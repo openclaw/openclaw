@@ -100,26 +100,14 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
     vi
       .spyOn(templates, "buildTemplateMessageFromPayload")
       .mockImplementation(deps.buildTemplateMessageFromPayload),
-  );
-  moduleMocks.push(
     vi.spyOn(markdown, "processLineMessage").mockImplementation(deps.processLineMessage),
-  );
-  moduleMocks.push(
     vi.spyOn(replyRuntime, "chunkMarkdownText").mockImplementation(deps.chunkMarkdownText),
-  );
-  moduleMocks.push(vi.spyOn(send, "replyMessageLine").mockImplementation(deps.replyMessageLine));
-  moduleMocks.push(vi.spyOn(send, "pushMessagesLine").mockImplementation(deps.pushMessagesLine));
-  moduleMocks.push(vi.spyOn(send, "createFlexMessage").mockImplementation(deps.createFlexMessage));
-  moduleMocks.push(
+    vi.spyOn(send, "replyMessageLine").mockImplementation(deps.replyMessageLine),
+    vi.spyOn(send, "pushMessagesLine").mockImplementation(deps.pushMessagesLine),
+    vi.spyOn(send, "createFlexMessage").mockImplementation(deps.createFlexMessage),
     vi.spyOn(media, "buildLineMediaMessage").mockImplementation(deps.buildMediaMessage),
-  );
-  moduleMocks.push(
     vi.spyOn(send, "createLocationMessage").mockImplementation(deps.createLocationMessage),
   );
 
-  return {
-    replyMessageLine,
-    buildMediaMessage,
-    pushMessagesLine,
-  };
+  return { replyMessageLine, buildMediaMessage, pushMessagesLine };
 }

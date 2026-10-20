@@ -1,4 +1,3 @@
-// Line tests cover accounts plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,27 +48,25 @@ describe("LINE accounts", () => {
 
       const account = resolveLineAccount({ cfg });
 
-      expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
-      expect(account.enabled).toBe(true);
-      expect(account.channelAccessToken).toBe("override-token");
-      expect(account.channelSecret).toBe("override-secret");
-      expect(account.name).toBe("Test Bot");
-      expect(account.tokenSource).toBe("config");
+      expect(account).toMatchObject({
+        accountId: DEFAULT_ACCOUNT_ID,
+        enabled: true,
+        channelAccessToken: "override-token",
+        channelSecret: "override-secret",
+        name: "Test Bot",
+        tokenSource: "config",
+      });
     });
 
     it("resolves account from environment variables", () => {
       vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
       vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
 
-      const cfg = withLine({
-        enabled: true,
+      expect(resolveLineAccount({ cfg: withLine({ enabled: true }) })).toMatchObject({
+        channelAccessToken: "env-token",
+        channelSecret: "env-secret",
+        tokenSource: "env",
       });
-
-      const account = resolveLineAccount({ cfg });
-
-      expect(account.channelAccessToken).toBe("env-token");
-      expect(account.channelSecret).toBe("env-secret");
-      expect(account.tokenSource).toBe("env");
     });
 
     it("resolves named account credentials from account-level files", () => {
@@ -84,10 +81,12 @@ describe("LINE accounts", () => {
 
       const account = resolveLineAccount({ cfg, accountId: "business" });
 
-      expect(account.channelAccessToken).toBe("business-file-token");
-      expect(account.enabled).toBe(true);
-      expect(account.channelSecret).toBe("business-file-secret");
-      expect(account.tokenSource).toBe("file");
+      expect(account).toMatchObject({
+        channelAccessToken: "business-file-token",
+        enabled: true,
+        channelSecret: "business-file-secret",
+        tokenSource: "file",
+      });
     });
 
     it.runIf(process.platform !== "win32")(
@@ -95,25 +94,13 @@ describe("LINE accounts", () => {
       () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
         tempDirs.push(dir);
-        const tokenFile = path.join(dir, "token.txt");
         const tokenLink = path.join(dir, "token-link.txt");
-        const secretFile = path.join(dir, "secret.txt");
         const secretLink = path.join(dir, "secret-link.txt");
-        fs.writeFileSync(tokenFile, "file-token\n", "utf8");
-        fs.writeFileSync(secretFile, "file-secret\n", "utf8");
-        fs.symlinkSync(tokenFile, tokenLink);
-        fs.symlinkSync(secretFile, secretLink);
-
-        const cfg: OpenClawConfig = {
-          channels: {
-            line: {
-              tokenFile: tokenLink,
-              secretFile: secretLink,
-            },
-          },
-        };
-
-        const account = resolveLineAccount({ cfg });
+        fs.symlinkSync(createSecretFile("token.txt", "file-token\n"), tokenLink);
+        fs.symlinkSync(createSecretFile("secret.txt", "file-secret\n"), secretLink);
+        const account = resolveLineAccount({
+          cfg: withLine({ tokenFile: tokenLink, secretFile: secretLink }),
+        });
         expect(account.tokenStatus).toBe("configured_unavailable");
         expect(account.signingSecretStatus).toBe("configured_unavailable");
         expect(account.credentialDiagnostics).toEqual([
@@ -144,23 +131,20 @@ describe("LINE accounts", () => {
 
       const account = resolveLineAccount({ cfg });
 
-      expect(account.channelAccessToken).toBe("");
-      expect(account.tokenStatus).toBe("configured_unavailable");
-      expect(account.tokenSource).toBe("file");
+      expect(account).toMatchObject({
+        channelAccessToken: "",
+        tokenStatus: "configured_unavailable",
+        tokenSource: "file",
+      });
     });
   });
 
   describe("listLineAccountIds", () => {
     it("preserves configured named-account insertion order", () => {
-      expect(
-        listLineAccountIds({
-          channels: {
-            line: {
-              accounts: { work: {}, alerts: {} },
-            },
-          },
-        }),
-      ).toEqual(["work", "alerts"]);
+      expect(listLineAccountIds(withLine({ accounts: { work: {}, alerts: {} } }))).toEqual([
+        "work",
+        "alerts",
+      ]);
     });
   });
 });

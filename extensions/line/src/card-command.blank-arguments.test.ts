@@ -1,4 +1,3 @@
-// Line tests cover blank /card arguments, which LINE rejects atomically.
 import type { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
@@ -11,11 +10,7 @@ async function runCardCommand(args: string): Promise<LineChannelData> {
   return payload.channelData.line;
 }
 
-/**
- * Every `text` LINE requires to be non-empty in the rendered message: Flex text
- * components, a template's own text, and an action's message text. A Flex text
- * carrying styled `contents` spans instead is exempt.
- */
+// Styled spans can replace a Flex component's text; other text fields must be nonempty.
 function requiredTextFields(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.flatMap(requiredTextFields);
@@ -43,8 +38,7 @@ async function renderedMessage(
   return expectDefined(buildTemplateMessageFromPayload(template), "built template message");
 }
 
-// LINE rejects the whole push when any of these is blank, so the reply is lost
-// rather than degraded. Blank arguments are the reachable way to produce one.
+// LINE rejects the entire push if any required field is blank.
 const BLANK_ARGUMENT_INPUTS = [
   "info",
   'info "" ""',
@@ -60,10 +54,7 @@ describe("/card with blank arguments", () => {
     async (args) => {
       const message = await renderedMessage(args);
 
-      // A carousel that cannot be rendered validly now degrades to a text reply,
-      // which carries no altText. No blank-argument input reaches that path, so
-      // this still asserts altText on every case; if one ever degrades, the first
-      // assertion fails rather than silently skipping the second.
+      // None of these inputs should degrade to text (which has no altText).
       expect("altText" in message).toBe(true);
       if ("altText" in message) {
         expect(message.altText.trim()).not.toBe("");
