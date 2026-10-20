@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -14,9 +14,24 @@ import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(closeOpenClawStateDatabaseForTest);
+
+function runChild(args: string[], options: SpawnOptionsWithoutStdio = {}) {
+  return new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stdout: string;
+    stderr: string;
+  }>((resolve, reject) => {
+    const child = spawn(process.execPath, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code, signal) => resolve({ code, signal, stdout, stderr }));
+  });
+}
 
 describe("OpenClaw state lease", () => {
   it.each([
@@ -31,30 +46,16 @@ describe("OpenClaw state lease", () => {
       await withOpenClawTestState({ label: "core-state-lease-process-exit" }, async (state) => {
         const childUrl = resolveRuntimeWorkerUrl(stateLeaseProcessExitRuntimeEntrypoint);
 
-        await new Promise<void>((resolve, reject) => {
-          const child = spawn(
-            process.execPath,
-            [
-              ...resolveRuntimeWorkerArgv(childUrl),
-              state.stateDir,
-              heartbeat ?? "",
-              termination,
-              processBound ? "process-bound" : "",
-            ],
-            { stdio: ["ignore", "pipe", "pipe"] },
-          );
-          let output = "";
-          child.stdout.on("data", (chunk) => (output += chunk));
-          child.stderr.on("data", (chunk) => (output += chunk));
-          child.on("error", reject);
-          child.on("close", (code, signal) => {
-            if (termination === "SIGKILL" ? signal !== "SIGKILL" : code !== 23) {
-              reject(new Error(`lease child exited ${code}/${signal}: ${output}`));
-              return;
-            }
-            resolve();
-          });
-        });
+        const { code, signal, stdout, stderr } = await runChild([
+          ...resolveRuntimeWorkerArgv(childUrl),
+          state.stateDir,
+          heartbeat ?? "",
+          termination,
+          processBound ? "process-bound" : "",
+        ]);
+        expect(termination === "SIGKILL" ? signal : code, `lease child: ${stdout}${stderr}`).toBe(
+          termination === "SIGKILL" ? "SIGKILL" : 23,
+        );
 
         let reacquired = false;
         const acquisition = withOpenClawStateLease(
@@ -123,27 +124,11 @@ describe("OpenClaw state lease", () => {
         `,
       );
 
-      const childResult = await new Promise<{
-        code: number | null;
-        stdout: string;
-        stderr: string;
-      }>((resolve, reject) => {
-        const child = spawn(
-          process.execPath,
-          [...resolveRuntimeWorkerArgv(leaseModuleUrl).slice(0, -1), childScript, state.stateDir],
-          {
-            // Keep console logging enabled in the child despite the inherited VITEST env.
-            env: { ...process.env, OPENCLAW_TEST_CONSOLE: "1" },
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        );
-        let stdout = "";
-        let stderr = "";
-        child.stdout.on("data", (chunk) => (stdout += chunk));
-        child.stderr.on("data", (chunk) => (stderr += chunk));
-        child.on("error", reject);
-        child.on("close", (code) => resolve({ code, stdout, stderr }));
-      });
+      const childResult = await runChild(
+        [...resolveRuntimeWorkerArgv(leaseModuleUrl).slice(0, -1), childScript, state.stateDir],
+        // Keep console logging enabled despite the inherited VITEST env.
+        { env: { ...process.env, OPENCLAW_TEST_CONSOLE: "1" } },
+      );
 
       expect(
         childResult.code,

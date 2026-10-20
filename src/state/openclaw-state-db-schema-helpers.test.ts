@@ -14,88 +14,75 @@ describe("tableExists", () => {
   it.each([false, true])(
     "reuses only admitted statements with fresh table names (cache: %s)",
     (cacheEnabled) => {
-      const database = new DatabaseSync(":memory:");
-      try {
-        database.exec("CREATE TABLE present (id INTEGER); CREATE VIEW projection AS SELECT 1;");
-        if (cacheEnabled) {
-          enableNodeSqliteKyselyStatementCache(database);
-        }
-        const prepare = vi.spyOn(database, "prepare");
-        const cases = [
-          ["present", true],
-          ["absent", false],
-          ["projection", false],
-          ["present' OR 1=1 --", false],
-        ] as const;
-        for (let repeat = 0; repeat < 8; repeat += 1) {
-          for (const [tableName, expected] of cases) {
-            expect(tableExists(database, tableName)).toBe(expected);
-          }
-        }
-        expect(prepare).toHaveBeenCalledTimes(cacheEnabled ? 2 : 32);
-      } finally {
-        database.close();
+      using database = new DatabaseSync(":memory:");
+      database.exec("CREATE TABLE present (id INTEGER); CREATE VIEW projection AS SELECT 1;");
+      if (cacheEnabled) {
+        enableNodeSqliteKyselyStatementCache(database);
       }
+      const prepare = vi.spyOn(database, "prepare");
+      const cases = [
+        ["present", true],
+        ["absent", false],
+        ["projection", false],
+        ["present' OR 1=1 --", false],
+      ] as const;
+      for (let repeat = 0; repeat < 8; repeat += 1) {
+        for (const [tableName, expected] of cases) {
+          expect(tableExists(database, tableName)).toBe(expected);
+        }
+      }
+      expect(prepare).toHaveBeenCalledTimes(cacheEnabled ? 2 : 32);
     },
   );
 
   it("observes schema changes within the current WAL read snapshot", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-probe-"), "state.sqlite");
-    const reader = new DatabaseSync(filename);
-    const writer = new DatabaseSync(filename);
-    try {
-      reader.exec("PRAGMA journal_mode=WAL");
-      enableNodeSqliteKyselyStatementCache(reader);
-      expect(tableExists(reader, "entries")).toBe(false);
-      expect(tableExists(reader, "entries")).toBe(false);
-      writer.exec("CREATE TABLE entries (id INTEGER)");
-      expect(tableExists(reader, "entries")).toBe(true);
+    using reader = new DatabaseSync(filename);
+    using writer = new DatabaseSync(filename);
+    reader.exec("PRAGMA journal_mode=WAL");
+    enableNodeSqliteKyselyStatementCache(reader);
+    expect(tableExists(reader, "entries")).toBe(false);
+    expect(tableExists(reader, "entries")).toBe(false);
+    writer.exec("CREATE TABLE entries (id INTEGER)");
+    expect(tableExists(reader, "entries")).toBe(true);
 
-      reader.exec("BEGIN");
-      expect(tableExists(reader, "entries")).toBe(true);
-      writer.exec("DROP TABLE entries");
-      expect(tableExists(reader, "entries")).toBe(true);
-      reader.exec("COMMIT");
-      expect(tableExists(reader, "entries")).toBe(false);
+    reader.exec("BEGIN");
+    expect(tableExists(reader, "entries")).toBe(true);
+    writer.exec("DROP TABLE entries");
+    expect(tableExists(reader, "entries")).toBe(true);
+    reader.exec("COMMIT");
+    expect(tableExists(reader, "entries")).toBe(false);
 
-      reader.exec("BEGIN; CREATE TABLE entries (id INTEGER)");
-      expect(tableExists(reader, "entries")).toBe(true);
-      reader.exec("ROLLBACK");
-      expect(tableExists(reader, "entries")).toBe(false);
-    } finally {
-      writer.close();
-      reader.close();
-    }
+    reader.exec("BEGIN; CREATE TABLE entries (id INTEGER)");
+    expect(tableExists(reader, "entries")).toBe(true);
+    reader.exec("ROLLBACK");
+    expect(tableExists(reader, "entries")).toBe(false);
   });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
     "rechecks changing authorization after warming the schema probe",
     () => {
-      const database = openNodeSqliteDatabase(":memory:");
-      try {
-        database.exec("CREATE TABLE entries (id INTEGER)");
-        enableNodeSqliteKyselyStatementCache(database);
-        admitSqliteSchema(database);
-        for (let repeat = 0; repeat < 3; repeat += 1) {
-          expect(tableExists(database, "entries")).toBe(true);
-          expect(tableHasColumn(database, "entries", "id")).toBe(true);
-        }
-        let allow = false;
-        database.setAuthorizer(() => (allow ? constants.SQLITE_OK : constants.SQLITE_DENY));
-        expect(() => tableExists(database, "entries")).toThrow(/not authorized/iu);
-        expect(() => tableHasColumn(database, "entries", "id")).toThrow(/not authorized/iu);
-        allow = true;
+      using database = openNodeSqliteDatabase(":memory:");
+      database.exec("CREATE TABLE entries (id INTEGER)");
+      enableNodeSqliteKyselyStatementCache(database);
+      admitSqliteSchema(database);
+      for (let repeat = 0; repeat < 3; repeat += 1) {
         expect(tableExists(database, "entries")).toBe(true);
         expect(tableHasColumn(database, "entries", "id")).toBe(true);
-        allow = false;
-        expect(() => tableExists(database, "entries")).toThrow(/not authorized/iu);
-        expect(() => tableHasColumn(database, "entries", "id")).toThrow(/not authorized/iu);
-        database.setAuthorizer(null);
-        expect(tableExists(database, "entries")).toBe(true);
-        expect(tableHasColumn(database, "entries", "id")).toBe(true);
-      } finally {
-        database.close();
       }
+      let allow = false;
+      database.setAuthorizer(() => (allow ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      expect(() => tableExists(database, "entries")).toThrow(/not authorized/iu);
+      expect(() => tableHasColumn(database, "entries", "id")).toThrow(/not authorized/iu);
+      allow = true;
+      expect(tableExists(database, "entries")).toBe(true);
+      expect(tableHasColumn(database, "entries", "id")).toBe(true);
+      allow = false;
+      expect(() => tableExists(database, "entries")).toThrow(/not authorized/iu);
+      expect(() => tableHasColumn(database, "entries", "id")).toThrow(/not authorized/iu);
+      database.setAuthorizer(null);
+      expect(tableExists(database, "entries")).toBe(true);
+      expect(tableHasColumn(database, "entries", "id")).toBe(true);
     },
   );
 });

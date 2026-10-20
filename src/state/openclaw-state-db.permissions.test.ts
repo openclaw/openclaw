@@ -1,14 +1,8 @@
-// State database permission hardening tests cover best-effort chmod on
-// filesystems without POSIX permission support (Azure Files, NFS, certain
-// Docker volume drivers).
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-// The permission helper hardens via the named import `chmodSync` from node:fs.
-// A namespace `vi.spyOn(fs, ...)` cannot rebind an
-// already-captured named import, so we mock node:fs and route chmodSync
-// (named + default) through a single controllable failure hook.
+// Mock both import forms: spying on the namespace cannot rebind captured named imports.
 const chmodFailHook = vi.hoisted(() => {
   // Runtime setup can preload permission helpers before this file's filesystem mock.
   vi.resetModules();
@@ -46,9 +40,7 @@ const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
 const { ensureOpenClawStatePermissions } = await import("./openclaw-state-db-permissions.js");
 
 function chmodError(code: string): Error {
-  const err = new Error(`${code}: chmod failed`) as NodeJS.ErrnoException;
-  err.code = code;
-  return err;
+  return Object.assign(new Error(`${code}: chmod failed`), { code });
 }
 
 describe("state database permission hardening without chmod support", () => {
@@ -63,71 +55,63 @@ describe("state database permission hardening without chmod support", () => {
     });
   });
 
+  function fixture(initialize = true) {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-state-chmod-") };
+    const options = { env };
+    if (initialize) {
+      openOpenClawStateDatabase(options);
+      closeOpenClawStateDatabaseForTest();
+    }
+    return { options, env, pathname: join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite") };
+  }
+
   it.skipIf(process.platform === "win32")("leaves already-private metadata unchanged", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawStateDatabase({ env });
-    closeOpenClawStateDatabaseForTest();
-    const before = fs.statSync(database.path, { bigint: true });
+    const { pathname, env } = fixture();
+    const before = fs.statSync(pathname, { bigint: true });
     chmodFailHook.targets = [];
 
-    ensureOpenClawStatePermissions(database.path, env);
+    ensureOpenClawStatePermissions(pathname, env);
 
     expect(chmodFailHook.targets).toEqual([]);
-    expect(fs.statSync(database.path, { bigint: true }).ctimeNs).toBe(before.ctimeNs);
+    expect(fs.statSync(pathname, { bigint: true }).ctimeNs).toBe(before.ctimeNs);
   });
 
   it("rethrows EPERM when existing permissions are too broad", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
+    const { options, env } = fixture(false);
     // The shared database owner hardens state/, not the outer profile directory.
-    const databaseDir = join(stateDir, "state");
+    const databaseDir = join(env.OPENCLAW_STATE_DIR, "state");
     fs.mkdirSync(databaseDir);
     fs.chmodSync(databaseDir, 0o755);
     chmodFailHook.error = chmodError("EPERM");
     chmodFailHook.failProbe = false;
 
-    expect(() => openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } })).toThrow(
-      /EPERM/,
-    );
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/EPERM/);
   });
 
   it("opens when EPERM leaves existing permissions restrictive", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    closeOpenClawStateDatabaseForTest();
+    const { options } = fixture();
     chmodFailHook.error = chmodError("EPERM");
 
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
+    expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
   });
 
   it("opens when the -wal sidecar disappears before chmod", () => {
-    const suffix = "-wal";
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    openOpenClawStateDatabase(options);
-    closeOpenClawStateDatabaseForTest();
-    const sidecarPath = join(stateDir, "state", `openclaw.sqlite${suffix}`);
+    const { options, pathname } = fixture();
+    const sidecarPath = `${pathname}-wal`;
     fs.writeFileSync(sidecarPath, "");
     fs.chmodSync(sidecarPath, 0o644);
-    chmodFailHook.removeTargetSuffix = suffix;
+    chmodFailHook.removeTargetSuffix = "-wal";
 
-    ensureOpenClawStatePermissions(join(stateDir, "state", "openclaw.sqlite"), options.env);
+    ensureOpenClawStatePermissions(pathname, options.env);
     expect(fs.existsSync(sidecarPath)).toBe(false);
     expect(chmodFailHook.targets).toContain(sidecarPath);
     expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
   });
 
   it("rethrows when the main database vanishes between the existence check and the chmod", () => {
-    // resolveSqliteDatabaseFilePaths lists the unsuffixed database first. Losing
-    // it must stay fatal: swallowing that ENOENT would fall through to a SQLite
-    // open that creates a fresh empty database instead of surfacing the loss.
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    openOpenClawStateDatabase(options);
-    closeOpenClawStateDatabaseForTest();
-    fs.chmodSync(join(stateDir, "state", "openclaw.sqlite"), 0o644);
+    // Swallowing ENOENT here would silently recreate the lost main database.
+    const { options, pathname } = fixture();
+    fs.chmodSync(pathname, 0o644);
     chmodFailHook.removeTargetSuffix = "openclaw.sqlite";
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(/ENOENT/);

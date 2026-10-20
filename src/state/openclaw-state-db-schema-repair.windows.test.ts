@@ -27,6 +27,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+function row(
+  pathname: string,
+  facts: Partial<Omit<AgentDatabases, "agent_id" | "path">>,
+  agent_id = "main",
+): AgentDatabases {
+  return {
+    agent_id,
+    path: pathname,
+    schema_version: 18,
+    last_seen_at: 100,
+    size_bytes: 50,
+    ...facts,
+  };
+}
+
 describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
   "v8 Windows inventory migration under %s",
   (stateDir) => {
@@ -38,9 +53,8 @@ describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     ])(
       "merges aliases with newest $newest facts (reverse scan: $reverse)",
       ({ reverse, newest }) => {
-        const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
-        try {
-          db.exec(`
+        using db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+        db.exec(`
           CREATE TABLE agent_databases (
             agent_id TEXT NOT NULL,
             path TEXT NOT NULL,
@@ -52,79 +66,52 @@ describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
           PRAGMA user_version = 8;
           PRAGMA reverse_unordered_selects = ${reverse ? 1 : 0};
         `);
-          const relative = String.raw`agents\main\agent\openclaw-agent.sqlite`;
-          const ordinary = path.join(stateDir, relative);
-          const namespaced = path.toNamespacedPath(ordinary);
-          const external = String.raw`D:\External\custom.sqlite`;
-          const newestFacts = { schema_version: 20, last_seen_at: 200, size_bytes: null };
-          const olderFacts = { schema_version: 18, last_seen_at: 100, size_bytes: 50 };
-          const aliases: AgentDatabases[] = [
-            {
-              agent_id: "main",
-              path: ordinary,
-              ...(newest === "ordinary" ? newestFacts : olderFacts),
-            },
-            {
-              agent_id: "main",
-              path: namespaced,
-              ...(newest === "namespaced" ? newestFacts : olderFacts),
-            },
-          ];
-          const retained: AgentDatabases[] = [
-            {
-              agent_id: "other",
-              path: ordinary,
-              schema_version: 18,
-              last_seen_at: 300,
-              size_bytes: 75,
-            },
-            {
-              agent_id: "main",
-              path: external,
-              schema_version: 18,
-              last_seen_at: 400,
-              size_bytes: 80,
-            },
-            {
-              agent_id: "main",
-              path: path.toNamespacedPath(external),
-              schema_version: 20,
-              last_seen_at: 500,
-              size_bytes: 90,
-            },
-          ];
-          const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
-          executeSqliteQuerySync(
-            db,
-            queries
-              .insertInto("agent_databases")
-              .values([...(reverse ? aliases.toReversed() : aliases), ...retained]),
-          );
+        const relative = String.raw`agents\main\agent\openclaw-agent.sqlite`;
+        const ordinary = path.join(stateDir, relative);
+        const namespaced = path.toNamespacedPath(ordinary);
+        const external = String.raw`D:\External\custom.sqlite`;
+        const newestFacts = { schema_version: 20, last_seen_at: 200, size_bytes: null };
+        const olderFacts = { schema_version: 18, last_seen_at: 100, size_bytes: 50 };
+        const aliases = (
+          [
+            ["ordinary", ordinary],
+            ["namespaced", namespaced],
+          ] as const
+        ).map(([kind, pathname]) => row(pathname, newest === kind ? newestFacts : olderFacts));
+        const retained: AgentDatabases[] = [
+          row(ordinary, { last_seen_at: 300, size_bytes: 75 }, "other"),
+          row(external, { last_seen_at: 400, size_bytes: 80 }),
+          row(path.toNamespacedPath(external), {
+            last_seen_at: 500,
+            schema_version: 20,
+            size_bytes: 90,
+          }),
+        ];
+        const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
+        executeSqliteQuerySync(
+          db,
+          queries
+            .insertInto("agent_databases")
+            .values([...(reverse ? aliases.toReversed() : aliases), ...retained]),
+        );
 
-          runSqliteImmediateTransactionSync(db, () =>
-            migrateAgentDatabaseRelativePaths(
-              db,
-              8,
-              path.join(stateDir, "state", "openclaw.sqlite"),
-            ),
-          );
+        runSqliteImmediateTransactionSync(db, () =>
+          migrateAgentDatabaseRelativePaths(db, 8, path.join(stateDir, "state", "openclaw.sqlite")),
+        );
 
-          const rows = executeSqliteQuerySync(
-            db,
-            queries.selectFrom("agent_databases").selectAll(),
-          ).rows;
-          expect(rows).toHaveLength(4);
-          expect(rows).toEqual(
-            expect.arrayContaining([
-              { agent_id: "main", path: relative, ...newestFacts },
-              { ...retained[0], path: relative },
-              retained[1],
-              retained[2],
-            ]),
-          );
-        } finally {
-          db.close();
-        }
+        const rows = executeSqliteQuerySync(
+          db,
+          queries.selectFrom("agent_databases").selectAll(),
+        ).rows;
+        expect(rows).toHaveLength(4);
+        expect(rows).toEqual(
+          expect.arrayContaining([
+            { agent_id: "main", path: relative, ...newestFacts },
+            { ...retained[0], path: relative },
+            retained[1],
+            retained[2],
+          ]),
+        );
       },
     );
   },

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,31 +19,18 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 describe("state schema fast-path failure settlement", () => {
   it.each([
-    {
-      name: "retains repair after successful rollback",
-      rollbackFails: false,
-      undefinedError: false,
-      convergenceFails: false,
-    },
-    {
-      name: "preserves the original error after native close",
-      rollbackFails: true,
-      undefinedError: false,
-      convergenceFails: false,
-    },
+    { name: "retains repair after successful rollback" },
+    { name: "preserves the original error after native close", rollbackFails: true },
     {
       name: "preserves undefined rejection after native close",
       rollbackFails: true,
       undefinedError: true,
-      convergenceFails: false,
     },
     {
       name: "restores foreign-key enforcement after failed schema convergence",
-      rollbackFails: false,
-      undefinedError: false,
       convergenceFails: true,
     },
-  ])("$name", ({ rollbackFails, undefinedError, convergenceFails }) => {
+  ])("$name", ({ rollbackFails = false, undefinedError = false, convergenceFails = false }) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("state-fast-path-settlement-") };
     const pathname = realpathSync(openOpenClawStateDatabase({ env }).path);
     closeOpenClawStateDatabaseForTest();
@@ -53,8 +41,7 @@ describe("state schema fast-path failure settlement", () => {
     const exec = DatabaseSync.prototype.exec;
     // oxlint-disable-next-line typescript/unbound-method -- Native close is called with its exact database receiver below.
     const close = DatabaseSync.prototype.close;
-    const events: Array<{ phase: "commit" | "rollback" | "close" | "fallback"; isOpen: boolean }> =
-      [];
+    const events: Array<["commit" | "rollback" | "close" | "fallback", boolean]> = [];
     const selected = new Set<DatabaseSync>();
     let injected = false;
     let foreignKeysAtClose: unknown;
@@ -65,18 +52,18 @@ describe("state schema fast-path failure settlement", () => {
       if (selected.has(this)) {
         if (!injected && sql === "COMMIT") {
           injected = true;
-          events.push({ phase: "commit", isOpen: this.isOpen });
+          events.push(["commit", this.isOpen]);
           // oxlint-disable-next-line typescript/only-throw-error -- The public opener must preserve an undefined rejection too.
           throw original;
         }
         if (injected && sql === "ROLLBACK") {
-          events.push({ phase: "rollback", isOpen: this.isOpen });
+          events.push(["rollback", this.isOpen]);
           if (rollbackFails) {
             throw rollbackError;
           }
         }
         if (sql === "PRAGMA foreign_keys = OFF;") {
-          events.push({ phase: "fallback", isOpen: this.isOpen });
+          events.push(["fallback", this.isOpen]);
         }
         if (convergenceFails && sql === "BEGIN IMMEDIATE") {
           throw convergenceError;
@@ -90,7 +77,7 @@ describe("state schema fast-path failure settlement", () => {
       }
       Reflect.apply(close, this, []);
       if (selected.has(this)) {
-        events.push({ phase: "close", isOpen: this.isOpen });
+        events.push(["close", this.isOpen]);
       }
     });
     let result:
@@ -105,37 +92,21 @@ describe("state schema fast-path failure settlement", () => {
     if (convergenceFails) {
       expect(result).toEqual({ status: "rejected", error: convergenceError });
       expect(foreignKeysAtClose).toBe(1);
-      expect(events).toEqual([
-        { phase: "commit", isOpen: true },
-        { phase: "rollback", isOpen: true },
-        { phase: "fallback", isOpen: true },
-        { phase: "close", isOpen: false },
-      ]);
     } else if (rollbackFails) {
-      expect(result.status).toBe("rejected");
-      if (result.status !== "rejected") {
-        throw new Error("Expected the failed native rollback to refuse opening");
-      }
+      assert(result.status === "rejected", "Failed native rollback must refuse opening");
       expect(result.error).toBe(original);
       expect([...selected].map((database) => database.isOpen)).toEqual([false]);
-      expect(events).toEqual([
-        { phase: "commit", isOpen: true },
-        { phase: "rollback", isOpen: true },
-        { phase: "close", isOpen: false },
-      ]);
     } else {
-      expect(result.status).toBe("fulfilled");
-      if (result.status !== "fulfilled") {
-        throw new Error("Expected successful rollback to retain the schema repair fallback");
-      }
+      assert(result.status === "fulfilled", "Successful rollback must retain schema repair");
       expect(result.database.db.isOpen).toBe(true);
       expect(result.database.db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
-      expect(events).toEqual([
-        { phase: "commit", isOpen: true },
-        { phase: "rollback", isOpen: true },
-        { phase: "fallback", isOpen: true },
-      ]);
     }
+    expect(events).toEqual([
+      ["commit", true],
+      ["rollback", true],
+      ...(!rollbackFails ? [["fallback", true]] : []),
+      ...(rollbackFails || convergenceFails ? [["close", false]] : []),
+    ]);
   });
 
   it.each([false, true])(
@@ -144,13 +115,10 @@ describe("state schema fast-path failure settlement", () => {
       const env = { OPENCLAW_STATE_DIR: dirs.make("state-doctor-foreign-keys-") };
       const pathname = realpathSync(openOpenClawStateDatabase({ env }).path);
       closeOpenClawStateDatabaseForTest();
-      const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")
-        ?.value as ((this: DatabaseSync, sql: string) => void) | undefined;
-      const originalClose = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "close")
-        ?.value as ((this: DatabaseSync) => void) | undefined;
-      if (!originalExec || !originalClose) {
-        throw new Error("Native SQLite descriptors are unavailable");
-      }
+      // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
+      const originalExec = DatabaseSync.prototype.exec;
+      // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its exact database receiver.
+      const originalClose = DatabaseSync.prototype.close;
       const selected = new Set<DatabaseSync>();
       let foreignKeysAtClose: unknown;
       vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
