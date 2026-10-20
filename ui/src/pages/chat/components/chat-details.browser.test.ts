@@ -1,5 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { createComponent } from "solid-js";
+import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
@@ -7,7 +7,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import { ChatDetails } from "./chat-details.tsx";
+import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import progressStyles from "../../../styles/chat/progress-card.css?inline";
@@ -60,26 +60,38 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
     pane.prepend(header);
   }
   document.body.append(pane);
+  let details: ChatDetails | undefined;
+  const [current, setCurrent] = createSignal<ChatDetailsViewProps>({
+    chat: value,
+    elements: { pane, frame, footer, header: fullscreen ? header : undefined },
+    presentation: true,
+    mobile: false,
+    conversationVisible: !fullscreen,
+    externalTrigger: fullscreen,
+    setRef: (handle) => (details = handle),
+  });
+  const update = (patch: Partial<ChatDetailsViewProps>) =>
+    setCurrent((previous) => ({ ...previous, ...patch }));
   const view = mountSolid(
     () =>
-      createComponent(ChatDetails, {
-        props: value,
-        elements: { pane, frame, footer, header: fullscreen ? header : undefined },
-        presented: true,
-        conversationVisible: !fullscreen,
-        externalTrigger: fullscreen,
-      }),
+      createComponent(
+        ChatDetails,
+        merge(() => current()),
+      ),
     { container: fullscreen ? header : frame },
   );
   const element = view.container.querySelector("openclaw-chat-details")!;
   conversation.append(footer);
   frame.append(conversation);
   mounted.push(pane, styles);
-  await element.updateComplete;
-  const progress = pane.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
   flush();
+  const progress = pane.querySelector<HTMLElement>("openclaw-chat-details-progress")!;
   return {
     element,
+    update,
+    updateChat: (patch: Partial<ChatDetailsProps>) =>
+      update({ chat: { ...current().chat!, ...patch } }),
+    open: (source: HTMLElement) => details?.open(source),
     frame,
     pane,
     footer,
@@ -108,7 +120,10 @@ afterEach(() => {
 describe("chat Details presentation", () => {
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
-    const { element, frame, conversation, footer, trigger, panel } = await fixture(props(), 1320);
+    const { update, updateChat, frame, conversation, footer, trigger, panel } = await fixture(
+      props(),
+      1320,
+    );
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     // The first docked view also resolves the lazy session module.
     await expect
@@ -143,14 +158,14 @@ describe("chat Details presentation", () => {
     trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(1320);
-    element.props = { ...element.props!, progressCard: { ...card, revision: 4 } };
+    updateChat({ progressCard: { ...card, revision: 4 } });
     frame.style.width = "900px";
-    await element.updateComplete;
+    flush();
     frame.style.width = "1320px";
-    element.presented = false;
-    await element.updateComplete;
-    element.presented = true;
-    await element.updateComplete;
+    update({ presentation: false });
+    flush();
+    update({ presentation: true });
+    flush();
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
@@ -161,20 +176,20 @@ describe("chat Details presentation", () => {
     frame.style.width = "1320px";
     await expect.poll(() => panel.getAttribute("role")).toBe("complementary");
     expect(panel.matches(":popover-open")).toBe(false);
-    element.presented = false;
-    await element.updateComplete;
+    update({ presentation: false });
+    flush();
     expect(panel.hidden).toBe(true);
     expect(conversation.getBoundingClientRect().width).toBe(1320);
   });
 
   it("positions above its supplied footer when unrelated matching DOM precedes it", async () => {
-    const { element, frame, footer, trigger, panel } = await fixture();
+    const { frame, footer, trigger, panel } = await fixture();
     const unrelatedFooter = document.createElement("div");
     unrelatedFooter.className = "chat-footer";
     unrelatedFooter.style.cssText = "position:absolute;top:0;height:20px";
     frame.prepend(unrelatedFooter);
     trigger.click();
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(true);
     expect(Number.parseFloat(panel.style.maxHeight)).toBeCloseTo(
       footer.getBoundingClientRect().top - 8 - Number.parseFloat(panel.style.top),
@@ -183,7 +198,7 @@ describe("chat Details presentation", () => {
 
   it("nests section content under aligned headings without shifting navigation highlights", async () => {
     const openFiles = vi.fn();
-    const { element, trigger, panel } = await fixture(
+    const { trigger, panel } = await fixture(
       props({
         onOpenWorkspace: openFiles,
         selectedSession: {
@@ -198,7 +213,7 @@ describe("chat Details presentation", () => {
       }),
     );
     trigger.click();
-    await element.updateComplete;
+    flush();
     await expect.poll(() => panel.querySelector(".chat-details__environment")).not.toBeNull();
     const environment = panel.querySelector(".chat-details__environment")!;
     const navigation = environment.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
@@ -249,15 +264,15 @@ describe("chat Details presentation", () => {
   });
 
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
-    const { element, trigger, panel } = await fixture();
+    const { updateChat, trigger, panel } = await fixture();
     expect(trigger.textContent).toContain("Details");
     expect(panel.matches(":popover-open")).toBe(false);
     expect(panel.querySelector("openclaw-chat-details-session")).toBeNull();
-    element.props = { ...element.props!, progressCard: { ...card, revision: 2 } };
-    await element.updateComplete;
+    updateChat({ progressCard: { ...card, revision: 2 } });
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     trigger.click();
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(true);
     await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
@@ -265,22 +280,22 @@ describe("chat Details presentation", () => {
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(trigger);
   });
 
   it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
     await page.viewport(420, 720);
-    const { element, frame, trigger, panel } = await fixture(props(), 380);
-    element.mobile = true;
+    const { update, open, frame, trigger, panel } = await fixture(props(), 380);
+    update({ mobile: true });
     const source = document.createElement("button");
     source.textContent = "Panels";
     frame.prepend(source);
-    await element.updateComplete;
+    flush();
     expect(trigger.hidden).toBe(true);
-    element.open(source);
-    await element.updateComplete;
+    open(source);
+    flush();
     expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getBoundingClientRect().width).toBe(364);
     expect(panel.querySelector(".chat-details__toolbar")).not.toBeNull();
@@ -288,33 +303,33 @@ describe("chat Details presentation", () => {
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(source);
-    element.open(source);
-    await element.updateComplete;
+    open(source);
+    flush();
     panel.querySelector<HTMLButtonElement>(".chat-details__toolbar button")!.click();
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(source);
-    element.presented = false;
-    await element.updateComplete;
-    element.open(source);
-    await element.updateComplete;
+    update({ presentation: false });
+    flush();
+    open(source);
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
   });
 
   it("opens fullscreen Details within the visible pane and returns focus to its external trigger", async () => {
     await page.viewport(1700, 900);
-    const { element, pane, frame, trigger, panel } = await fixture(props(), 1320, true);
+    const { open, pane, frame, trigger, panel } = await fixture(props(), 1320, true);
     const source = document.createElement("button");
     source.textContent = "Session actions";
     pane.prepend(source);
     expect(frame.checkVisibility()).toBe(false);
     expect(trigger.hidden).toBe(true);
     expect(panel.matches(":popover-open")).toBe(false);
-    element.open(source);
-    await element.updateComplete;
+    open(source);
+    flush();
     expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.checkVisibility()).toBe(true);
     expect(frame.contains(panel)).toBe(false);
@@ -333,28 +348,31 @@ describe("chat Details presentation", () => {
     expect(close.getAttribute("aria-label")).toBe("Close details");
     close.focus();
     close.click();
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(source);
-    element.open(source);
-    await element.updateComplete;
+    open(source);
+    flush();
     close.focus();
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(source);
   });
 
-  it("closes Details after its child menu closes", async () => {
-    const { element, trigger, panel, progress } = await fixture();
+  it("keeps its child menu open through chat updates and closes Details after it closes", async () => {
+    const { trigger, panel, progress, updateChat } = await fixture();
     trigger.click();
-    await element.updateComplete;
+    flush();
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+    expect(menuSurface.matches(":popover-open")).toBe(true);
+    updateChat({ messages: [] });
+    flush();
     expect(menuSurface.matches(":popover-open")).toBe(true);
     menu.querySelector<HTMLButtonElement>("button")!.click();
     await expect
@@ -363,15 +381,15 @@ describe("chat Details presentation", () => {
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
-    await element.updateComplete;
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(trigger);
   });
 
   it("keeps metadata visible while progress retains its collapse across revisions", async () => {
-    const { element, trigger, panel, progress } = await fixture();
+    const { updateChat, trigger, panel, progress } = await fixture();
     trigger.click();
-    await element.updateComplete;
+    flush();
     await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     await session.updateComplete;
@@ -386,17 +404,17 @@ describe("chat Details presentation", () => {
     expect(
       getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display,
     ).not.toBe("none");
-    element.props = { ...element.props!, progressCard: { ...card, revision: 3 } };
-    await element.updateComplete;
+    updateChat({ progressCard: { ...card, revision: 3 } });
+    flush();
     flush();
     expect(sessionSection.checkVisibility()).toBe(true);
     expect(progressSection.open).toBe(false);
   });
 
   it("constrains the popover to its conversation and above the composer after narrowing", async () => {
-    const { element, frame, footer, trigger, panel } = await fixture();
+    const { frame, footer, trigger, panel } = await fixture();
     trigger.click();
-    await element.updateComplete;
+    flush();
     for (const width of [600, 300]) {
       frame.style.width = width + "px";
       window.dispatchEvent(new Event("resize"));
@@ -415,23 +433,19 @@ describe("chat Details presentation", () => {
   });
 
   it("retires the open surface on hidden presentation and session changes", async () => {
-    const { element, trigger, panel } = await fixture();
+    const { update, updateChat, trigger, panel } = await fixture();
     trigger.click();
-    await element.updateComplete;
-    element.presented = false;
-    await element.updateComplete;
+    flush();
+    update({ presentation: false });
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
-    element.presented = true;
-    await element.updateComplete;
+    update({ presentation: true });
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
     trigger.click();
-    await element.updateComplete;
-    element.props = {
-      ...element.props!,
-      sessionKey: "agent:main:other",
-      selectedSession: undefined,
-    };
-    await element.updateComplete;
+    flush();
+    updateChat({ sessionKey: "agent:main:other", selectedSession: undefined });
+    flush();
     expect(panel.matches(":popover-open")).toBe(false);
   });
 
@@ -442,7 +456,7 @@ describe("chat Details presentation", () => {
     const refresh = vi.fn();
     const collapse = vi.fn();
     const settings = vi.fn();
-    const { element, trigger, progress } = await fixture(
+    const { update, trigger, progress } = await fixture(
       props({
         onHideTaskProgress: hide,
         onDismissProgressCard: dismiss,
@@ -453,7 +467,7 @@ describe("chat Details presentation", () => {
       }),
     );
     trigger.click();
-    await element.updateComplete;
+    flush();
     flush();
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
@@ -464,7 +478,7 @@ describe("chat Details presentation", () => {
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
         trigger.click();
-        await element.updateComplete;
+        flush();
         await expect
           .poll(() => menu.querySelector<HTMLButtonElement>("button")!.disabled)
           .toBe(false);
@@ -491,8 +505,8 @@ describe("chat Details presentation", () => {
     expect(refresh).toHaveBeenCalledWith(card);
     await select("clear");
     expect(clear).toHaveBeenCalledWith(card);
-    element.presented = false;
-    await element.updateComplete;
+    update({ presentation: false });
+    flush();
     flush();
     menu.querySelector<HTMLButtonElement>('[data-value="hide"]')!.click();
     expect(hide).toHaveBeenCalledTimes(1);

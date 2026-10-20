@@ -671,9 +671,7 @@ describe("xAI OAuth", () => {
   });
 
   it("keeps device-code polling deadline monotonic so a wall-clock jump cannot end authorization early", async () => {
-    const login = startLogin(() =>
-      jsonResponse({ error: "authorization_pending" }, { status: 400 }),
-    );
+    const login = startLogin(() => jsonResponse({ error: "authorization_pending" }, 400));
     await login.requested.promise; // first token poll complete
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);

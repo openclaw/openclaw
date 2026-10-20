@@ -32,6 +32,7 @@ import {
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
+import { ChatPastedText } from "./chat-pasted-text.tsx";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -384,12 +385,12 @@ function AttachmentContent(
         />
       </Match>
       <Match when={model().pastedText}>
-        <openclaw-chat-pasted-text
-          prop:src={pastedTextSource()}
-          prop:sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
-          prop:scope={scope()}
-          prop:onOpen={model().openAttachmentSidebar}
-          prop:admission={props.admission}
+        <ChatPastedText
+          src={pastedTextSource()}
+          sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+          scope={scope()}
+          onOpen={model().openAttachmentSidebar}
+          admission={props.admission}
         />
       </Match>
       <Match when={ready() && model().imageAttachment}>
