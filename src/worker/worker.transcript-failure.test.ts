@@ -100,9 +100,8 @@ it.each(["storage", "malformed schema receipt"])(
         },
       });
       expect(commit).toHaveBeenCalledOnce();
-      expect(harness.connectionCount).toBe(1);
+      expect(harness).toMatchObject({ connectionCount: 1, providerCalls: 0 });
       expect(harness.requestParams("worker.transcript.commit")).toHaveLength(1);
-      expect(harness.providerCalls).toBe(0);
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(
           kind === "storage"
@@ -133,7 +132,7 @@ it("replays transient transcript failures and completes the run without duplicat
         createAgentDatabaseInspectionRefusal({
           agentId: "main",
           paths: [],
-          reason: "synthetic pending inspection",
+          reason: "pending",
           pending: true,
         }),
       ),
@@ -160,12 +159,11 @@ it("replays transient transcript failures and completes the run without duplicat
 
     await expect(run).resolves.toMatchObject({ status: "completed" });
     const requests = harness.requestParams("worker.transcript.commit");
-    expect(harness.connectionCount).toBe(failures.length + 2);
+    expect(harness).toMatchObject({ connectionCount: failures.length + 2, providerCalls: 1 });
     expect(requests).toHaveLength(failures.length + 3);
     for (const replay of requests.slice(1, -1)) {
       expect(replay).toEqual(requests[0]);
     }
-    expect(harness.providerCalls).toBe(1);
     const transcript = await SessionManager.openAsync(harness.sessionTarget);
     expect(transcript.getEntries()).toHaveLength(2);
     expect(await run).toMatchObject({ transcriptLeafId: transcript.getLeafId() });

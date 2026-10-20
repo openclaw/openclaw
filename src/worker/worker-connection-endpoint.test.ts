@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
-  parseWorkerConnectionEndpoint,
-  resolveWorkerConnectionTarget,
-  WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES,
+  parseWorkerConnectionEndpoint as parseEndpoint,
+  resolveWorkerConnectionTarget as resolveTarget,
+  WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES as maxJsonBytes,
   type WorkerConnectionEndpoint,
 } from "./worker-connection-endpoint.js";
 
@@ -13,106 +13,83 @@ const credentials = { clientId: "cf-worker-id", clientSecret: "cf-worker-secret"
 const plaintext = { ...websocket, url: "ws://127.0.0.1/__openclaw__/worker" };
 
 function expectBounded(input: unknown) {
-  const parsed = parseWorkerConnectionEndpoint(input);
+  const parsed = parseEndpoint(input);
   expect(parsed).toBeDefined();
-  expect(Buffer.byteLength(JSON.stringify(parsed))).toBeLessThanOrEqual(
-    WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES,
-  );
+  expect(Buffer.byteLength(JSON.stringify(parsed))).toBeLessThanOrEqual(maxJsonBytes);
+}
+function inherited(prototype: object, own: object): object {
+  return Object.assign(Object.create(prototype), own);
 }
 
-describe("worker connection endpoint", () => {
-  it("bounds maximal control endpoint and Access fields", () => {
-    const prefix = "wss://worker.invalid/";
-    const suffix = "/__openclaw__/worker";
-    const fill = (length: number) => "\0".repeat(length);
-    const input = {
-      kind: "websocket",
-      url: prefix + fill(4_096 - prefix.length - suffix.length) + suffix,
-      tlsFingerprint: colonFingerprint,
-      cloudflareAccess: { clientId: `x${fill(4_095)}`, clientSecret: `s${fill(4_095)}` },
-    };
-    expectBounded(input);
-    for (const key of ["url", "clientId", "clientSecret"] as const) {
-      const candidate =
-        key === "url"
-          ? { ...input, url: prefix + "x" + input.url.slice(prefix.length) }
-          : {
-              ...input,
-              cloudflareAccess: {
-                ...input.cloudflareAccess,
-                [key]: `${input.cloudflareAccess[key]}x`,
-              },
-            };
-      expect(parseWorkerConnectionEndpoint(candidate)).toBeUndefined();
+it("bounds maximal control endpoint and Access fields", () => {
+  const prefix = "wss://worker.invalid/";
+  const suffix = "/__openclaw__/worker";
+  const fill = (length: number) => "\0".repeat(length);
+  const input = {
+    kind: "websocket",
+    url: prefix + fill(4_096 - prefix.length - suffix.length) + suffix,
+    tlsFingerprint: colonFingerprint,
+    cloudflareAccess: { clientId: `x${fill(4_095)}`, clientSecret: `s${fill(4_095)}` },
+  };
+  expectBounded(input);
+  for (const key of ["url", "clientId", "clientSecret"] as const) {
+    const candidate = structuredClone(input);
+    if (key === "url") {
+      candidate.url = prefix + "x" + input.url.slice(prefix.length);
+    } else {
+      candidate.cloudflareAccess[key] += "x";
     }
-    expectBounded({ kind: "unix", socketPath: `/${fill(255)}` });
-  });
+    expect(parseEndpoint(candidate)).toBeUndefined();
+  }
+  expectBounded({ kind: "unix", socketPath: `/${fill(255)}` });
+});
 
-  it("rejects endpoint fields inherited from the prototype", () => {
-    const endpoint = Object.assign(Object.create({ kind: "unix" }) as Record<string, unknown>, {
-      socketPath: "/tmp/openclaw-worker/gateway.sock",
-    });
-
-    expect(parseWorkerConnectionEndpoint(endpoint)).toBeUndefined();
-
-    const websocketEndpoint = Object.assign(
-      Object.create({ tlsFingerprint: fingerprint }),
-      websocket,
-    );
-
-    expect(parseWorkerConnectionEndpoint(websocketEndpoint)).toBeUndefined();
-
-    for (const cloudflareAccess of [
-      Object.assign(Object.create({ clientId: "fixture-id" }), { clientSecret: "fixture-secret" }),
-      Object.assign(Object.create({ clientSecret: "fixture-secret" }), { clientId: "fixture-id" }),
-    ]) {
-      expect(parseWorkerConnectionEndpoint({ ...websocket, cloudflareAccess })).toBeUndefined();
-    }
-  });
-
-  it("omits explicitly undefined optional credentials", () => {
-    expect(
-      parseWorkerConnectionEndpoint({
-        ...plaintext,
-        tlsFingerprint: undefined,
-        cloudflareAccess: undefined,
-      }),
-    ).toStrictEqual(plaintext);
-  });
-
-  it("carries the closed Cloudflare Access credential pair to the worker upgrade", () => {
-    const endpoint = parseWorkerConnectionEndpoint({
+it("rejects endpoint fields inherited from the prototype", () => {
+  for (const endpoint of [
+    inherited({ kind: "unix" }, { socketPath: "/tmp/openclaw-worker/gateway.sock" }),
+    inherited({ tlsFingerprint: fingerprint }, websocket),
+    {
       ...websocket,
-      cloudflareAccess: credentials,
-    });
-
-    expect(endpoint).toBeDefined();
-    expect(resolveWorkerConnectionTarget(endpoint!).options.headers).toEqual({
-      "CF-Access-Client-Id": credentials.clientId,
-      "CF-Access-Client-Secret": credentials.clientSecret,
-    });
-  });
-
-  it("rejects public plaintext while retaining the private-network break-glass", () => {
-    const endpoint = {
+      cloudflareAccess: inherited({ clientId: "fixture-id" }, { clientSecret: "fixture-secret" }),
+    },
+    {
       ...websocket,
-      url: "ws://gateway.example/__openclaw__/worker",
-    };
-    expect(() => resolveWorkerConnectionTarget(endpoint, {})).toThrow("SECURITY ERROR");
-    expect(() =>
-      resolveWorkerConnectionTarget(endpoint, { OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" }),
-    ).not.toThrow();
-  });
+      cloudflareAccess: inherited({ clientSecret: "fixture-secret" }, { clientId: "fixture-id" }),
+    },
+  ]) {
+    expect(parseEndpoint(endpoint)).toBeUndefined();
+  }
+});
 
-  it("rejects Access credentials on plaintext worker endpoints", () => {
-    const endpoint = {
-      ...plaintext,
-      cloudflareAccess: credentials,
-    };
+it("omits explicitly undefined optional credentials", () => {
+  const input = { ...plaintext, tlsFingerprint: undefined, cloudflareAccess: undefined };
+  expect(parseEndpoint(input)).toStrictEqual(plaintext);
+});
 
-    expect(parseWorkerConnectionEndpoint(endpoint)).toBeUndefined();
-    expect(() => resolveWorkerConnectionTarget(endpoint as WorkerConnectionEndpoint)).toThrow(
-      "Cloudflare Access credentials require a wss:// worker endpoint",
-    );
+it("carries the closed Cloudflare Access credential pair to the worker upgrade", () => {
+  const endpoint = parseEndpoint({ ...websocket, cloudflareAccess: credentials });
+
+  expect(endpoint).toBeDefined();
+  expect(resolveTarget(endpoint!).options.headers).toEqual({
+    "CF-Access-Client-Id": credentials.clientId,
+    "CF-Access-Client-Secret": credentials.clientSecret,
   });
+});
+
+it("rejects public plaintext while retaining the private-network break-glass", () => {
+  const endpoint = {
+    ...websocket,
+    url: "ws://gateway.example/__openclaw__/worker",
+  };
+  expect(() => resolveTarget(endpoint, {})).toThrow("SECURITY ERROR");
+  expect(() => resolveTarget(endpoint, { OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1" })).not.toThrow();
+});
+
+it("rejects Access credentials on plaintext worker endpoints", () => {
+  const endpoint = { ...plaintext, cloudflareAccess: credentials };
+
+  expect(parseEndpoint(endpoint)).toBeUndefined();
+  expect(() => resolveTarget(endpoint as WorkerConnectionEndpoint)).toThrow(
+    "Cloudflare Access credentials require a wss:// worker endpoint",
+  );
 });

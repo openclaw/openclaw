@@ -13,11 +13,8 @@ export function expectNativeRequests(
   count: number,
   expected: object,
 ) {
-  expect(provider.errors).toEqual([]);
-  expect(provider.requests).toHaveLength(count);
-  for (const request of provider.requests) {
-    expect(request).toMatchObject(expected);
-  }
+  const requests = Array.from({ length: count }, () => expected);
+  expect(provider).toMatchObject({ errors: [], requests });
 }
 
 export function expectNoProxyInference(owner: {
@@ -103,11 +100,8 @@ export async function nativeProviderFixture(
   const port = await listenNativeServer(
     createServer((request, response) => {
       void (async () => {
-        requests.push({
-          headers: request.headers,
-          body: JSON.parse(await text(request)),
-          url: request.url,
-        });
+        const body = JSON.parse(await text(request));
+        requests.push({ headers: request.headers, body, url: request.url });
         response.writeHead(200, { "content-type": "text/event-stream" });
         const value = reply(requests.length);
         if (value === undefined) {

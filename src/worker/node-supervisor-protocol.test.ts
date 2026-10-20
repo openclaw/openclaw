@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
-import { testWorkerDescriptor } from "../node-host/node-worker-supervisor.test-support.js";
+import { testWorkerLaunchInput } from "../node-host/node-worker-supervisor.test-support.js";
 import {
-  NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+  NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE as failureType,
   nodeWorkerPlanHash,
   parseNodeWorkerConnectionFailureMessage,
   parseNodeWorkerEnvironmentStopInput,
@@ -22,21 +22,12 @@ const identity: NodeWorkerSupervisorIdentity = {
   runId: "run-1",
 };
 
-function launchInput() {
-  const descriptor = testWorkerDescriptor("/tmp/worker", "success", "turn-1");
-  return {
-    environmentSession: 1,
-    launchId: "turn-1",
-    gatewayNamespace: "gateway-1",
-    expectedBundleHash: descriptor.admission.handshake.bundleHash,
-    placementGeneration: 4,
-    descriptor,
-  };
-}
-
+const launchInput = () => testWorkerLaunchInput("/tmp/worker", "turn-1");
 const parseLaunch = (input: unknown) => parseNodeWorkerLaunchInput(JSON.stringify(input));
 const parseLookup = (input: unknown) => parseNodeWorkerLookupInput(JSON.stringify(input));
 const parseStop = (input: unknown) => parseNodeWorkerEnvironmentStopInput(JSON.stringify(input));
+const parseFailure = (cause: string | null) =>
+  parseNodeWorkerConnectionFailureMessage({ type: failureType, cause });
 function withAuthoring(base: ReturnType<typeof launchInput>, skillAuthoring: unknown) {
   return {
     ...base,
@@ -101,12 +92,8 @@ it("rejects malformed authoring, unnegotiated lifetimes, and mismatched turn ide
 });
 
 it("requires a complete bounded environment owner independently of its completed turn", () => {
-  const scope = {
-    gatewayNamespace: "gateway-1",
-    environmentId: "environment-1",
-    sessionId: "session-1",
-    ownerEpoch: 3,
-  };
+  const { environmentId, sessionId, ownerEpoch } = identity;
+  const scope = { gatewayNamespace: "gateway-1", environmentId, sessionId, ownerEpoch };
   expect(parseStop(scope)).toEqual(scope);
   for (const fields of [
     { ownerEpoch: undefined },
@@ -122,25 +109,17 @@ it("requires a complete bounded environment owner independently of its completed
 
 it("accepts only bounded worker connection diagnostics", () => {
   for (const cause of ["certificate rejected", null]) {
-    const message = { type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE, cause };
-    expect(parseNodeWorkerConnectionFailureMessage(message)).toEqual(message);
+    expect(parseFailure(cause)).toEqual({ type: failureType, cause });
   }
-  expect(
-    parseNodeWorkerConnectionFailureMessage({
-      type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
-      cause: "x".repeat(64 * 1024 + 1),
-    }),
-  ).toBeNull();
+  expect(parseFailure("x".repeat(64 * 1024 + 1))).toBeNull();
 });
 
 it("round-trips only closed receipts with bounded output or single-line failure diagnostics", () => {
+  const resultJson = JSON.stringify({ status: "completed", transcriptNextSeq: 2 });
   for (const fields of [
     { state: "pending" },
     { state: "running" },
-    {
-      state: "completed",
-      resultJson: JSON.stringify({ status: "completed", transcriptNextSeq: 2 }),
-    },
+    { state: "completed", resultJson },
     { state: "failed", errorText: "worker exited before completion" },
     { state: "interrupted", errorText: "node host stopped" },
     { state: "cancelled", errorText: "node worker launch cancelled" },
