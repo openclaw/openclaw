@@ -3,44 +3,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
-const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/provider-runtime.js").resolveProviderUsageSnapshotWithPlugin>(),
-);
-const { envDispatcher, createHttp1EnvHttpProxyAgent, loadUndiciRuntimeDeps, undiciFetch } =
-  vi.hoisted(() => {
-    const envDispatcherLocal = { dispatch: () => true };
-    const undiciFetchLocal = vi.fn();
-    const loadUndiciRuntimeDepsLocal = vi.fn(() => ({
-      FormData: globalThis.FormData,
-      fetch: undiciFetchLocal,
-    }));
-
-    return {
-      envDispatcher: envDispatcherLocal,
-      createHttp1EnvHttpProxyAgent: vi.fn(() => envDispatcherLocal),
-      loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
-      undiciFetch: undiciFetchLocal,
-    };
-  });
+const mocks = vi.hoisted(() => {
+  const dispatcher = { dispatch: () => true };
+  const fetch = vi.fn();
+  return {
+    resolve:
+      vi.fn<
+        typeof import("../plugins/provider-runtime.js").resolveProviderUsageSnapshotWithPlugin
+      >(),
+    dispatcher,
+    proxyAgent: vi.fn(() => dispatcher),
+    runtime: vi.fn(() => ({ FormData: globalThis.FormData, fetch })),
+    fetch,
+  };
+});
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
 vi.mock("./net/undici-runtime.js", () => ({
-  createHttp1EnvHttpProxyAgent,
-  loadUndiciRuntimeDeps,
+  createHttp1EnvHttpProxyAgent: mocks.proxyAgent,
+  loadUndiciRuntimeDeps: mocks.runtime,
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderUsageSnapshotWithPlugin: resolveProviderUsageSnapshotWithPluginMock,
-  };
-});
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
+  resolveProviderUsageSnapshotWithPlugin: mocks.resolve,
+}));
 
 const usageNow = Date.UTC(2026, 0, 7);
 const snapshot: ProviderUsageSnapshot = {
@@ -56,14 +46,19 @@ const options = {
   auth: [{ provider: "openai", token: "codex-token", accountId: "acc-1" }],
   env,
 };
+function usePluginFetch() {
+  mocks.resolve.mockImplementationOnce(async ({ context }) => {
+    await context.fetchFn(url);
+    return snapshot;
+  });
+}
 
 describe("provider usage plugin routing", () => {
   beforeEach(() => {
-    createHttp1EnvHttpProxyAgent.mockClear();
-    loadUndiciRuntimeDeps.mockClear();
-    undiciFetch.mockReset();
-    resolveProviderUsageSnapshotWithPluginMock.mockReset();
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
+    mocks.proxyAgent.mockClear();
+    mocks.runtime.mockClear();
+    mocks.fetch.mockReset();
+    mocks.resolve.mockReset().mockResolvedValue(null);
     vi.stubGlobal(
       "fetch",
       vi.fn(() => {
@@ -74,61 +69,45 @@ describe("provider usage plugin routing", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("routes synthetic usage to the Codex hook with the original OpenAI account context", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce(snapshot);
+    mocks.resolve.mockResolvedValueOnce(snapshot);
+    const auth = { provider: "openai", token: "codex-app-server", authProfileId: "openai:work" };
     expect(
       await loadProviderUsageSummary({
         now: usageNow,
         env: {},
-        auth: [
-          {
-            provider: "openai",
-            token: "codex-app-server",
-            authProfileId: "openai:work",
-            hookProvider: "codex",
-          },
-        ],
+        auth: [{ ...auth, hookProvider: "codex" }],
       }),
     ).toEqual(expected);
-    expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.resolve).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         provider: "codex",
-        context: expect.objectContaining({
-          provider: "openai",
-          token: "codex-app-server",
-          authProfileId: "openai:work",
-        }),
+        context: expect.objectContaining(auth),
       }),
     );
   });
 
   it("routes plugin requests through the environment proxy", async () => {
-    undiciFetch.mockResolvedValueOnce(new Response("{}"));
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementationOnce(async ({ context }) => {
-      await context.fetchFn(url);
-      return snapshot;
-    });
+    mocks.fetch.mockResolvedValueOnce(new Response("{}"));
+    usePluginFetch();
     expect(await loadProviderUsageSummary(options)).toEqual(expected);
-    expect(createHttp1EnvHttpProxyAgent).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.proxyAgent).toHaveBeenCalledExactlyOnceWith(
       { httpsProxy: "http://proxy.test:8080" },
       undefined,
       env,
     );
-    expect(undiciFetch).toHaveBeenCalledExactlyOnceWith(
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith(
       url,
-      expect.objectContaining({ dispatcher: envDispatcher }),
+      expect.objectContaining({ dispatcher: mocks.dispatcher }),
     );
   });
 
   it("prefers explicit fetch over the environment proxy", async () => {
     const fetch = vi.fn(async () => new Response("{}"));
-    resolveProviderUsageSnapshotWithPluginMock.mockImplementationOnce(async ({ context }) => {
-      await context.fetchFn(url);
-      return snapshot;
-    });
+    usePluginFetch();
     expect(await loadProviderUsageSummary({ ...options, fetch })).toEqual(expected);
     expect(fetch).toHaveBeenCalledOnce();
-    expect(loadUndiciRuntimeDeps).not.toHaveBeenCalled();
-    expect(createHttp1EnvHttpProxyAgent).not.toHaveBeenCalled();
-    expect(undiciFetch).not.toHaveBeenCalled();
+    expect(mocks.runtime).not.toHaveBeenCalled();
+    expect(mocks.proxyAgent).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 });
