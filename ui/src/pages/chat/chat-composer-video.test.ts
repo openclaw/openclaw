@@ -24,44 +24,46 @@ function iconShapes(name: IconName): string[] {
   }
 }
 
-afterEach(async () => {
-  await resetComposerFixture();
-});
+afterEach(() => resetComposerFixture());
+
+function videoTalk(overrides: Parameters<typeof props>[0] = {}) {
+  return {
+    onToggleRealtimeTalk: vi.fn(),
+    onToggleRealtimeCamera: vi.fn(),
+    realtimeTalkActive: true,
+    realtimeTalkStatus: "listening" as const,
+    realtimeTalkVideoCapable: true,
+    ...overrides,
+  };
+}
+
+function cameraStream(facingMode: string): MediaStream {
+  return {
+    getVideoTracks: () => [{ getSettings: () => ({ facingMode }) } as MediaStreamTrack],
+  } as unknown as MediaStream;
+}
 
 describe("renderChatComposer video", () => {
   it("offers camera only inside a video-capable active talk session", () => {
     const onToggleRealtimeCamera = vi.fn();
-    const { container } = renderComposer({
-      onToggleRealtimeTalk: vi.fn(),
-      onToggleRealtimeCamera,
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "listening",
-      realtimeTalkVideoCapable: true,
-    });
+    const { container } = renderComposer(videoTalk({ onToggleRealtimeCamera }));
 
     button(container, t("chat.composer.turnCameraOn")).click();
     expect(onToggleRealtimeCamera).toHaveBeenCalledOnce();
     expect(container.querySelector('[aria-label="Start video talk"]')).toBeNull();
 
-    const failed = renderComposer({
-      onToggleRealtimeTalk: vi.fn(),
-      onToggleRealtimeCamera,
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "error",
-      realtimeTalkVideoCapable: true,
-    });
+    const failed = renderComposer(
+      videoTalk({ onToggleRealtimeCamera, realtimeTalkStatus: "error" }),
+    );
     expect(button(failed.container, t("chat.composer.turnCameraOn")).disabled).toBe(true);
   });
 
   it("renders the camera-off glyph while the talk camera is enabled", () => {
-    const { container } = renderComposer({
-      onToggleRealtimeTalk: vi.fn(),
-      onToggleRealtimeCamera: vi.fn(),
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "listening",
-      realtimeTalkVideoCapable: true,
-      realtimeTalkVideoStream: {} as MediaStream,
-    });
+    const { container } = renderComposer(
+      videoTalk({
+        realtimeTalkVideoStream: {} as MediaStream,
+      }),
+    );
 
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
     const shapes = Array.from(
@@ -74,13 +76,7 @@ describe("renderChatComposer video", () => {
 
   it("offers camera switching only for a live preview with multiple cameras", () => {
     const onSwitchRealtimeCamera = vi.fn();
-    const stream = {
-      getVideoTracks: () => [
-        {
-          getSettings: () => ({ facingMode: "user" }),
-        } as MediaStreamTrack,
-      ],
-    } as unknown as MediaStream;
+    const stream = cameraStream("user");
     const { container } = renderComposer({
       realtimeTalkVideoStream: stream,
       realtimeTalkCameraDevices: [
@@ -109,13 +105,7 @@ describe("renderChatComposer video", () => {
   });
 
   it("does not mirror an environment-facing camera preview", () => {
-    const stream = {
-      getVideoTracks: () => [
-        {
-          getSettings: () => ({ facingMode: "environment" }),
-        } as MediaStreamTrack,
-      ],
-    } as unknown as MediaStream;
+    const stream = cameraStream("environment");
     const { container } = renderComposer({ realtimeTalkVideoStream: stream });
 
     expect(container.querySelector("video")?.classList).not.toContain(

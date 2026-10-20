@@ -5,6 +5,7 @@ import { t } from "../../i18n/index.ts";
 import {
   createComposerContainer,
   createComposerProps,
+  findComposerButton as button,
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
@@ -18,14 +19,6 @@ function renderComposer(overrides: Partial<ComposerProps> = {}): HTMLElement {
   return container;
 }
 
-function button(container: Element, label: string): HTMLButtonElement {
-  const result = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
-  if (!result) {
-    throw new Error(`expected button ${label}`);
-  }
-  return result;
-}
-
 function textarea(container: Element): HTMLTextAreaElement {
   const result = container.querySelector<HTMLTextAreaElement>("textarea");
   if (!result) {
@@ -36,6 +29,24 @@ function textarea(container: Element): HTMLTextAreaElement {
 
 function primaryPointerDown(): MouseEvent {
   return new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+}
+
+function sendableDraft(initial: string, trackTyping = false) {
+  let draft = initial;
+  const onSend = vi.fn(() => {
+    draft = "";
+  });
+  const onTypingChange = vi.fn();
+  const container = renderComposer({
+    draft,
+    getDraft: () => draft,
+    onDraftChange: (value) => {
+      draft = value;
+    },
+    onSend,
+    onTypingChange: trackTyping ? onTypingChange : undefined,
+  });
+  return { container, input: textarea(container), onSend, onTypingChange };
 }
 
 afterEach(() => resetComposerFixture());
@@ -91,21 +102,12 @@ describe("chat composer pointer activation", () => {
   });
 
   it("retains focus while Send clears the draft and Stop preserves it", () => {
-    let sendDraft = "Send this";
-    const onSend = vi.fn(() => {
-      sendDraft = "";
-    });
-    const onSendTypingChange = vi.fn();
-    const sendContainer = renderComposer({
-      draft: sendDraft,
-      getDraft: () => sendDraft,
-      onDraftChange: (value) => {
-        sendDraft = value;
-      },
+    const {
+      container: sendContainer,
+      input: sendTextarea,
       onSend,
       onTypingChange: onSendTypingChange,
-    });
-    const sendTextarea = textarea(sendContainer);
+    } = sendableDraft("Send this", true);
     const send = button(sendContainer, t("chat.runControls.sendMessage"));
     sendTextarea.focus();
     send.dispatchEvent(primaryPointerDown());
@@ -136,19 +138,7 @@ describe("chat composer pointer activation", () => {
   });
 
   it("does not leave composition state stuck after pointer Send", () => {
-    let draft = "構成中";
-    const onSend = vi.fn(() => {
-      draft = "";
-    });
-    const container = renderComposer({
-      draft,
-      getDraft: () => draft,
-      onDraftChange: (value) => {
-        draft = value;
-      },
-      onSend,
-    });
-    const input = textarea(container);
+    const { container, input, onSend } = sendableDraft("構成中");
     input.focus();
     input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     const send = button(container, t("chat.runControls.sendMessage"));

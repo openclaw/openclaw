@@ -53,6 +53,20 @@ async function openPicker(container: HTMLElement) {
   return dropdown;
 }
 
+const part = (container: Element, name: string) =>
+  container.querySelector<HTMLElement>(`.chat-talk-input-picker__${name}`);
+const items = (container: Element) => [
+  ...container.querySelectorAll<HTMLButtonElement>(".chat-talk-input-picker__item"),
+];
+const checked = (container: Element) =>
+  items(container).map((item) => item.getAttribute("aria-checked"));
+const expectOpen = (dropdown: HTMLElement, open: boolean) =>
+  waitForSolid(() => expect(dropdown.hasAttribute("open")).toBe(open));
+const escape = () =>
+  document.activeElement?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+
 describe("composer microphone picker", () => {
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
     discoverRealtimeTalkInputsMock.mockResolvedValue({
@@ -87,22 +101,22 @@ describe("composer microphone picker", () => {
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(3),
     );
-    const items = [
-      ...container.querySelectorAll<HTMLButtonElement>(".chat-talk-input-picker__item"),
-    ];
-    expect(
-      items.map((item) => item.querySelector(".chat-talk-input-picker__label")?.textContent),
-    ).toEqual([t("chat.composer.systemDefaultMicrophone"), "Studio microphone", "USB headset"]);
-    expect(items.map((item) => item.getAttribute("role"))).toEqual([
+    const choices = items(container);
+    expect(choices.map((item) => part(item, "label")?.textContent)).toEqual([
+      t("chat.composer.systemDefaultMicrophone"),
+      "Studio microphone",
+      "USB headset",
+    ]);
+    expect(choices.map((item) => item.getAttribute("role"))).toEqual([
       "menuitemradio",
       "menuitemradio",
       "menuitemradio",
     ]);
-    expect(items.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
+    expect(choices.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
       "true",
     );
     expect(
-      items
+      choices
         .find((item) => item.value === "studio-mic")
         ?.querySelector(".chat-talk-input-picker__check")
         ?.querySelector("svg"),
@@ -113,32 +127,24 @@ describe("composer microphone picker", () => {
         "open",
       ),
     );
-    const focused = items.find((item) => item.value === "studio-mic")!;
+    const focused = choices.find((item) => item.value === "studio-mic")!;
     focused.focus();
     composerProps.composerHoldToRecord = false;
     draw();
     await waitForSolid(() => {
-      expect(
-        container
-          .querySelector(".chat-talk-input-picker__preference")
-          ?.getAttribute("aria-checked"),
-      ).toBe("false");
+      expect(part(container, "preference")?.getAttribute("aria-checked")).toBe("false");
       expect(container.querySelector('[value="studio-mic"]')).toBe(focused);
       expect(document.activeElement).toBe(focused);
     });
 
-    items.find((item) => item.value === "headset")?.click();
+    choices.find((item) => item.value === "headset")?.click();
     await waitForSolid(() => expect(loadSettings().realtimeTalkInputDeviceId).toBe("headset"));
-    await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(false));
+    await expectOpen(dropdown, false);
 
     button(container, t("chat.composer.microphoneInput")).click();
     await waitForSolid(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
     expect(dropdown?.hasAttribute("open")).toBe(true);
-    expect(
-      [...container.querySelectorAll(".chat-talk-input-picker__item")].map((item) =>
-        item.getAttribute("aria-checked"),
-      ),
-    ).toEqual(["false", "false", "true"]);
+    expect(checked(container)).toEqual(["false", "false", "true"]);
   });
 
   it("keeps the controlled hold-to-dictate preference in sync after toggling", async () => {
@@ -160,9 +166,7 @@ describe("composer microphone picker", () => {
 
     await openPicker(container);
 
-    const preference = container.querySelector<HTMLElement>(
-      '.chat-talk-input-picker__preference[role="menuitemcheckbox"]',
-    );
+    const preference = part(container, 'preference[role="menuitemcheckbox"]');
     expect(preference?.getAttribute("aria-checked")).toBe("true");
     preference?.click();
 
@@ -171,9 +175,7 @@ describe("composer microphone picker", () => {
     expect(loadSettings().realtimeTalkInputDeviceId).toBe("studio-mic");
     expect(dropdown?.hasAttribute("open")).toBe(true);
     expect(
-      container
-        .querySelector<HTMLElement>('.chat-talk-input-picker__preference[role="menuitemcheckbox"]')
-        ?.getAttribute("aria-checked"),
+      part(container, 'preference[role="menuitemcheckbox"]')?.getAttribute("aria-checked"),
     ).toBe("false");
   });
 
@@ -317,32 +319,26 @@ describe("composer microphone picker", () => {
         await waitForSolid(() =>
           expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
         );
-        expect(
-          [...container.querySelectorAll(".chat-talk-input-picker__item")].map((item) =>
-            item.getAttribute("aria-checked"),
-          ),
-        ).toEqual(["true", "false"]);
-        expect(
-          container.querySelector(".chat-talk-input-picker__warning")?.textContent?.trim(),
-        ).toBe(t(messageKey));
-        expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
-        expect(container.querySelector(".chat-talk-input-picker__hint")?.textContent).toContain(
+        expect(checked(container)).toEqual(["true", "false"]);
+        expect(part(container, "warning")?.textContent?.trim()).toBe(t(messageKey));
+        expect(part(container, "empty")).toBeNull();
+        expect(part(container, "hint")?.textContent).toContain(
           t("chat.composer.microphoneAppliesNextSession"),
         );
-        document.activeElement?.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-        );
-        await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(false));
+        escape();
+        await expectOpen(dropdown, false);
       } else {
         const empty = await waitForSolid(() => {
-          const node = container.querySelector(".chat-talk-input-picker__empty");
+          const node = part(container, "empty");
           expect(node?.textContent?.trim()).toBe(t(messageKey));
           return node;
         });
-        expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0);
-        expect(container.querySelector(".chat-talk-input-picker__note")).toBeNull();
-        expect(container.querySelector(".chat-talk-input-picker__warning")).toBeNull();
-        expect(container.querySelector(".chat-talk-input-picker__hint")).toBeNull();
+        expect(items(container)).toHaveLength(0);
+        expect(
+          container.querySelector(
+            ".chat-talk-input-picker__note, .chat-talk-input-picker__warning, .chat-talk-input-picker__hint",
+          ),
+        ).toBeNull();
         expect(container.querySelectorAll(".chat-talk-input-picker__empty")).toHaveLength(1);
         expect(empty?.getAttribute("role")).toBe("status");
         expect(empty?.classList.contains("chat-talk-input-picker__empty--fault")).toBe(fault);
@@ -362,7 +358,7 @@ describe("composer microphone picker", () => {
 
     await openPicker(container);
     await waitForSolid(() =>
-      expect(container.querySelector(".chat-talk-input-picker__empty")?.textContent?.trim()).toBe(
+      expect(part(container, "empty")?.textContent?.trim()).toBe(
         t("chat.composer.microphoneNoneFound"),
       ),
     );
@@ -377,7 +373,7 @@ describe("composer microphone picker", () => {
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(2),
     );
-    expect(container.querySelector(".chat-talk-input-picker__empty")).toBeNull();
+    expect(part(container, "empty")).toBeNull();
 
     discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
     mediaDevices.dispatchEvent(new Event("devicechange"));
@@ -385,10 +381,8 @@ describe("composer microphone picker", () => {
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(0),
     );
 
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-    await waitForSolid(() => expect(dropdown?.hasAttribute("open")).toBe(false));
+    escape();
+    await expectOpen(dropdown, false);
     const callsWhileClosed = discoverRealtimeTalkInputsMock.mock.calls.length;
     mediaDevices.dispatchEvent(new Event("devicechange"));
     await Promise.resolve();

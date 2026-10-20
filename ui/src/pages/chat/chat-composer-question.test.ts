@@ -48,6 +48,14 @@ describe("composer question takeover", () => {
       progress.querySelector("summary")!.click();
       expect(progress.open).toBe(progressOpen);
       const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
+      const expectRestored = () => {
+        const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+        expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
+        expect(progressWrapper.hidden).toBe(false);
+        expect(progress.open).toBe(progressOpen);
+        expect(textarea.value).toBe("Host updated this draft while the question was open");
+        expect(document.activeElement).toBe(textarea);
+      };
       expect(progressWrapper.hidden).toBe(false);
       const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       initialTextarea.focus();
@@ -61,9 +69,11 @@ describe("composer question takeover", () => {
       composerProps.gatewayQuestionPrompts = [prompt];
       draw();
       let panel = await questionPanelIn(container);
-      expect(container.querySelector(".agent-chat__input")).toBeNull();
-      expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-      expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
+      expect(
+        container.querySelector(
+          ".agent-chat__input, .agent-chat__composer-footer, .agent-chat__typing-indicator--outside",
+        ),
+      ).toBeNull();
       expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
       expect(composerProps.draft).toBe("Keep this draft while composing");
       expect(progressWrapper.hidden).toBe(true);
@@ -74,12 +84,7 @@ describe("composer question takeover", () => {
       panel.props!.onCollapsedChange!(true);
       draw();
       await Promise.resolve();
-      let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
-      expect(progressWrapper.hidden).toBe(false);
-      expect(progress.open).toBe(progressOpen);
-      expect(textarea.value).toBe("Host updated this draft while the question was open");
-      expect(document.activeElement).toBe(textarea);
+      expectRestored();
 
       panel = await questionPanelIn(container);
       panel.props!.onCollapsedChange!(false);
@@ -92,12 +97,7 @@ describe("composer question takeover", () => {
       prompt.status = "answered";
       draw();
       await Promise.resolve();
-      textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
-      expect(progressWrapper.hidden).toBe(false);
-      expect(progress.open).toBe(progressOpen);
-      expect(textarea.value).toBe("Host updated this draft while the question was open");
-      expect(document.activeElement).toBe(textarea);
+      expectRestored();
       expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
 
       container.remove();
