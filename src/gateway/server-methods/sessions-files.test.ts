@@ -416,6 +416,19 @@ describe("sessions.files RPC handlers", () => {
     });
   });
 
+  it("keeps searches complete when only repository metadata is excluded", async () => {
+    writeWorkspace("src/REPORT.md", "# Source report\n");
+    writeWorkspace(".git/objects/REPORT.md", "# Git object\n");
+
+    const payload = await files.ok("list", { search: "REPORT.md" });
+
+    expect(payload.browser).toMatchObject({
+      search: "REPORT.md",
+      entries: [{ path: "src/REPORT.md" }],
+    });
+    expect(payload.browser).not.toHaveProperty("truncated");
+  });
+
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
     async () => {
