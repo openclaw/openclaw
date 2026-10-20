@@ -86,7 +86,9 @@ export function createColdLoadEventStream(input: ColdLoadProbeInput) {
           gateway.emit(item.event, payloadWithIdentity(item.payload));
           emitting = undefined;
         };
-        window.setTimeout(emit, item.atMs);
+        window.setTimeout(() => {
+          void emit();
+        }, item.atMs);
       }
     },
     get emitting() {

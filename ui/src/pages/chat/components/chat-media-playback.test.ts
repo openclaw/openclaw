@@ -13,19 +13,28 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const waitForPlayback = () =>
-  waitForChatMediaPlayback({ source: "/media?playback=1", signal: new AbortController().signal });
-
 describe("chat media playback renditions", () => {
   it("appends playback=1 without dropping assistant or managed media tickets", () => {
-    for (const [source, hash] of [
-      ["/__openclaw__/assistant-media?source=%2Ftmp%2Fvoice.caf&mediaTicket=assistant", ""],
-      ["/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full?mediaTicket=managed", ""],
-      ["media/clip.avi?mediaTicket=relative", "#preview"],
-      ["//cdn.example/clip.avi?mediaTicket=cdn", ""],
-    ]) {
-      expect(appendChatMediaPlaybackParam(source + hash)).toBe(`${source}&playback=1${hash}`);
-    }
+    expect(
+      appendChatMediaPlaybackParam(
+        "/__openclaw__/assistant-media?source=%2Ftmp%2Fvoice.caf&mediaTicket=assistant",
+      ),
+    ).toBe(
+      "/__openclaw__/assistant-media?source=%2Ftmp%2Fvoice.caf&mediaTicket=assistant&playback=1",
+    );
+    expect(
+      appendChatMediaPlaybackParam(
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full?mediaTicket=managed",
+      ),
+    ).toBe(
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full?mediaTicket=managed&playback=1",
+    );
+    expect(appendChatMediaPlaybackParam("media/clip.avi?mediaTicket=relative#preview")).toBe(
+      "media/clip.avi?mediaTicket=relative&playback=1#preview",
+    );
+    expect(appendChatMediaPlaybackParam("//cdn.example/clip.avi?mediaTicket=cdn")).toBe(
+      "//cdn.example/clip.avi?mediaTicket=cdn&playback=1",
+    );
   });
 
   it("retries at the default delays until the rendition is ready", async () => {
@@ -97,7 +106,10 @@ describe("chat media playback renditions", () => {
   it("fails a stalled readiness request at its request deadline", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => await new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetchMock);
-    const pending = waitForPlayback();
+    const pending = waitForChatMediaPlayback({
+      source: "/media?playback=1",
+      signal: new AbortController().signal,
+    });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(pending).resolves.toBe("unavailable");
     expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
@@ -109,7 +121,10 @@ describe("chat media playback renditions", () => {
       return new Response(null, { status: 202 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const pending = waitForPlayback();
+    const pending = waitForChatMediaPlayback({
+      source: "/media?playback=1",
+      signal: new AbortController().signal,
+    });
     let settled = false;
     void pending.then(() => (settled = true));
 

@@ -6,7 +6,9 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { DecisionProviderV2 } from "./types-v2.js";
 import type { DecisionProviderV1, UnavailableReason } from "./types.js";
 
-export const unavailable = (reason: UnavailableReason) => ({
+export const unavailable = <Reason extends UnavailableReason>(
+  reason: Reason,
+): { status: "unavailable"; reason: Reason } => ({
   status: "unavailable" as const,
   reason,
 });

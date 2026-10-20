@@ -5,14 +5,14 @@ import type {
   SessionEventReceipt,
 } from "../auto-reply/reply/session-event-contract.js";
 import * as handoff from "../auto-reply/reply/session-event-handoff.js";
-import { setRuntimeConfigSnapshot as setConfig } from "../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig as Config } from "../config/types.openclaw.js";
-import { rotateAgentEventLifecycleGeneration as rotateLifecycle } from "../infra/agent-events.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -31,7 +31,7 @@ import {
   markExited,
   processSessionInstanceId,
 } from "./bash-process-registry.js";
-import { createProcessSessionFixture as processFixture } from "./bash-process-registry.test-helpers.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import {
   maybeNotifyOnExit,
@@ -41,18 +41,10 @@ import {
 import { createProcessTool } from "./bash-tools.process.js";
 import { isRuntimeToolAllowed } from "./tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { withGatewayToolCallerIdentity as withCaller } from "./tools/gateway-caller-context.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const sessionKey = "agent:main:exec-restart";
-const initialConfig: Config = { agents: { entries: { main: {} } } };
-const agentNotifications = (main: boolean, secondary?: boolean): Config["agents"] => ({
-  entries: {
-    main: { tools: { exec: { notifyOnExit: main } } },
-    ...(secondary === undefined
-      ? {}
-      : { secondary: { tools: { exec: { notifyOnExit: secondary } } } }),
-  },
-});
+const initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
 const route = { channel: "telegram", to: "-100001", accountId: "synthetic-account" };
 const completed: SessionEventOutcome = {
   status: "completed",
@@ -81,37 +73,37 @@ afterAll(() => enqueue.mockRestore());
 
 async function withFixture(
   run: (fixture: {
-    config: Config;
-    read: () => Promise<SessionEntry | undefined>;
-    patch: (entry: Partial<SessionEntry>) => Promise<unknown>;
+    config: OpenClawConfig;
+    read: () => Promise<InternalSessionEntry | undefined>;
+    patch: (entry: Partial<InternalSessionEntry>) => Promise<unknown>;
     background: (options?: {
       notifyOnExit?: boolean;
       id?: string;
       toolsAllow?: string[];
-    }) => Promise<ReturnType<typeof processFixture>>;
-    recover: (config?: Config) => Promise<void>;
+    }) => Promise<ReturnType<typeof createProcessSessionFixture>>;
+    recover: (config?: OpenClawConfig) => Promise<void>;
   }) => Promise<void>,
-  entry: Partial<SessionEntry> = {},
+  entry: Partial<InternalSessionEntry> = {},
   owner = { agentId: "main", storeAgentId: "main" },
 ) {
   await withOpenClawTestState({ label: "exec-restart-notification" }, async (state) => {
     const { agentId, storeAgentId } = owner;
     const key = `agent:${agentId}:exec-restart`;
-    setConfig(initialConfig);
+    setRuntimeConfigSnapshot(initialConfig);
     openOpenClawStateDatabase({ env: state.env });
     const database = openOpenClawAgentDatabase({
       agentId: storeAgentId,
       path: agentId === storeAgentId ? undefined : state.path("shared.sqlite"),
       env: state.env,
     });
-    const config: Config =
+    const config: OpenClawConfig =
       agentId === storeAgentId
         ? initialConfig
         : {
             agents: { entries: { [storeAgentId]: {}, [agentId]: {} } },
             session: { store: database.path },
           };
-    setConfig(config);
+    setRuntimeConfigSnapshot(config);
     writeSessionEntry(database, key, {
       sessionId: "original-session",
       lifecycleRevision: "original-revision",
@@ -135,7 +127,7 @@ async function withFixture(
         read: () => readSessionEntryReadOnlyInWorker(scope),
         patch: (patch) => patchSessionEntryCore(scope, () => patch, { preserveActivity: true }),
         background: async (options = {}) => {
-          const process = processFixture({
+          const process = createProcessSessionFixture({
             id: options.id ?? `synthetic-execution-${++executionCounter}`,
             command: "SECRET_TOKEN=synthetic-secret private-command --secret synthetic-secret",
             startedAt: 123,
@@ -147,7 +139,7 @@ async function withFixture(
             notifyOnExitEmptySuccess: true,
           });
           addSession(process);
-          await withCaller(
+          await withGatewayToolCallerIdentity(
             { agentId, sessionKey: key, sessionEventToolsAllow: options.toolsAllow },
             () => prepareExecExitNotification(process, false),
           );
@@ -180,10 +172,10 @@ function lastNotification() {
 }
 
 describe("background exec completion obligations", () => {
-  it("rescans stores after admission completes", () =>
-    withFixture(async ({ background, recover, read }) => {
+  it("rescans pending stores after their admission owner completes", async () => {
+    await withFixture(async ({ background, recover, read }) => {
       await background();
-      rotateLifecycle();
+      rotateAgentEventLifecycleGeneration();
       const refusal = createAgentDatabaseInspectionRefusal({
         agentId: "main",
         paths: [resolveSessionStorePathCore(undefined, { agentId: "main" })],
@@ -218,10 +210,11 @@ describe("background exec completion obligations", () => {
         await recovery;
         recordAgentDatabaseAdmissions([]);
       }
-    }));
+    });
+  });
 
-  it("persists only notification metadata", () =>
-    withFixture(async ({ background, read }) => {
+  it("records a compact durable obligation without command text, environment or output", async () => {
+    await withFixture(async ({ background, read }) => {
       const process = await background();
       const entry = await read();
       expect(entry?.pendingExecNotifications).toEqual({
@@ -238,10 +231,27 @@ describe("background exec completion obligations", () => {
       expect(JSON.stringify(entry?.pendingExecNotifications)).not.toContain("synthetic-secret");
       expect(entry?.updatedAt).toBe(1);
       expect(enqueue).not.toHaveBeenCalled();
-    }));
+    });
+  });
 
-  it.each(["cancelled", "removed"] as const)("clears explicitly %s processes", (action) =>
-    withFixture(async ({ background, read }) => {
+  it("retains the obligation until normal completion is adopted", async () => {
+    await withFixture(async ({ background, read }) => {
+      const process = await background();
+      process.exitCode = 0;
+      await maybeNotifyOnExit(process, "completed", false);
+      expect((await read())?.pendingExecNotifications).toHaveProperty(
+        processSessionInstanceId(process),
+      );
+      const notification = lastNotification();
+      expect(notification.text).toContain("Exec completed");
+      expect(notification.options.expectedTarget).toBe(process.notifySessionTarget);
+      await notification.options.onAdopted?.();
+      expect((await read())?.pendingExecNotifications).toBeUndefined();
+    });
+  });
+
+  it.each(["cancelled", "removed"] as const)("clears explicitly %s processes", async (action) => {
+    await withFixture(async ({ background, read }) => {
       const process = await background();
       if (action === "cancelled") {
         process.exitReason = "manual-cancel";
@@ -256,15 +266,15 @@ describe("background exec completion obligations", () => {
       }
       expect((await read())?.pendingExecNotifications).toBeUndefined();
       expect(enqueue).not.toHaveBeenCalled();
-    }),
-  );
+    });
+  });
 
-  it("recovers a lost exec once after adoption", () =>
-    withFixture(async ({ background, read, recover }) => {
+  it("hands off an old-incarnation obligation once and does not repeat it after adoption", async () => {
+    await withFixture(async ({ background, read, recover }) => {
       const process = await background();
       await recover();
       expect(enqueue).not.toHaveBeenCalled();
-      rotateLifecycle();
+      rotateAgentEventLifecycleGeneration();
       await recover();
       await recover();
       expect(enqueue).toHaveBeenCalledTimes(1);
@@ -284,24 +294,18 @@ describe("background exec completion obligations", () => {
       });
       await options.onAdopted?.();
       expect((await read())?.pendingExecNotifications).toBeUndefined();
-      rotateLifecycle();
+      rotateAgentEventLifecycleGeneration();
       await recover();
       expect(enqueue).toHaveBeenCalledTimes(1);
-    }));
+    });
+  });
 
-  it("distinguishes receipts with reused slug and start time", () =>
-    withFixture(async ({ background, read }) => {
+  it("keeps distinct completion receipts when a process slug and start time are reused", async () => {
+    await withFixture(async ({ background, read }) => {
       const first = await background({ id: "reused-process" });
-      first.exitCode = 0;
       await maybeNotifyOnExit(first, "completed", false);
-      expect((await read())?.pendingExecNotifications).toHaveProperty(
-        processSessionInstanceId(first),
-      );
       const firstNotification = lastNotification();
-      expect(firstNotification.text).toContain("Exec completed");
-      expect(firstNotification.options.expectedTarget).toBe(first.notifySessionTarget);
       await firstNotification.options.onAdopted?.();
-      expect((await read())?.pendingExecNotifications).toBeUndefined();
       deleteSession(first.id);
       await first.clearExitNotification?.();
       const successor = await background({ id: first.id });
@@ -316,131 +320,175 @@ describe("background exec completion obligations", () => {
       ]);
       await successorNotification.options.onAdopted?.();
       expect((await read())?.pendingExecNotifications).toBeUndefined();
-    }));
+    });
+  });
 
-  it.each<{
-    name: string;
-    patch?: (source: string) => Partial<SessionEntry>;
-    config?: Config;
-  }>([
-    {
-      name: "claimed source",
-      patch: (source) => ({
-        restartRecoveryDeliveryRunId: "admitted-notice-run",
-        restartRecoveryDeliverySourceRunId: source,
-      }),
+  it.each(["claimed", "terminal"] as const)(
+    "clears an already %s source after a crash before the adoption callback",
+    async (phase) => {
+      await withFixture(async ({ background, patch, read, recover }) => {
+        const process = await background();
+        const sourceTurnId = `exec:${processSessionInstanceId(process)}`;
+        await patch(
+          phase === "claimed"
+            ? {
+                restartRecoveryDeliveryRunId: "admitted-notice-run",
+                restartRecoveryDeliverySourceRunId: sourceTurnId,
+              }
+            : { restartRecoveryTerminalRunIds: [sourceTurnId] },
+        );
+        rotateAgentEventLifecycleGeneration();
+        await recover();
+        expect(enqueue).not.toHaveBeenCalled();
+        expect((await read())?.pendingExecNotifications).toBeUndefined();
+      });
     },
-    { name: "terminal source", patch: (source) => ({ restartRecoveryTerminalRunIds: [source] }) },
-    { name: "replaced session", patch: () => ({ sessionId: "replacement-session" }) },
-    { name: "reset session", patch: () => ({ lifecycleRevision: "replacement-revision" }) },
-    { name: "archived session", patch: () => ({ archivedAt: 5 }) },
-    {
-      name: "global opt-out",
-      config: { ...initialConfig, tools: { exec: { notifyOnExit: false } } },
-    },
-    { name: "agent opt-out", config: { agents: agentNotifications(false) } },
-  ])("clears a $name without waking it", ({ patch, config }) =>
-    withFixture(async ({ background, patch: patchEntry, read, recover }) => {
-      const process = await background();
-      if (patch) {
-        await patchEntry(patch(`exec:${processSessionInstanceId(process)}`));
-      }
-      if (config) {
-        setConfig(config);
-      }
-      rotateLifecycle();
-      await recover(config);
+  );
+
+  it.each([
+    { name: "replaced", patch: { sessionId: "replacement-session" } },
+    { name: "reset", patch: { lifecycleRevision: "replacement-revision" } },
+    { name: "archived", patch: { archivedAt: 5 } },
+  ])("clears a $name session without waking it", async ({ patch }) => {
+    await withFixture(async ({ background, patch: patchEntry, read, recover }) => {
+      await background();
+      await patchEntry(patch);
+      rotateAgentEventLifecycleGeneration();
+      await recover();
       expect(enqueue).not.toHaveBeenCalled();
       expect((await read())?.pendingExecNotifications).toBeUndefined();
-    }),
+    });
+  });
+
+  it.each(["global", "agent"] as const)(
+    "honors the current %s notification opt-out",
+    async (scope) => {
+      await withFixture(async ({ background, read, recover }) => {
+        await background();
+        const config: OpenClawConfig =
+          scope === "global"
+            ? { ...initialConfig, tools: { exec: { notifyOnExit: false } } }
+            : { agents: { entries: { main: { tools: { exec: { notifyOnExit: false } } } } } };
+        setRuntimeConfigSnapshot(config);
+        rotateAgentEventLifecycleGeneration();
+        await recover(config);
+        expect(enqueue).not.toHaveBeenCalled();
+        expect((await read())?.pendingExecNotifications).toBeUndefined();
+      });
+    },
   );
 
   it.each([
     { main: true, secondary: true },
     { main: false, secondary: true },
     { main: true, secondary: false },
-  ])("uses the logical agent in a shared store (main=$main, secondary=$secondary)", (notify) =>
-    withFixture(
-      async ({ background, read, recover, config }) => {
-        const process = await background();
-        expect((await read())?.pendingExecNotifications).toHaveProperty(
-          processSessionInstanceId(process),
-        );
-        const recoveryConfig: Config = {
-          ...config,
-          agents: agentNotifications(notify.main, notify.secondary),
-        };
-        setConfig(recoveryConfig);
-        rotateLifecycle();
-        await recover(recoveryConfig);
-        if (notify.secondary) {
-          expect(enqueue).toHaveBeenCalledTimes(1);
-          const { options } = lastNotification();
-          expect(options).toMatchObject({
-            agentId: "secondary",
-            sessionKey: "agent:secondary:exec-restart",
-            expectedTarget: {
-              agentId: "secondary",
-              sessionId: "original-session",
-              lifecycleRevision: "original-revision",
+  ])(
+    "uses the logical agent in a shared store (main=$main, secondary=$secondary)",
+    async (notify) => {
+      await withFixture(
+        async ({ background, read, recover, config }) => {
+          const process = await background();
+          expect((await read())?.pendingExecNotifications).toHaveProperty(
+            processSessionInstanceId(process),
+          );
+          const recoveryConfig: OpenClawConfig = {
+            ...config,
+            agents: {
+              entries: {
+                main: { tools: { exec: { notifyOnExit: notify.main } } },
+                secondary: { tools: { exec: { notifyOnExit: notify.secondary } } },
+              },
             },
-          });
-          expect(() => options.assertCurrent?.()).not.toThrow();
-          setConfig({
-            ...recoveryConfig,
-            agents: agentNotifications(true, false),
-          });
-          expect(() => options.assertCurrent?.()).toThrow("notifications are disabled");
-          await options.onAdopted?.();
-        } else {
-          expect(enqueue).not.toHaveBeenCalled();
-        }
-        expect((await read())?.pendingExecNotifications).toBeUndefined();
-      },
-      {},
-      { agentId: "secondary", storeAgentId: "main" },
-    ),
+          };
+          setRuntimeConfigSnapshot(recoveryConfig);
+          rotateAgentEventLifecycleGeneration();
+          await recover(recoveryConfig);
+          if (notify.secondary) {
+            expect(enqueue).toHaveBeenCalledTimes(1);
+            const { options } = lastNotification();
+            expect(options).toMatchObject({
+              agentId: "secondary",
+              sessionKey: "agent:secondary:exec-restart",
+              expectedTarget: {
+                agentId: "secondary",
+                sessionId: "original-session",
+                lifecycleRevision: "original-revision",
+              },
+            });
+            expect(() => options.assertCurrent?.()).not.toThrow();
+            setRuntimeConfigSnapshot({
+              ...recoveryConfig,
+              agents: {
+                entries: {
+                  main: { tools: { exec: { notifyOnExit: true } } },
+                  secondary: { tools: { exec: { notifyOnExit: false } } },
+                },
+              },
+            });
+            expect(() => options.assertCurrent?.()).toThrow("notifications are disabled");
+            await options.onAdopted?.();
+          } else {
+            expect(enqueue).not.toHaveBeenCalled();
+          }
+          expect((await read())?.pendingExecNotifications).toBeUndefined();
+        },
+        {},
+        { agentId: "secondary", storeAgentId: "main" },
+      );
+    },
   );
 
-  it.each([
-    { name: "disabled notification", options: { notifyOnExit: false }, entry: {} },
-    { name: "incognito session", options: {}, entry: { incognito: true } },
-  ])("does not record a restart obligation for a $name", ({ options, entry }) =>
-    withFixture(async ({ background, read, recover }) => {
-      await background(options);
+  it("does not persist a process whose completion notification was disabled", async () => {
+    await withFixture(async ({ background, read, recover }) => {
+      await background({ notifyOnExit: false });
       expect((await read())?.pendingExecNotifications).toBeUndefined();
-      rotateLifecycle();
+      rotateAgentEventLifecycleGeneration();
       await recover();
       expect(enqueue).not.toHaveBeenCalled();
-    }, entry),
-  );
+    });
+  });
 
-  it("narrows recovery authority and rechecks opt-out before effect", () =>
-    withFixture(async ({ background, patch, recover }) => {
+  it("does not record a restart obligation for an incognito session", async () => {
+    await withFixture(
+      async ({ background, read, recover }) => {
+        await background();
+        expect((await read())?.pendingExecNotifications).toBeUndefined();
+        rotateAgentEventLifecycleGeneration();
+        await recover();
+        expect(enqueue).not.toHaveBeenCalled();
+      },
+      { incognito: true },
+    );
+  });
+
+  it("narrows recovered tool authority and rechecks opt-out at the effect boundary", async () => {
+    await withFixture(async ({ background, patch, recover }) => {
       await background();
       await patch({ permissionMode: "read-only" });
-      rotateLifecycle();
+      rotateAgentEventLifecycleGeneration();
       await recover();
       const { options } = lastNotification();
       expect(options.expectedTarget?.settings?.permissionMode).toBe("read-only");
       expect(options.assertCurrent).toBeTypeOf("function");
-      setConfig({ ...initialConfig, tools: { exec: { notifyOnExit: false } } });
+      setRuntimeConfigSnapshot({ ...initialConfig, tools: { exec: { notifyOnExit: false } } });
       expect(() => options.assertCurrent?.()).toThrow("notifications are disabled");
-    }));
+    });
+  });
 
-  it("preserves tool intersections through recovery", () =>
-    withFixture(async ({ background, read, recover }) => {
+  it("preserves intersected tool restrictions through durable recovery", async () => {
+    await withFixture(async ({ background, read, recover }) => {
       await background({
         toolsAllow: attachToolAllowlistIntersection([], [["read*"], ["*ad"]]),
       });
       expect(
         Object.values((await read())?.pendingExecNotifications ?? {})[0]?.policy.toolsAllow,
       ).toEqual([["read*"], ["*ad"]]);
-      rotateLifecycle();
+      rotateAgentEventLifecycleGeneration();
       await recover();
       const toolsAllow = lastNotification().options.expectedTarget?.toolsAllow;
       expect(isRuntimeToolAllowed("read", toolsAllow)).toBe(true);
       expect(isRuntimeToolAllowed("read_secret", toolsAllow)).toBe(false);
       expect(isRuntimeToolAllowed("write", toolsAllow)).toBe(false);
-    }));
+    });
+  });
 });

@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { MessageGroup as MessageGroupView } from "./chat-message-group-view.tsx";
-import { createMessageGroup } from "./chat-message.test-support.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
 import {
   installTranscriptDomMocks,
@@ -15,19 +15,6 @@ import {
 } from "./chat-transcript.test-support.ts";
 
 let container: HTMLDivElement;
-const query = (selector: string) => container.querySelector(selector);
-const options = { agentId: "main", mainKey: "main" };
-const groupOptions = {
-  ...options,
-  showReasoning: false,
-  showToolCalls: false,
-  avatarPlacement: "none" as const,
-  agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
-  senderAgentAvatars: new Map([["research", "blob:research-avatar"]]),
-};
-beforeEach(() => {
-  container = document.body.appendChild(document.createElement("div"));
-});
 afterEach(() => {
   cleanupSolid();
   container?.remove();
@@ -41,21 +28,51 @@ it.each([
   ["assistant", "agent:main:subagent:audit", "agent:main:subagent:audit", null, false],
   ["user", "agent:research:subagent:audit", "agent:research:subagent:audit", null, false],
 ] as const)("labels %s forwarding from %s", (role, key, chipText, prefix, titled) => {
-  const group = createMessageGroup({ role, content: "report" }, role, {
+  container = document.createElement("div");
+  const group: MessageGroup = {
+    kind: "group",
     key: "forwarded",
+    role,
     timestamp: 0,
+    visibleContent: "text",
+    isStreaming: false,
+    messages: [
+      {
+        key: "forwarded-message",
+        hasVisibleContent: true,
+        message: { role, content: "forwarded report" },
+      },
+    ],
     senderSession: { sessionKey: key, agentId: key.split(":")[1] },
-  });
-  mountSolid(MessageGroupView, { group, options: groupOptions }, container);
+  };
+  mountStatefulSolid(
+    MessageGroupView,
+    {
+      group,
+      options: {
+        showReasoning: false,
+        showToolCalls: false,
+        avatarPlacement: "none",
+        agentId: "main",
+        agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
+        mainKey: "main",
+        senderAgentAvatars: new Map([["research", "blob:research-avatar"]]),
+      },
+    },
+    container,
+  );
 
-  const chip = query(`a.markdown-session-link[data-session-key="${key}"]`)!;
+  const chip = container.querySelector<HTMLAnchorElement>(
+    `a.markdown-session-link[data-session-key="${key}"]`,
+  )!;
+  expect(chip).not.toBeNull();
   expect(chip.textContent).toBe(chipText);
   expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
   expect(chip.classList.contains("markdown-session-link--titled")).toBe(titled);
-  const attributionText = query(".chat-reply-attribution")
-    ?.textContent?.replace(/\s+/g, " ")
-    .trim();
-  const avatar = query(".chat-reply-attribution img.chat-avatar");
+  const attributionText =
+    container.querySelector(".chat-reply-attribution")?.textContent?.replace(/\s+/g, " ").trim() ??
+    "";
+  const avatar = container.querySelector(".chat-reply-attribution img.chat-avatar");
   expect(avatar?.getAttribute("src") ?? null).toBe(
     key.startsWith("agent:research:") && !key.includes(":subagent:")
       ? "blob:research-avatar"
@@ -65,16 +82,17 @@ it.each([
 });
 
 it("omits avatar space when the source agent is not in the roster", () => {
-  mountSolid(
+  container = document.body.appendChild(document.createElement("div"));
+  mountStatefulSolid(
     ForwardedAttribution,
     {
       group: { senderSession: { sessionKey: "agent:research:main", label: "Research" } },
-      options: { ...options, agents: [{ id: "main" }] },
+      options: { agentId: "main", mainKey: "main", agents: [{ id: "main" }] },
     },
     container,
   );
-  expect(query(".session-label")?.textContent).toBe("Research");
-  expect(query(".chat-reply-attribution__agent-avatar")).toBeNull();
+  expect(container.querySelector(".session-label")?.textContent).toBe("Research");
+  expect(container.querySelector(".chat-reply-attribution__agent-avatar")).toBeNull();
 });
 
 it("routes forwarded cron runs with primary and keyboard activation, preserving native modified clicks", async ({
@@ -102,20 +120,26 @@ it("routes forwarded cron runs with primary and keyboard activation, preserving 
   };
   const transcript = createTestTranscript();
   onTestFinished(() => transcript.dispose());
-  mountSolid(ChatThread, { props, transcript }, container);
-  await waitForSolid(() => expect(query(".chat-reply-attribution a")).not.toBeNull());
+  container = document.body.appendChild(document.createElement("div"));
+  mountStatefulSolid(ChatThread, { props, transcript }, container);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-reply-attribution a")).not.toBeNull(),
+  );
   const link = container.querySelector<HTMLAnchorElement>(".chat-reply-attribution a")!;
+  expect(link).not.toBeNull();
   expect(link.getAttribute("href")).toBe("/control/automations?job=daily&run=first");
   link.focus();
   expect(document.activeElement).toBe(link);
-  const eventOptions = { bubbles: true, cancelable: true };
   for (const event of [
-    new MouseEvent("click", eventOptions),
-    ...["Enter", " "].map((key) => new KeyboardEvent("keydown", { ...eventOptions, key })),
+    new MouseEvent("click", { bubbles: true, cancelable: true }),
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
   ]) {
     link.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
-    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("cron", { search: "?job=daily&run=first" });
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("cron", {
+      search: "?job=daily&run=first",
+    });
     onNavigate.mockClear();
   }
   for (const init of [
@@ -125,7 +149,7 @@ it("routes forwarded cron runs with primary and keyboard activation, preserving 
     { altKey: true },
     { button: 1 },
   ]) {
-    const event = new MouseEvent("click", { ...eventOptions, ...init });
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, ...init });
     link.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
   }
@@ -135,15 +159,19 @@ it("routes forwarded cron runs with primary and keyboard activation, preserving 
 
 it("keeps the titler's resolved label and title class when attribution counts update", () => {
   const group = { senderSession: { sessionKey: "agent:main:bench", agentId: "main" } };
-  const view = mountSolid(ForwardedAttribution, { group, options }, container);
-  const link = query("a.markdown-session-link")!;
+  const options: Parameters<typeof ForwardedAttribution>[0]["options"] = {
+    agentId: "main",
+    mainKey: "main",
+  };
+  const view = mountStatefulSolid(ForwardedAttribution, { group, options });
+  const link = view.container.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
   const label = link.querySelector(".session-label")!;
   label.textContent = "Resolved source title";
   link.classList.add("markdown-session-link--titled");
 
   view.update({ group, options: { ...options, updateCount: 2 } });
 
-  expect(query("a.markdown-session-link")).toBe(link);
+  expect(view.container.querySelector("a.markdown-session-link")).toBe(link);
   expect(label.textContent).toBe("Resolved source title");
   expect(link.classList.contains("markdown-session-link--titled")).toBe(true);
   expect(view.container.textContent).toContain("2 updates from");

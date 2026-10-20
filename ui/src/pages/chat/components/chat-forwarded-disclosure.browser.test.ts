@@ -30,16 +30,6 @@ beforeEach(async () => {
 let host: HTMLDivElement;
 let root: ReturnType<typeof createMessageGroupHarness>;
 let avatarUrl: string | undefined;
-const query = <T extends HTMLElement = HTMLElement>(selector: string, parent: ParentNode = host) =>
-  parent.querySelector<T>(selector)!;
-const contentOf = (parent: ParentNode = host) => query(".chat-message-disclosure__content", parent);
-const toggleOf = (parent: ParentNode = host) =>
-  query<HTMLButtonElement>(".chat-message-disclosure__toggle", parent);
-const message = (content: string, key: string, role = "assistant") => ({
-  key,
-  hasVisibleContent: true,
-  message: { role, content },
-});
 afterEach(async () => {
   if (host) {
     root.unmount();
@@ -68,14 +58,18 @@ function fixture(
   root = createMessageGroupHarness(host);
   const group: MessageGroup = {
     kind: "group",
-    role,
-    isStreaming: false,
-    visibleContent: "text",
     key: "forwarded",
+    role,
     timestamp: 0,
+    visibleContent: "text",
     senderSession: { sessionKey: "agent:research:main" },
+    isStreaming: false,
     messages: [longText, longText, "First line.\nSecond line.", "One.\nTwo.\nThree."].map(
-      (content, i) => message(content, `message-${i}`, role),
+      (content, i) => ({
+        key: `message-${i}`,
+        hasVisibleContent: true,
+        message: { role, content },
+      }),
     ),
   };
   const expanded = new Set<string>();
@@ -116,42 +110,48 @@ it.each([
     const { draw } = fixture(role, width);
     await document.fonts.ready;
     const bubbles = host.querySelectorAll<HTMLElement>(".chat-bubble");
-    const content = contentOf(bubbles[0]!);
-    const toggle = toggleOf(bubbles[0]!);
+    const content = bubbles[0]!.querySelector<HTMLElement>(".chat-message-disclosure__content");
+    expect(content).not.toBeNull();
+    const toggle = bubbles[0]!.querySelector<HTMLButtonElement>(
+      ".chat-message-disclosure__toggle",
+    )!;
     await expect.poll(() => toggle.hidden).toBe(false);
-    const lineHeight = Number.parseFloat(getComputedStyle(query(".chat-text", content)).lineHeight);
-    expect(Math.abs(content.getBoundingClientRect().height - lineHeight * 2.5)).toBeLessThanOrEqual(
-      1,
+    const lineHeight = Number.parseFloat(
+      getComputedStyle(content!.querySelector(".chat-text")!).lineHeight,
     );
-    expect(getComputedStyle(content).maskImage).not.toBe("none");
-    expect(content.textContent?.trim()).toBe(longText);
+    expect(
+      Math.abs(content!.getBoundingClientRect().height - lineHeight * 2.5),
+    ).toBeLessThanOrEqual(1);
+    expect(getComputedStyle(content!).maskImage).not.toBe("none");
+    expect(content!.textContent?.trim()).toBe(longText);
     const box = bubbles[0]!.getBoundingClientRect();
     const button = toggle.getBoundingClientRect();
-    const above = button.top - content.getBoundingClientRect().bottom;
+    const above = button.top - content!.getBoundingClientRect().bottom;
     const below =
       box.bottom -
       Number.parseFloat(getComputedStyle(bubbles[0]!).borderBottomWidth) -
       button.bottom;
     expect(Math.abs(above - below)).toBeLessThanOrEqual(1);
     for (const bubble of [bubbles[2]!, bubbles[3]!]) {
-      const shortToggle = toggleOf(bubble);
+      const shortToggle = bubble.querySelector<HTMLButtonElement>(
+        ".chat-message-disclosure__toggle",
+      );
       await expect.poll(() => !shortToggle || shortToggle.hidden).toBe(true);
-      const short = contentOf(bubble);
+      const short = bubble.querySelector<HTMLElement>(".chat-message-disclosure__content")!;
       expect(getComputedStyle(short).maskImage).toBe("none");
       expect(short.scrollHeight - short.clientHeight).toBeLessThanOrEqual(1);
     }
-    const link = query<HTMLAnchorElement>(".chat-reply-attribution a");
-    expect(getComputedStyle(link)).toMatchObject({
-      backgroundColor: "rgba(0, 0, 0, 0)",
-      borderTopWidth: "0px",
-    });
-    const label = query(".session-label", link);
+    const link = host.querySelector<HTMLAnchorElement>(".chat-reply-attribution a")!;
+    expect(link).not.toBeNull();
+    expect(getComputedStyle(link).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(link).borderTopWidth).toBe("0px");
+    const label = link.querySelector<HTMLElement>(".session-label")!;
     expect(label.textContent).toBe("research");
     expect(getComputedStyle(label, "::first-letter").textTransform).toBe("uppercase");
     toggle.click();
     await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(getComputedStyle(content).maskImage).toBe("none");
-    expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+    expect(getComputedStyle(content!).maskImage).toBe("none");
+    expect(content!.scrollHeight - content!.clientHeight).toBeLessThanOrEqual(1);
     expect(bubbles[1]!.querySelector("button[aria-expanded='false']")).not.toBeNull();
     draw();
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
@@ -178,16 +178,21 @@ it("keeps a forwarded stream open until final while collapsing prior messages", 
 it("rechecks retained content when the transcript width or message text changes", async () => {
   const { group, draw } = fixture("assistant", 1000);
   group.messages = [
-    message(
-      "A scheduled update preserves the full instruction text while keeping the conversation readable. ".repeat(
-        3,
-      ),
-      "wrapped",
-    ),
+    {
+      key: "wrapped",
+      hasVisibleContent: true,
+      message: {
+        role: "assistant",
+        content:
+          "A scheduled update preserves the full instruction text while keeping the conversation readable. ".repeat(
+            3,
+          ),
+      },
+    },
   ];
   draw();
-  const toggle = toggleOf();
-  const content = contentOf();
+  const toggle = host.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")!;
+  const content = host.querySelector<HTMLElement>(".chat-message-disclosure__content")!;
   await expect.poll(() => toggle.hidden).toBe(true);
   expect(getComputedStyle(content).maskImage).toBe("none");
   host.style.width = "240px";
@@ -198,7 +203,7 @@ it("rechecks retained content when the transcript width or message text changes"
   expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
   group.messages[0]!.message = { role: "assistant", content: longText };
   draw();
-  expect(contentOf()).toBe(content);
+  expect(host.querySelector(".chat-message-disclosure__content")).toBe(content);
   await expect.poll(() => toggle.hidden).toBe(false);
 });
 
@@ -210,16 +215,24 @@ it.each([
   async ({ loaded, width }) => {
     const { page } = await import("vitest/browser");
     await page.viewport(width, 800);
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"/>';
-    avatarUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    avatarUrl = URL.createObjectURL(
+      new Blob(
+        [
+          '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><rect width="18" height="18" fill="blue"/></svg>',
+        ],
+        { type: "image/svg+xml" },
+      ),
+    );
     if (!loaded) {
       URL.revokeObjectURL(avatarUrl);
     }
     fixture("assistant", width, new Map([["research", avatarUrl]]));
-    const slot = query(".chat-reply-attribution__agent-avatar .chat-avatar-slot");
+    const slot = host.querySelector<HTMLElement>(
+      ".chat-reply-attribution__agent-avatar .chat-avatar-slot",
+    )!;
     await expect.poll(() => slot.dataset.avatarState).toBe(loaded ? "loaded" : "failed");
-    const image = query<HTMLImageElement>("img", slot);
-    const fallback = query(":scope > .identity-avatar--agent", slot);
+    const image = slot.querySelector<HTMLImageElement>("img")!;
+    const fallback = slot.querySelector<HTMLElement>(":scope > .identity-avatar--agent")!;
     await expect.poll(() => fallback.querySelector("svg") !== null).toBe(true);
     expect(image.getBoundingClientRect().height).toBe(loaded ? 18 : 0);
     expect(fallback.getBoundingClientRect().height).toBe(loaded ? 0 : 18);

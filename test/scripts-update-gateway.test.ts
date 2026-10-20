@@ -38,18 +38,6 @@ function commitFixture(cwd: string, message: string) {
   );
 }
 
-const read = (file: string) => fs.readFileSync(file, "utf8");
-const retainedBackups = () =>
-  fs.readdirSync(workdir).filter((name) => name.includes(".openclaw-update-"));
-function publishSeed(message: string, pull = true) {
-  const seed = path.join(scratch, "seed");
-  commitFixture(seed, message);
-  git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
-  if (pull) {
-    git(workdir, "pull", "--ff-only", "-q");
-  }
-}
-
 function writeShim(name: string, body: string) {
   const file = path.join(shimDir, name);
   fs.writeFileSync(file, `#!/bin/bash\n${body}\n`);
@@ -79,7 +67,9 @@ function runUpdater(overrides: Record<string, string> = {}) {
 }
 
 const calls = () =>
-  fs.existsSync(invocationLog) ? read(invocationLog).trim().split("\n").filter(Boolean) : [];
+  fs.existsSync(invocationLog)
+    ? fs.readFileSync(invocationLog, "utf8").trim().split("\n").filter(Boolean)
+    : [];
 
 beforeEach(() => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-gateway-"));
@@ -183,7 +173,8 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     const seed = path.join(scratch, "seed");
     fs.writeFileSync(path.join(seed, "target.txt"), "new tracked source\n");
     git(seed, "add", "target.txt");
-    publishSeed("target", false);
+    commitFixture(seed, "target");
+    git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
     const original = git(workdir, "rev-parse", "HEAD");
     fs.mkdirSync(path.join(workdir, "node_modules"));
     const dependency = path.join(workdir, "node_modules", "serving-marker");
@@ -288,7 +279,9 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
       `export { prepareBundledPluginRuntime } from ${JSON.stringify(stageRuntimeUrl.href)};\n`,
     );
     git(seed, "add", "scripts/stage-bundled-plugin-runtime.mts");
-    publishSeed("runtime inspector");
+    commitFixture(seed, "runtime inspector");
+    git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
+    git(workdir, "pull", "--ff-only", "-q");
     fs.mkdirSync(path.join(workdir, "dist/extensions/demo"), { recursive: true });
     fs.writeFileSync(
       path.join(workdir, "dist/extensions/demo/index.js"),
@@ -324,7 +317,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
     expect({ bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino }).toEqual(before);
     expect({
       head: git(workdir, "rev-parse", "HEAD"),
-      dependency: read(dependency),
+      dependency: fs.readFileSync(dependency, "utf8"),
       installed: calls().includes("live-install"),
       restarted: calls().includes("unexpected-restart"),
     }).toEqual({
@@ -345,7 +338,9 @@ await withDistArtifactOwnership(process.cwd(), async () => {
     const seed = path.join(scratch, "seed");
     fs.writeFileSync(path.join(seed, "scripts/update-gateway.sh"), published);
     git(seed, "add", "scripts/update-gateway.sh");
-    publishSeed("published source driver");
+    commitFixture(seed, "published source driver");
+    git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
+    git(workdir, "pull", "--ff-only", "-q");
     // The old shell is already running when its target replaces this file.
     fs.copyFileSync(
       path.join(repoRoot, "scripts/update-gateway.sh"),
@@ -356,7 +351,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
     expect(result.status, result.stdout + result.stderr).toBe(23);
     expect(calls()).toContain("stop-refused");
     expect(git(workdir, "rev-parse", "HEAD")).not.toBe(original);
-    expect(read(dependency)).toBe("changed\n");
+    expect(fs.readFileSync(dependency, "utf8")).toBe("changed\n");
     expect(calls()).not.toContain("unexpected-restart");
   });
 
@@ -406,7 +401,9 @@ process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
         git(seed, "add", "-f", trackedAsset);
       }
       if (trackedRuntime || interceptRename) {
-        publishSeed("runtime recovery fixture");
+        commitFixture(seed, "runtime recovery fixture");
+        git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
+        git(workdir, "pull", "-q", "--ff-only");
       }
       if (trackedRuntime) {
         if (mode === "tracked-runtime-deleted") {
@@ -473,9 +470,11 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
         expect(git(workdir, "rev-parse", "HEAD")).toBe(git(seed, "rev-parse", "HEAD"));
         expect(calls().some((call) => call.includes(`reset --keep ${original}`))).toBe(false);
         expect(calls().some((call) => call.startsWith("restart:"))).toBe(false);
-        expect(read(dependency)).toBe("original dependency\n");
-        expect(read(path.join(workdir, "dist/marker"))).toBe("old");
-        expect(retainedBackups().length > 0).toBe(true);
+        expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency\n");
+        expect(fs.readFileSync(path.join(workdir, "dist/marker"), "utf8")).toBe("old");
+        expect(fs.readdirSync(workdir).some((name) => name.includes(".openclaw-update-"))).toBe(
+          true,
+        );
         return;
       }
       if (mode === "tracked-runtime-partial") {
@@ -486,17 +485,20 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
         if (mode === "tracked-runtime-deleted") {
           expect(result.stderr).toContain("Published source runtime could not be verified");
         }
-        expect(read(path.join(workdir, trackedAsset)), result.stdout + result.stderr).toBe(
-          published ? "target tracked runtime\n" : "original tracked runtime\n",
-        );
+        expect(
+          fs.readFileSync(path.join(workdir, trackedAsset), "utf8"),
+          result.stdout + result.stderr,
+        ).toBe(published ? "target tracked runtime\n" : "original tracked runtime\n");
         expect(git(workdir, "diff", "--name-only", "HEAD")).toBe("");
       }
       expect(calls()).toContain(`restart:${expectedHead}:${expectedDependency}`);
       expect(git(workdir, "rev-parse", "HEAD")).toBe(expectedHead);
       expect(git(workdir, "branch", "--show-current")).toBe("main");
-      expect(read(dependency)).toBe(`${expectedDependency}\n`);
-      expect(read(path.join(workdir, "dist/marker"))).toBe(published ? "new" : "old");
-      const backups = retainedBackups();
+      expect(fs.readFileSync(dependency, "utf8")).toBe(`${expectedDependency}\n`);
+      expect(fs.readFileSync(path.join(workdir, "dist/marker"), "utf8")).toBe(
+        published ? "new" : "old",
+      );
+      const backups = fs.readdirSync(workdir).filter((name) => name.includes(".openclaw-update-"));
       expect(backups.length > 0).toBe(mode === "restart-failed");
       expect(calls()).not.toContain("live-install");
       if (mode === "restart-failed") {
@@ -505,7 +507,7 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
         );
         const retainedMarker = backups.find((name) => name.startsWith("dist.openclaw-update-"))!;
         const originalMarker = path.join(workdir, retainedMarker, "previous/marker");
-        expect(read(originalMarker)).toBe("old");
+        expect(fs.readFileSync(originalMarker, "utf8")).toBe("old");
         const observation = path.join(scratch, "retry-inputs");
         fs.appendFileSync(
           runtimeWriter,
@@ -517,12 +519,17 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
           UPDATE_TEST_RETRY_INPUTS: observation,
         });
         expect(retry.status, retry.stdout + retry.stderr).toBe(23);
-        expect(JSON.parse(read(observation))).toEqual([]);
-        expect(read(originalMarker)).toBe("old");
+        expect(JSON.parse(fs.readFileSync(observation, "utf8"))).toEqual([]);
+        expect(fs.readFileSync(originalMarker, "utf8")).toBe("old");
         expect(
           new Map(backups.map((name) => [name, fs.statSync(path.join(workdir, name)).ino])),
         ).toEqual(retained);
-        expect(retainedBackups().toSorted()).toEqual(backups.toSorted());
+        expect(
+          fs
+            .readdirSync(workdir)
+            .filter((name) => name.includes(".openclaw-update-"))
+            .toSorted(),
+        ).toEqual(backups.toSorted());
       }
     },
   );
@@ -566,9 +573,9 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
           : "Source update Git diff failed (exit 1)",
       );
       expect(git(workdir, "rev-parse", "HEAD")).toBe(original);
-      expect(read(dependency)).toBe("original dependency\n");
+      expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency\n");
       expect(calls()).not.toContain("unexpected-restart");
-      expect(retainedBackups().length > 0).toBe(true);
+      expect(fs.readdirSync(workdir).some((name) => name.includes(".openclaw-update-"))).toBe(true);
     },
   );
 
@@ -607,10 +614,12 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
       } else {
         expect(calls()).toContain("pack-cleanup-refused");
         expect(result.stderr.match(/Git update pack could not be removed:/gu)).toHaveLength(1);
-        expect(retainedBackups().length > 0).toBe(false);
+        expect(fs.readdirSync(workdir).some((name) => name.includes(".openclaw-update-"))).toBe(
+          false,
+        );
       }
       expect(git(workdir, "rev-parse", "HEAD")).toBe(original);
-      expect(read(dependency)).toBe("original dependency\n");
+      expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency\n");
       expect(calls()).not.toContain("unexpected-restart");
     },
   );
@@ -639,7 +648,9 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
       fs.writeFileSync(mutationTarget, expected);
       fs.symlinkSync(payload, path.join(seed, "assets"), "dir");
       git(seed, "add", "assets");
-      publishSeed("tracked external input alias");
+      commitFixture(seed, "tracked external input alias");
+      git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
+      git(workdir, "pull", "-q", "--ff-only");
       fs.symlinkSync("../assets/payload.txt", input);
       const candidatePayload = path.join(scratch, "candidate-external-input");
       fs.mkdirSync(candidatePayload);
@@ -658,7 +669,9 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
     } else if (kind === "physical-alias") {
       fs.writeFileSync(path.join(seed, "target.txt"), "old tracked source\n");
       git(seed, "add", "target.txt");
-      publishSeed("old source input");
+      commitFixture(seed, "old source input");
+      git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
+      git(workdir, "pull", "-q", "--ff-only");
       const alias = path.join(scratch, "external-checkout-alias");
       fs.symlinkSync(workdir, alias, "dir");
       fs.symlinkSync(path.join(alias, "target.txt"), input);
@@ -695,9 +708,9 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
           : {}),
       },
     );
-    expect(read(observation)).toBe(expected);
+    expect(fs.readFileSync(observation, "utf8")).toBe(expected);
     if (originalExternalFile) {
-      expect(read(originalExternalFile)).toBe(expected);
+      expect(fs.readFileSync(originalExternalFile, "utf8")).toBe(expected);
     }
     expect(result.status, result.stdout + result.stderr).toBe(
       changedInput ? 1 : published ? 0 : 23,
@@ -705,14 +718,16 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
     expect(calls().includes("stop-refused")).toBe(!changedInput && !published);
     if (changedInput) {
       expect(result.stderr).toContain("Local source build inputs changed");
-      expect(read(mutationTarget)).toBe("changed\n");
+      expect(fs.readFileSync(mutationTarget, "utf8")).toBe("changed\n");
     }
     expect(git(workdir, "rev-parse", "HEAD")).toBe(
       published ? git(seed, "rev-parse", "HEAD") : original,
     );
-    expect(read(dependency)).toBe(published ? "changed\n" : "original dependency\n");
+    expect(fs.readFileSync(dependency, "utf8")).toBe(
+      published ? "changed\n" : "original dependency\n",
+    );
     if (published) {
-      expect(read(input)).toBe(expected);
+      expect(fs.readFileSync(input, "utf8")).toBe(expected);
       expect(calls()).toContain("selected-restart");
     }
     expect(calls()).not.toContain("live-install");
