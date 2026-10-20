@@ -9,6 +9,7 @@ import {
   resolveModelCandidateChain,
 } from "./model-fallback-candidates.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
+import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const customProvider: ModelProviderConfig = {
@@ -27,19 +28,12 @@ const customProvider: ModelProviderConfig = {
 describe("resolveModelCandidateChain", () => {
   it("preserves literal requested model namespaces while deduplicating fallback routes", () => {
     const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "custom/model",
-            fallbacks: ["custom/custom/model", "custom/model", "custom/custom/model"],
-          },
-        },
-      },
-      models: {
-        providers: {
-          custom: customProvider,
-        },
-      },
+      ...createModelFallbackConfig("custom/model", [
+        "custom/custom/model",
+        "custom/model",
+        "custom/custom/model",
+      ]),
+      models: { providers: { custom: customProvider } },
     };
 
     expect(
@@ -154,7 +148,7 @@ describe("resolveImageFallbackCandidates", () => {
 
   it("records unresolved configured entries without changing the resolved chain", async () => {
     const warnLogs = createWarnLogCapture("openclaw-image-fallback-candidates-test");
-    const cfg = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           imageModel: {
@@ -163,14 +157,10 @@ describe("resolveImageFallbackCandidates", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
     try {
-      expect(
-        resolveImageFallbackCandidates({
-          cfg,
-        }),
-      ).toEqual([
+      expect(resolveImageFallbackCandidates({ cfg })).toEqual([
         {
           provider: "anthropic",
           model: "claude-sonnet-4-6",

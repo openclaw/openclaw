@@ -11,6 +11,22 @@ import { recordAdmittedModelRoutingDecision } from "./model-routing-decision.js"
 const auditConfig = {
   logging: { audit: { executionIdentity: true } },
 } satisfies OpenClawConfig;
+const route = {
+  requestedProvider: "openai",
+  requestedModel: "gpt-5.6",
+  selectedProvider: "openai",
+  selectedModel: "gpt-5.6",
+  selectionMode: "automatic",
+} as const;
+
+function captureWork() {
+  const captured: ExecutionDecisionWork[] = [];
+  const clear = configureExecutionDecisionWorkSink((work) => {
+    captured.push(work);
+    return true;
+  });
+  return { captured, clear };
+}
 
 function prepareRoutingAdmission(runId: string) {
   return prepareAgentRunAdmission({
@@ -30,11 +46,7 @@ afterEach(() => {
 
 describe("admitted model routing decisions", () => {
   it("keeps a selected credential raw only in the private work ref", async () => {
-    const captured: ExecutionDecisionWork[] = [];
-    const clear = configureExecutionDecisionWorkSink((work) => {
-      captured.push(work);
-      return true;
-    });
+    const { captured, clear } = captureWork();
     const admission = prepareRoutingAdmission("model-route-run");
     const admittedRunContext = await admission.admit("embedded");
     const token = admittedRunContext.executionIdentityToken;
@@ -43,10 +55,8 @@ describe("admitted model routing decisions", () => {
 
     expect(
       recordAdmittedModelRoutingDecision({
+        ...route,
         admittedRunContext,
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.6",
-        selectedProvider: "openai",
         selectedModel: rawTargetSecret,
         selectionMode: "explicit",
         credentialProfileId: rawProfile,
@@ -76,33 +86,12 @@ describe("admitted model routing decisions", () => {
   });
 
   it("does not fabricate work without admission and marks an unknown credential owner", async () => {
-    const captured: ExecutionDecisionWork[] = [];
-    const clear = configureExecutionDecisionWorkSink((work) => {
-      captured.push(work);
-      return true;
-    });
+    const { captured, clear } = captureWork();
 
-    expect(
-      recordAdmittedModelRoutingDecision({
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.6",
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.6",
-        selectionMode: "automatic",
-      }),
-    ).toBe(false);
+    expect(recordAdmittedModelRoutingDecision(route)).toBe(false);
     const admission = prepareRoutingAdmission("unknown-owner-run");
     const admittedRunContext = await admission.admit("embedded");
-    expect(
-      recordAdmittedModelRoutingDecision({
-        admittedRunContext,
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.6",
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.6",
-        selectionMode: "automatic",
-      }),
-    ).toBe(true);
+    expect(recordAdmittedModelRoutingDecision({ ...route, admittedRunContext })).toBe(true);
     admission.close();
     clear();
 
@@ -126,22 +115,11 @@ describe("admitted model routing decisions", () => {
       } else {
         admission.close();
       }
-      const captured: ExecutionDecisionWork[] = [];
-      const clear = configureExecutionDecisionWorkSink((work) => {
-        captured.push(work);
-        return true;
-      });
+      const { captured, clear } = captureWork();
 
-      expect(() =>
-        recordAdmittedModelRoutingDecision({
-          admittedRunContext,
-          requestedProvider: "openai",
-          requestedModel: "gpt-5.6",
-          selectedProvider: "openai",
-          selectedModel: "gpt-5.6",
-          selectionMode: "automatic",
-        }),
-      ).toThrow("admitted run authority is no longer active");
+      expect(() => recordAdmittedModelRoutingDecision({ ...route, admittedRunContext })).toThrow(
+        "admitted run authority is no longer active",
+      );
       clear();
       admission.close();
       replacement?.close();

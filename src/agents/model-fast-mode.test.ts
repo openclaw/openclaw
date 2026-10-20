@@ -12,6 +12,31 @@ const opus: ModelCatalogEntry = {
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
 };
+const available = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
+function metadata(providers: string[]) {
+  return createPluginMetadataSnapshotFixture({
+    plugins: providers.map((id) => ({
+      id,
+      providers: [id],
+      rootDir: path.resolve(import.meta.dirname, "../../extensions", id),
+      ...(id === "anthropic"
+        ? {
+            providerEndpoints: [
+              { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
+            ],
+            providerRequest: { providers: { anthropic: { family: "anthropic" } } },
+          }
+        : {}),
+    })),
+  });
+}
+const openai: ModelCatalogEntry = {
+  id: "speed-fixture",
+  name: "Speed fixture",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+};
 function fastResolver(params: Parameters<typeof createModelSpeedPolicyResolver>[0]) {
   const resolve = createModelSpeedPolicyResolver(params);
   return (...args: Parameters<typeof resolve>) => resolve(...args).supportsFastMode;
@@ -21,29 +46,13 @@ function resolver(cfg: OpenClawConfig = {}) {
     cfg,
     agentId: "main",
     catalog: [opus],
-    metadataSnapshot: createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "anthropic",
-          providers: ["anthropic"],
-          rootDir: path.resolve(import.meta.dirname, "../../extensions/anthropic"),
-          providerEndpoints: [{ endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] }],
-          providerRequest: { providers: { anthropic: { family: "anthropic" } } },
-        },
-      ],
-    }),
+    metadataSnapshot: metadata(["anthropic"]),
   });
 }
 describe("private selected Fast metadata", () => {
   it("uses each selected model's policy", () => {
     const catalog: ModelCatalogEntry[] = [
-      {
-        id: "speed-fixture",
-        name: "Speed fixture",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
+      openai,
       { id: "grok-3", name: "Grok 3", provider: "xai", api: "openai-responses" },
       { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax", api: "anthropic-messages" },
     ];
@@ -51,21 +60,14 @@ describe("private selected Fast metadata", () => {
       cfg: {},
       agentId: "main",
       catalog,
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: ["openai", "xai", "minimax"].map((id) => ({
-          id,
-          providers: [id],
-          rootDir: path.resolve(import.meta.dirname, "../../extensions", id),
-        })),
-      }),
+      metadataSnapshot: metadata(["openai", "xai", "minimax"]),
     });
-    const evaluation = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
-    expect(catalog.map((entry) => resolve(entry, evaluation, "openclaw"))).toEqual([
+    expect(catalog.map((entry) => resolve(entry, available, "openclaw"))).toEqual([
       true,
       true,
       true,
     ]);
-    expect(catalog.map((entry) => resolve(entry, evaluation, "codex"))).toEqual([
+    expect(catalog.map((entry) => resolve(entry, available, "codex"))).toEqual([
       undefined,
       undefined,
       undefined,
@@ -73,15 +75,8 @@ describe("private selected Fast metadata", () => {
   });
   it("loads the provider's light policy for the exact model and auth facts", () => {
     const resolve = resolver();
-    expect(
-      resolve(
-        { ...opus, id: "claude-sonnet-5" },
-        { availability: true, routeResolution: null, selectedAuthMode: "api_key" },
-      ),
-    ).toBe(false);
-    expect(
-      resolve(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(true);
+    expect(resolve({ ...opus, id: "claude-sonnet-5" }, available)).toBe(false);
+    expect(resolve(opus, available)).toBe(true);
     expect(resolve(opus, { availability: undefined, routeResolution: null })).toBeUndefined();
     expect(
       resolve(
@@ -98,9 +93,7 @@ describe("private selected Fast metadata", () => {
         entries: { main: { params: { serviceTier: "invalid" } } },
       },
     });
-    expect(
-      resolve(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(true);
+    expect(resolve(opus, available)).toBe(true);
     const explicit = resolver({
       agents: {
         defaults: {
@@ -108,9 +101,7 @@ describe("private selected Fast metadata", () => {
         },
       },
     });
-    expect(
-      explicit(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(false);
+    expect(explicit(opus, available)).toBe(false);
     const agentModel = resolver({
       agents: {
         entries: {
@@ -120,9 +111,7 @@ describe("private selected Fast metadata", () => {
         },
       },
     });
-    expect(
-      agentModel(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(false);
+    expect(agentModel(opus, available)).toBe(false);
   });
   it("does not replace unresolved route ownership with catalog provenance", () => {
     expect(
@@ -132,26 +121,11 @@ describe("private selected Fast metadata", () => {
 });
 
 it("derives tier recovery from the selected transport rather than catalog provenance", () => {
-  const entry: ModelCatalogEntry = {
-    id: "speed-fixture",
-    name: "Speed fixture",
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  };
   const resolve = createModelSpeedPolicyResolver({
     cfg: {},
     agentId: "main",
-    catalog: [entry],
-    metadataSnapshot: createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "openai",
-          providers: ["openai"],
-          rootDir: path.resolve(import.meta.dirname, "../../extensions/openai"),
-        },
-      ],
-    }),
+    catalog: [openai],
+    metadataSnapshot: metadata(["openai"]),
   });
   for (const [baseUrl, expected] of [
     ["https://api.openai.com/v1", true],
@@ -159,9 +133,7 @@ it("derives tier recovery from the selected transport rather than catalog proven
     ["https://api.openai.com/proxy", false],
   ] as const) {
     const evaluation = {
-      availability: true,
-      routeResolution: null,
-      selectedAuthMode: "api_key",
+      ...available,
       selectedRoute: {
         api: "openai-responses" as const,
         baseUrl,
@@ -169,7 +141,7 @@ it("derives tier recovery from the selected transport rather than catalog proven
         requestTransportOverrides: "none" as const,
       },
     };
-    expect(resolve(entry, evaluation, "openclaw").supportsServiceTierRecovery).toBe(expected);
-    expect(resolve(entry, evaluation, "codex").supportsServiceTierRecovery).toBe(false);
+    expect(resolve(openai, evaluation, "openclaw").supportsServiceTierRecovery).toBe(expected);
+    expect(resolve(openai, evaluation, "codex").supportsServiceTierRecovery).toBe(false);
   }
 });
