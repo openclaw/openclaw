@@ -14,9 +14,10 @@ agent receives them alongside its available tools. Direct tools include the
 guidance in the system prompt; tools deferred behind Tool Search or Code Mode
 provide it through discovery. If discovery shows an `instructionsHint`, load
 the server guidance with `tool_describe` or the Code Mode handle's `describe()`
-before calling the tool. To bound prompt cost, OpenClaw keeps at most the first
-2,000 characters per server, followed by a truncation marker when needed. This
-same capped text is used in the system prompt, Tool Search, and Code Mode.
+before calling the tool. To bound embedded prompt cost, OpenClaw keeps at most
+the first 2,000 characters per server, followed by a truncation marker when needed.
+The system prompt, Tool Search, and Code Mode share that capped text. Native
+Claude CLI loopback connections continue to receive the complete server guidance.
 
 <Note>
 This guide is about connecting third-party MCP servers **to OpenClaw**. For the reverse — exposing OpenClaw channel conversations to another MCP client — use [`openclaw mcp serve`](/cli/mcp#openclaw-as-an-mcp-server).

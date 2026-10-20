@@ -7,12 +7,9 @@ import {
 } from "@modelcontextprotocol/client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
-import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 import {
   projectBundleMcpServerCatalog,
   projectBundleMcpCatalogFailure,
@@ -73,9 +70,6 @@ import {
   type NativeMcpClientContext,
 } from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
-
-const MAX_MCP_SERVER_INSTRUCTIONS_CHARS = 2_000;
 
 type BundleMcpSession = {
   serverName: string;
@@ -587,21 +581,10 @@ function createServerMcpRuntime(
           }
         }
         failIfDisposed();
-        const rawServerInstructions = normalizeOptionalString(session.client.getInstructions());
-        const serverInstructions = rawServerInstructions
-          ? sanitizeModelSpecialTokens(
-              neutralizePromptControlMarkers(
-                rawServerInstructions.length > MAX_MCP_SERVER_INSTRUCTIONS_CHARS
-                  ? `${truncateUtf16Safe(rawServerInstructions, MAX_MCP_SERVER_INSTRUCTIONS_CHARS)} …[truncated: server instructions exceed ${MAX_MCP_SERVER_INSTRUCTIONS_CHARS} characters]`
-                  : rawServerInstructions,
-              ),
-            )
-          : undefined;
         const projected = projectBundleMcpServerCatalog({
           serverName,
           safeServerName,
           launchDescription,
-          instructions: serverInstructions,
           rawServer,
           listedTools,
           schemaValidator,

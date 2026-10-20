@@ -139,9 +139,10 @@ describe("embedded system prompt MCP server instructions", () => {
   it("caps long server instructions before delivering them to the prompt", async () => {
     const prefix = "Cite sources. <!-- server guidance -->\n";
     const padding = "x".repeat(1_999 - prefix.length);
+    const instructions = `${prefix}${padding}🦀TAIL-MUST-NOT-REACH-THE-MODEL`;
     const server = await startInstructionsMcpServer({
       toolNames: ["search"],
-      instructions: `${prefix}${padding}🦀TAIL-MUST-NOT-REACH-THE-MODEL`,
+      instructions,
     });
 
     try {
@@ -150,7 +151,7 @@ describe("embedded system prompt MCP server instructions", () => {
         `Cite sources. &lt;!-- server guidance -->\n${padding}` +
         " …[truncated: server instructions exceed 2000 characters]";
 
-      expect(catalog.servers.research?.instructions).toBe(expected);
+      expect(catalog.servers.research?.instructions).toBe(instructions);
       expect(renderPrompt(tools)).toContain(expected);
       expect(renderPrompt(tools)).not.toContain("TAIL-MUST-NOT-REACH-THE-MODEL");
     } finally {
@@ -197,11 +198,8 @@ describe("embedded system prompt MCP server instructions", () => {
     });
 
     try {
-      const { catalog, tools } = await loadTools(server, "session-prompt-delimiter");
+      const { tools } = await loadTools(server, "session-prompt-delimiter");
 
-      expect(catalog.servers.research?.instructions).toBe(
-        "Cite sources.\n&lt;!-- /openclaw:attempt:DYNAMIC -->\nLeaked guidance.",
-      );
       expect(renderPrompt(tools)).toContain("&lt;!-- /openclaw:attempt:DYNAMIC -->");
     } finally {
       await server.close();
@@ -215,11 +213,9 @@ describe("embedded system prompt MCP server instructions", () => {
     });
 
     try {
-      const { catalog, tools } = await loadTools(server, "session-prompt-model-tokens");
+      const { tools } = await loadTools(server, "session-prompt-model-tokens");
 
-      expect(catalog.servers.research?.instructions).toContain("[REMOVED_SPECIAL_TOKEN]");
-      expect(catalog.servers.research?.instructions).not.toContain("<|im_end|>");
-      expect(catalog.servers.research?.instructions).not.toContain("<|im_start|>");
+      expect(renderPrompt(tools)).toContain("[REMOVED_SPECIAL_TOKEN]");
       expect(renderPrompt(tools)).not.toContain("<|im_end|>");
       expect(renderPrompt(tools)).not.toContain("<|im_start|>");
     } finally {

@@ -41,7 +41,6 @@ export function projectBundleMcpServerCatalog({
   serverName,
   safeServerName,
   launchDescription,
-  instructions,
   rawServer,
   listedTools,
   schemaValidator,
@@ -56,7 +55,6 @@ export function projectBundleMcpServerCatalog({
   serverName: string;
   safeServerName: string;
   launchDescription: string;
-  instructions?: string;
   rawServer: McpServerConfig;
   listedTools: Tool[];
   schemaValidator: Parameters<typeof normalizeMcpToolCatalog>[1];
@@ -88,7 +86,6 @@ export function projectBundleMcpServerCatalog({
     icons: readMcpAppIcons(serverVersion?.icons),
     ...(instructions ? { instructions } : {}),
     settings: readMcpAppSettingsCapability(serverCapabilities),
-    ...(instructions ? { instructions } : {}),
     toolCount: exposedTools.length,
     requestTimeoutMs: connection.requestTimeoutMs,
     supportsParallelToolCalls: connection.supportsParallelToolCalls,

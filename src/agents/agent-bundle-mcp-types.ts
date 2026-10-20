@@ -44,8 +44,6 @@ export type McpServerCatalog = {
   /** Complete server-level guidance from the upstream initialize result. */
   instructions?: string;
   settings?: McpAppSettingsCapability;
-  /** Server-level usage guidance from the initialize result, when the server publishes it. */
-  instructions?: string;
   toolCount: number;
   resources?: {
     listChanged?: boolean;

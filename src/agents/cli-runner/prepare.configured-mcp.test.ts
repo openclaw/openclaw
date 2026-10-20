@@ -32,6 +32,11 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
 
+const PROBE_SERVER_INSTRUCTIONS =
+  "PROBE_GUIDANCE: echo one word per call.\n" +
+  "x".repeat(2_500) +
+  "\nPROBE_TAIL: preserve the complete native guidance.";
+
 const claudeBackend: CliBackendPlugin & { pluginId: string } = {
   id: "claude-cli",
   pluginId: "anthropic",
@@ -76,7 +81,7 @@ async function startProbeServer() {
               protocolVersion: message.params?.protocolVersion,
               capabilities: { tools: {} },
               serverInfo: { name: "probe", version: "1" },
-              instructions: "PROBE_GUIDANCE: echo one word per call.",
+              instructions: PROBE_SERVER_INSTRUCTIONS,
             }
           : message.method === "tools/list"
             ? {
@@ -280,8 +285,7 @@ describe("configured MCP servers on exclusive CLI turns", () => {
         listed: expectedTools,
         // Native Claude saw the server's guidance; the bridge keeps it, unless
         // the server has no listed tools.
-        instructions:
-          deny.length > 0 ? undefined : "## probe\nPROBE_GUIDANCE: echo one word per call.",
+        instructions: deny.length > 0 ? undefined : `## probe\n${PROBE_SERVER_INSTRUCTIONS}`,
         result: deny.length > 0 ? undefined : "probe:pong",
       });
       // One catalog for ordinary and completion turns keeps the Claude prefix stable.
