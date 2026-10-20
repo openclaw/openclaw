@@ -48,17 +48,13 @@ export function observeSessionWorkAdmissionDrain(
   };
 }
 
-type RunExclusiveSessionLifecycleParams<T> = {
+/** Holds real effect validation for boundary race fixtures; no production test API. */
+export async function runExclusiveSessionLifecycle<T>(params: {
   scope: string;
   identities: Iterable<string | undefined>;
   signal?: AbortSignal;
   run: () => Promise<T>;
-};
-
-/** Holds real effect validation for boundary race fixtures; no production test API. */
-export async function runExclusiveSessionLifecycle<T>(
-  params: RunExclusiveSessionLifecycleParams<T>,
-): Promise<T> {
+}): Promise<T> {
   let result: { value: T } | undefined;
   const effect = await sessionLifecycle.beginSessionEffect({
     scope: params.scope,
@@ -79,29 +75,29 @@ export async function runExclusiveSessionLifecycle<T>(
 /** Rebinds a fixture through controller-owned target and operation identity. */
 export function setRpcSourceIdentityForTest(
   source: RpcSourceRef,
-  identity: Partial<RpcSourceIdentity>,
+  { sessionKey, agentId, sessionId }: Partial<RpcSourceIdentity>,
 ): void {
   const current = source.input.target;
   if (!current) {
     throw new Error("Test RPC source has no captured target");
   }
   const operation = source.input.claim?.operation;
-  if (operation && (identity.sessionKey !== undefined || identity.agentId !== undefined)) {
+  if (operation && (sessionKey !== undefined || agentId !== undefined)) {
     operation.updateSessionKey(
-      identity.sessionKey ?? operation.key,
-      identity.agentId ?? operation.agentId,
+      sessionKey ?? operation.key,
+      agentId ?? operation.agentId,
       source.input.claim,
     );
   }
   source.input.target = captureSessionTarget({
     storeScope: current.storeScope,
-    sessionKey: identity.sessionKey ?? current.sessionKey,
-    incarnation: identity.sessionId ?? source.input.sourceSessionId ?? current.incarnation,
-    agentId: identity.agentId ?? current.agentId,
+    sessionKey: sessionKey ?? current.sessionKey,
+    incarnation: sessionId ?? source.input.sourceSessionId ?? current.incarnation,
+    agentId: agentId ?? current.agentId,
   });
-  if (identity.sessionId !== undefined) {
-    source.input.sourceSessionId = identity.sessionId;
-    operation?.updateSessionId(identity.sessionId);
+  if (sessionId !== undefined) {
+    source.input.sourceSessionId = sessionId;
+    operation?.updateSessionId(sessionId);
   }
 }
 
@@ -131,46 +127,34 @@ function registerFixtureRpcSource(runId: string, source: RpcSourceRef): void {
   registerRpcSource(runId, source);
 }
 
-class RpcSourceTestMap extends Map<string, RpcSourceRef> {
-  override get size(): number {
+// Only the map operations used by fixtures; the production registry remains the owner.
+class RpcSourceTestMap {
+  get size(): number {
     return rpcSourcesByRunId.size;
   }
 
-  override clear(): void {
+  clear(): void {
     rpcSourcesByRunId.clear();
   }
 
-  override delete(runId: string): boolean {
+  delete(runId: string): boolean {
     return rpcSourcesByRunId.delete(runId);
   }
 
-  override entries(): MapIterator<[string, RpcSourceRef]> {
+  entries(): MapIterator<[string, RpcSourceRef]> {
     return new Map(this.uniqueEntries()).entries();
   }
 
-  override forEach(
-    callbackfn: (value: RpcSourceRef, key: string, map: Map<string, RpcSourceRef>) => void,
-    thisArg?: unknown,
-  ): void {
-    for (const [runId, source] of this) {
-      callbackfn.call(thisArg, source, runId, this);
-    }
-  }
-
-  override get(runId: string): RpcSourceRef | undefined {
+  get(runId: string): RpcSourceRef | undefined {
     const sources = rpcSourcesByRunId.get(runId);
     return sources?.size === 1 ? sources.values().next().value : undefined;
   }
 
-  override has(runId: string): boolean {
+  has(runId: string): boolean {
     return (rpcSourcesByRunId.get(runId)?.size ?? 0) > 0;
   }
 
-  override keys(): MapIterator<string> {
-    return new Map(this.uniqueEntries()).keys();
-  }
-
-  override set(runId: string, source: RpcSourceRef): this {
+  set(runId: string, source: RpcSourceRef): this {
     if (rpcSourcesByRunId.get(runId)?.has(source)) {
       return this;
     }
@@ -179,11 +163,11 @@ class RpcSourceTestMap extends Map<string, RpcSourceRef> {
     return this;
   }
 
-  override values(): MapIterator<RpcSourceRef> {
+  values(): MapIterator<RpcSourceRef> {
     return new Map(this.uniqueEntries()).values();
   }
 
-  override [Symbol.iterator](): MapIterator<[string, RpcSourceRef]> {
+  [Symbol.iterator](): MapIterator<[string, RpcSourceRef]> {
     return this.entries();
   }
 
@@ -194,10 +178,6 @@ class RpcSourceTestMap extends Map<string, RpcSourceRef> {
       return source ? [[runId, source]] : [];
     });
   }
-}
-
-/** Test-only Map-shaped access to controller-owned protocol correlation. */
-export const rpcSourceTesting = Object.assign(new RpcSourceTestMap(), {
   deleteExpected(runId: string, expected: RpcSourceRef): boolean {
     const sources = rpcSourcesByRunId.get(runId);
     if (!sources?.delete(expected)) {
@@ -210,11 +190,13 @@ export const rpcSourceTesting = Object.assign(new RpcSourceTestMap(), {
     rpcSourceRemovalByRef.delete(expected);
     onRemoved?.();
     return true;
-  },
+  }
   reset(entries: Iterable<readonly [string, RpcSourceRef]> = []): void {
     rpcSourcesByRunId.clear();
     for (const [runId, ref] of entries) {
       registerFixtureRpcSource(runId, ref);
     }
-  },
-});
+  }
+}
+
+export const rpcSourceTesting = new RpcSourceTestMap();

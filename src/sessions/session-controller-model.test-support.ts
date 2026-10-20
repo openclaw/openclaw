@@ -10,7 +10,7 @@ export type PilotEvent =
   | { type: "receipt"; id: string; outcome: "accepted" | "indeterminate" | "rejected" };
 export type PilotEffect =
   | { type: "cancel" }
-  | { type: "inject"; input: PilotInput; generation: number }
+  | { type: "inject"; input: PilotInput }
   | { type: "reject"; id: string };
 export type PilotState = Readonly<{
   generation: number;
@@ -22,9 +22,7 @@ export type PilotState = Readonly<{
   compacting: boolean;
   injectionAvailable: boolean;
   authority: string;
-  inputs: Readonly<
-    Record<string, { input: PilotInput; generation: number; custody: PilotCustody }>
-  >;
+  inputs: Readonly<Record<string, { generation: number; custody: PilotCustody }>>;
 }>;
 
 export function initialPilotState(): PilotState {
@@ -98,15 +96,11 @@ export function stepPilot(
         {
           inputs: {
             ...state.inputs,
-            [event.input.id]: {
-              input: event.input,
-              generation: state.generation,
-              custody,
-            },
+            [event.input.id]: { generation: state.generation, custody },
           },
         },
         allowed
-          ? [{ type: "inject", input: event.input, generation: state.generation }]
+          ? [{ type: "inject", input: event.input }]
           : [{ type: "reject", id: event.input.id }],
       );
     }
@@ -136,18 +130,15 @@ export type PilotMailboxEvent = { type: "enqueue"; input: PilotInput; overflow: 
 export function stepPilotMailbox(
   state: PilotMailbox,
   event: PilotMailboxEvent,
-): {
-  state: PilotMailbox;
-  effects: readonly { type: "retire"; id: string }[];
-} {
+): { state: PilotMailbox } {
   if (
     state.waiting.some((input) => input.id === event.input.id) ||
     state.retired.includes(event.input.id)
   ) {
-    return { state, effects: [] };
+    return { state };
   }
   if (state.capacity <= 0 || state.waiting.length < state.capacity) {
-    return { state: { ...state, waiting: [...state.waiting, event.input] }, effects: [] };
+    return { state: { ...state, waiting: [...state.waiting, event.input] } };
   }
   const victim = event.overflow === "new" ? event.input : state.waiting[0];
   if (!victim) {
@@ -159,7 +150,6 @@ export function stepPilotMailbox(
       waiting: event.overflow === "new" ? state.waiting : [...state.waiting.slice(1), event.input],
       retired: [...state.retired, victim.id],
     },
-    effects: [{ type: "retire", id: victim.id }],
   };
 }
 

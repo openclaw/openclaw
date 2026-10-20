@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -30,15 +30,24 @@ import {
 } from "./session-state-events.test-support.js";
 import { enqueueSessionStateNotice } from "./session-state-notices.js";
 
+let database: ReturnType<typeof createDatabaseOptions>;
+beforeEach(() => {
+  database = createDatabaseOptions();
+  setRuntimeConfigSnapshot({});
+});
 afterEach(async () => {
   await cleanupSessionStateTestState();
   clearRuntimeConfigSnapshot();
 });
 
+const register = (targetAgentId?: string) =>
+  registerSessionStateWatch(
+    { watcherSessionKey: watcher, targetSessionKey: child, targetAgentId },
+    database,
+  );
+
 describe("session state watch ownership", () => {
   it("refuses raw, malformed, and contradictory watch addresses before registering", async () => {
-    const database = createDatabaseOptions();
-    setRuntimeConfigSnapshot({});
     for (const address of [
       { watcherSessionKey: watcher, targetSessionKey: "global", targetAgentId: "main" },
       { watcherSessionKey: watcher, targetSessionKey: "global", targetAgentId: "worker" },
@@ -55,17 +64,10 @@ describe("session state watch ownership", () => {
         readCursor(database, address.watcherSessionKey, address.targetSessionKey),
       ).toBeUndefined();
     }
-    expect(
-      await registerSessionStateWatch(
-        { watcherSessionKey: watcher, targetSessionKey: child, targetAgentId: "main" },
-        database,
-      ),
-    ).toBe(true);
+    expect(await register("main")).toBe(true);
   });
 
   it("keeps raw event history agent-scoped without seeding or publishing ambiguous watches", async () => {
-    const database = createDatabaseOptions();
-    setRuntimeConfigSnapshot({});
     for (const agentId of ["main", "worker"]) {
       for (const kind of ["child_spawned", "human_direct_message"] as const) {
         await recordSessionStateEventAsync(
@@ -87,17 +89,12 @@ describe("session state watch ownership", () => {
   });
 
   it("retains historical unbound cursors inert through restart, acknowledgment, and deletion until expiry", async () => {
-    const database = createDatabaseOptions();
-    setRuntimeConfigSnapshot({});
     const now = Date.now();
     await upsertSessionEntryCore(
       { sessionKey: watcher, env: database.env },
       { sessionId: "watcher-session", updatedAt: now },
     );
-    await registerSessionStateWatch(
-      { watcherSessionKey: watcher, targetSessionKey: child },
-      database,
-    );
+    await register();
     const { db } = openOpenClawStateDatabase(database);
     const { watcher_store_path: watcherStorePath } = db
       .prepare("SELECT watcher_store_path FROM session_watch_cursors")

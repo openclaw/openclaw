@@ -25,17 +25,22 @@ import { deleteSessionUpstreamLinkInDatabase } from "./session-upstream-links.ke
 
 afterEach(() => vi.restoreAllMocks());
 
-function link(sessionKey: string, threadId: string) {
+const sessionKey = "agent:main:presence";
+function link() {
   return {
     sessionKey,
     agentId: "main",
     catalogId: "fixture",
     hostId: "gateway:local",
-    threadId,
+    threadId: "presence-thread",
     upstreamKind: "codex-app-server" as const,
     upstreamRef: null,
     marker: null,
   };
+}
+
+function presence(source = captureSessionUpstreamLinkReadSource()) {
+  return prepareSessionUpstreamPresence(source, sessionKey, "main");
 }
 
 function expectPresence(prepared: { current(): boolean }, present: boolean) {
@@ -48,50 +53,55 @@ function expectPresence(prepared: { current(): boolean }, present: boolean) {
   }
 }
 
-it.each(["worker delete", "settlement", "session cleanup", "legacy SDK"] as const)(
-  "keeps prepared upstream presence current after %s without guard SQL",
-  async (writer) => {
+it.each([
+  ["worker delete", true],
+  ["settlement", true],
+  ["session cleanup", true],
+  ["legacy SDK", true],
+  ["worker", false],
+  ["legacy SDK", false],
+] as const)(
+  "keeps presence current through %s (existing source: %s) without guard SQL",
+  async (writer, existing) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      openOpenClawStateDatabase();
+      if (existing) {
+        openOpenClawStateDatabase();
+      }
+      const source = captureSessionUpstreamLinkReadSource();
+      expect(source.present).toBe(existing);
       const input = {
-        ...link("agent:main:presence", "presence-thread"),
-        upstreamRef: { threadId: "presence-thread" },
+        ...link(),
+        upstreamRef: existing ? { threadId: "presence-thread" } : null,
       };
-      using prepared = await prepareSessionUpstreamPresence(
-        captureSessionUpstreamLinkReadSource(),
-        input.sessionKey,
-        input.agentId,
-      );
+      using prepared = await presence(source);
       expectPresence(prepared, false);
-      expect(
-        await (writer === "legacy SDK"
-          ? upsertSessionUpstreamLink(input, { now: 1 })
-          : upsertSessionUpstreamLinkAsync(input, { now: 1 })),
-      ).toBe(true);
+      const upsert =
+        writer === "legacy SDK" ? upsertSessionUpstreamLink : upsertSessionUpstreamLinkAsync;
+      expect(await upsert(input, existing ? { now: 1 } : undefined)).toBe(true);
       expectPresence(prepared, true);
+      if (!existing) {
+        return;
+      }
       if (writer === "legacy SDK") {
         expect(() =>
           runOpenClawStateWriteTransaction(({ db }) => {
-            deleteSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId);
+            deleteSessionUpstreamLinkInDatabase(db, sessionKey, "main");
             throw new Error("rollback presence");
           }),
         ).toThrow("rollback presence");
         expectPresence(prepared, true);
-        expect(deleteSessionUpstreamLink(input.sessionKey, input.agentId)).toBe("deleted");
+        expect(deleteSessionUpstreamLink(sessionKey, "main")).toBe("deleted");
       } else if (writer === "worker delete") {
-        expect(await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId)).toBe(
-          "deleted",
-        );
+        expect(await deleteSessionUpstreamLinkAsync(sessionKey, "main")).toBe("deleted");
       } else if (writer === "settlement") {
-        expect(
-          await settleSessionUpstreamLink(
-            { ...input, createdAt: 1, updatedAt: 1 },
-            { kind: "missing" },
-            { assertCurrent: () => {} },
-          ),
-        ).toBe(true);
+        const settled = await settleSessionUpstreamLink(
+          { ...input, createdAt: 1, updatedAt: 1 },
+          { kind: "missing" },
+          { assertCurrent: () => {} },
+        );
+        expect(settled).toBe(true);
       } else {
-        await handleSessionStateSessionDeleted(input.sessionKey, input.agentId);
+        await handleSessionStateSessionDeleted(sessionKey, "main");
       }
       expectPresence(prepared, false);
     });
@@ -101,7 +111,6 @@ it.each(["worker delete", "settlement", "session cleanup", "legacy SDK"] as cons
 it("keeps a committed adoption when the initial read reply arrives later", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     openOpenClawStateDatabase();
-    const sessionKey = "agent:main:presence-late-read";
     const readComplete = createDeferredCore();
     const deliverRead = createDeferredCore();
     const read = stateReads.executeExistingOpenClawStateRead;
@@ -113,14 +122,10 @@ it("keeps a committed adoption when the initial read reply arrives later", async
       }
       return result;
     });
-    const pending = prepareSessionUpstreamPresence(
-      captureSessionUpstreamLinkReadSource(),
-      sessionKey,
-      "main",
-    );
+    const pending = presence();
     try {
       await awaitGateBeforeSettlement(readComplete.promise, pending, "upstream read preparation");
-      expect(await upsertSessionUpstreamLinkAsync(link(sessionKey, "late-read-thread"))).toBe(true);
+      expect(await upsertSessionUpstreamLinkAsync(link())).toBe(true);
     } finally {
       deliverRead.resolve();
     }
@@ -130,51 +135,22 @@ it("keeps a committed adoption when the initial read reply arrives later", async
   });
 });
 
-it.each(["worker", "legacy SDK"] as const)(
-  "observes %s adoption when the prepared source did not exist",
-  async (writer) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = captureSessionUpstreamLinkReadSource();
-      expect(source.present).toBe(false);
-      const sessionKey = "agent:main:presence-create";
-      using prepared = await prepareSessionUpstreamPresence(source, sessionKey, "main");
-      expect(prepared.current()).toBe(false);
-      const input = link(sessionKey, "created-thread");
-      expect(
-        await (writer === "worker"
-          ? upsertSessionUpstreamLinkAsync(input)
-          : upsertSessionUpstreamLink(input)),
-      ).toBe(true);
-      expectPresence(prepared, true);
-    });
-  },
-);
-
 it("denies the final guard when committed presence facts cannot be installed", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     openOpenClawStateDatabase();
-    const sessionKey = "agent:main:presence-unknown";
-    using prepared = await prepareSessionUpstreamPresence(
-      captureSessionUpstreamLinkReadSource(),
-      sessionKey,
-      "main",
-    );
+    using prepared = await presence();
     const release = sessionUpstreamPresencePublication.subscribeFacts((change) => {
       if (change.kind === "committed") {
         throw new Error("presence publication unavailable");
       }
     });
     try {
-      expect(await upsertSessionUpstreamLinkAsync(link(sessionKey, "unknown-thread"))).toBe(true);
+      expect(await upsertSessionUpstreamLinkAsync(link())).toBe(true);
       expect(() => prepared.current()).toThrow("Session upstream source is unavailable");
     } finally {
       release();
     }
-    using refreshed = await prepareSessionUpstreamPresence(
-      captureSessionUpstreamLinkReadSource(),
-      sessionKey,
-      "main",
-    );
+    using refreshed = await presence();
     expect(refreshed.current()).toBe(true);
   });
 });

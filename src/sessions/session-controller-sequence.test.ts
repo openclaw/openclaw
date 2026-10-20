@@ -50,6 +50,10 @@ type Event =
   | { type: "mutation-settled" }
   | { type: "tick" };
 
+function steps(id: number, ...types: Extract<Event, { id: number }>["type"][]): Event[] {
+  return types.map((type) => ({ type, id }));
+}
+
 type Mail = {
   id: number;
   native: boolean;
@@ -213,9 +217,7 @@ function advance(model: Model, event: Event): boolean | undefined {
 const prefix: readonly Event[] = [
   { type: "reserve", id: -1 },
   { type: "native", id: 0 },
-  { type: "ready", id: -1 },
-  { type: "finish", id: -1 },
-  { type: "owner-settled", id: -1 },
+  ...steps(-1, "ready", "finish", "owner-settled"),
   { type: "tick" },
   // A wait-policy mutation must also join a selected source whose native owner
   // has finished but whose onSettled callback still owns cleanup/persistence.
@@ -224,26 +226,19 @@ const prefix: readonly Event[] = [
   { type: "mutation-settled" },
   { type: "reserve", id: 1 },
   { type: "native", id: 2 },
-  { type: "reserve", id: 3 },
-  { type: "ready", id: 3 },
+  ...steps(3, "reserve", "ready"),
   { type: "reserve", id: 4, interrupt: true },
   { type: "ready", id: 4 },
   { type: "reserve", id: 5, interrupt: true },
   { type: "hold", id: 1 },
-  { type: "reserve", id: 6 },
-  { type: "ready", id: 6 },
-  { type: "cancel", id: 1 },
-  { type: "withdraw", id: 1 },
-  { type: "stop", id: 0 },
-  { type: "finish", id: 0 },
+  ...steps(6, "reserve", "ready"),
+  ...steps(1, "cancel", "withdraw"),
+  ...steps(0, "stop", "finish"),
   { type: "tick" },
   { type: "owner-settled", id: 0 },
   { type: "source-settled", id: 1 },
-  { type: "ready", id: 5 },
-  { type: "retry", id: 5 },
-  { type: "late-detach", id: 5 },
-  { type: "withdraw", id: 1 },
-  { type: "cancel", id: 1 },
+  ...steps(5, "ready", "retry", "late-detach"),
+  ...steps(1, "withdraw", "cancel"),
   { type: "mutation" },
   { type: "finish", id: 5 },
   { type: "tick" },
@@ -252,11 +247,8 @@ const prefix: readonly Event[] = [
   { type: "source-settled", id: 5 },
   { type: "mutation-settled" },
   { type: "late-detach", id: 5 },
-  { type: "finish", id: 2 },
-  { type: "owner-settled", id: 2 },
-  { type: "finish", id: 3 },
-  { type: "source-settled", id: 3 },
-  { type: "owner-settled", id: 3 },
+  ...steps(2, "finish", "owner-settled"),
+  ...steps(3, "finish", "source-settled", "owner-settled"),
 ];
 function sequence(seed: number): Event[] {
   const model = initialModel();
@@ -600,13 +592,11 @@ describe("real controller selector sequences", () => {
       { type: "source-settled", id: 4 },
       { type: "reserve", id: 8, interrupt: false },
       { type: "native", id: 9 },
-      { type: "hold", id: 8 },
-      { type: "withdraw", id: 8 },
+      ...steps(8, "hold", "withdraw"),
       { type: "source-settled", id: 6 },
       { type: "source-settled", id: 8 },
       { type: "mutation-settled" },
-      { type: "finish", id: 9 },
-      { type: "owner-settled", id: 9 },
+      ...steps(9, "finish", "owner-settled"),
     ]);
   });
 
