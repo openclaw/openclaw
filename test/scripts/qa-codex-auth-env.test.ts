@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   OPENCLAW_QA_CODEX_API_KEY_HANDOFF,
-  resolveQaCodexApiKeyEnvPatch,
+  resolveQaCodexApiKeyEnvPatch as resolveHandoff,
 } from "../../scripts/lib/qa-codex-auth-env.mts";
 import { runNodeMain } from "./run-node-boundary.test-support.js";
 import {
@@ -20,49 +20,38 @@ const keyReader = () =>
   vi.fn(() => ({ type: "api_key" as const, provider: "openai" as const, key: apiKey }));
 const readOptions = { codexHome: callerEnv.CODEX_HOME, allowKeychainPrompt: false };
 
-describe("QA Codex API-key launcher handoff", () => {
-  it("preserves missing-auth rejection by returning no handoff", () => {
-    const readCodexApiKey = vi.fn(() => null);
+it("preserves missing-auth rejection by returning no handoff", () => {
+  const readCodexApiKey = vi.fn(() => null);
 
-    expect(
-      resolveQaCodexApiKeyEnvPatch({
-        args: liveSuiteArgs,
-        env: { CODEX_HOME: "/host/.codex" },
-        readCodexApiKey,
-      }),
-    ).toBeUndefined();
-    expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith(readOptions);
-  });
-
-  it.each([
-    ["boolean root option", ["qa", "--no-color", "suite", "--provider-mode", "live-frontier"]],
-    [
-      "valued root option",
-      ["qa", "--log-level", "debug", "suite", "--provider-mode=live-frontier"],
-    ],
-  ] as const)("recognizes a live suite with a %s between command tokens", (_name, args) => {
-    const readCodexApiKey = keyReader();
-    expect(resolveQaCodexApiKeyEnvPatch({ args, env: callerEnv, readCodexApiKey })).toEqual({
-      [OPENCLAW_QA_CODEX_API_KEY_HANDOFF]: apiKey,
-    });
-    expect(readCodexApiKey).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["non-live QA", ["qa", "suite", "--provider-mode", "mock-openai"], {}],
-    ["unrelated command", ["status"], {}],
-    ["explicit OpenAI key", liveSuiteArgs, { OPENAI_API_KEY: "explicit-key" }],
-    ["explicit Codex key", liveSuiteArgs, { CODEX_API_KEY: "explicit-key" }],
-  ] as const)("does not read Codex auth for %s", (_name, args, env) => {
-    const readCodexApiKey = vi.fn(() => {
-      throw new Error("unexpected credential read");
-    });
-
-    expect(resolveQaCodexApiKeyEnvPatch({ args, env, readCodexApiKey })).toBeUndefined();
-    expect(readCodexApiKey).not.toHaveBeenCalled();
-  });
+  const patch = resolveHandoff({ args: liveSuiteArgs, env: callerEnv, readCodexApiKey });
+  expect(patch).toBeUndefined();
+  expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith(readOptions);
 });
 
+it.each([
+  ["boolean root option", ["qa", "--no-color", "suite", "--provider-mode", "live-frontier"]],
+  ["valued root option", ["qa", "--log-level", "debug", "suite", "--provider-mode=live-frontier"]],
+] as const)("recognizes a live suite with a %s between command tokens", (_name, args) => {
+  const readCodexApiKey = keyReader();
+  expect(resolveHandoff({ args, env: callerEnv, readCodexApiKey })).toEqual({
+    [OPENCLAW_QA_CODEX_API_KEY_HANDOFF]: apiKey,
+  });
+  expect(readCodexApiKey).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ["non-live QA", ["qa", "suite", "--provider-mode", "mock-openai"], {}],
+  ["unrelated command", ["status"], {}],
+  ["explicit OpenAI key", liveSuiteArgs, { OPENAI_API_KEY: "explicit-key" }],
+  ["explicit Codex key", liveSuiteArgs, { CODEX_API_KEY: "explicit-key" }],
+] as const)("does not read Codex auth for %s", (_name, args, env) => {
+  const readCodexApiKey = vi.fn(() => {
+    throw new Error("unexpected credential read");
+  });
+
+  expect(resolveHandoff({ args, env, readCodexApiKey })).toBeUndefined();
+  expect(readCodexApiKey).not.toHaveBeenCalled();
+});
 fixtureIt(
   "passes an active API-key-only login through the real QA launcher child boundary",
   async ({ tmp }) => {
@@ -97,7 +86,6 @@ fixtureIt(
     expect(launchedEnv?.[OPENCLAW_QA_CODEX_API_KEY_HANDOFF]).toBe(apiKey);
     expect(launchedEnv).not.toHaveProperty("CODEX_API_KEY");
     expect(callerEnv).toEqual({ CODEX_HOME: "/host/.codex", OPENCLAW_RUNNER_LOG: "0" });
-    expect(JSON.stringify(callerEnv)).not.toContain(apiKey);
     expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith(readOptions);
   },
 );

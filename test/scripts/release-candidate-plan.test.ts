@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { createPluginPrereleaseTestPlan } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
@@ -11,13 +11,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(
   readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
 ) as { jobs: Record<string, { steps: { name?: string; run?: string }[] }> };
-const step = workflow.jobs.prepare_docker_e2e_image?.steps.find(
+const planningScript = workflow.jobs.prepare_docker_e2e_image?.steps.find(
   (entry) => entry.name === "Plan Docker E2E images",
-);
-if (!step?.run) {
+)?.run;
+if (!planningScript) {
   throw new Error("Missing shared candidate planning step");
 }
-const planningScript = step.run;
 
 type Plan = ReturnType<typeof resolveDockerE2ePlan>["plan"];
 
@@ -54,47 +53,41 @@ function runPlanningStep(
   };
 }
 
-describe("shared release candidate preparation", () => {
-  it.each(["beta", "stable", "full"] as const)(
-    "prepares every plugin child's package under the %s profile",
-    (releaseProfile) => {
-      const { plan, output } = runPlanningStep(releaseProfile, "prepare");
-      const release = runPlanningStep(releaseProfile, "release").plan;
-      const child = resolveDockerE2ePlan({
-        includeOpenWebUI: false,
-        liveMode: "all",
-        orderLanes: (lanes) => lanes,
-        planReleaseAll: false,
-        profile: "all",
-        releaseChunk: "",
-        releaseProfile,
-        selectedLaneNames: createPluginPrereleaseTestPlan().dockerLanes,
-      }).plan;
-      const missing = [
-        ...child.requiredPrepublishPluginPackages,
-        ...release.requiredPrepublishPluginPackages,
-      ].filter((name) => !plan.requiredPrepublishPluginPackages.includes(name));
-      expect(missing).toEqual([]);
-      expect(output).toContain(
-        `required_prepublish_plugin_packages=${JSON.stringify(plan.requiredPrepublishPluginPackages)}`,
-      );
-      expect(plan.needs.bareImage).toBe(true);
-      expect(plan.needs.functionalImage).toBe(true);
-      expect(release.lanes.map((lane) => lane.name)).not.toContain(
-        "npm-onboard-slack-candidate-channel-agent",
-      );
-    },
-  );
+it.each(["beta", "stable", "full"] as const)(
+  "prepares every plugin child's package under the %s profile",
+  (releaseProfile) => {
+    const { plan, output } = runPlanningStep(releaseProfile, "prepare");
+    const release = runPlanningStep(releaseProfile, "release").plan;
+    const child = resolveDockerE2ePlan({
+      includeOpenWebUI: false,
+      liveMode: "all",
+      orderLanes: (lanes) => lanes,
+      planReleaseAll: false,
+      profile: "all",
+      releaseChunk: "",
+      releaseProfile,
+      selectedLaneNames: createPluginPrereleaseTestPlan().dockerLanes,
+    }).plan;
+    const packages = plan.requiredPrepublishPluginPackages;
+    for (const expected of [child, release]) {
+      expect(packages).toEqual(expect.arrayContaining(expected.requiredPrepublishPluginPackages));
+    }
+    expect(output).toContain(`required_prepublish_plugin_packages=${JSON.stringify(packages)}`);
+    expect(plan.needs).toMatchObject({ bareImage: true, functionalImage: true });
+    expect(release.lanes.map((lane) => lane.name)).not.toContain(
+      "npm-onboard-slack-candidate-channel-agent",
+    );
+  },
+);
 
-  it("keeps targeted execution limited to the selected lane and its packages", () => {
-    const { plan } = runPlanningStep("full", "targeted");
-    expect(plan.lanes.map((lane) => lane.name)).toEqual(["npm-onboard-channel-agent"]);
-    expect(plan.requiredPrepublishPluginPackages).toEqual(["@openclaw/codex"]);
-  });
+it("keeps targeted execution limited to the selected lane and its packages", () => {
+  const { plan } = runPlanningStep("full", "targeted");
+  expect(plan.lanes.map((lane) => lane.name)).toEqual(["npm-onboard-channel-agent"]);
+  expect(plan.requiredPrepublishPluginPackages).toEqual(["@openclaw/codex"]);
+});
 
-  it("prepares the default non-soak survivor companion packages", () => {
-    const { plan } = runPlanningStep("beta", "prepare", "");
+it("prepares the default non-soak survivor companion packages", () => {
+  const { plan } = runPlanningStep("beta", "prepare", "");
 
-    expect(plan.requiredPrepublishPluginPackages).toContain("@openclaw/duckduckgo-plugin");
-  });
+  expect(plan.requiredPrepublishPluginPackages).toContain("@openclaw/duckduckgo-plugin");
 });

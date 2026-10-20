@@ -17,9 +17,7 @@ const files = [
 ];
 type Worker = { file: string; pid: number; threadId: number };
 
-it("releases the previous file's live catalog before a provider proxy test in the same worker", async ({
-  signal,
-}) => {
+it("isolates live catalogs between files in one worker", async ({ signal }) => {
   await lifetime.run(async () => {
     const root = lifetime.createTempDir("oc-catalog-isolation-");
     const local = (name: string) => path.join(root, name);
@@ -38,8 +36,7 @@ beforeAll(() => fs.appendFileSync(${JSON.stringify(receipt)}, JSON.stringify({
 }) + "\\n"));
 `,
     );
-    // Keep the real extension setup and runner; ordering and worker identity
-    // exercise cross-file cache reuse deterministically.
+    // Real extension setup, explicit order, and one worker reproduce cross-file cache reuse.
     fs.writeFileSync(
       config,
       `import { BaseSequencer } from "vitest/node";
@@ -48,17 +45,15 @@ const files = ${JSON.stringify(files.map((file) => path.join(repoRoot, file).rep
 class OrderedCatalogTests extends BaseSequencer {
   async sort(tests) { return [...tests].sort((a, b) => files.indexOf(a.moduleId.replaceAll("\\\\", "/")) - files.indexOf(b.moduleId.replaceAll("\\\\", "/"))); }
 }
-export default {
-  ...extensions,
-  test: {
+extensions.test = {
     ...extensions.test,
     include: ${JSON.stringify(files.map((file) => file.replace(/^extensions\//u, "")))},
     setupFiles: [...extensions.test.setupFiles, ${JSON.stringify(setup)}],
     isolate: false, fileParallelism: false, maxWorkers: 1,
     sequence: { ...extensions.test.sequence, sequencer: OrderedCatalogTests },
     reporters: ["json"], outputFile: ${JSON.stringify(reportPath)},
-  },
 };
+export default extensions;
 `,
     );
     const result = await lifetime.track(
@@ -77,29 +72,19 @@ export default {
       ),
     );
     const output = [result.error, result.stderr, result.stdout].filter(Boolean).join("\n");
-    expect(fs.existsSync(receipt), output).toBe(true);
-    const workers = fs
-      .readFileSync(receipt, "utf8")
-      .trim()
-      .split("\n")
-      .map((line): Worker => JSON.parse(line));
-    expect(
-      workers.map((worker) => path.relative(repoRoot, worker.file).replaceAll("\\", "/")),
-      output,
-    ).toEqual(files);
+    const lines = fs.readFileSync(receipt, "utf8").trim().split("\n");
+    const workers = lines.map((line): Worker => JSON.parse(line));
+    const paths = workers.map(({ file }) => path.relative(repoRoot, file).replaceAll("\\", "/"));
+    expect(paths, output).toEqual(files);
     const identities = new Set(workers.map(({ pid, threadId }) => `${pid}:${threadId}`));
     expect(identities.size, output).toBe(1);
-    expect(fs.existsSync(reportPath), output).toBe(true);
     const report = JSON.parse(fs.readFileSync(reportPath, "utf8")) as JsonTestResults;
-    const failures = report.testResults.flatMap((file) => [
-      file.message,
-      ...file.assertionResults.flatMap((assertion) => assertion.failureMessages ?? []),
-    ]);
-    expect(result.status, [output, ...failures].filter(Boolean).join("\n").slice(-16_384)).toBe(0);
-    expect(report, output).toMatchObject({
-      numFailedTests: 0,
-      testResults: [{ status: "passed" }, { status: "passed" }],
-    });
+    expect(result.status, output).toBe(0);
+    expect(report.numFailedTests, output).toBe(0);
+    expect(
+      report.testResults.map(({ status }) => status),
+      output,
+    ).toEqual(["passed", "passed"]);
     for (const file of report.testResults) {
       expect(file.assertionResults.length, output).toBeGreaterThan(0);
     }

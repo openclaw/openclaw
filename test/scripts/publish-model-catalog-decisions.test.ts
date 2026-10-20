@@ -1,68 +1,50 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  parseRemoteModelCatalogBundle,
-  parseRemoteModelCatalogBundleV2,
-  parseRemoteModelCatalogBundleV3,
-} from "@openclaw/model-catalog-core";
+import * as catalog from "@openclaw/model-catalog-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 const decision = { protocol: "fixture.decisions", input: ["text"] };
-const billing = {
-  unit: "tokens",
-  source: "provider-docs",
-  usdPerMillion: { input: 0, output: 0 },
+const nativeModel = {
+  id: "native",
+  baseUrl: "https://fixture.invalid/private",
+  inference: {
+    chat: false,
+    decision: {
+      ...decision,
+      billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0, output: 0 } },
+    },
+  },
 };
 
 function fixture(chatModels = 200) {
   const rootDir = tempDirs.make("openclaw-catalog-decisions-");
-  const manifestDir = path.join(rootDir, "extensions", "fixture");
-  fs.mkdirSync(manifestDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(manifestDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      providers: ["anthropic", "openai", "fixture"],
-      modelCatalog: {
-        providers: {
-          anthropic: { models: [{ id: "chat-a" }] },
-          openai: {
-            authScope: "agent",
-            models: Array.from({ length: chatModels - 1 }, (_, index) => ({
-              id: `chat-${index}`,
-              ...(index === 0 ? { inference: { chat: true, decision } } : {}),
-            })),
-          },
-          fixture: {
-            authScope: "plugin",
-            defaultModel: "native",
-            defaultUtilityModel: "native",
-            headers: { "X-Fixture": "not-a-secret" },
-            models: [
-              {
-                id: "native",
-                input: ["text"],
-                baseUrl: "https://fixture.invalid/private",
-                inference: {
-                  chat: false,
-                  decision: {
-                    ...decision,
-                    questions: { boolean: { probabilities: "boolean", abstention: false } },
-                    billing,
-                  },
-                },
-              },
-            ],
-          },
-        },
-      },
-    }),
-  );
-  fs.mkdirSync(path.join(rootDir, "scripts", "lib"), { recursive: true });
-  fs.writeFileSync(path.join(rootDir, "scripts", "lib", "recommended-models.json"), "[]");
+  const providers = {
+    anthropic: { models: [{ id: "chat-a" }] },
+    openai: {
+      authScope: "agent",
+      models: Array.from({ length: chatModels - 1 }, (_, index) => ({
+        id: `chat-${index}`,
+        ...(index === 0 ? { inference: { chat: true, decision } } : {}),
+      })),
+    },
+    fixture: {
+      authScope: "plugin",
+      defaultModel: "native",
+      defaultUtilityModel: "native",
+      headers: { "X-Fixture": "not-a-secret" },
+      models: [nativeModel],
+    },
+  };
+  writeJsonFile(path.join(rootDir, "extensions/fixture/openclaw.plugin.json"), {
+    providers: Object.keys(providers),
+    modelCatalog: { providers },
+  });
+  writeJsonFile(path.join(rootDir, "scripts/lib/recommended-models.json"), []);
   const file = (version: number) => path.join(rootDir, `v${version}.json`);
   const files = [file(1), file(2), file(3)] as const;
   vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -85,9 +67,9 @@ it("publishes native capabilities only to the negotiated v3 output", async () =>
   const { files, run } = fixture();
   await expect(run()).resolves.toMatchObject({ wrote: true });
   const payloads = files.map((file) => JSON.parse(fs.readFileSync(file, "utf8")));
-  const v1 = parseRemoteModelCatalogBundle(payloads[0]);
-  const v2 = parseRemoteModelCatalogBundleV2(payloads[1]);
-  const v3 = parseRemoteModelCatalogBundleV3(payloads[2]);
+  const v1 = catalog.parseRemoteModelCatalogBundle(payloads[0]);
+  const v2 = catalog.parseRemoteModelCatalogBundleV2(payloads[1]);
+  const v3 = catalog.parseRemoteModelCatalogBundleV3(payloads[2]);
   expect(v1.providers).not.toHaveProperty("fixture");
   expect(v2.providers).not.toHaveProperty("fixture");
   expect(v2.models).toHaveLength(200);
@@ -97,15 +79,10 @@ it("publishes native capabilities only to the negotiated v3 output", async () =>
     decision: { protocol: "fixture.decisions", input: ["text"] },
   });
   const native = v3.models.find((model) => model.provider === "fixture");
-  expect(native).toMatchObject({
-    id: "native",
-    inference: {
-      chat: false,
-      decision: {
-        protocol: "fixture.decisions",
-        billing: { usdPerMillion: { input: 0, output: 0 } },
-      },
-    },
+  expect(native).toMatchObject({ id: "native", inference: { chat: false } });
+  expect(native?.inference?.decision).toMatchObject({
+    protocol: "fixture.decisions",
+    billing: { usdPerMillion: { input: 0, output: 0 } },
   });
   expect(native).not.toHaveProperty("baseUrl");
   expect(v3.providers.fixture).toEqual({});
