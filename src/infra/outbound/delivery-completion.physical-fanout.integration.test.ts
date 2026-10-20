@@ -1,41 +1,23 @@
-import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../../agents/pending-final-recovery-source.js";
+import { describe, expect, it, vi } from "vitest";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
+import {
+  installRecoveryHooks,
+  markFinal,
+  registerMatrix,
+  seedRecoverySession,
+} from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import {
-  createRecoveryLog,
-  installDeliveryQueueTmpDirHooks,
-  loadPendingDeliveries,
-} from "./delivery-queue.test-helpers.js";
-
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+import { createRecoveryLog, loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 describe("final receipt physical fanout", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let tmpDir: string;
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-  beforeEach(() => {
-    tmpDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
-  });
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    vi.unstubAllEnvs();
-  });
+  const fixtures = installRecoveryHooks(false);
+  const deliverOutboundPayloads = fixtures.deliver;
 
   it.each(
     (["live", "recovery"] as const).flatMap((mode) =>
@@ -54,23 +36,13 @@ describe("final receipt physical fanout", () => {
   )(
     "requires every physical send in one logical final ($mode, $transport, $disposition)",
     async ({ mode, transport, disposition }) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:physical-fanout",
-        storePath: path.join(tmpDir, "sessions.json"),
-      };
-      const context = { channel: "matrix", to: "!original:example" };
-      await replaceSessionEntry(scope, {
-        sessionId: "session",
-        updatedAt: 1,
-        restartRecoveryDeliveryRunId: "run",
-        restartRecoveryDeliverySourceRunId: "source",
-        restartRecoveryDeliveryContext: context,
-      });
-      const entry = loadSessionEntry(scope);
-      if (!entry) {
-        throw new Error("missing fixture session");
-      }
+      const tmpDir = fixtures.tmpDir();
+      const { scope, context, entry } = await seedRecoverySession(
+        tmpDir,
+        "physical-fanout",
+        "source",
+        "run",
+      );
       // One logical final. Real core planning splits text or media into two sends.
       const payloads = [
         {
@@ -80,18 +52,7 @@ describe("final receipt physical fanout", () => {
             : {}),
         },
       ];
-      await persistPendingFinalDeliveryMarker({
-        ...scope,
-        deliver: true,
-        sessionEntry: entry,
-        sessionStore: { [scope.sessionKey]: entry },
-        admittedRecoverySource: capturePendingFinalRecoverySource(entry),
-        suppressVisibleSessionEffects: false,
-        sessionReboundDuringRun: false,
-        payloads,
-        deliveryContext: context,
-        runOwnedSessionId: entry.sessionId,
-      });
+      await markFinal(scope, entry, payloads, context);
       const completion = resolvePendingFinalDeliveryCompletion(payloads);
       if (!completion) {
         throw new Error("missing final custody");
@@ -108,30 +69,19 @@ describe("final receipt physical fanout", () => {
             }
           : { channel: "matrix", messageId: index === 0 ? "first-id" : "second-id" };
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "matrix",
-            source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "matrix",
-              outbound: {
-                ...matrixOutboundForQueueTest,
-                chunker: chunkText,
-                textChunkLimit: 5,
-                ...(transport === "formatted"
-                  ? {
-                      sendFormattedText: async ({ onPlatformSendDispatch }) => {
-                        await onPlatformSendDispatch?.();
-                        return [await send(), await send()];
-                      },
-                    }
-                  : {}),
+      registerMatrix({
+        ...matrixOutboundForQueueTest,
+        chunker: chunkText,
+        textChunkLimit: 5,
+        ...(transport === "formatted"
+          ? {
+              sendFormattedText: async ({ onPlatformSendDispatch }) => {
+                await onPlatformSendDispatch?.();
+                return [await send(), await send()];
               },
-            }),
-          },
-        ]),
-      );
+            }
+          : {}),
+      });
       const progress: OutboundDeliveryResult[] = [];
       const runDelivery: typeof deliverOutboundPayloads = (params) =>
         deliverOutboundPayloads({

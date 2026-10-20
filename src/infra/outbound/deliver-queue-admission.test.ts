@@ -43,6 +43,18 @@ function preparation(id: string, preparationLeaseExpiresAt: number): StableDeliv
   };
 }
 
+const payloads = [{ text: "prepared" }];
+function enqueue(
+  options?: Parameters<typeof stageAndEnqueueOutboundDelivery>[2],
+  overrides: Partial<Parameters<typeof stageAndEnqueueOutboundDelivery>[0]> = {},
+) {
+  return stageAndEnqueueOutboundDelivery(
+    { cfg: {}, channel: "matrix", to: "!room:example", payloads, ...overrides },
+    createUnmodifiedPreparedOutboundBatch(payloads),
+    options,
+  );
+}
+
 describe("stageAndEnqueueOutboundDelivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -50,7 +62,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
   });
 
   it("restores first custody including absence of a generation binding", () => {
-    const payloads = [{ text: "original result" }];
+    const originalPayloads = [{ text: "original result" }];
     const entry = {
       id: "shared-intent",
       enqueuedAt: 1,
@@ -58,7 +70,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       attemptCount: 0,
       channel: "matrix" as const,
       to: "!original:example",
-      preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
+      preparedBatch: createUnmodifiedPreparedOutboundBatch(originalPayloads),
     };
     const generation = {
       agentId: "main",
@@ -76,7 +88,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
     };
     expect(restoreQueuedDeliveryCustody(params, entry)).toMatchObject({
       to: entry.to,
-      payloads,
+      payloads: originalPayloads,
       sessionGeneration: undefined,
     });
     expect(
@@ -84,29 +96,27 @@ describe("stageAndEnqueueOutboundDelivery", () => {
         { ...params, sessionGeneration: undefined },
         { ...entry, sessionGeneration: generation },
       ),
-    ).toMatchObject({ to: entry.to, payloads, sessionGeneration: generation });
+    ).toMatchObject({ to: entry.to, payloads: originalPayloads, sessionGeneration: generation });
   });
 
   it("waits for the prepared checkpoint snapshot before enqueue", async () => {
     const snapshot = preparation("stable-checkpoint", 200);
     const checkpoint = createDeferredCore<StableDeliveryPreparation>();
     const entered = createDeferredCore();
-    const payloads = [{ text: "prepared" }];
     mocks.stageQueuePayloadMedia.mockResolvedValueOnce({
       status: "staged",
       payloads,
       artifacts: [],
     });
     mocks.enqueuePreparedDeliveryOnce.mockResolvedValueOnce({ id: snapshot.id, created: true });
-    const pending = stageAndEnqueueOutboundDelivery(
-      { cfg: {}, channel: "matrix", to: "!room:example", payloads, deliveryIntentId: snapshot.id },
-      createUnmodifiedPreparedOutboundBatch(payloads),
+    const pending = enqueue(
       {
         getStablePreparation: () => {
           entered.resolve();
           return checkpoint.promise;
         },
       },
+      { deliveryIntentId: snapshot.id },
     );
     await entered.promise;
     const callsBeforeCheckpoint = mocks.enqueuePreparedDeliveryOnce.mock.calls.length;
@@ -117,43 +127,23 @@ describe("stageAndEnqueueOutboundDelivery", () => {
   });
 
   it("reads the stable preparation after asynchronous media staging", async () => {
-    let finishStaging: (() => void) | undefined;
-    mocks.stageQueuePayloadMedia.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
-          finishStaging = () =>
-            resolve({
-              status: "staged",
-              payloads: [{ text: "prepared" }],
-              artifacts: [],
-            });
-        }),
-    );
-    mocks.enqueuePreparedDeliveryOnce.mockResolvedValueOnce({
-      id: "stable-1",
-      created: true,
+    const staging = createDeferredCore();
+    mocks.stageQueuePayloadMedia.mockImplementationOnce(async () => {
+      await staging.promise;
+      return { status: "staged", payloads, artifacts: [] };
     });
+    mocks.enqueuePreparedDeliveryOnce.mockResolvedValueOnce({ id: "stable-1", created: true });
     let current = preparation("stable-1", 100);
     const getStablePreparation = vi.fn(async () => current);
-    const payloads = [{ text: "prepared" }];
-
-    const pending = stageAndEnqueueOutboundDelivery(
-      {
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads,
-        queuePolicy: "required",
-        deliveryIntentId: "stable-1",
-      },
-      createUnmodifiedPreparedOutboundBatch(payloads),
+    const pending = enqueue(
       { getStablePreparation },
+      { queuePolicy: "required", deliveryIntentId: "stable-1" },
     );
 
     await vi.waitFor(() => expect(mocks.stageQueuePayloadMedia).toHaveBeenCalledOnce());
     expect(getStablePreparation).not.toHaveBeenCalled();
     current = preparation("stable-1", 200);
-    finishStaging?.();
+    staging.resolve();
 
     await expect(pending).resolves.toEqual({ id: "stable-1", created: true });
     expect(getStablePreparation).toHaveBeenCalledOnce();
@@ -166,7 +156,6 @@ describe("stageAndEnqueueOutboundDelivery", () => {
     const original = new Error("enqueue failed before publication");
     const cancel = new Error("stage cancellation failed");
     const release = new Error("spool cleanup failed");
-    const payloads = [{ text: "prepared" }];
     mocks.stageQueuePayloadMedia.mockResolvedValueOnce({
       status: "staged",
       payloads,
@@ -178,11 +167,9 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       throw cancel;
     });
     mocks.releaseSpoolArtifacts.mockRejectedValueOnce(release);
-    await expect(
-      stageAndEnqueueOutboundDelivery(
-        { cfg: {}, channel: "matrix", to: "!synthetic:example", payloads },
-        createUnmodifiedPreparedOutboundBatch(payloads),
-      ),
-    ).rejects.toMatchObject({ cause: original, errors: [original, cancel, release] });
+    await expect(enqueue(undefined, { to: "!synthetic:example" })).rejects.toMatchObject({
+      cause: original,
+      errors: [original, cancel, release],
+    });
   });
 });

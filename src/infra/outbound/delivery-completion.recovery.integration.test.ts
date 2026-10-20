@@ -1,8 +1,5 @@
-import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildMainSessionRecoverySettlementPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
-import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../../agents/pending-final-recovery-source.js";
 import { resolveRequesterRecoveryDelivery } from "../../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { createDirectAnnounceResponseClassifier } from "../../agents/subagents/announce/subagent-announce-direct-response.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
@@ -15,50 +12,24 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
-import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
+import {
+  installRecoveryHooks,
+  markFinal,
+  seedRecoverySession,
+} from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import {
-  createRecoveryLog,
-  loadPendingDeliveries,
-  installDeliveryQueueTmpDirHooks,
-} from "./delivery-queue.test-helpers.js";
-
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+import { createRecoveryLog, loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 describe("recovered requester final receipts", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let tmpDir: string;
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-  beforeEach(() => {
-    tmpDir = fixtures.tmpDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-        },
-      ]),
-    );
-  });
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    vi.unstubAllEnvs();
-  });
+  const fixtures = installRecoveryHooks();
+  const deliverOutboundPayloads = fixtures.deliver;
 
   it.each([
     { producer: "command", terminalBeforeDelivery: false },
@@ -68,40 +39,22 @@ describe("recovered requester final receipts", () => {
   ] as const)(
     "retains a recovered subagent final after queue restart ($producer, terminal: $terminalBeforeDelivery)",
     async ({ producer, terminalBeforeDelivery }) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:recovered-requester",
-        storePath: path.join(tmpDir, "sessions.json"),
-      };
+      const tmpDir = fixtures.tmpDir();
       const sourceRunId = "subagent-settle:completed-child:generation:1";
       const recoveryRunId = "recovered-requester-run";
-      const context = { channel: "matrix", to: "!original:example" };
-      await replaceSessionEntry(scope, {
-        sessionId: "requester-session",
-        updatedAt: 1,
-        restartRecoveryDeliveryRunId: recoveryRunId,
-        restartRecoveryDeliverySourceRunId: sourceRunId,
-        restartRecoveryDeliveryContext: context,
-        restartRecoverySourceIngress: "channel",
-      });
-      const entry = loadSessionEntry(scope)!;
+      const { scope, context, entry } = await seedRecoverySession(
+        tmpDir,
+        "recovered-requester",
+        sourceRunId,
+        recoveryRunId,
+        { sessionId: "requester-session", restartRecoverySourceIngress: "channel" },
+      );
       const payload = {
         text: "Completed child result, synthesized by the recovered requester.",
       };
       const payloads = [payload];
       if (producer === "command") {
-        await persistPendingFinalDeliveryMarker({
-          admittedRecoverySource: capturePendingFinalRecoverySource(entry),
-          ...scope,
-          deliver: true,
-          sessionStore: { [scope.sessionKey]: entry },
-          sessionEntry: entry,
-          suppressVisibleSessionEffects: false,
-          sessionReboundDuringRun: false,
-          payloads,
-          deliveryContext: context,
-          runOwnedSessionId: entry.sessionId,
-        });
+        await markFinal(scope, entry, payloads, context);
       } else {
         const operation = createReplyOperation({
           target: captureSessionTarget({
@@ -241,21 +194,13 @@ describe("recovered requester final receipts", () => {
       replaceSourceBeforeCapture?: boolean;
     } = {},
   ) {
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:receipt-control",
-      storePath: path.join(tmpDir, "sessions.json"),
-    };
-    const context = { channel: "matrix", to: "!original:example" };
     const sourceRunId = "original-source";
-    await replaceSessionEntry(scope, {
-      sessionId: "session",
-      updatedAt: 1,
-      restartRecoveryDeliveryRunId: "recovery",
-      restartRecoveryDeliverySourceRunId: sourceRunId,
-      restartRecoveryDeliveryContext: context,
-    });
-    const entry = loadSessionEntry(scope)!;
+    const { scope, context, entry } = await seedRecoverySession(
+      fixtures.tmpDir(),
+      "receipt-control",
+      sourceRunId,
+      "recovery",
+    );
     if (options.replaceSourceBeforeCapture) {
       await patchSessionEntryCore(scope, () => ({
         restartRecoveryDeliveryRunId: "later-run",
@@ -263,18 +208,7 @@ describe("recovered requester final receipts", () => {
       }));
     }
     const payloads = [{ text: "The final result." }];
-    await persistPendingFinalDeliveryMarker({
-      admittedRecoverySource: capturePendingFinalRecoverySource(entry),
-      ...scope,
-      deliver: true,
-      sessionStore: { [scope.sessionKey]: entry },
-      sessionEntry: entry,
-      suppressVisibleSessionEffects: false,
-      sessionReboundDuringRun: false,
-      payloads,
-      deliveryContext: options.captureContext ?? context,
-      runOwnedSessionId: entry.sessionId,
-    });
+    await markFinal(scope, entry, payloads, options.captureContext ?? context);
     const completion = resolvePendingFinalDeliveryCompletion(payloads);
     if (!completion && !options.replaceSourceBeforeCapture) {
       throw new Error("Expected final custody");
@@ -334,7 +268,7 @@ describe("recovered requester final receipts", () => {
     const outcome = await settlePendingFinalDelivery(completion, state, undefined, {
       identifiedResult: result,
     });
-    await closeOpenClawAgentDatabasesAsync(tmpDir);
+    await closeOpenClawAgentDatabasesAsync(fixtures.tmpDir());
     const after = loadSessionEntry(scope);
     expect(getRestartRecoveryTerminalDeliveryEvidence(after, sourceRunId)).toBeUndefined();
     if (condition === "session-reset" || condition === "intent-replaced") {
@@ -380,7 +314,7 @@ describe("recovered requester final receipts", () => {
       await settlePendingFinalDelivery(completion, "delivered", undefined, {
         identifiedResult: { channel: captureContext.channel, messageId: "sent-elsewhere" },
       });
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      await closeOpenClawAgentDatabasesAsync(fixtures.tmpDir());
       const after = loadSessionEntry(scope);
       expect(getRestartRecoveryTerminalDeliveryEvidence(after, sourceRunId)).toBeUndefined();
       expect(getRestartRecoveryTerminalDeliveryEvidence(after, "later-source")).toBeUndefined();
@@ -428,7 +362,7 @@ describe("recovered requester final receipts", () => {
       platformMessageId: "second-provider-id",
     });
     await clearPendingFinalDeliveryAfterSuccess(completion);
-    await closeOpenClawAgentDatabasesAsync(tmpDir);
+    await closeOpenClawAgentDatabasesAsync(fixtures.tmpDir());
     const after = loadSessionEntry(scope);
     expect(getRestartRecoveryTerminalDeliveryEvidence(after, sourceRunId)).toMatchObject({
       durableFinalReceipt: { platformMessageId: "second-provider-id" },

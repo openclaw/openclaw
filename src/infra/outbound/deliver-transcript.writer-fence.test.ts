@@ -1,9 +1,7 @@
-// Mirror fence tests cover which session's writer claim a delivery mirror carries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -13,10 +11,8 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
 
 const mocks = vi.hoisted(() => ({
-  // Typed with the append params so the recorded call is inspectable without a cast.
   appendAssistantMessageToSessionTranscript: vi.fn(
     async (_params: Record<string, unknown>) => ({ ok: true }) as const,
   ),
@@ -30,10 +26,6 @@ vi.mock("../../config/sessions/transcript.runtime.js", async (importOriginal) =>
 const RUNNING_SESSION_KEY = "agent:wolf:discord:channel:1497965766035640391";
 const OTHER_SESSION_KEY = "agent:arthur:discord:channel:1538510183024689305";
 
-function payload(text: string): NormalizedOutboundPayload {
-  return { text, mediaUrls: [] };
-}
-
 async function mirrorInto(sessionKey: string, deferToSessionLane = false): Promise<void> {
   await mirrorDeliveredPayloads({
     delivery: {
@@ -43,11 +35,10 @@ async function mirrorInto(sessionKey: string, deferToSessionLane = false): Promi
       payloads: [],
       mirror: { agentId: "wolf", sessionKey, deferToSessionLane },
     },
-    payloads: [payload("delivered to the user")],
+    payloads: [{ text: "delivered to the user", mediaUrls: [] }],
   });
 }
 
-/** Runs a mirror inside a run that owns `RUNNING_SESSION_KEY`, the way a live delivery does. */
 async function withRunningSession(run: () => Promise<void>): Promise<void> {
   await withOwnedSessionTranscriptWrites(
     {
@@ -66,7 +57,7 @@ async function withRunningSession(run: () => Promise<void>): Promise<void> {
 }
 
 function appendedArgs() {
-  return vi.mocked(appendAssistantMessageToSessionTranscript).mock.calls[0]?.[0];
+  return mocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0];
 }
 
 describe("outbound delivery mirror writer fence", () => {
@@ -76,9 +67,7 @@ describe("outbound delivery mirror writer fence", () => {
   });
 
   it("carries the running run's fence when it mirrors into that run's own session", async () => {
-    await withRunningSession(async () => {
-      await mirrorInto(RUNNING_SESSION_KEY);
-    });
+    await withRunningSession(() => mirrorInto(RUNNING_SESSION_KEY));
 
     expect(appendedArgs()).toMatchObject({
       sessionKey: RUNNING_SESSION_KEY,
@@ -88,15 +77,11 @@ describe("outbound delivery mirror writer fence", () => {
   });
 
   it("withholds that fence when it mirrors into a different session", async () => {
-    await withRunningSession(async () => {
-      await mirrorInto(OTHER_SESSION_KEY);
-    });
+    await withRunningSession(() => mirrorInto(OTHER_SESSION_KEY));
 
     const args = appendedArgs();
     expect(args).toMatchObject({ sessionKey: OTHER_SESSION_KEY });
-    // A claim about the delivering session is not a claim about this one. Passing it made
-    // the transcript guards refuse the append as "session rebound", and the refusal is
-    // warn-only after a successful channel send, so the mirror was lost for good.
+    // The sender's claim would reject this cross-session mirror as "session rebound".
     expect(args).not.toHaveProperty("expectedWriterRunId");
     expect(args).not.toHaveProperty("expectedLifecycleRevision");
   });

@@ -1,49 +1,19 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
-  matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
+import { installRecoveryHooks } from "./delivery-completion.shard-test-support.js";
 import type { DeliverFn } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import {
-  installDeliveryQueueTmpDirHooks,
-  loadPendingDeliveries,
-} from "./delivery-queue.test-helpers.js";
-
-let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 describe("outbound recovery shutdown", () => {
-  const fixtures = installDeliveryQueueTmpDirHooks();
-  let tmpDir: string;
-
-  beforeAll(async () => {
-    ({ deliverOutboundPayloads } = await import("./deliver.js"));
-  });
-
-  beforeEach(() => {
-    tmpDir = fixtures.tmpDir();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "matrix",
-          source: "test",
-          plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-        },
-      ]),
-    );
-  });
-
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
+  const fixtures = installRecoveryHooks(true, false);
 
   it("restores a reserved row when shutdown wins before provider dispatch", async () => {
+    const tmpDir = fixtures.tmpDir();
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const intentIds = ["lifecycle-fence-a", "lifecycle-fence-b"];
     for (const id of intentIds) {
@@ -71,7 +41,7 @@ describe("outbound recovery shutdown", () => {
         secondPrepared();
         await secondBlocked;
       }
-      return deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } });
+      return fixtures.deliver({ ...params, deps: { matrix: sendMatrix } });
     });
     let shouldContinue = true;
 

@@ -21,7 +21,10 @@ import {
   loadPendingDelivery,
 } from "./delivery-queue-storage.js";
 import { holdAcknowledgementReply } from "./delivery-queue-worker-reply.test-support.js";
-import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
+import {
+  createQueueMedia,
+  installDeliveryQueueTmpDirHooks,
+} from "./delivery-queue.test-helpers.js";
 
 describe("outbound acknowledgement worker", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
@@ -89,13 +92,7 @@ describe("outbound acknowledgement worker", () => {
   it("captures ACK facts before admission and settles an expired exact owner before media cleanup", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "captured-expired-ack";
-    const artifact = path.join(
-      stateDir,
-      "delivery-queue-media",
-      "00000000-0000-4000-8000-000000000001.ogg",
-    );
-    await fs.mkdir(path.dirname(artifact), { recursive: true });
-    await fs.writeFile(artifact, "synthetic audio");
+    const artifact = await createQueueMedia(stateDir, "000000000001", "synthetic audio");
     await enqueueDeliveryOnce(
       {
         channel: "matrix",
