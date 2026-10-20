@@ -45,6 +45,13 @@ import { rpcSourceTesting } from "./session-lifecycle-admission.test-support.js"
 const storeScope = "/synthetic/rpc-source-contracts/sessions.db";
 const sessionKey = "agent:main:rpc-sources";
 const sessionId = "rpc-source-session";
+function registration(
+  runId: string,
+  target: ReturnType<typeof captureSessionTarget>,
+  scope = { sessionKey, sessionId },
+) {
+  return { runId, ...scope, timeoutMs: 1, target };
+}
 afterEach(() => {
   controllerTesting.resetSessionControllerForTest();
   vi.useRealTimers();
@@ -57,16 +64,11 @@ function reserve(runId: string, scope = { sessionKey, sessionId, agentId: "main"
     incarnation: scope.sessionId,
     agentId: scope.agentId,
   });
-  const registration = registerChatAbortController({
-    runId,
-    ...scope,
-    timeoutMs: 1,
-    target,
-  });
-  if (!registration.entry) {
+  const registered = registerChatAbortController(registration(runId, target, scope));
+  if (!registered.entry) {
     throw new Error("Expected fresh RPC source reservation");
   }
-  return { ...registration, entry: registration.entry, target };
+  return { ...registered, entry: registered.entry, target };
 }
 
 function runSource(ref: RpcSourceRef, run: Parameters<typeof withSessionTurn>[1]) {
@@ -161,13 +163,7 @@ describe("RPC source owner boundary", () => {
   it("keeps byte-exact spaced protocol IDs distinct during cancellation and duplicate admission", () => {
     const spaced = reserve(" run ");
     const plain = reserve("run");
-    const duplicate = registerChatAbortController({
-      runId: " run ",
-      sessionKey,
-      sessionId,
-      timeoutMs: 1,
-      target: spaced.target,
-    });
+    const duplicate = registerChatAbortController(registration(" run ", spaced.target));
     expect(duplicate.registered).toBe(false);
     expect(requestRpcSourceCancellation(spaced.entry)).toBe(true);
     expect(plain.entry.input.abortSignal.aborted).toBe(false);
@@ -238,15 +234,9 @@ describe("RPC source owner boundary", () => {
     first.entry.adapter.cancel = () => {
       expect(rpcSourceTesting.get("reentrant")).toBe(first.entry);
       first.cleanup();
-      expect(
-        registerChatAbortController({
-          runId: "reentrant",
-          sessionKey,
-          sessionId,
-          timeoutMs: 1,
-          target: first.target,
-        }).registered,
-      ).toBe(false);
+      expect(registerChatAbortController(registration("reentrant", first.target)).registered).toBe(
+        false,
+      );
     };
     expect(requestRpcSourceCancellation(first.entry, "rpc")).toBe(true);
     first.cleanup();
@@ -269,21 +259,17 @@ describe("RPC source owner boundary", () => {
       agentId: "second",
     };
     const second = reserve("second-run", other);
-    const duplicate = registerChatAbortController({
-      runId: "shared-run",
-      sessionKey: "agent:first:main",
-      sessionId: "first-session",
-      timeoutMs: 1,
-      target: first.target,
-    });
+    const duplicate = registerChatAbortController(
+      registration("shared-run", first.target, {
+        sessionKey: "agent:first:main",
+        sessionId: "first-session",
+      }),
+    );
 
     expect(duplicate).toMatchObject({ registered: false, existingEntry: first.entry });
-    const foreignDuplicate = registerChatAbortController({
-      runId: "shared-run",
-      ...other,
-      timeoutMs: 1,
-      target: second.target,
-    });
+    const foreignDuplicate = registerChatAbortController(
+      registration("shared-run", second.target, other),
+    );
     expect(foreignDuplicate.registered).toBe(false);
     expect(foreignDuplicate.existingEntry).toBeUndefined();
     expect(hasRpcSource("shared-run")).toBe(true);
@@ -306,13 +292,7 @@ describe("RPC source owner boundary", () => {
     const resolveInner: GatewayContextResolver = () => undefined;
     withPluginRuntimeGatewayContextResolver(resolveOuter, () => {
       const outer = reserve("nested-run");
-      const params = {
-        runId: "nested-run",
-        sessionKey,
-        sessionId,
-        timeoutMs: 1,
-        target: outer.target,
-      };
+      const params = registration("nested-run", outer.target);
       withPluginRuntimeGatewayContextResolver(resolveInner, () => {
         const reserved = reserveSessionControllerSource(sessionKey, {
           target: outer.target,

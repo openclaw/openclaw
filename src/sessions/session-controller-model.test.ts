@@ -41,6 +41,15 @@ import {
   captureCurrentReplyMessageInjectionTarget,
 } from "./session-controller.message-injection.js";
 
+function reserve(key: string, options: Parameters<typeof reserveSessionControllerSource>[1] = {}) {
+  return reserveSessionControllerSource(key, { policy: { mode: "followup" }, ...options });
+}
+
+function release(claim: SessionControllerMailboxClaim) {
+  releaseSessionControllerClaim(claim);
+  return claim.settlement.promise;
+}
+
 /** Calls public owner operations, never the runtime reducer under test. */
 async function replay(events: readonly PilotEvent[], label: string) {
   let model = initialPilotState();
@@ -246,18 +255,16 @@ function startForegroundBeforeResend(
   beforeJoin: (resend: SessionControllerInput) => void = () => {},
 ) {
   const foregroundAbort = new AbortController();
-  const foreground = reserveSessionControllerSource(key, {
-    policy: { mode: "followup" },
+  const foreground = reserve(key, {
     adapter: { signal: foregroundAbort.signal },
   });
   const foregroundClaim = tryClaimSessionControllerTask(foreground);
   if (!foregroundClaim) {
     throw new Error("expected the foreground source to own the mailbox");
   }
-  const resend = reserveSessionControllerSource(key, {
+  const resend = reserve(key, {
     reservationId,
     protocolRunId: "startup-recovery-run",
-    policy: { mode: "followup" },
   });
   beforeJoin(resend);
   const joined = retryRestartRecoveryBeforeSelectedClaim({
@@ -290,10 +297,9 @@ describe("session controller executable pilot", () => {
     ];
     const expected = modelParentMailbox(offered);
     const sources = offered.map((input, index) =>
-      reserveSessionControllerSource(key, {
+      reserve(key, {
         reservationId: input.kind === "user" ? undefined : input.id,
         protocolRunId: input.kind === "user" ? `${input.id}:${index}` : input.id,
-        policy: { mode: "followup" },
       }),
     );
     expect(sources[1]).toBe(sources[2]);
@@ -312,8 +318,7 @@ describe("session controller executable pilot", () => {
     try {
       for (const claim of pending) {
         const admitted = await claim;
-        releaseSessionControllerClaim(admitted);
-        await admitted.settlement.promise;
+        await release(admitted);
       }
       expect(turns).toEqual(expected.map((input) => input.id));
       expect(turns.filter((id) => id === "completion:a:1")).toHaveLength(1);
@@ -332,28 +337,18 @@ describe("session controller executable pilot", () => {
       { id: "settle:later", kind: "settle", owedAt: 20 },
       { id: "completion:earlier", kind: "completion", owedAt: 10 },
     ]).toSorted((a, b) => a.owedAt - b.owedAt);
-    const initial = owed.map((input) =>
-      reserveSessionControllerSource(key, {
-        reservationId: input.id,
-        policy: { mode: "followup" },
-      }),
-    );
+    const rebuild = () => owed.map((input) => reserve(key, { reservationId: input.id }));
+    const initial = rebuild();
     clearSessionControllerMailbox(initial[0]!.mailbox, () => {});
     await Promise.allSettled(initial.map((source) => source.settlement.promise));
-    const rebuilt = owed.map((input) =>
-      reserveSessionControllerSource(key, {
-        reservationId: input.id,
-        policy: { mode: "followup" },
-      }),
-    );
+    const rebuilt = rebuild();
     const turns: string[] = [];
     try {
       for (const source of rebuilt) {
         const claim = await claimSessionControllerTask(source, () => {
           turns.push(source.sourceTurnId!);
         });
-        releaseSessionControllerClaim(claim);
-        await claim.settlement.promise;
+        await release(claim);
       }
       expect(turns).toEqual(["completion:earlier", "settle:later"]);
     } finally {
@@ -385,8 +380,7 @@ describe("session controller executable pilot", () => {
       expect(foreground.mailbox.claim).toBe(foregroundClaim);
       expect(turns).toEqual(["resend"]);
     } finally {
-      releaseSessionControllerClaim(foregroundClaim);
-      await foregroundClaim.settlement.promise;
+      await release(foregroundClaim);
     }
   });
 
@@ -401,8 +395,7 @@ describe("session controller executable pilot", () => {
     expect(resend.retirementRequested).toBeUndefined();
     expect(resend.mailbox.entries).toContain(resend);
     // The aborted foreground caller releases its custody before the resend starts.
-    releaseSessionControllerClaim(foregroundClaim);
-    await foregroundClaim.settlement.promise;
+    await release(foregroundClaim);
 
     const turns: string[] = [];
     const resendClaim = await claimSessionControllerTask(resend, () => {

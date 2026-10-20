@@ -45,6 +45,20 @@ import {
 const key = "agent:main:physical-identity";
 const target = (storeScope: string, sessionKey = key, incarnation = "incarnation") =>
   captureSessionTarget({ storeScope, sessionKey, incarnation });
+function reserve(
+  physical: ReturnType<typeof captureSessionTarget>,
+  options: Parameters<typeof reserveSessionControllerSource>[1] = {},
+) {
+  return reserveSessionControllerSource(physical.sessionKey, {
+    target: physical,
+    policy: { mode: "followup" },
+    ...options,
+  });
+}
+
+function turn(physical: ReturnType<typeof captureSessionTarget>) {
+  return { sessionKey: physical.sessionKey, sessionId: physical.incarnation, target: physical };
+}
 afterEach(async () => {
   const receipts: Promise<void>[] = [];
   // Capture owners before cleanup can mutate the registry or publish a successor.
@@ -73,22 +87,16 @@ it("treats equal active identities in two stores as busy and mutates only the se
   const enteredB = createDeferredCore();
   const doneA = createDeferredCore();
   const doneB = createDeferredCore();
-  const runA = withSessionTurn(
-    { sessionKey: key, sessionId: "incarnation", target: a },
-    async (operation) => {
-      expect(operation?.key).toBe(key);
-      enteredA.resolve();
-      await doneA.promise;
-    },
-  );
-  const runB = withSessionTurn(
-    { sessionKey: key, sessionId: "incarnation", target: b },
-    async (operation) => {
-      expect(operation?.key).toBe(key);
-      enteredB.resolve();
-      await doneB.promise;
-    },
-  );
+  const runA = withSessionTurn(turn(a), async (operation) => {
+    expect(operation?.key).toBe(key);
+    enteredA.resolve();
+    await doneA.promise;
+  });
+  const runB = withSessionTurn(turn(b), async (operation) => {
+    expect(operation?.key).toBe(key);
+    enteredB.resolve();
+    await doneB.promise;
+  });
   await Promise.all([enteredA.promise, enteredB.promise]);
   const ownerA = getSessionControllerOperation(key, a);
   const ownerB = getSessionControllerOperation(key, b);
@@ -146,15 +154,9 @@ it("treats equal active identities in two stores as busy and mutates only the se
 });
 
 it("aliases of one physical incarnation share the same selector", async () => {
-  const first = reserveSessionControllerSource(key, {
-    target: target("/stores/aliases.sqlite"),
-    policy: { mode: "followup" },
-  });
+  const first = reserve(target("/stores/aliases.sqlite"));
   const aliasKey = "agent:main:alias";
-  const second = reserveSessionControllerSource(aliasKey, {
-    target: target("/stores/aliases.sqlite", aliasKey),
-    policy: { mode: "followup" },
-  });
+  const second = reserve(target("/stores/aliases.sqlite", aliasKey));
   expect(second.mailbox).toBe(first.mailbox);
   const claim = await claimSessionControllerTask(first, () => {});
   const selected = vi.fn();
@@ -177,129 +179,90 @@ it("keeps nested raw-key turns owned by separate agents in one physical store", 
     });
   const outerTarget = agentTarget("main");
   const nestedTarget = agentTarget("other");
-  await withSessionTurn(
-    { sessionKey: "global", sessionId: "incarnation", target: outerTarget },
-    async (outer) => {
-      expect(outer).toBeDefined();
-      expect(() => outer!.updateSessionKey("global", "other")).toThrow(
-        "Changing agent owner requires matching destination admission",
-      );
-      expect(outer!.agentId).toBe("main");
-      await withSessionTurn(
-        { sessionKey: "global", sessionId: "incarnation", target: nestedTarget },
-        async (nested) => {
-          expect(nested).toBeDefined();
-          expect(nested).not.toBe(outer);
-          expect(getSessionControllerOperation("global", outerTarget)).toBe(outer);
-          expect(getSessionControllerOperation("global", nestedTarget)).toBe(nested);
+  await withSessionTurn(turn(outerTarget), async (outer) => {
+    expect(outer).toBeDefined();
+    expect(() => outer!.updateSessionKey("global", "other")).toThrow(
+      "Changing agent owner requires matching destination admission",
+    );
+    expect(outer!.agentId).toBe("main");
+    await withSessionTurn(turn(nestedTarget), async (nested) => {
+      expect(nested).toBeDefined();
+      expect(nested).not.toBe(outer);
+      expect(getSessionControllerOperation("global", outerTarget)).toBe(outer);
+      expect(getSessionControllerOperation("global", nestedTarget)).toBe(nested);
+    });
+    await expect(
+      withSessionTurn(
+        {
+          ...turn(nestedTarget),
+          replyOperation: outer,
         },
-      );
-      await expect(
-        withSessionTurn(
-          {
-            sessionKey: "global",
-            sessionId: "incarnation",
-            target: nestedTarget,
-            replyOperation: outer,
-          },
-          async () => {},
-        ),
-      ).rejects.toThrow("does not match its session controller admission");
-      expect(() => bindSessionControllerTarget(outer!, nestedTarget)).toThrow(
-        "Cannot move a controller between agent owners",
-      );
-      expect(getSessionControllerEntryForOperation(outer!).target).toBe(outerTarget);
-    },
-  );
+        async () => {},
+      ),
+    ).rejects.toThrow("does not match its session controller admission");
+    expect(() => bindSessionControllerTarget(outer!, nestedTarget)).toThrow(
+      "Cannot move a controller between agent owners",
+    );
+    expect(getSessionControllerEntryForOperation(outer!).target).toBe(outerTarget);
+  });
 });
 
 it("deduplicates one reserved delivery identity and rejects conflicting reuse", () => {
   const physical = target("/stores/reservation.sqlite");
-  const first = reserveSessionControllerSource(key, {
-    target: physical,
+  const reservation = {
     reservationId: "subagent-completion:run-1:0",
     protocolRunId: "run-1",
-    policy: { mode: "followup" },
-  });
-  const second = reserveSessionControllerSource(key, {
-    target: physical,
-    reservationId: "subagent-completion:run-1:0",
-    protocolRunId: "run-1",
-    policy: { mode: "followup" },
-  });
+  };
+  const first = reserve(physical, reservation);
+  const second = reserve(physical, reservation);
 
   expect(second).toBe(first);
   expect(first.mailbox.entries).toEqual([first]);
+  expect(() => reserve(physical, { ...reservation, protocolRunId: "different-run" })).toThrow(
+    "different delivery",
+  );
   expect(() =>
-    reserveSessionControllerSource(key, {
-      target: physical,
-      reservationId: "subagent-completion:run-1:0",
-      protocolRunId: "different-run",
-      policy: { mode: "followup" },
-    }),
-  ).toThrow("different delivery");
-  expect(() =>
-    reserveSessionControllerSource(key, {
-      target: physical,
-      reservationId: "subagent-completion:run-1:0",
-      protocolRunId: "run-1",
+    reserve(physical, {
+      ...reservation,
       policy: { mode: "steer" },
     }),
   ).toThrow("different delivery");
-  expect(() =>
-    reserveSessionControllerSource(key, {
-      target: target("/stores/other.sqlite"),
-      reservationId: "subagent-completion:run-1:0",
-      protocolRunId: "run-1",
-      policy: { mode: "followup" },
-    }),
-  ).toThrow("different delivery");
+  expect(() => reserve(target("/stores/other.sqlite"), reservation)).toThrow("different delivery");
 });
 
 it("adopts only the exact unclaimed reserved source", async () => {
   const physical = target("/stores/rpc-adoption.sqlite");
   const adapter = {};
-  const input = reserveSessionControllerSource(key, {
-    target: captureSessionTarget({ storeScope: physical.storeScope, sessionKey: key }),
-    reservationId: "subagent-settle:batch:0",
-    policy: { mode: "followup" },
-  });
+  const input = reserve(
+    captureSessionTarget({ storeScope: physical.storeScope, sessionKey: key }),
+    {
+      reservationId: "subagent-settle:batch:0",
+    },
+  );
+  const adoption = {
+    protocolRunId: "settle-run",
+    target: physical,
+    policy: { mode: "followup" as const },
+    adapter,
+  };
 
   expect(() =>
     adoptSessionControllerSource(input, {
-      protocolRunId: "settle-run",
+      ...adoption,
       target: target("/stores/foreign.sqlite"),
-      policy: { mode: "followup" },
-      adapter,
     }),
   ).toThrow("foreign or claimed");
-  adoptSessionControllerSource(input, {
-    protocolRunId: "settle-run",
-    target: physical,
-    policy: { mode: "followup" },
-    adapter,
-  });
+  adoptSessionControllerSource(input, adoption);
   expect(getSessionControllerSourceIdentity(input)).toMatchObject({
     sessionKey: key,
     sessionId: "incarnation",
   });
-  expect(input.protocolRunId).toBe("settle-run");
+  expect(input).toMatchObject({ protocolRunId: "settle-run", custody: { rpcAdopted: true } });
   expect(input.sourceAdapter).toBe(adapter);
-  expect(input.custody.rpcAdopted).toBe(true);
-  expect(() =>
-    adoptSessionControllerSource(input, {
-      protocolRunId: "settle-run",
-      target: physical,
-      policy: { mode: "followup" },
-      adapter,
-    }),
-  ).toThrow("foreign or claimed");
+  expect(() => adoptSessionControllerSource(input, adoption)).toThrow("foreign or claimed");
 
   const claimedTarget = target("/stores/rpc-claimed.sqlite");
-  const claimed = reserveSessionControllerSource(key, {
-    target: claimedTarget,
-    policy: { mode: "followup" },
-  });
+  const claimed = reserve(claimedTarget);
   const claim = await claimSessionControllerTask(claimed, () => {});
   expect(() =>
     adoptSessionControllerSource(claimed, {
@@ -321,10 +284,7 @@ it.each(
   "binds adopted $binding cancellation (alreadyAborted=$alreadyAborted)",
   async ({ binding, alreadyAborted }) => {
     const physical = target("/stores/adopted-cancellation.sqlite");
-    const input = reserveSessionControllerSource(key, {
-      target: physical,
-      policy: { mode: "followup" },
-    });
+    const input = reserve(physical);
     const originalSignal = input.abortSignal;
     const cancellation = new AbortController();
     const reason = new Error("adopted source cancelled");
@@ -356,10 +316,8 @@ it.each(
 );
 
 it("moves one unbound command source into target ordering without replacing its receipt", async () => {
-  const source = reserveSessionControllerSource(key, {
-    target: target("/stores/command.sqlite", key, "command-source"),
+  const source = reserve(target("/stores/command.sqlite", key, "command-source"), {
     protocolRunId: " exact command id ",
-    policy: { mode: "followup" },
   });
   const receipt = captureSessionControllerSourceSettlement(source);
   const originalMailbox = source.mailbox;
@@ -369,10 +327,7 @@ it("moves one unbound command source into target ordering without replacing its 
   expect(source.mailbox).toBe(originalMailbox);
   expect(originalMailbox.entries).toContain(source);
   const destination = target("/stores/command.sqlite", key + ":target", "target-row");
-  const older = reserveSessionControllerSource(destination.sessionKey, {
-    target: destination,
-    policy: { mode: "followup" },
-  });
+  const older = reserve(destination);
   retargetSessionControllerSource(source, destination);
   expect(captureSessionControllerSourceSettlement(source)).toBe(receipt);
   expect(source.protocolRunId).toBe(" exact command id ");
@@ -429,10 +384,7 @@ it("reuses an early input and cancels reset preparation without completing its l
     storeScope: "/stores/preparing.sqlite",
     sessionKey: key,
   });
-  const input = reserveSessionControllerSource(key, {
-    target: physical,
-    policy: { mode: "followup" },
-  });
+  const input = reserve(physical);
   const started = createDeferredCore();
   const release = createDeferredCore();
   const work = withSessionTurn(
@@ -461,9 +413,7 @@ it("reuses an early input and cancels reset preparation without completing its l
 it("holds uncertain injection and source cleanup through clear while allowing a fresh signal afterward", async () => {
   const physical = target("/stores/injection.sqlite");
   const cleanup = createDeferredCore();
-  const input = reserveSessionControllerSource(key, {
-    target: physical,
-    policy: { mode: "followup" },
+  const input = reserve(physical, {
     adapter: { onSettled: () => cleanup.promise },
   });
   const injection = createDeferredCore<boolean>();
@@ -473,10 +423,7 @@ it("holds uncertain injection and source cleanup through clear while allowing a 
   clearSessionControllerMailbox(input.mailbox, () => {});
   expect(settle).not.toHaveBeenCalled();
   expect(input.mailbox.entries).toContain(input);
-  const fresh = reserveSessionControllerSource(key, {
-    target: physical,
-    policy: { mode: "followup" },
-  });
+  const fresh = reserve(physical);
   expect(fresh.abortSignal.aborted).toBe(false);
   const started = vi.fn();
   const queued = claimSessionControllerTask(fresh, started);
@@ -502,10 +449,7 @@ it("holds uncertain injection and source cleanup through clear while allowing a 
 });
 
 it("retains claimed source adoption until the callback settles", async () => {
-  const input = reserveSessionControllerSource(key, {
-    target: target("/stores/adoption.sqlite"),
-    policy: { mode: "followup" },
-  });
+  const input = reserve(target("/stores/adoption.sqlite"));
   const claim = await claimSessionControllerTask(input, () => {});
   const adoption = createDeferredCore();
   input.custody.adopting = adoption.promise;
@@ -520,10 +464,7 @@ it("retains claimed source adoption until the callback settles", async () => {
 });
 
 it("cancels atomically while holding selection and refuses unavailable withdrawal", async () => {
-  const input = reserveSessionControllerSource(key, {
-    target: target("/stores/withdraw.sqlite"),
-    policy: { mode: "followup" },
-  });
+  const input = reserve(target("/stores/withdraw.sqlite"));
   const hold = holdSessionControllerSourceWithdrawal(input);
   const selected = vi.fn();
   const pending = claimSessionControllerTask(input, selected);
@@ -540,15 +481,10 @@ it("cancels atomically while holding selection and refuses unavailable withdrawa
 it("stale disposal cannot delete a successor created by settlement callbacks", async () => {
   const physical = target("/stores/reentrant.sqlite");
   let successor: ReturnType<typeof reserveSessionControllerSource> | undefined;
-  const input = reserveSessionControllerSource(key, {
-    target: physical,
-    policy: { mode: "followup" },
+  const input = reserve(physical, {
     adapter: {
       onSettled: () => {
-        successor = reserveSessionControllerSource(key, {
-          target: physical,
-          policy: { mode: "followup" },
-        });
+        successor = reserve(physical);
       },
     },
   });
@@ -566,28 +502,25 @@ it("stale disposal cannot delete a successor created by settlement callbacks", a
 
 it("rotates incarnation aliases while retaining exact late-writer lineage", async () => {
   const physical = target("/stores/rotation.sqlite", key, "old-id");
-  await withSessionTurn(
-    { sessionKey: key, sessionId: "old-id", target: physical },
-    async (operation) => {
-      if (!operation) {
-        throw new Error("Missing operation");
-      }
-      operation.updateSessionId("new-id");
-      const owner = getSessionControllerEntryForOperation(operation);
-      expect(owner.aliases.has("old-id")).toBe(true);
-      expect(owner.aliases.has("new-id")).toBe(true);
-      expect(operation.captureOwnedSessionIds()).toEqual(new Set(["old-id", "new-id"]));
-      expect(isSessionRunActive("old-id")).toBe(true);
-      expect(resolveReplyRunForCurrentSessionId("old-id")).toEqual({
-        kind: "one",
-        operation,
-      });
-      expect(
-        findSessionControllerEntry(
-          "new-id",
-          captureSessionTarget({ storeScope: physical.storeScope, sessionKey: "new-id" }),
-        ),
-      ).toBe(owner);
-    },
-  );
+  await withSessionTurn(turn(physical), async (operation) => {
+    if (!operation) {
+      throw new Error("Missing operation");
+    }
+    operation.updateSessionId("new-id");
+    const owner = getSessionControllerEntryForOperation(operation);
+    expect(owner.aliases.has("old-id")).toBe(true);
+    expect(owner.aliases.has("new-id")).toBe(true);
+    expect(operation.captureOwnedSessionIds()).toEqual(new Set(["old-id", "new-id"]));
+    expect(isSessionRunActive("old-id")).toBe(true);
+    expect(resolveReplyRunForCurrentSessionId("old-id")).toEqual({
+      kind: "one",
+      operation,
+    });
+    expect(
+      findSessionControllerEntry(
+        "new-id",
+        captureSessionTarget({ storeScope: physical.storeScope, sessionKey: "new-id" }),
+      ),
+    ).toBe(owner);
+  });
 });

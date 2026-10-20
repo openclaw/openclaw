@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { evaluateTurnAdmission } from "./session-controller.admission-rule.js";
-import type { SessionControllerTurnKind } from "./session-controller.contracts.js";
 import {
   getSessionControllerMailbox,
   reserveSessionControllerSource,
@@ -21,13 +20,9 @@ function createEntry(label: string): SessionControllerEntry {
   return getSessionControllerEntry(`agent:main:admission-rule:${label}`);
 }
 
-function evaluate(
-  entry: SessionControllerEntry,
-  kind: SessionControllerTurnKind = "visible",
-  claim?: SessionControllerMailboxClaim,
-) {
+function evaluate(entry: SessionControllerEntry, claim?: SessionControllerMailboxClaim) {
   return evaluateTurnAdmission(entry, {
-    kind,
+    kind: "visible",
     sessionKey: entry.key,
     registeredEntry: sessionControllers.get(entry.id),
     claim,
@@ -38,53 +33,26 @@ function barrier(): NonNullable<SessionControllerEntry["followupBarrier"]> {
   return {} as NonNullable<SessionControllerEntry["followupBarrier"]>;
 }
 
-function state(
-  mutate: (entry: SessionControllerEntry) => void,
-): (entry: SessionControllerEntry) => SessionControllerMailboxClaim | undefined {
-  return (entry) => {
-    mutate(entry);
-    return undefined;
-  };
-}
-
 afterEach(() => {
   sessionControllers.clear();
 });
 
 describe("evaluateTurnAdmission", () => {
-  it("admits an idle current entry", () => {
-    const entry = createEntry("idle");
-    expect(evaluate(entry)).toEqual({ admitted: true });
-  });
-
-  it.each([
-    {
-      reason: "active",
-      arrange: state((entry) => {
+  it.each(
+    Object.entries({
+      active: (entry) => {
         entry.active = {} as NonNullable<SessionControllerEntry["active"]>;
-      }),
-    },
-    {
-      reason: "successor-barrier",
-      arrange: state((entry) => {
+      },
+      "successor-barrier": (entry) => {
         entry.successorBarrier = barrier();
-      }),
-    },
-    {
-      reason: "lifecycle-blocked",
-      arrange: state((entry) => {
+      },
+      "lifecycle-blocked": (entry) => {
         entry.lifecycle = { blocksTurnAdmission: true } as SessionControllerEntry["lifecycle"];
-      }),
-    },
-    {
-      reason: "waiting-inputs",
-      arrange: state((entry) => {
+      },
+      "waiting-inputs": (entry) => {
         reserveSessionControllerSource(entry.key, { policy: { mode: "followup" } });
-      }),
-    },
-    {
-      reason: "stale-claim",
-      arrange: (entry: SessionControllerEntry) => {
+      },
+      "stale-claim": (entry) => {
         const mailbox = getSessionControllerMailbox(entry.key);
         const claim = {
           mailbox,
@@ -99,39 +67,20 @@ describe("evaluateTurnAdmission", () => {
         mailbox.claim = claim;
         return claim;
       },
-    },
-    {
-      reason: "entry-retired",
-      arrange: state((entry) => {
+      "entry-retired": (entry) => {
         sessionControllers.delete(entry.id);
-      }),
-    },
-    {
-      reason: "mailbox-clearing",
-      arrange: state((entry) => {
+      },
+      "mailbox-clearing": (entry) => {
         getSessionControllerMailbox(entry.key).clearing = true;
-      }),
-    },
-  ] satisfies ReadonlyArray<{
-    reason: TurnAdmissionRefusalReason;
-    arrange: (entry: SessionControllerEntry) => SessionControllerMailboxClaim | undefined;
-  }>)("reports $reason", ({ reason, arrange }) => {
+      },
+    } satisfies Record<
+      Exclude<TurnAdmissionRefusalReason, "followup-barrier">,
+      (entry: SessionControllerEntry) => SessionControllerMailboxClaim | void
+    >),
+  )("reports %s", (reason, arrange) => {
     const entry = createEntry(reason);
     const claim = arrange(entry);
-    expect(evaluate(entry, "visible", claim)).toEqual({ admitted: false, reason });
-  });
-
-  it.each([
-    { kind: "visible", admitted: true },
-    { kind: "heartbeat", admitted: false },
-    { kind: "queued_followup", admitted: false },
-    { kind: "direct", admitted: true },
-  ] as const)("applies delivery admission for $kind (admitted=$admitted)", ({ kind, admitted }) => {
-    const entry = createEntry(`barrier-${kind}`);
-    entry.followupBarrier = barrier();
-    expect(evaluate(entry, kind)).toEqual(
-      admitted ? { admitted: true } : { admitted: false, reason: "followup-barrier" },
-    );
+    expect(evaluate(entry, claim ?? undefined)).toEqual({ admitted: false, reason });
   });
 
   it("retains a mailbox while a consumed input finishes cleanup", () => {

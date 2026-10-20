@@ -18,6 +18,19 @@ import {
   submitSessionControllerTask,
 } from "./session-controller.mailbox.js";
 
+function makeRun(key: string, prompt: string) {
+  const run = createQueueTestRun({ prompt });
+  run.run.sessionKey = key;
+  return run;
+}
+
+function inputFor(run: ReturnType<typeof createQueueTestRun>) {
+  if (!run.controllerInput) {
+    throw new Error("Expected an enqueued controller input");
+  }
+  return run.controllerInput;
+}
+
 it("notifies a native producer once when a full clear retains its pending cleanup", async () => {
   const key = `agent:main:mailbox-clear-native-${randomUUID()}`;
   const preceding = reserveSessionControllerSource(key, { policy: { mode: "followup" } });
@@ -67,20 +80,11 @@ it.each([true, false])(
     const key = `agent:main:mailbox-clear-${randomUUID()}`;
     const settings = createQueueSettings({ mode: "followup", cap: 2 });
     let current = true;
-    const runs = ["first", "second", "third", "fourth"].map((prompt) => {
-      const run = createQueueTestRun({ prompt });
-      run.run.sessionKey = key;
-      return run;
-    });
+    const runs = ["first", "second", "third", "fourth"].map((prompt) => makeRun(key, prompt));
     for (const run of runs) {
       enqueueFollowupRun(key, run, settings);
     }
-    const inputs = runs.map((run) => {
-      if (!run.controllerInput) {
-        throw new Error("Expected an enqueued controller input");
-      }
-      return run.controllerInput;
-    });
+    const inputs = runs.map(inputFor);
     const first = inputs[0]!;
     first.abortSignal.addEventListener("abort", () => {
       current = false;
@@ -129,26 +133,18 @@ it.each([true, false])(
 
 it("keeps a reentrant successor outside the cleared mailbox generation", async () => {
   const key = `agent:main:mailbox-clear-reentrant-${randomUUID()}`;
-  const first = createQueueTestRun({ prompt: "first" });
-  const successor = createQueueTestRun({ prompt: "successor" });
-  first.run.sessionKey = key;
-  successor.run.sessionKey = key;
+  const first = makeRun(key, "first");
+  const successor = makeRun(key, "successor");
   const settings = createQueueSettings({ mode: "followup" });
   enqueueFollowupRun(key, first, settings);
-  const input = first.controllerInput;
-  if (!input) {
-    throw new Error("Expected an enqueued controller input");
-  }
+  const input = inputFor(first);
   const mailbox = input.mailbox;
   input.abortSignal.addEventListener("abort", () => {
     enqueueFollowupRun(key, successor, settings);
   });
   try {
     clearSessionControllerMailbox(mailbox, completeFollowupRunLifecycle);
-    const successorInput = successor.controllerInput;
-    if (!successorInput) {
-      throw new Error("Expected the reentrant successor to be enqueued");
-    }
+    const successorInput = inputFor(successor);
     expect(first.queueAbortSignal?.aborted).toBe(true);
     expect(successor.queueAbortSignal?.aborted).toBe(false);
     expect(successorInput.abortSignal.aborted).toBe(false);
