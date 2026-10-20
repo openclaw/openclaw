@@ -1,6 +1,8 @@
 import { mockNativeModuleExports } from "../../test/helpers/native-module-mock.js";
 
 const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
+const mock = (module: string, exports: Record<string, unknown>) =>
+  mockNativeModuleExports(new URL(`${module}.${extension}`, import.meta.url), exports);
 const count = 150_000;
 const storePath = "/mock/agents/main/agent/openclaw-agent.sqlite";
 const unexpected = () => {
@@ -16,15 +18,15 @@ let serviceCalls = 0;
 
 // Keep the actual command, grid, and label-summary owners. Only fixture the
 // service and unrelated metadata boundaries; no large database is needed.
-mockNativeModuleExports(new URL(`../config/config.${extension}`, import.meta.url), {
+mock("../config/config", {
   getRuntimeConfig: () => ({}),
   loadConfig: () => ({}),
   captureRuntimeConfigAsyncReader: () => async () => ({}),
 });
-mockNativeModuleExports(new URL(`./session-store-targets.${extension}`, import.meta.url), {
+mock("./session-store-targets", {
   resolveCommandSessionStoreTargets: () => [{ agentId: "main", storePath }],
 });
-mockNativeModuleExports(new URL(`../config/sessions.${extension}`, import.meta.url), {
+mock("../config/sessions", {
   resolveSessionCleanupAction: () => "keep",
   isSessionsCleanupPartialResult: unexpected,
   serializeSessionCleanupResult: unexpected,
@@ -62,24 +64,16 @@ mockNativeModuleExports(new URL(`../config/sessions.${extension}`, import.meta.u
     };
   },
 });
-mockNativeModuleExports(new URL(`../gateway/call.${extension}`, import.meta.url), {
+mock("../gateway/call", {
   buildGatewayConnectionDetails: unexpected,
   callGateway: unexpected,
   isImplicitLocalGatewayTarget: unexpected,
 });
-mockNativeModuleExports(
-  new URL(`../gateway/call-mutation-fallback.${extension}`, import.meta.url),
-  {
-    resolveGatewayMutationFallback: unexpected,
-  },
-);
-mockNativeModuleExports(
-  new URL(`../config/sessions/session-sqlite-target.${extension}`, import.meta.url),
-  {
-    resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }),
-  },
-);
-mockNativeModuleExports(new URL(`./sessions-display-model.${extension}`, import.meta.url), {
+mock("../gateway/call-mutation-fallback", { resolveGatewayMutationFallback: unexpected });
+mock("../config/sessions/session-sqlite-target", {
+  resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }),
+});
+mock("./sessions-display-model", {
   resolveSessionDisplayModelRef: (_cfg: unknown, row: { model: string }) => ({
     model: row.model,
   }),

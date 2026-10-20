@@ -1,4 +1,3 @@
-// Sessions ACP model display tests cover persisted control-plane metadata projection.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +19,7 @@ import { sessionsCommand } from "./sessions.js";
 const ACP_SESSION_KEY = "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9";
 const AGENT_CONFIGURED_MODEL = "gpt-5.3-codex";
 const AGENT_CONFIGURED_PROVIDER = "microsoft-foundry";
+const modelRef = `${AGENT_CONFIGURED_PROVIDER}/${AGENT_CONFIGURED_MODEL}`;
 
 type SessionRow = {
   key: string;
@@ -31,26 +31,17 @@ type SessionRow = {
 };
 
 let stateDir: string;
-let cfg: OpenClawConfig;
 const stores = new Map<string, string>();
-
-function configureAgents(agentIds: string[]): void {
-  cfg = {
-    agents: {
-      ownership: "explicit",
-      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
-      defaults: {
-        model: { primary: `${AGENT_CONFIGURED_PROVIDER}/${AGENT_CONFIGURED_MODEL}` },
-        models: {
-          [`${AGENT_CONFIGURED_PROVIDER}/${AGENT_CONFIGURED_MODEL}`]: {
-            agentRuntime: { id: "openclaw" },
-          },
-        },
-      },
+const cfg: OpenClawConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { copilot: {}, reviewer: {} },
+    defaults: {
+      model: { primary: modelRef },
+      models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
     },
-  };
-  setRuntimeConfigSnapshot(cfg);
-}
+  },
+};
 
 function writeSession(agentId: string, sessionKey: string, sessionId = `${agentId}-session`): void {
   const storePath = path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
@@ -63,22 +54,6 @@ function writeSession(agentId: string, sessionKey: string, sessionId = `${agentI
       updatedAt: Date.now() - 4 * 60_000,
     },
   );
-}
-
-async function writeAcpRuntimeMeta(agentId: string, sessionKey: string): Promise<void> {
-  await upsertAcpSessionMeta({
-    cfg,
-    agentId,
-    sessionKey,
-    mutate: () => ({
-      backend: agentId,
-      agent: agentId,
-      runtimeSessionName: `${agentId}-runtime-session`,
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt: Date.now(),
-    }),
-  });
 }
 
 async function readSessions(): Promise<SessionRow[]> {
@@ -102,7 +77,7 @@ describe("sessionsCommand ACP model display", () => {
   beforeEach(() => {
     stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-sessions-")));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    configureAgents(["copilot"]);
+    setRuntimeConfigSnapshot(cfg);
   });
 
   afterEach(async () => {
@@ -132,14 +107,25 @@ describe("sessionsCommand ACP model display", () => {
   });
 
   it("keeps each selected owner's metadata and rejects a replaced lifecycle", async () => {
-    configureAgents(["copilot", "reviewer"]);
     const reviewerSessionKey = "agent:reviewer:acp:current-session";
     for (const [agentId, sessionKey] of [
       ["copilot", ACP_SESSION_KEY],
       ["reviewer", reviewerSessionKey],
     ] as const) {
       writeSession(agentId, sessionKey);
-      await writeAcpRuntimeMeta(agentId, sessionKey);
+      await upsertAcpSessionMeta({
+        cfg,
+        agentId,
+        sessionKey,
+        mutate: () => ({
+          backend: agentId,
+          agent: agentId,
+          runtimeSessionName: `${agentId}-runtime-session`,
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: Date.now(),
+        }),
+      });
     }
     const before = await readSessions();
     for (const agentId of ["copilot", "reviewer"]) {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionCleanupSummary } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -43,67 +43,58 @@ const runtime: RuntimeEnv = {
   exit: () => {},
 };
 
-function summary(agentId: string): SessionCleanupSummary {
-  return {
-    agentId,
-    storePath: `/tmp/${agentId}/sessions.json`,
-    mode: "enforce",
-    dryRun: false,
-    beforeCount: 1,
-    afterCount: 0,
-    missing: 1,
-    dmScopeRetired: 0,
-    modelRunPruned: 0,
-    pruned: 0,
-    capped: 0,
-    unreferencedArtifacts: { scannedFiles: 0, removedFiles: 0, freedBytes: 0, olderThanMs: 0 },
-    diskBudget: null,
-    wouldMutate: true,
-    applied: true,
-    appliedCount: 0,
-  };
-}
+it("keeps prior store summaries when a later target returns a failure", async () => {
+  vi.clearAllMocks();
+  await withOpenClawTestState({ label: "cleanup-partial" }, async (state) => {
+    const mainSummary: SessionCleanupSummary = {
+      agentId: "main",
+      storePath: "/tmp/main/sessions.json",
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 1,
+      afterCount: 0,
+      missing: 1,
+      dmScopeRetired: 0,
+      modelRunPruned: 0,
+      pruned: 0,
+      capped: 0,
+      unreferencedArtifacts: { scannedFiles: 0, removedFiles: 0, freedBytes: 0, olderThanMs: 0 },
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 0,
+    };
+    runSessionsCleanup
+      .mockResolvedValueOnce({
+        mode: "enforce",
+        previewResults: [],
+        appliedSummaries: [mainSummary],
+      })
+      .mockRejectedValueOnce(new Error("injected later-store failure"));
 
-describe("runLocalSessionsCleanup", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    const result = await runLocalSessionsCleanup(
+      {
+        cfg: {},
+        opts: { enforce: true },
+        targets: [
+          { agentId: "main", storePath: state.statePath("agents/main/sessions/sessions.json") },
+          { agentId: "work", storePath: state.statePath("agents/work/sessions/sessions.json") },
+        ],
+      },
+      runtime,
+    );
 
-  it("keeps prior store summaries when a later target returns a failure", async () => {
-    await withOpenClawTestState({ label: "cleanup-partial" }, async (state) => {
-      const mainSummary = summary("main");
-      runSessionsCleanup
-        .mockResolvedValueOnce({
-          mode: "enforce",
-          previewResults: [],
-          appliedSummaries: [mainSummary],
-        })
-        .mockRejectedValueOnce(new Error("injected later-store failure"));
-
-      const result = await runLocalSessionsCleanup(
-        {
-          cfg: {},
-          opts: { enforce: true },
-          targets: [
-            { agentId: "main", storePath: state.statePath("agents/main/sessions/sessions.json") },
-            { agentId: "work", storePath: state.statePath("agents/work/sessions/sessions.json") },
-          ],
-        },
-        runtime,
-      );
-
-      expect(result.appliedSummaries).toEqual([mainSummary]);
-      expect(runSessionsCleanup.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
-        "in-process",
-        "in-process",
-      ]);
-      expect(result.failure).toMatchObject({
-        target: {
-          agentId: "work",
-          storePath: state.statePath("agents/work/sessions/sessions.json"),
-        },
-        lifecycleCommitted: false,
-      });
+    expect(result.appliedSummaries).toEqual([mainSummary]);
+    expect(runSessionsCleanup.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
+      "in-process",
+      "in-process",
+    ]);
+    expect(result.failure).toMatchObject({
+      target: {
+        agentId: "work",
+        storePath: state.statePath("agents/work/sessions/sessions.json"),
+      },
+      lifecycleCommitted: false,
     });
   });
 });

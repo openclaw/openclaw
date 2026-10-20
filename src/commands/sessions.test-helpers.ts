@@ -1,5 +1,3 @@
-// Session command test helpers create temporary homes, session stores, and runtime fixtures.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -36,9 +34,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 export function mockSessionsConfig() {
-  // The shared config mock is hoisted above so tests can keep their
-  // existing setup call without paying `importActual` cost or nested-mock
-  // warnings before importing `sessions.ts`.
+  // Compatibility entry point: importing this module already installs the hoisted mock.
 }
 
 export function setMockSessionsConfig(loader: () => Record<string, unknown>) {
@@ -49,27 +45,22 @@ export function resetMockSessionsConfig() {
   sessionsConfigState.loadConfig = defaultSessionsConfigLoader;
 }
 
-export function makeRuntime(params?: { throwOnError?: boolean }): {
-  runtime: RuntimeEnv;
-  logs: string[];
-  errors: string[];
-} {
+export function makeRuntime(params?: { throwOnError?: boolean }) {
   const logs: string[] = [];
   const errors: string[] = [];
-  const throwOnError = params?.throwOnError ?? false;
   return {
     runtime: {
       log: (msg: unknown) => logs.push(String(msg)),
       error: (msg: unknown) => {
         errors.push(String(msg));
-        if (throwOnError) {
+        if (params?.throwOnError) {
           throw new Error(String(msg));
         }
       },
       exit: (code: number) => {
         throw new Error(`exit ${code}`);
       },
-    },
+    } satisfies RuntimeEnv,
     logs,
     errors,
   };
@@ -81,9 +72,7 @@ export async function writeStore(
   prefix = "sessions",
   options: { agentId?: string } = {},
 ): Promise<string> {
-  const dirName = [prefix, Date.now(), randomUUID()].join("-");
-  const storeDir = path.join(os.tmpdir(), dirName);
-  fs.mkdirSync(storeDir, { recursive: true });
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
   const storePath = path.join(storeDir, "sessions.json");
   const agentId = options.agentId ?? "main";
   const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
@@ -97,34 +86,23 @@ export async function writeStore(
   return databasePath;
 }
 
-/** Removes the temporary SQLite session store created by writeStore. */
 export function cleanupStore(store: string): void {
   fs.rmSync(path.dirname(store), { recursive: true, force: true });
 }
 
-/** Runs sessionsCommand with JSON output and parses the emitted payload. */
+type SessionListOptions = { active?: string; limit?: string | number };
+
 export async function runSessionsJson<T>(
   run: (
-    opts: { json?: boolean; store?: string; active?: string; limit?: string | number },
+    opts: SessionListOptions & { json?: boolean; store?: string },
     runtime: RuntimeEnv,
   ) => Promise<void>,
   store: string,
-  options?: {
-    active?: string;
-    limit?: string | number;
-  },
+  options?: SessionListOptions,
 ): Promise<T> {
   const { runtime, logs } = makeRuntime();
   try {
-    await run(
-      {
-        store,
-        json: true,
-        active: options?.active,
-        limit: options?.limit,
-      },
-      runtime,
-    );
+    await run({ store, json: true, active: options?.active, limit: options?.limit }, runtime);
   } finally {
     await closeOpenClawAgentDatabaseByPathAsync(
       resolveSqliteTargetFromSessionStorePath(store).path,
