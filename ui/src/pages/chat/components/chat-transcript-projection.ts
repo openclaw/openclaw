@@ -45,11 +45,11 @@ import {
 import { pruneTranscriptExpansions } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
-  type NativeTranscriptView,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptReplyDependencies,
 } from "./chat-transcript-render-guard.ts";
+import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
