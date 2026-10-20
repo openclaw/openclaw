@@ -74,13 +74,12 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           const terminal = await withinTest(finished.promise, signal);
 
           signal.throwIfAborted();
-          const database = new DatabaseSync(
-            path.join(instance.stateDir, "state", "openclaw.sqlite"),
-            { readOnly: true },
-          );
-          let receipt: Record<string, unknown> | undefined;
-          try {
-            receipt = database
+          const receipt = (() => {
+            using database = new DatabaseSync(
+              path.join(instance.stateDir, "state", "openclaw.sqlite"),
+              { readOnly: true },
+            );
+            return database
               .prepare(
                 `SELECT status, owner_pid AS ownerPid, owner_start_time AS ownerStartTime,
                     finished_at_ms AS finishedAtMs
@@ -88,9 +87,7 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
                ORDER BY started_at_ms DESC LIMIT 1`,
               )
               .get(job.id);
-          } finally {
-            database.close();
-          }
+          })();
 
           expect(terminal).toMatchObject({ status: "ok", completionStatus: "succeeded" });
           expect(receipt).toMatchObject({
@@ -105,14 +102,8 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
             await client.request("cron.remove", { id: jobId }).catch(() => undefined);
           }
         },
-        async () => {
-          if (client) {
-            await disconnectGatewayClient(client);
-          }
-        },
-        async () => {
-          await instance?.cleanup();
-        },
+        () => client && disconnectGatewayClient(client),
+        () => instance?.cleanup(),
       );
     },
   );

@@ -7,7 +7,6 @@ import {
 } from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import { expect, vi } from "vitest";
-import type { SessionGitHubPublicationPublished } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
@@ -54,14 +53,13 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     sessionId: SESSION_ID,
     sessionKey: SESSION_KEY,
   });
-  const published = await f.coordinator.requestForSessionV2(
+  const publication = await f.coordinator.requestForSessionV2(
     f.request(randomUUID(), f.guest, "Publish session work"),
   );
-  expect(published.status).toBe("published");
-  if (published.status !== "published") {
+  expect(publication.status).toBe("published");
+  if (publication.status !== "published") {
     throw new Error("Publication fixture did not publish");
   }
-  const publication: SessionGitHubPublicationPublished = published;
   const writerSource =
     backend === "repository"
       ? await createGitHubPublicationRequesterFixture({
@@ -74,10 +72,11 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
   const creation = mocks.runCommand.mock.calls.findLast(
     ([argv]) => argv.includes("POST") && argv.some((arg: string) => arg.endsWith("/pulls")),
   )!;
+  const { body, title }: { body: string; title: string } = JSON.parse(creation[1]!.input as string);
   const state = {
-    body: JSON.parse(creation[1]!.input as string).body as string,
+    body,
     node_id: "PR_fixture",
-    title: JSON.parse(creation[1]!.input as string).title as string,
+    title,
     html_url: publication.url,
     state: "open",
     draft: true,
@@ -100,13 +99,18 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     if (argv[0] !== "gh" || !argv.includes("--method")) {
       return await previous(argv, options);
     }
-    if (argv.includes("GET") && argv.some((arg) => /\/pulls\/\d+$/u.test(arg))) {
+    const pullRequest = argv.some((arg) => /\/pulls\/\d+$/u.test(arg));
+    if (argv.includes("GET") && pullRequest) {
       await beforeRead?.();
       return commandResult(JSON.stringify(state));
     }
+    const recordWrite = (action: string) => {
+      const input: Record<string, unknown> = JSON.parse(options!.input!);
+      writes.push({ action, input });
+    };
     let response = commandResult("{}");
     if (argv.includes("POST") && argv.some((arg) => /\/issues\/\d+\/comments$/u.test(arg))) {
-      writes.push({ action: "request_review", input: JSON.parse(options!.input!) });
+      recordWrite("request_review");
       response =
         reviewResponse ??
         commandResult(
@@ -118,10 +122,10 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
           }),
         );
     } else if (argv.includes("graphql")) {
-      writes.push({ action: "ready", input: JSON.parse(options!.input!) });
+      recordWrite("ready");
       state.draft = false;
     } else if (argv.some((arg) => arg.endsWith("/merge"))) {
-      writes.push({ action: "merge", input: JSON.parse(options!.input!) });
+      recordWrite("merge");
       if (rejectMerge) {
         if (rejectMerge instanceof Error) {
           throw rejectMerge;
@@ -131,24 +135,20 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
       state.merged = true;
       state.state = "closed";
       state.merge_commit_sha = "e".repeat(40);
-    } else if (argv.includes("PATCH") && argv.some((arg) => /\/pulls\/\d+$/u.test(arg))) {
+    } else if (argv.includes("PATCH") && pullRequest) {
       const input: Record<string, unknown> = JSON.parse(options!.input!);
-      if (input.state === undefined) {
-        writes.push({ action: "edit", input });
-        if (rejectEdit) {
-          return commandResult('{"message":"Resource not accessible"}', 1);
-        }
-        if (typeof input.title === "string") {
-          state.title = input.title;
-        }
-        if (typeof input.body === "string") {
-          state.body = input.body;
+      const edit = input.state === undefined;
+      writes.push({ action: edit ? "edit" : "close", input });
+      if (edit ? rejectEdit : rejectClose) {
+        return commandResult('{"message":"Resource not accessible"}', 1);
+      }
+      if (edit) {
+        for (const key of ["title", "body"] as const) {
+          if (typeof input[key] === "string") {
+            state[key] = input[key];
+          }
         }
       } else {
-        writes.push({ action: "close", input });
-        if (rejectClose) {
-          return commandResult('{"message":"Resource not accessible"}', 1);
-        }
         state.state = "closed";
       }
     } else {
@@ -215,9 +215,7 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     writes,
     invoke,
     expected,
-    onRead(callback: () => Promise<void>) {
-      beforeRead = callback;
-    },
+    onRead: (callback: () => Promise<void>) => void (beforeRead = callback),
     rejectMerge(
       result: ReturnType<typeof commandResult> | Error = commandResult(
         '{"message":"Required checks have not passed"}',
@@ -226,17 +224,9 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     ) {
       rejectMerge = result;
     },
-    rejectEdit() {
-      rejectEdit = true;
-    },
-    rejectClose() {
-      rejectClose = true;
-    },
-    reviewResponse(result: ReturnType<typeof commandResult>) {
-      reviewResponse = result;
-    },
-    loseResponse() {
-      loseResponse = true;
-    },
+    rejectEdit: () => void (rejectEdit = true),
+    rejectClose: () => void (rejectClose = true),
+    reviewResponse: (result: ReturnType<typeof commandResult>) => void (reviewResponse = result),
+    loseResponse: () => void (loseResponse = true),
   };
 }

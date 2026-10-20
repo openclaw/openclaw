@@ -48,16 +48,8 @@ export function configWithSelectedIdentity(
   nextIdentity: GitHubToolIdentityConfig,
 ): OpenClawConfig {
   const next = structuredClone(config);
-  if (scope === "system") {
-    next.tools ??= {};
-    next.tools.github = structuredClone(nextIdentity);
-  } else {
-    next.agents ??= {};
-    next.agents.entries ??= {};
-    const entry = (next.agents.entries[agentId] ??= {});
-    entry.tools ??= {};
-    entry.tools.github = structuredClone(nextIdentity);
-  }
+  const owner = scope === "system" ? next : (((next.agents ??= {}).entries ??= {})[agentId] ??= {});
+  (owner.tools ??= {}).github = structuredClone(nextIdentity);
   return next;
 }
 
