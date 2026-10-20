@@ -64,48 +64,45 @@ async function fixture(kind = "public") {
   return { context, publication: readChildSessionPublication(run), close: host.retire };
 }
 
-it.each(["source revocation", "run closure"])(
-  "expires admitted publication on %s",
-  async (phase) => {
-    let current = true;
-    const context = {};
-    const prepare = vi.fn(async () => () => {
-      if (!current) {
-        throw new Error("revoked after admission");
-      }
-    });
-    bindChildSessionPublication(
-      context,
-      parentKey,
-      () => {
-        if (phase === "source revocation") {
-          throw new Error("stale original snapshot");
-        }
-      },
-      phase === "source revocation" ? prepare : undefined,
-    );
-    const admission = prepareAdmission(context, "renewed-publication");
-    try {
-      const admitted = await admission.admit("embedded");
-      const publication = readChildSessionPublication(admitted.operationalRunInstance);
-      expect(publication).toBeDefined();
-      expect(() => publication?.assertCurrent()).not.toThrow();
+it.each(["source revocation", "run closure"])("publication expires on %s", async (phase) => {
+  let current = true;
+  const context = {};
+  const prepare = vi.fn(async () => () => {
+    if (!current) {
+      throw new Error("revoked after admission");
+    }
+  });
+  bindChildSessionPublication(
+    context,
+    parentKey,
+    () => {
       if (phase === "source revocation") {
-        current = false;
-        await admission.admit("embedded");
-        await publication?.prepare();
-        expect(prepare).toHaveBeenCalledOnce();
-      } else {
-        admission.close();
+        throw new Error("stale original snapshot");
       }
-      expect(() => publication?.assertCurrent()).toThrow(
-        phase === "source revocation" ? "revoked after admission" : "run is no longer active",
-      );
-    } finally {
+    },
+    phase === "source revocation" ? prepare : undefined,
+  );
+  const admission = prepareAdmission(context, "renewed-publication");
+  try {
+    const admitted = await admission.admit("embedded");
+    const publication = readChildSessionPublication(admitted.operationalRunInstance);
+    expect(publication).toBeDefined();
+    expect(() => publication?.assertCurrent()).not.toThrow();
+    if (phase === "source revocation") {
+      current = false;
+      await admission.admit("embedded");
+      await publication?.prepare();
+      expect(prepare).toHaveBeenCalledOnce();
+    } else {
       admission.close();
     }
-  },
-);
+    expect(() => publication?.assertCurrent()).toThrow(
+      phase === "source revocation" ? "revoked after admission" : "run is no longer active",
+    );
+  } finally {
+    admission.close();
+  }
+});
 
 it.each(["public", "absent", "retargeted", "forged"])(
   "accepts only an exact host handoff: %s",

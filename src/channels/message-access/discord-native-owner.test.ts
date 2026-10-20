@@ -57,26 +57,15 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
         .listNativeCandidates("discord")
         .find((entry) => entry.name === name)!;
       expect(candidate).toBeDefined();
-      const observedContexts: PluginCommandDispatchContext[] = [];
-      const command = {
-        ...candidate,
-        prepareDispatch: (args?: string) => {
-          const selected = candidate.prepareDispatch(args);
-          if (selected.kind === "non-plugin") {
-            return selected;
-          }
-          return {
-            ...selected,
-            execute: async (ctx: PluginCommandDispatchContext) => {
-              observedContexts.push(ctx);
-              return selected.execute(ctx);
-            },
-          };
-        },
-      };
+      const selected = candidate.prepareDispatch();
+      if (selected.kind !== "plugin") {
+        throw new Error("Expected a plugin dispatch");
+      }
+      const execute = vi.fn((ctx: PluginCommandDispatchContext) => selected.execute(ctx));
+      const command = { ...candidate, prepareDispatch: () => ({ ...selected, execute }) };
       const interaction = await run({ pluginCommand: command });
-      expect(observedContexts).toHaveLength(1);
-      const observed = observedContexts[0];
+      expect(execute).toHaveBeenCalledOnce();
+      const observed = execute.mock.calls[0]?.[0];
       expect(handler).toHaveBeenCalledOnce();
       expect(interaction.followUp).toHaveBeenCalledWith(
         expect.objectContaining({ content: "owner-ok" }),

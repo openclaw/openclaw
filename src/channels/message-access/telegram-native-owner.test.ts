@@ -1,85 +1,71 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
 const denied = "You are not authorized to use this command.";
 const failed = "⚠️ Command failed. Please try again later.";
+const topicOwner = {
+  senderIsOwner: true,
+  agentId: "topic-owner",
+  messageThreadId: 42,
+  sessionKey: "agent:topic-owner:telegram:group:-10012345:topic:42",
+};
+const dmOwner = {
+  senderIsOwner: true,
+  isAuthorizedSender: true,
+  channel: "telegram",
+  accountId: "default",
+  assertOwnerCurrent: expect.any(Function),
+};
 
 it.each([
-  ["enabled", "open", undefined, true],
-  ["group disabled", "disabled", undefined, false],
-  ["topic disabled", "open", "disabled", false],
-  ["topic overrides disabled group", "disabled", "open", true],
+  ["topic enabled", "open", undefined, "linked", true],
+  ["group disabled", "disabled", undefined, "linked", false],
+  ["topic disabled", "open", "disabled", "linked", false],
+  ["topic overrides disabled group", "disabled", "open", "linked", true],
+  ["DM linked owners", undefined, undefined, "linked", true],
+  ["DM provider allowlist", undefined, undefined, "provider", false],
+  ["DM global allowlist", undefined, undefined, "global", false],
+  ["DM unlinked", undefined, undefined, "unlinked", false],
+  ["DM asserted identity", undefined, undefined, "asserted", false],
 ] as const)(
-  "preserves real topic routing and room admission for linked native owners: %s",
-  (_name, groupPolicy, topicPolicy, allowed) =>
-    withTelegramNativeOwners(async ({ cfg, invokeTopic, handler, driver }) => {
-      cfg.channels!.telegram!.groups = {
-        "-10012345": {
-          groupPolicy,
-          topics: {
-            "42": {
-              agentId: "topic-owner",
-              ...(topicPolicy ? { groupPolicy: topicPolicy } : {}),
-            },
-          },
-        },
-      };
-      await invokeTopic();
+  "enforces native owner admission and routing: %s",
+  (_name, groupPolicy, topicPolicy, authority, allowed) =>
+    withTelegramNativeOwners(async ({ cfg, invoke, invokeTopic, handler, driver }) => {
+      if (groupPolicy) {
+        const topic = {
+          agentId: "topic-owner",
+          ...(topicPolicy ? { groupPolicy: topicPolicy } : {}),
+        };
+        cfg.channels!.telegram!.groups = { "-10012345": { groupPolicy, topics: { "42": topic } } };
+      }
+      if (authority === "provider" || authority === "global") {
+        cfg.commands!.allowFrom = { [authority === "provider" ? "telegram" : "*"]: ["999999"] };
+      }
+      const senderId = authority === "unlinked" ? 300 : 100;
+      await (groupPolicy ? invokeTopic() : invoke(senderId));
       if (allowed) {
-        expect(handler).toHaveBeenCalledWith(
-          expect.objectContaining({
-            senderIsOwner: true,
-            agentId: "topic-owner",
-            messageThreadId: 42,
-            sessionKey: "agent:topic-owner:telegram:group:-10012345:topic:42",
-          }),
-        );
-        expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
-      } else {
-        expect(handler).not.toHaveBeenCalled();
-        expect([driver.sentMessages(), driver.deliveries()]).toEqual([[], []]);
-      }
-    }),
-);
-
-it.each(["linked", "provider allowlist", "global allowlist", "unlinked", "asserted"] as const)(
-  "admits native owner commands only with current linked authority: %s",
-  (denial) =>
-    withTelegramNativeOwners(async ({ cfg, invoke, handler, driver }) => {
-      if (denial === "provider allowlist") {
-        cfg.commands!.allowFrom = { telegram: ["999999"] };
-      }
-      if (denial === "global allowlist") {
-        cfg.commands!.allowFrom = { "*": ["999999"] };
-      }
-      await invoke(denial === "unlinked" ? 300 : 100);
-      if (denial === "linked") {
-        await invoke(200);
-        expect(handler).toHaveBeenCalledTimes(2);
-        for (const [ctx] of handler.mock.calls) {
-          expect(ctx).toMatchObject({
-            senderIsOwner: true,
-            isAuthorizedSender: true,
-            channel: "telegram",
-            accountId: "default",
-            assertOwnerCurrent: expect.any(Function),
-          });
+        if (!groupPolicy) {
+          await invoke(200);
+          expect(driver.pairingStoreReadCount()).toBe(0);
         }
-        expect(driver.pairingStoreReadCount()).toBe(0);
-        expect(driver.deliveries()).toHaveLength(2);
+        expect(handler).toHaveBeenCalledTimes(groupPolicy ? 1 : 2);
+        for (const [ctx] of handler.mock.calls) {
+          expect(ctx).toMatchObject(groupPolicy ? topicOwner : dmOwner);
+        }
+        if (groupPolicy) {
+          expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
+        } else {
+          expect(driver.deliveries()).toHaveLength(2);
+        }
       } else {
         expect(handler).not.toHaveBeenCalled();
-        expect(driver.sentMessages()).toEqual([
-          {
-            chatId: denial === "unlinked" ? 300 : 100,
-            text: denied,
-          },
-        ]);
-        expect(driver.deliveries()).toEqual([]);
+        const messages = groupPolicy ? [] : [{ chatId: senderId, text: denied }];
+        expect([driver.sentMessages(), driver.deliveries()]).toEqual([messages, []]);
       }
-    }, denial === "asserted"),
+    }, authority === "asserted"),
 );
 
 it("rejects stale native plugin owner authority after demotion", () =>
@@ -97,9 +83,11 @@ it("rejects stale native plugin owner authority after demotion", () =>
     });
     const pending = invoke();
     try {
-      expect(
-        await Promise.race([entered.promise.then(() => "entered"), pending.then(() => "finished")]),
-      ).toBe("entered");
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Owner handler must enter before settling",
+      );
       setUserProfileRole(admins[0]!.profile.id, "member");
       finish.resolve();
       await pending;
@@ -115,50 +103,43 @@ it("rejects stale native plugin owner authority after demotion", () =>
     }
   }));
 
-it.each([false, true])(
-  "retains linked owner authority through native provider login (revoke=%s)",
-  (revoke) =>
-    withTelegramNativeOwners(async ({ cfg, admins, driver }) => {
-      cfg.agents = { defaults: { model: "openai/gpt-5.5" } };
-      const finish = createDeferredCore();
-      const notified = createDeferredCore();
-      let writes = 0;
-      const loginFlow = vi.fn<Parameters<typeof driver.configureLogin>[0]["run"]>(
-        async (options) => {
-          await options.prompter.deviceCode?.({ title: "Sign in", code: "OWNER-TEST-CODE" });
-          await finish.promise;
-          options.assertCurrent?.();
-          writes += 1;
-          return {
-            providerId: "openai",
-            methodId: "device-code",
-            authRefresh: "refreshed",
-            profiles: [],
-          };
-        },
-      );
-      driver.configureLogin({
-        run: loginFlow,
-        onResult: () => notified.resolve(),
-      });
-      try {
-        await driver.invoke({
-          command: "login",
-          senderId: 100,
-          match: "openai/openai-device-code",
-        });
-        expect(loginFlow).toHaveBeenCalledOnce();
-        if (revoke) {
-          setUserProfileRole(admins[0]!.profile.id, "member");
-        }
-        finish.resolve();
-        await notified.promise;
-        expect(writes).toBe(revoke ? 0 : 1);
-      } finally {
-        finish.resolve();
-        if (loginFlow.mock.calls.length > 0) {
-          await notified.promise;
-        }
+it.each([false, true])("checks live owner authority during login (revoke=%s)", (revoke) =>
+  withTelegramNativeOwners(async ({ cfg, admins, driver }) => {
+    cfg.agents = { defaults: { model: "openai/gpt-5.5" } };
+    const finish = createDeferredCore();
+    const notified = createDeferredCore();
+    let writes = 0;
+    let calls = 0;
+    driver.configureLogin({
+      run: async (options) => {
+        calls += 1;
+        await options.prompter.deviceCode?.({ title: "Sign in", code: "OWNER-TEST-CODE" });
+        await finish.promise;
+        options.assertCurrent?.();
+        writes += 1;
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          authRefresh: "refreshed",
+          profiles: [],
+        };
+      },
+      onResult: () => notified.resolve(),
+    });
+    try {
+      await driver.invoke({ command: "login", match: "openai/openai-device-code" });
+      expect(calls).toBe(1);
+      if (revoke) {
+        setUserProfileRole(admins[0]!.profile.id, "member");
       }
-    }),
+      finish.resolve();
+      await notified.promise;
+      expect(writes).toBe(revoke ? 0 : 1);
+    } finally {
+      finish.resolve();
+      if (calls > 0) {
+        await notified.promise;
+      }
+    }
+  }),
 );

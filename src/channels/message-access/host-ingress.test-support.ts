@@ -1,14 +1,39 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
 } from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
+import type { ChannelPlugin } from "../plugins/types.public.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
 import { createHostChannelIngressRuntime } from "./runtime.js";
+
+export async function withTestChannelRegistry<T>(
+  plugin: ChannelPlugin | undefined,
+  run: () => Promise<T>,
+) {
+  const previous = plugin ? captureActivePluginRegistrySnapshot() : undefined;
+  if (plugin) {
+    const registry = createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]);
+    stageActivePluginRegistry(registry, null, "default");
+  }
+  try {
+    return await run();
+  } finally {
+    if (previous) {
+      rollbackStagedPluginRegistry(previous);
+    }
+  }
+}
 
 export function createHostIngressFixture(
   channelId = "test",
