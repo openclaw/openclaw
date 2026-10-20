@@ -36,17 +36,15 @@ suite.define(() => {
           const parent = sessionRow(parentKey, "Mac app onboarding flow testing", now + 1, {
             childSessions: childKeys,
           });
+          const makeChild = (key: string, label: string, updatedAt: number) =>
+            sessionRow(key, label, updatedAt, { spawnedBy: parentKey, status: undefined });
           const children = childKeys.map((key, index) =>
-            sessionRow(
+            makeChild(
               key,
               ["Move OAuth profile persistence reads", "Land workboard archived-session recovery"][
                 index
               ]!,
               now + 2 + index,
-              {
-                spawnedBy: parentKey,
-                status: undefined,
-              },
             ),
           );
           await page.clock.install();
@@ -68,7 +66,6 @@ suite.define(() => {
           const row = sidebar.locator('[data-session-key="' + parentKey + '"]');
           const toggle = row.locator("[data-child-session-toggle]");
           await toggle.waitFor();
-          // Both revisions show the same expanded content for the visual comparison.
           if ((await toggle.getAttribute("aria-expanded")) === "false") {
             await toggle.click();
           }
@@ -96,14 +93,10 @@ suite.define(() => {
           expect(await toggle.textContent()).toContain("2");
           await toggle.click();
           await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-          const third = sessionRow(
+          const third = makeChild(
             "agent:main:dashboard:verification",
             "Verify onboarding regression",
             now + 4,
-            {
-              spawnedBy: parentKey,
-              status: undefined,
-            },
           );
           await gateway.setSessionsListResponse(
             sessionsListResponse([
@@ -113,28 +106,23 @@ suite.define(() => {
               third,
             ]),
           );
-          await pauseVirtualClock(page);
-          await gateway.emitGatewayEvent("sessions.changed", {
-            sessionKey: parentKey,
-            agentId: "main",
-            reason: "create",
-            updatedAt: now + 4,
-          });
-          await page.clock.fastForward(5_001);
-          await page.clock.resume();
+          const refreshChildren = async (reason: "create" | "patch", updatedAt: number) => {
+            await pauseVirtualClock(page);
+            await gateway.emitGatewayEvent("sessions.changed", {
+              sessionKey: parentKey,
+              agentId: "main",
+              reason,
+              updatedAt,
+            });
+            await page.clock.fastForward(5_001);
+            await page.clock.resume();
+          };
+          await refreshChildren("create", now + 4);
           await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
           await sidebar.locator('[data-session-key="' + third.key + '"]').waitFor();
           await toggle.click();
           await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-          await pauseVirtualClock(page);
-          await gateway.emitGatewayEvent("sessions.changed", {
-            sessionKey: parentKey,
-            agentId: "main",
-            reason: "patch",
-            updatedAt: now + 5,
-          });
-          await page.clock.fastForward(5_001);
-          await page.clock.resume();
+          await refreshChildren("patch", now + 5);
           expect(await toggle.getAttribute("aria-expanded")).toBe("false");
           expect(await sidebar.locator('[data-session-key="' + third.key + '"]').count()).toBe(0);
           await toggle.focus();

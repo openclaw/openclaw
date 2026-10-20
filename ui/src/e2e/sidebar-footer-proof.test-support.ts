@@ -92,21 +92,15 @@ export async function captureUnionProof(
   if (!viewport) {
     throw new Error(`Cannot capture ${fileName}: viewport is unavailable`);
   }
-  const margin = 12;
-  const x = Math.max(0, Math.min(...boxes.map((box) => box.x)) - margin);
-  const y = Math.max(0, Math.min(...boxes.map((box) => box.y)) - margin);
-  const right = Math.min(
-    viewport.width,
-    Math.max(...boxes.map((box) => box.x + box.width)) + margin,
-  );
-  const bottom = Math.min(
-    viewport.height,
-    Math.max(...boxes.map((box) => box.y + box.height)) + margin,
-  );
-  const artifactDir = path.join(owner.artifactDir, directory);
+  const extent = (axis: "x" | "y", size: "width" | "height"): [number, number] => [
+    Math.max(0, Math.min(...boxes.map((box) => box[axis])) - 12),
+    Math.min(viewport[size], Math.max(...boxes.map((box) => box[axis] + box[size])) + 12),
+  ];
+  const [x, right] = extent("x", "width");
+  const [y, bottom] = extent("y", "height");
   await page.screenshot({
     animations: "disabled",
     clip: { x, y, width: right - x, height: bottom - y },
-    path: path.join(artifactDir, fileName),
+    path: path.join(owner.artifactDir, directory, fileName),
   });
 }

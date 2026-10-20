@@ -56,8 +56,6 @@ suite.define(() => {
           sidebarCronJob({
             id: "inbox-latency-job",
             name: "Daily report",
-            payload: { kind: "agentTurn", message: "Prepare the report." },
-            state: { lastRunStatus: "error", lastError: "Report failed" },
           }),
         ]
       : [];
@@ -79,15 +77,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("cron.list");
-      await page.locator(".sidebar-issues-button").waitFor();
-      await page.locator(".sidebar-issues-button").click();
-      await page
-        .locator(
-          populated
-            ? '#sidebar-issues-panel [data-attention-kind="cronFailed"]'
-            : ".sidebar-issues-panel__empty",
-        )
-        .waitFor();
+      const button = page.locator(".sidebar-issues-button");
+      const emptyOrItem = page.locator(
+        populated
+          ? '#sidebar-issues-panel [data-attention-kind="cronFailed"]'
+          : ".sidebar-issues-panel__empty",
+      );
+      await button.waitFor();
+      await button.click();
+      await emptyOrItem.waitFor();
       await page.keyboard.press("Escape");
       await page.locator("#sidebar-issues-panel").waitFor({ state: "detached" });
       await expectInboxOnNextFrame(page, populated);

@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { compactCronJobFixture, cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
 
@@ -26,25 +26,24 @@ suite.define(() => {
         state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
       }),
     );
-    jobs[50] = { ...jobs[50]!, name: "Failed daily report", state: { lastStatus: "error" } };
-    jobs[51] = {
-      ...jobs[51]!,
-      name: "Paused report",
-      enabled: false,
-      state: { lastRunStatus: "error" },
+    const setJob = (
+      index: number,
+      name: string,
+      state: (typeof jobs)[number]["state"],
+      enabled = true,
+    ) => {
+      jobs[index] = { ...jobs[index]!, name, state, enabled };
     };
-    jobs[52] = {
-      ...jobs[52]!,
-      name: "Running report",
-      state: { runningAtMs: 0, nextRunAtMs: now - 600_000 },
-    };
-    jobs[53] = {
-      ...jobs[53]!,
-      name: "Disabled after failures",
-      enabled: false,
-      state: { autoDisabled: { reason: "consecutive-failures", atMs: now, consecutiveErrors: 3 } },
-    };
-    jobs[54] = { ...jobs[54]!, name: "Overdue report", state: { nextRunAtMs: now - 600_000 } };
+    setJob(50, "Failed daily report", { lastStatus: "error" });
+    setJob(51, "Paused report", { lastRunStatus: "error" }, false);
+    setJob(52, "Running report", { runningAtMs: 0, nextRunAtMs: now - 600_000 });
+    setJob(
+      53,
+      "Disabled after failures",
+      { autoDisabled: { reason: "consecutive-failures", atMs: now, consecutiveErrors: 3 } },
+      false,
+    );
+    setJob(54, "Overdue report", { nextRunAtMs: now - 600_000 });
     const compactJobs = jobs.map(compactCronJobFixture);
     const pageResponse = (compact: boolean, offset: number) => ({
       jobs: (compact ? compactJobs : jobs).slice(offset, offset + 50),
@@ -64,14 +63,10 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: "The synthetic daily report is ready." }],
           deferredMethods: ["chat.startup"],
           methodResponses: {
-            "cron.list": {
-              cases: [
-                { match: { compact: true, offset: 50 }, response: pageResponse(true, 50) },
-                { match: { compact: true }, response: pageResponse(true, 0) },
-                { match: { offset: 50 }, response: pageResponse(false, 50) },
-                { response: pageResponse(false, 0) },
-              ],
-            },
+            "cron.list": cronListResponseFixture([
+              { match: { offset: 50 }, response: pageResponse(false, 50) },
+              { response: pageResponse(false, 0) },
+            ]),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: jobs.length },
             "models.authStatus": { providers: [], ts: now },
           },
@@ -96,19 +91,13 @@ suite.define(() => {
           await rows.getByText(name, { exact: true }).waitFor();
         }
         const requests = await gateway.getRequests("cron.list");
+        const bytes = (compact: boolean, offset: number) =>
+          Buffer.byteLength(JSON.stringify(pageResponse(compact, offset)));
         const responseBytes = requests.reduce((sum, request) => {
           const params = request.params as { compact?: boolean; offset?: number };
-          return (
-            sum +
-            Buffer.byteLength(
-              JSON.stringify(pageResponse(params.compact === true, params.offset ?? 0)),
-            )
-          );
+          return sum + bytes(params.compact === true, params.offset ?? 0);
         }, 0);
-        const fullBytes = [0, 50].reduce(
-          (sum, offset) => sum + Buffer.byteLength(JSON.stringify(pageResponse(false, offset))),
-          0,
-        );
+        const fullBytes = bytes(false, 0) + bytes(false, 50);
         const proof = {
           responseBytes,
           fullBytes,

@@ -44,19 +44,14 @@ export async function captureSidebarUiProof(
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  if (page.video()) {
-    const proofSurface = surface ?? page.locator(".shell");
-    await writeFile(
-      path.join(owner.artifactDir, fileName),
-      await takeControlUiViewportScreenshot(page, proofSurface, content ?? [proofSurface]),
-    );
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(owner.artifactDir, fileName),
-  });
+  const destination = path.join(owner.artifactDir, fileName);
+  const proofSurface = surface ?? page.locator(".shell");
+  await (page.video()
+    ? writeFile(
+        destination,
+        await takeControlUiViewportScreenshot(page, proofSurface, content ?? [proofSurface]),
+      )
+    : page.screenshot({ animations: "disabled", fullPage: true, path: destination }));
 }
 
 export async function captureSettingsSidebarUiProof(
@@ -67,19 +62,16 @@ export async function captureSettingsSidebarUiProof(
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  if (sidebar.page().video()) {
-    await writeFile(
-      path.join(owner.artifactDir, fileName),
-      await takeControlUiElementScreenshot(sidebar.page(), sidebar, [
-        sidebar.getByRole("searchbox", { name: "Search settings" }),
-      ]),
-    );
-    return;
-  }
-  await sidebar.screenshot({
-    animations: "disabled",
-    path: path.join(owner.artifactDir, fileName),
-  });
+  const destination = path.join(owner.artifactDir, fileName);
+  const page = sidebar.page();
+  await (page.video()
+    ? writeFile(
+        destination,
+        await takeControlUiElementScreenshot(page, sidebar, [
+          sidebar.getByRole("searchbox", { name: "Search settings" }),
+        ]),
+      )
+    : sidebar.screenshot({ animations: "disabled", path: destination }));
 }
 
 export async function openSidebarCustomizationPage(
@@ -93,7 +85,8 @@ export async function openSidebarCustomizationPage(
   const page = await context.newPage();
   await installMockGateway(page);
   await page.goto(`${suite.server.baseUrl}chat`);
-  await page.locator("openclaw-app-sidebar").waitFor();
+  const sidebar = page.locator("openclaw-app-sidebar");
+  await sidebar.waitFor();
   const pages = await openSidebarPages(page);
   for (const label of ["Agents", "Dashboards", "Systems"]) {
     await pages
@@ -102,10 +95,7 @@ export async function openSidebarCustomizationPage(
       .getByRole("button", { name: "Pin", exact: true })
       .click();
   }
-  await page
-    .locator("openclaw-app-sidebar")
-    .getByRole("button", { name: "Sessions", exact: true })
-    .click();
+  await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
   return { context, page };
 }
 

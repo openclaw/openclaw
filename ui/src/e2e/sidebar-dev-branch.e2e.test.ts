@@ -1,6 +1,3 @@
-// Control UI sidebar footer flags non-release gateways: a source-checkout
-// gateway off main reports its branch via bootstrap config and the footer
-// renders it in the danger color; release gateways omit it entirely.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -31,22 +28,19 @@ suite.define(() => {
       const badge = page.locator(".sidebar-footer-branch");
       await badge.waitFor();
       await expect
-        .poll(() => badge.locator(".sidebar-footer-branch__name").textContent())
-        .toBe(DEV_BRANCH);
-      // The branch name surfaces via the shared tooltip's accessible
-      // description instead of a native title attribute.
-      await expect
         .poll(() =>
           badge.evaluate((element) => {
             const id = element.getAttribute("aria-describedby");
-            return id ? (document.getElementById(id)?.textContent ?? null) : null;
+            return {
+              name: element.querySelector(".sidebar-footer-branch__name")?.textContent,
+              description: id ? (document.getElementById(id)?.textContent ?? null) : null,
+            };
           }),
         )
-        .toBe(DEV_BRANCH);
+        .toEqual({ name: DEV_BRANCH, description: DEV_BRANCH });
 
       const colors = await badge.evaluate((element) => {
-        // Compare resolved colors: getComputedStyle().color returns rgb() while
-        // the raw --danger token may be hex/oklch, so resolve it via a probe.
+        // Resolve the token before comparing against the computed RGB color.
         const probe = document.createElement("span");
         probe.style.color = "var(--danger)";
         element.append(probe);

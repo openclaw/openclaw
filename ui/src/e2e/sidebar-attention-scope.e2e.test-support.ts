@@ -9,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
+import { setSidebarProofTheme } from "./sidebar-footer-proof.test-support.ts";
 
 type SidebarAttentionScopeFlowOptions = {
   artifactDir: string;
@@ -42,17 +43,6 @@ async function holdProof(page: Page, enabled: boolean) {
   }
 }
 
-async function setDarkTheme(page: Page) {
-  await page.emulateMedia({ colorScheme: "dark" });
-  await page.evaluate(() => {
-    const root = document.documentElement;
-    root.dataset.themeMode = "dark";
-    root.dataset.themeResolved = "dark";
-    root.style.colorScheme = "dark";
-  });
-  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-}
-
 export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScopeFlowOptions) {
   const context = await params.browser.newContext({
     locale: "en-US",
@@ -83,6 +73,12 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     hasMore: false,
     nextOffset: null,
   });
+  const scopedCronResponses = (writer: CronJob) =>
+    cronListResponseFixture([
+      { match: { agentId: "main" }, response: cronResponse([mainJob]) },
+      { match: { agentId: "writer" }, response: cronResponse([writer]) },
+      { response: cronResponse([mainJob, writer]) },
+    ]);
   const gateway = await installMockGateway(page, {
     presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
     methodResponses: {
@@ -95,11 +91,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
           { id: "writer", identity: { name: "Writer" }, name: "Writer" },
         ],
       },
-      "cron.list": cronListResponseFixture([
-        { match: { agentId: "main" }, response: cronResponse([mainJob]) },
-        { match: { agentId: "writer" }, response: cronResponse([writerJob]) },
-        { response: cronResponse([mainJob, writerJob]) },
-      ]),
+      "cron.list": scopedCronResponses(writerJob),
       "models.authStatus": { providers: [], ts: 1 },
     },
   });
@@ -117,7 +109,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
   try {
     await page.goto(`${params.baseUrl}new`);
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
-    await setDarkTheme(page);
+    await setSidebarProofTheme(page, "dark");
     await waitForCronScope("main");
     await gateway.emitGatewayEvent("exec.approval.requested", {
       id: "approval-global",
@@ -132,6 +124,14 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const sidebar = page.locator("openclaw-app-sidebar");
     const automationRows = sidebar.locator('[data-attention-kind="cronFailed"]');
     const approvalRow = sidebar.locator('[data-approval-id="approval-global"]');
+    const expectAutomations = async (main: number, writer: number) => {
+      await expect
+        .poll(async () => ({
+          main: await automationRows.getByText("Main release digest").count(),
+          writer: await automationRows.getByText("Writer release digest").count(),
+        }))
+        .toEqual({ main, writer });
+    };
     const openAutomations = async () => {
       await sidebar.locator(".sidebar-issues-button").click();
       await expect.poll(() => approvalRow.count()).toBe(1);
@@ -139,24 +139,24 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     };
 
     await openAutomations();
-    await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(0);
+    await expectAutomations(1, 0);
     const mainDismiss = automationRows.getByRole("button", {
       name: "Dismiss Main release digest",
     });
     await expect
-      .poll(() => mainDismiss.evaluate((element) => getComputedStyle(element).opacity))
-      .toBe("1");
-    await expect
-      .poll(() => mainDismiss.evaluate((element) => getComputedStyle(element).pointerEvents))
-      .toBe("auto");
+      .poll(() =>
+        mainDismiss.evaluate((element) => {
+          const { opacity, pointerEvents } = getComputedStyle(element);
+          return { opacity, pointerEvents };
+        }),
+      )
+      .toEqual({ opacity: "1", pointerEvents: "auto" });
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "08-desktop-inbox-main-agent.png");
     const mainAutomationChevron = automationRows
       .filter({ hasText: "Main release digest" })
       .locator(".sidebar-issues-panel__chevron");
     const mainAutomationChevronBox = await mainAutomationChevron.boundingBox();
-    expect(mainAutomationChevronBox).not.toBeNull();
     if (!mainAutomationChevronBox) {
       throw new Error("Main release digest chevron has no bounding box");
     }
@@ -176,8 +176,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     // The agent's cron refresh can precede the Chat route commit that closes Inbox.
     await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });
     await openAutomations();
-    await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(0);
+    await expectAutomations(0, 1);
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "09-desktop-inbox-writer-agent.png");
     await sidebar.locator(".sidebar-issues-button").click();
@@ -193,24 +192,13 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       .click();
     await waitForCronScope(null);
     await openAutomations();
-    await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);
-    await expect
-      .poll(() =>
-        automationRows
-          .filter({ hasText: "Main release digest" })
-          .locator(".sidebar-issues-panel__meta-context")
-          .textContent(),
-      )
-      .toBe("Main");
-    await expect
-      .poll(() =>
-        automationRows
-          .filter({ hasText: "Writer release digest" })
-          .locator(".sidebar-issues-panel__meta-context")
-          .textContent(),
-      )
-      .toBe("Writer");
+    await expectAutomations(1, 1);
+    for (const owner of ["Main", "Writer"]) {
+      const ownerLabel = automationRows
+        .filter({ hasText: owner + " release digest" })
+        .locator(".sidebar-issues-panel__meta-context");
+      await expect.poll(() => ownerLabel.textContent()).toBe(owner);
+    }
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "10-desktop-inbox-all-agents.png");
 
@@ -233,8 +221,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await selectPageScope("Main", "main");
     await selectPageScope("All agents", null);
     await openAutomations();
-    await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(0);
+    await expectAutomations(1, 0);
     await sidebar.locator(".sidebar-issues-button").click();
 
     const writerJobNext = sidebarCronJob({
@@ -242,14 +229,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       name: "Writer release digest",
       agentId: "writer",
     });
-    await gateway.setMethodResponse(
-      "cron.list",
-      cronListResponseFixture([
-        { match: { agentId: "main" }, response: cronResponse([mainJob]) },
-        { match: { agentId: "writer" }, response: cronResponse([writerJobNext]) },
-        { response: cronResponse([mainJob, writerJobNext]) },
-      ]),
-    );
+    await gateway.setMethodResponse("cron.list", scopedCronResponses(writerJobNext));
     const previousAllCount = await cronScopeRequestCount(null);
     await gateway.emitGatewayEvent("cron", {});
     await expect.poll(() => cronScopeRequestCount(null)).toBeGreaterThan(previousAllCount);
@@ -283,8 +263,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expect.poll(() => sidebar.locator(".sidebar-issues-button__count").count()).toBe(1);
     await sidebar.locator(".sidebar-issues-button").click();
     await expect.poll(() => sidebarUpdate.count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(0);
+    await expectAutomations(0, 1);
     await sidebar.locator(".sidebar-issues-button").click();
 
     await page.setViewportSize({ height: 852, width: 393 });
@@ -310,8 +289,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
     await expect.poll(() => approvalRow.count()).toBe(1);
     await sidebar.getByRole("tab", { name: /Automations/ }).click();
-    await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);
-    await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(0);
+    await expectAutomations(0, 1);
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "11-mobile-inbox-writer-agent.png");
 
