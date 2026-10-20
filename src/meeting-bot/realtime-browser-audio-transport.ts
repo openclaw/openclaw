@@ -149,7 +149,7 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
               params.audioFormat === "pcm16-24khz" ? pcm : convertPcmToMulaw8k(pcm, 24_000);
             onAudio(audio);
           }
-          // Count only a pull whose audio reached the model as a success.
+          // Reset only once the pull and any audio processing completed without an error.
           consecutiveInputErrors = 0;
           if (!stopped) {
             timer = setTimeout(() => void pull(), 50);
