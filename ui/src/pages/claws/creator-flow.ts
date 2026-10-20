@@ -5,6 +5,7 @@ import type {
   ClawsDraftsReadResult,
   ClawsDraftsReviewResult,
 } from "@openclaw/gateway-protocol";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -44,7 +45,7 @@ function hasCompleteScope(content: string) {
 
 /** Connection-scoped presentation; the Gateway owns draft bytes and publication authority. */
 export class ClawCreatorFlow {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private editTimer: ReturnType<typeof setTimeout> | null = null;
@@ -75,16 +76,9 @@ export class ClawCreatorFlow {
     });
   }
 
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
-  private changed() {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
+  private readonly changed = this.listeners.publish;
 
   private mainSessionKey(agentId: string) {
     const mainKey = resolveUiConfiguredMainKey({
