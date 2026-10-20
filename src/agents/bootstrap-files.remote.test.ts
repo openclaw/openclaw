@@ -49,6 +49,9 @@ function createRemoteBridge() {
   });
 }
 
+const resolveFiles = (params: Partial<Parameters<typeof resolveBootstrapFilesForRun>[0]> = {}) =>
+  resolveBootstrapFilesForRun({ workspaceDir, ...params });
+
 describe.runIf(process.platform !== "win32")("remote bootstrap read provenance", () => {
   beforeEach(async () => {
     clearInternalHooks();
@@ -88,17 +91,11 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       "junction",
     );
     bindRemote();
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      bootstrapUserProfileId: alice.id,
-    });
+    const files = await resolveFiles({ bootstrapUserProfileId: alice.id });
     expect(files.filter((file) => file.name === "USER.md").map((file) => file.content)).toEqual([
       "Remote Alice",
     ]);
-    const aliased = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      bootstrapUserProfileId: bob.id,
-    });
+    const aliased = await resolveFiles({ bootstrapUserProfileId: bob.id });
     expect(aliased.some((file) => file.content === "Remote Alice")).toBe(false);
   });
 
@@ -143,15 +140,14 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       }),
     );
     const params = {
-      workspaceDir,
       sessionKey: "agent:main:remote-source-cache",
       config: {},
       agentId: "main",
     };
-    const first = await resolveBootstrapFilesForRun(params);
+    const first = await resolveFiles(params);
     expect(first.find((file) => file.name === "USER.md")?.content).toBe("Harness profile");
     workspaceSource = false;
-    const second = await resolveBootstrapFilesForRun(params);
+    const second = await resolveFiles(params);
     expect(second.some((file) => file.name === "USER.md")).toBe(false);
     expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toBe("Gateway decoy");
   });
@@ -174,8 +170,6 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
         revoke();
       });
     }
-    await expect(
-      resolveBootstrapFilesForRun({ workspaceDir, config: {}, agentId: "main" }),
-    ).rejects.toThrow(/changed|stopped/);
+    await expect(resolveFiles({ config: {}, agentId: "main" })).rejects.toThrow(/changed|stopped/);
   });
 });
