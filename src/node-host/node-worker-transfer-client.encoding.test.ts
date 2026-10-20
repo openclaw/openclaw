@@ -15,6 +15,7 @@ import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { rawManifest, manifestRef } = manifestFixture();
+const overflow = () => Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1);
 
 function oversizedGzipHeader() {
   const compressed = gzipSync(rawManifest);
@@ -62,19 +63,9 @@ describe("workspace manifest HTTP encoding", () => {
   it.each<[string, string, () => Buffer, RegExp]>([
     ["unknown encoding", "br", () => Buffer.from(rawManifest), /encoding/],
     ["decoded digest mismatch", "gzip", () => gzipSync(`${rawManifest} `), /digest/],
-    [
-      "decoded overflow",
-      "gzip",
-      () => gzipSync(Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1)),
-      /byte limit/,
-    ],
+    ["decoded overflow", "gzip", () => gzipSync(overflow()), /byte limit/],
     ["encoded gzip overflow", "gzip", oversizedGzipHeader, /byte limit/],
-    [
-      "identity overflow",
-      "identity",
-      () => Buffer.alloc(MAX_WORKSPACE_MANIFEST_BYTES + 1),
-      /byte limit/,
-    ],
+    ["identity overflow", "identity", overflow, /byte limit/],
   ])("rejects %s before changing the workspace", async (_name, encoding, body, reason) => {
     const payload = body();
     await using fixture = await transferFixture((res) =>

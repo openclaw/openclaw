@@ -42,35 +42,30 @@ describe("node invoke progress writer", () => {
     [100, 250],
     [2_000, 1_000],
     [60_000, 5_000],
-  ])(
-    "uses a %i ms timeout to emit heartbeats every %i ms",
-    async (idleTimeoutMs, heartbeatIntervalMs) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(0);
-      const request = vi.fn(async () => ({}));
-      const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs });
-      writer.startHeartbeats();
-      await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 1);
-      expect(request).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledWith(
-        "node.invoke.progress",
-        { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "" },
-        undefined,
-      );
-      writer.stop();
-      await writer.flush();
-    },
-  );
+  ])("idle %i ms: heartbeat every %i ms", async (idleTimeoutMs, heartbeatIntervalMs) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const request = vi.fn(async () => ({}));
+    const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs });
+    writer.startHeartbeats();
+    await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 1);
+    expect(request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.progress",
+      { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "" },
+      undefined,
+    );
+    writer.stop();
+    await writer.flush();
+  });
 });
 
 describe("invocation-owned progress cancellation", () => {
   it("releases a cancelled progress wait and queued chunks without cancelling another request", async () => {
     vi.useFakeTimers();
-    const messages: Array<Record<string, unknown>> = [];
-    const client = new NodeHostWorkerBridgeClient((message) =>
-      messages.push(message as Record<string, unknown>),
-    );
+    const send = vi.fn();
+    const client = new NodeHostWorkerBridgeClient(send);
     client.setConnection(1, true);
     const respond = (id: string, result: unknown) =>
       client.handleResponse({
@@ -87,18 +82,16 @@ describe("invocation-owned progress cancellation", () => {
       void writer.write("first");
       void writer.write("queued");
       await vi.advanceTimersByTimeAsync(1);
-      expect(messages.map((message) => message.method)).toEqual([
-        "skills.bins",
-        "node.invoke.progress",
+      expect(send.mock.calls).toMatchObject([
+        [{ method: "skills.bins" }],
+        [{ method: "node.invoke.progress" }],
       ]);
-      let flushed = false;
-      void writer.flush().then(() => {
-        flushed = true;
-      });
+      const flushed = vi.fn();
+      void writer.flush().then(flushed);
       controller.abort();
       await vi.advanceTimersByTimeAsync(1);
-      expect(flushed).toBe(true);
-      expect(messages).toHaveLength(2);
+      expect(flushed).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledTimes(2);
       expect(respond("gateway-2", {})).toBe(false);
       expect(respond("gateway-1", { bins: [] })).toBe(true);
       await expect(unrelated).resolves.toEqual({ bins: [] });

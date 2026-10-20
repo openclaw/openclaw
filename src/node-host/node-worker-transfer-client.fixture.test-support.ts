@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { Server, RequestListener, IncomingMessage, ServerResponse } from "node:http";
 import type { Server as HttpsServer } from "node:https";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -51,28 +52,27 @@ export async function writeManifest(root: string, raw: string) {
 export function transferFixture(root: string, environmentId: string) {
   const workspaceDir = path.join(root, "workspace");
   const context = { environmentId, workspaceDir, manifestHome: root };
+  const run = (
+    gatewayUrl: string,
+    transfer: TransferOptions["transfer"],
+    overrides: TransferOverrides,
+  ) => runNodeWorkerWorkspaceTransfer({ ...context, ...overrides, gatewayUrl, transfer });
   return {
     workspaceDir,
     read: (file: string) => fs.readFile(path.join(workspaceDir, file), "utf8"),
     download: (gatewayUrl: string, manifestRef: string, overrides: TransferOverrides = {}) =>
-      runNodeWorkerWorkspaceTransfer({
-        ...context,
-        ...overrides,
-        gatewayUrl,
-        transfer: { direction: "download", token: "download-token", manifestRef },
-      }),
+      run(gatewayUrl, { direction: "download", token: "download-token", manifestRef }, overrides),
     upload: (gatewayUrl: string, manifestRef: string, overrides: TransferOverrides = {}) =>
-      runNodeWorkerWorkspaceTransfer({
-        ...context,
-        ...overrides,
+      run(
         gatewayUrl,
-        transfer: {
+        {
           direction: "upload",
           token: "upload-token",
           baseManifestRef: manifestRef,
           referenceManifestRef: manifestRef,
         },
-      }),
+        overrides,
+      ),
   };
 }
 
@@ -87,14 +87,9 @@ export function transferHandler(
 }
 
 export async function readUpload(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const body = Buffer.concat(chunks);
+  const body = await buffer(request);
   const currentHeader = 4 + body.readUInt32BE(0);
-  const currentBytes = body.readUInt32BE(currentHeader);
-  const fileHeader = currentHeader + 4 + currentBytes;
+  const fileHeader = currentHeader + 4 + body.readUInt32BE(currentHeader);
   const currentRaw = body.subarray(currentHeader + 4, fileHeader).toString("utf8");
   return { body, fileHeader, currentRaw, currentRef: `sha256:${digest(currentRaw)}` };
 }

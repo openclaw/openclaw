@@ -9,7 +9,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withNodeWorkerUploadSnapshot } from "./node-worker-upload-snapshot.js";
+import { withNodeWorkerUploadSnapshot as withSnapshot } from "./node-worker-upload-snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const content = Buffer.from("captured workspace bytes");
@@ -21,7 +21,7 @@ const source = {
 
 describe("node worker upload snapshot scope", () => {
   it.each([false, true])(
-    "scopes frozen literal paths and hardlinks through an alias (upload fails: %s)",
+    "freezes literal paths and aliased hardlinks (upload fails: %s)",
     async (fails) => {
       const root = tempDirs.make("worker-upload-snapshot-");
       const workspaceDir = path.join(root, "workspace");
@@ -35,7 +35,7 @@ describe("node worker upload snapshot scope", () => {
       let readAfterScope: (() => Promise<void>) | undefined;
       const failure = new Error("upload failed");
 
-      const uploading = withNodeWorkerUploadSnapshot(
+      const uploading = withSnapshot(
         { workspaceDir: alias, sources: [{ ...source, path: sourcePath }] },
         async (snapshot) => {
           const file = snapshot.files[0]!;
@@ -56,11 +56,7 @@ describe("node worker upload snapshot scope", () => {
         },
       );
 
-      if (fails) {
-        await expect(uploading).rejects.toBe(failure);
-      } else {
-        await expect(uploading).resolves.toBe("uploaded");
-      }
+      await expect(uploading)[fails ? "rejects" : "resolves"].toBe(fails ? failure : "uploaded");
       await expect(readAfterScope!()).rejects.toThrow();
       await expect(fs.readFile(sharedFile)).resolves.toEqual(
         fails ? content : Buffer.from("later workspace edit"),
@@ -71,18 +67,12 @@ describe("node worker upload snapshot scope", () => {
   it("accepts an empty source list while still requiring the workspace to exist", async () => {
     const workspaceDir = tempDirs.make("worker-upload-empty-");
     const upload = vi.fn(async (snapshot: { files: unknown[] }) => snapshot.files);
+    const run = (dir = workspaceDir) => withSnapshot({ workspaceDir: dir, sources: [] }, upload);
 
-    await expect(
-      withNodeWorkerUploadSnapshot({ workspaceDir, sources: [] }, upload),
-    ).resolves.toEqual([]);
+    await expect(run()).resolves.toEqual([]);
     expect(upload).toHaveBeenCalledOnce();
     upload.mockClear();
-    await expect(
-      withNodeWorkerUploadSnapshot(
-        { workspaceDir: path.join(workspaceDir, "missing"), sources: [] },
-        upload,
-      ),
-    ).rejects.toThrow();
+    await expect(run(path.join(workspaceDir, "missing"))).rejects.toThrow();
     expect(upload).not.toHaveBeenCalled();
   });
 
@@ -95,10 +85,7 @@ describe("node worker upload snapshot scope", () => {
     const upload = vi.fn(async () => undefined);
 
     await expect(
-      withNodeWorkerUploadSnapshot(
-        { workspaceDir, sources: [source], signal: controller.signal },
-        upload,
-      ),
+      withSnapshot({ workspaceDir, sources: [source], signal: controller.signal }, upload),
     ).rejects.toBe(cancelled);
     expect(upload).not.toHaveBeenCalled();
     await expect(fs.readFile(path.join(workspaceDir, source.path))).resolves.toEqual(content);
@@ -134,9 +121,8 @@ describe("node worker upload snapshot scope", () => {
       }
       return handle;
     });
-    const operation = withNodeWorkerUploadSnapshot(
-      { workspaceDir, sources: [source] },
-      (snapshot) => snapshot.stream(snapshot.files[0]!, write, controller.signal),
+    const operation = withSnapshot({ workspaceDir, sources: [source] }, (snapshot) =>
+      snapshot.stream(snapshot.files[0]!, write, controller.signal),
     );
     try {
       await withinTest(

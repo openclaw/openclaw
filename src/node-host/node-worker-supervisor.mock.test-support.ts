@@ -111,19 +111,12 @@ vi.mock("./node-worker-launch-transport.js", () => ({
 }));
 
 // Re-exports evaluate dependencies before Vitest installs these mocks.
-const { NodeWorkerCapacity } = await import("./node-worker-capacity.js");
-const { NodeWorkerContainerLifecycle } = await import("./node-worker-container-lifecycle.js");
-const { NodeWorkerJournalWorker } = await import("./node-worker-journal-worker.js");
-const { NodeWorkerLaunchStore } = await import("./node-worker-launch-store.js");
-const { createNodeWorkerLaunchRecovery } = await import("./node-worker-supervisor-recovery.js");
-const { createNodeWorkerSupervisor } = await import("./node-worker-supervisor.js");
-
-export {
-  NodeWorkerCapacity,
-  NodeWorkerContainerLifecycle,
-  NodeWorkerJournalWorker,
-  NodeWorkerLaunchStore,
-  createNodeWorkerLaunchRecovery,
-  createNodeWorkerSupervisor,
-  mocks,
-};
+export const { NodeWorkerCapacity } = await import("./node-worker-capacity.js");
+export const { NodeWorkerContainerLifecycle } =
+  await import("./node-worker-container-lifecycle.js");
+export const { NodeWorkerJournalWorker } = await import("./node-worker-journal-worker.js");
+export const { NodeWorkerLaunchStore } = await import("./node-worker-launch-store.js");
+export const { createNodeWorkerLaunchRecovery } =
+  await import("./node-worker-supervisor-recovery.js");
+export const { createNodeWorkerSupervisor } = await import("./node-worker-supervisor.js");
+export { mocks };

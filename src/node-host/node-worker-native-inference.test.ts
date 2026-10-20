@@ -34,21 +34,17 @@ function model(id: string, headers?: Record<string, string>) {
   };
 }
 
-function config(overrides: Partial<ModelProviderConfig> = {}): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        "provider-1": {
-          apiKey: credential,
-          api: "openai-completions",
-          baseUrl: "https://model.example.test/v1",
-          headers: { "x-provider": providerHeader },
-          models: [model("model-1"), model("model-2", { "x-model": modelHeader })],
-          ...overrides,
-        },
-      },
-    },
+function snapshot(overrides: Partial<ModelProviderConfig> = {}, platform?: NodeJS.Platform) {
+  const provider: ModelProviderConfig = {
+    apiKey: credential,
+    api: "openai-completions",
+    baseUrl: "https://model.example.test/v1",
+    headers: { "x-provider": providerHeader },
+    models: [model("model-1"), model("model-2", { "x-model": modelHeader })],
+    ...overrides,
   };
+  const config: OpenClawConfig = { models: { providers: { "provider-1": provider } } };
+  return snapshotNodeWorkerNativeInference(config, {}, platform);
 }
 
 function descriptor(modelId = "model-1", workspace = tempDirs.make("node-native-")) {
@@ -63,28 +59,23 @@ function descriptor(modelId = "model-1", workspace = tempDirs.make("node-native-
 
 describe("node worker inference config projection", () => {
   it("uses the canonical custom-provider API default", () => {
-    const snapshot = snapshotNodeWorkerNativeInference(config({ api: undefined }), {})!;
-    const startup = projectNodeWorkerNativeInference(snapshot, descriptor());
+    const startup = projectNodeWorkerNativeInference(snapshot({ api: undefined })!, descriptor());
     expect(startup.config.models[0]?.api).toBe("openai-completions");
   });
 
   it("accepts an empty provider header map", () => {
-    expect(
-      snapshotNodeWorkerNativeInference(config({ headers: {}, models: [model("model-1")] }), {}),
-    ).toBeDefined();
+    expect(snapshot({ headers: {}, models: [model("model-1")] })).toBeDefined();
   });
 
   it("rejects a selected model that is absent from the node config", () => {
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    expect(() => projectNodeWorkerNativeInference(snapshot, descriptor("missing"))).toThrow(
+    expect(() => projectNodeWorkerNativeInference(snapshot()!, descriptor("missing"))).toThrow(
       "Configure it under models.providers with a usable credential in the node openclaw.json",
     );
   });
 
   it("captures credentials and header bytes for child diagnostics", () => {
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
     const assignment = descriptor();
-    expect(new Set(nodeWorkerLaunchSecrets(assignment, snapshot))).toEqual(
+    expect(new Set(nodeWorkerLaunchSecrets(assignment, snapshot()))).toEqual(
       new Set([assignment.admission.credential, credential, providerHeader, modelHeader]),
     );
   });
@@ -96,12 +87,12 @@ describe("node worker inference config projection", () => {
       { api: "azure-openai-responses" as const },
       { api: "google-vertex" as const, apiKey: "gcp-vertex-credentials" },
     ]) {
-      expect(snapshotNodeWorkerNativeInference(config(overrides), {})).toBeUndefined();
+      expect(snapshot(overrides)).toBeUndefined();
     }
   });
 
   it("does not advertise worker-local inference on Windows", () => {
-    expect(snapshotNodeWorkerNativeInference(config(), {}, "win32")).toBeUndefined();
+    expect(snapshot({}, "win32")).toBeUndefined();
   });
 
   it("canonicalizes the exact assigned workspace instead of granting a parent tree", () => {
@@ -110,9 +101,8 @@ describe("node worker inference config projection", () => {
     fs.mkdirSync(workspace);
     const link = path.join(root, "workspace-link");
     fs.symlinkSync(workspace, link, "junction");
-    const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
     const assignment = descriptor("model-1", link);
-    const startup = projectNodeWorkerNativeInference(snapshot, assignment);
+    const startup = projectNodeWorkerNativeInference(snapshot()!, assignment);
     expect(startup.config.workspace).toBe(fs.realpathSync(workspace));
     expect(() => assertNativeInferenceAssignment(startup, assignment)).not.toThrow();
   });
