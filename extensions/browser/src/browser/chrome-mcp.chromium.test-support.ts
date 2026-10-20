@@ -40,18 +40,10 @@ export async function withMcpBrowser(
     },
   );
   try {
-    await run({
-      profile,
-      profileName,
-      context,
-      page: context.pages()[0] ?? (await context.newPage()),
-    });
+    const page = context.pages()[0] ?? (await context.newPage());
+    await run({ profile, profileName, context, page });
   } finally {
-    try {
-      await closeChromeMcpSession(profileName);
-    } finally {
-      await context.close();
-    }
+    await closeChromeMcpSession(profileName).finally(() => context.close());
   }
 }
 
