@@ -23,9 +23,7 @@ it.each([
   const globalRoot = path.join(base, "prefix/lib/node_modules");
   const packageRoot = path.join(globalRoot, "openclaw");
   await writePackageRoot(packageRoot, "1.0.0");
-  const message = scenario.refused
-    ? "Schema change was not applied. Use an independent shell for the manual update."
-    : "optional dependency build failed";
+  const message = scenario.refused ? "schema refused" : "optional build failed";
   const installs: string[][] = [];
   const result = await runGlobalPackageUpdateSteps({
     ...createNpmUpdateOptions(globalRoot),
@@ -60,27 +58,20 @@ it.each([
             }`,
           );
           const script = path.join(stagedRoot, "scripts/postinstall-bundled-plugins.mjs");
-          const child = spawnSync(
-            process.execPath,
-            [
-              "--input-type=module",
-              "--eval",
-              `Object.defineProperty(process, "platform", { value: "win32" });
+          const launch = `Object.defineProperty(process, "platform", { value: "win32" });
               process.argv[1] = ${JSON.stringify(script)};
-              await import(${JSON.stringify(pathToFileURL(script).href)});`,
-            ],
-            {
-              cwd: stagedRoot,
-              encoding: "utf8",
-              timeout: 10_000,
-              env: {
-                ...process.env,
-                OPENCLAW_STATE_DIR: path.join(base, "state"),
-                OPENCLAW_UPDATE_IN_PROGRESS: "1",
-                OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
-              },
+              await import(${JSON.stringify(pathToFileURL(script).href)});`;
+          const child = spawnSync(process.execPath, ["--input-type=module", "--eval", launch], {
+            cwd: stagedRoot,
+            encoding: "utf8",
+            timeout: 10_000,
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: path.join(base, "state"),
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
             },
-          );
+          });
           expect(child.error).toBeUndefined();
           expect(child.status, child.stderr).toBe(1);
           return {

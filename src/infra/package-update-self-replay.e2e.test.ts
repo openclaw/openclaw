@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -18,10 +18,12 @@ const stateSchemas = createStateSchemaInlinePlugin();
 async function copyPublicationRuntime(packageRoot: string): Promise<void> {
   const manifest = fileURLToPath(import.meta.resolve("@openclaw/fs-safe/package.json"));
   const require = createRequire(manifest);
-  await fs.cp(path.dirname(manifest), path.join(packageRoot, "node_modules/@openclaw/fs-safe"), {
-    recursive: true,
-    dereference: true,
-  });
+  const copy = (source: string, name: string) =>
+    fs.cp(path.dirname(source), path.join(packageRoot, "node_modules", name), {
+      recursive: true,
+      dereference: true,
+    });
+  await copy(manifest, "@openclaw/fs-safe");
   const metadata = JSON.parse(await fs.readFile(manifest, "utf8")) as {
     optionalDependencies: Record<string, string>;
   };
@@ -35,12 +37,15 @@ async function copyPublicationRuntime(packageRoot: string): Promise<void> {
     } catch {
       continue;
     }
-    await fs.cp(path.dirname(nativeManifest), path.join(packageRoot, "node_modules", name), {
-      recursive: true,
-      dereference: true,
-    });
+    await copy(nativeManifest, name);
   }
 }
+
+const writeManifest = (root: string, version: string) =>
+  fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", version, type: "module" }),
+  );
 
 const runner = `
 import assert from 'node:assert/strict';
@@ -80,85 +85,74 @@ const observed={result,overrides,rollback,loadedFrom:updater.installedDependency
 console.log(JSON.stringify(observed));
 `;
 
-describe("local replay from the installation being replaced", () => {
-  it.each(["success", "doctor failure"])(
-    "%s keeps the updater's external native dependency runtime available",
-    async (scenario) => {
-      await withTestDir({ prefix: "openclaw-self-replay-" }, async (requestedBase) => {
-        const base = await fs.realpath(requestedBase);
-        const packageRoot = path.join(base, "prefix/lib/node_modules/openclaw");
-        const stagedRoot = path.join(base, "stage/lib/node_modules/openclaw");
-        await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "1.0.0", type: "module" }),
-        );
-        await fs.writeFile(path.join(packageRoot, "dist/index.js"), "export {};\n");
-        await build({
-          stdin: {
-            contents:
-              'export { swapStagedPackageInstall } from "./src/infra/package-update-swap.ts"; export const installedDependencyUrl = import.meta.resolve("@openclaw/fs-safe/root");',
-            resolveDir: process.cwd(),
-          },
-          outfile: path.join(packageRoot, "dist/updater.mjs"),
-          bundle: true,
-          platform: "node",
-          format: "esm",
-          target: "node22",
-          plugins: [
-            {
-              name: stateSchemas.name,
-              setup(bundle) {
-                bundle.onLoad({ filter: /./ }, ({ path: modulePath }) => {
-                  const watchFiles: string[] = [];
-                  const result = stateSchemas.load.call(
-                    { addWatchFile: (file) => watchFiles.push(file) },
-                    modulePath,
-                  );
-                  return result
-                    ? { contents: result.code, loader: result.moduleType, watchFiles }
-                    : undefined;
-                });
-              },
-            },
-          ],
-          external: ["@openclaw/fs-safe", "@openclaw/fs-safe/*"],
-          banner: {
-            js: 'import { createRequire as createFixtureRequire } from "node:module"; const require = createFixtureRequire(import.meta.url);',
-          },
-          logLevel: "silent",
-        });
-        await copyPublicationRuntime(packageRoot);
-        await writePackageDistInventory(packageRoot);
-        await fs.cp(packageRoot, stagedRoot, { recursive: true });
-        await fs.writeFile(
-          path.join(stagedRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0", type: "module" }),
-        );
-        await fs.writeFile(path.join(packageRoot, "dist/index.js"), "operator edit\n");
-        const { stdout } = await exec(
-          process.execPath,
-          ["--input-type=module", "--eval", runner, base, scenario],
+it.each(["success", "doctor failure"])(
+  "self-replay %s keeps the updater's native dependency available",
+  async (scenario) => {
+    await withTestDir({ prefix: "openclaw-self-replay-" }, async (requestedBase) => {
+      const base = await fs.realpath(requestedBase);
+      const packageRoot = path.join(base, "prefix/lib/node_modules/openclaw");
+      const stagedRoot = path.join(base, "stage/lib/node_modules/openclaw");
+      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+      await writeManifest(packageRoot, "1.0.0");
+      await fs.writeFile(path.join(packageRoot, "dist/index.js"), "export {};\n");
+      await build({
+        stdin: {
+          contents:
+            'export { swapStagedPackageInstall } from "./src/infra/package-update-swap.ts"; export const installedDependencyUrl = import.meta.resolve("@openclaw/fs-safe/root");',
+          resolveDir: process.cwd(),
+        },
+        outfile: path.join(packageRoot, "dist/updater.mjs"),
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        target: "node22",
+        plugins: [
           {
-            cwd: base,
-            env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
-            timeout: 60_000,
-            maxBuffer: 1024 * 1024,
+            name: stateSchemas.name,
+            setup(bundle) {
+              bundle.onLoad({ filter: /./ }, ({ path: modulePath }) => {
+                // This is a one-shot build, not a watched esbuild context.
+                const result = stateSchemas.load.call({ addWatchFile() {} }, modulePath);
+                return result ? { contents: result.code, loader: result.moduleType } : undefined;
+              });
+            },
           },
-        );
-        const observed = JSON.parse(stdout.trim());
-        expect(observed.result.status, stdout).toBe("committed");
-        expect(observed.overrides.status).toBe("applied");
-        expect(observed.overrides.applied).toBe(scenario === "success" ? 2 : 1);
-        expect(observed.index).toBe("operator edit\n");
-        expect(observed.late).toBe(scenario === "success" ? "late edit\n" : null);
-        expect(observed.backupPresent).toBe(false);
-        expect(observed.version).toBe(scenario === "success" ? "2.0.0" : "1.0.0");
-        if (scenario === "doctor failure") {
-          expect(observed.rollback.exitCode).toBe(0);
-        }
+        ],
+        external: ["@openclaw/fs-safe", "@openclaw/fs-safe/*"],
+        banner: {
+          js: 'import { createRequire as createFixtureRequire } from "node:module"; const require = createFixtureRequire(import.meta.url);',
+        },
+        logLevel: "silent",
       });
-    },
-    120_000,
-  );
-});
+      await copyPublicationRuntime(packageRoot);
+      await writePackageDistInventory(packageRoot);
+      await fs.cp(packageRoot, stagedRoot, { recursive: true });
+      await writeManifest(stagedRoot, "2.0.0");
+      await fs.writeFile(path.join(packageRoot, "dist/index.js"), "operator edit\n");
+      const { stdout } = await exec(
+        process.execPath,
+        ["--input-type=module", "--eval", runner, base, scenario],
+        {
+          cwd: base,
+          env: { ...process.env, HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
+          timeout: 60_000,
+          maxBuffer: 1024 * 1024,
+        },
+      );
+      const observed = JSON.parse(stdout.trim());
+      const success = scenario === "success";
+      expect(observed, stdout).toMatchObject({
+        result: { status: "committed" },
+        overrides: { status: "applied", applied: success ? 2 : 1 },
+        index: "operator edit\n",
+        late: success ? "late edit\n" : null,
+        backupPresent: false,
+        version: success ? "2.0.0" : "1.0.0",
+      });
+      if (scenario === "doctor failure") {
+        expect(observed.rollback.exitCode).toBe(0);
+      }
+    });
+  },
+  120_000,
+);

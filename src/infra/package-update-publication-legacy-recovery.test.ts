@@ -48,35 +48,26 @@ it.skipIf(process.platform === "win32").each([
   "settles the legacy $phase record through $action after link-count drift",
   async ({ phase, action }) => {
     // The frozen legacy helper hash predates Bun's per-install SQLite library header.
-    const f = await fixtures.prepare(
-      undefined,
-      undefined,
-      capturePackageActivationRuntime("node", resolveTestNodeExecPath()),
-    );
+    const runtime = capturePackageActivationRuntime("node", resolveTestNodeExecPath());
+    const f = await fixtures.prepare(undefined, undefined, runtime);
     const journal = openPackageActivationJournal(f.anchor);
     const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
     const publishing = phase === "publishing";
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
       const record = journal.read();
-      journal.transition(
-        record,
-        phase,
-        publishing ? { kind: "publish" } : null,
-        fence.assertCurrent,
-        [],
-      );
-      const db = new DatabaseSync(resolvePackageActivationJournalPath(f.anchor));
-      try {
+      const intent = publishing ? { kind: "publish" as const } : null;
+      journal.transition(record, phase, intent, fence.assertCurrent, []);
+      const descriptor = {
+        ...record.descriptor,
+        previous: legacyPackageFingerprint(f.packageRoot),
+        candidate: legacyPackageFingerprint(path.join(f.anchor, "candidate")),
+      };
+      {
+        using db = new DatabaseSync(resolvePackageActivationJournalPath(f.anchor));
         db.prepare("UPDATE package_activation SET descriptor_json = ?").run(
-          JSON.stringify({
-            ...record.descriptor,
-            previous: legacyPackageFingerprint(f.packageRoot),
-            candidate: legacyPackageFingerprint(path.join(f.anchor, "candidate")),
-          }),
+          JSON.stringify(descriptor),
         );
-      } finally {
-        db.close();
       }
       if (publishing) {
         fs.renameSync(f.packageRoot, path.join(f.anchor, "previous"));
@@ -105,16 +96,12 @@ it.skipIf(process.platform === "win32").each([
     ).toBe(publishing ? "2.0.0" : "1.0.0");
     const retained = `${f.anchor}.superseded-${f.operationId}`;
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
-    const db = new DatabaseSync(path.join(retained, "control/operation.sqlite"), {
+    using db = new DatabaseSync(path.join(retained, "control/operation.sqlite"), {
       readOnly: true,
     });
-    try {
-      const row = db.prepare("SELECT phase, intent_json FROM package_activation").get();
-      expect(row?.phase).toBe("superseded");
-      expect(JSON.parse(String(row?.intent_json))).toMatchObject({ settled: true, detail });
-    } finally {
-      db.close();
-    }
+    const row = db.prepare("SELECT phase, intent_json FROM package_activation").get();
+    expect(row?.phase).toBe("superseded");
+    expect(JSON.parse(String(row?.intent_json))).toMatchObject({ settled: true, detail });
   },
 );
 

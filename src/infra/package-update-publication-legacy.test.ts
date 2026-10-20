@@ -36,14 +36,8 @@ async function fixture(selected = "previous", linked = false) {
     },
     warning,
   );
-  return {
-    root,
-    parent,
-    file,
-    legacy,
-    warning,
-    matches: () => matcher.matches(root, fingerprint, root),
-  };
+  const matches = () => matcher.matches(root, fingerprint, root);
+  return { root, parent, file, legacy, warning, matches };
 }
 
 it.skipIf(process.platform === "win32").each(["previous", "candidate"] as const)(

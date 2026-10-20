@@ -35,11 +35,12 @@ function originalReceipt(root: string) {
   return { digest: digest.digest("hex"), identity: `${stat.dev}:${stat.ino}`, version: "1.0.0" };
 }
 
-function fixture(publicModes = false) {
+function fixture(publicModes = false, shared = false) {
   const root = dirs.make("publication-permission-drift-");
   const directory = path.join(root, "dist");
   const manifest = path.join(root, "package.json");
   const payload = path.join(directory, "index.js");
+  const alias = path.join(directory, "shared.js");
   fs.mkdirSync(directory);
   fs.writeFileSync(manifest, '{"name":"openclaw","version":"1.0.0"}\n');
   fs.writeFileSync(payload, "export {};\n");
@@ -51,6 +52,9 @@ function fixture(publicModes = false) {
     );
   }
   fs.symlinkSync("dist/index.js", path.join(root, "entry"));
+  if (shared) {
+    fs.linkSync(payload, alias);
+  }
   const previous = originalReceipt(root);
   const warning = vi.fn();
   const matches = (expected = previous) =>
@@ -58,24 +62,29 @@ function fixture(publicModes = false) {
       { previous, candidate: { ...previous }, helperDigest: "0".repeat(64) },
       warning,
     ).matches(root, expected, root);
-  return { root, directory, manifest, payload, files, previous, warning, matches };
+  const modes = () => files.map((file) => fs.statSync(file).mode & 0o777);
+  return { root, manifest, payload, alias, files, modes, previous, warning, matches };
 }
 
 describe.skipIf(process.platform === "win32")("publication permission drift", () => {
-  it("repairs widened permissions against a pre-fix receipt", async () => {
-    const f = fixture();
-    for (const file of f.files) {
-      fs.chmodSync(file, fs.statSync(file).mode | 0o050);
+  it.each([false, true])("repairs pre-fix permissions once (shared inode=%s)", async (shared) => {
+    const f = fixture(false, shared);
+    for (const file of shared ? [f.payload] : f.files) {
+      fs.chmodSync(file, shared ? 0o644 : fs.statSync(file).mode | 0o050);
     }
+    const chmod = vi.spyOn(fs, "fchmodSync");
     await expect(f.matches()).resolves.toBe(true);
-    expect(f.files.map((file) => fs.statSync(file).mode & 0o777)).toEqual([
-      0o700, 0o700, 0o600, 0o600,
-    ]);
-    expect(f.warning).toHaveBeenCalledTimes(1);
-    expect(f.warning.mock.calls[0]?.[0]).toMatch(/4.*ACL/);
-    // Recovery in a new process must still accept the original serialized receipt.
-    await expect(f.matches({ ...f.previous })).resolves.toBe(true);
-    expect(f.warning).toHaveBeenCalledTimes(1);
+    expect(f.modes()).toEqual([0o700, 0o700, 0o600, 0o600]);
+    if (shared) {
+      expect(chmod).toHaveBeenCalledTimes(1);
+      expect(fs.statSync(f.alias).mode & 0o777).toBe(0o600);
+      expect(fs.readFileSync(f.alias, "utf8")).toBe("export {};\n");
+    } else {
+      expect(f.warning).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/4.*ACL/));
+      // A fresh matcher must still accept the original serialized receipt.
+      await expect(f.matches({ ...f.previous })).resolves.toBe(true);
+      expect(f.warning).toHaveBeenCalledTimes(1);
+    }
   });
 
   it.each(["bytes", "owner-mode", "inode", "target"])(
@@ -111,26 +120,6 @@ describe.skipIf(process.platform === "win32")("publication permission drift", ()
     expect(fs.statSync(f.payload).mode & 0o777).toBe(0o644);
   });
 
-  it("repairs a shared inode without mistaking its own chmod for drift", async () => {
-    const f = fixture();
-    const alias = path.join(f.directory, "shared.js");
-    fs.linkSync(f.payload, alias);
-    const previous = originalReceipt(f.root);
-    fs.chmodSync(f.payload, 0o644);
-    const chmod = vi.spyOn(fs, "fchmodSync");
-    const matcher = createPackagePublicationTreeMatcher(
-      { previous, candidate: { ...previous }, helperDigest: "0".repeat(64) },
-      f.warning,
-    );
-
-    await expect(matcher.matches(f.root, previous, f.root)).resolves.toBe(true);
-    expect(chmod).toHaveBeenCalledTimes(1);
-    expect([f.payload, alias].map((file) => fs.statSync(file).mode & 0o777)).toEqual([
-      0o600, 0o600,
-    ]);
-    expect(fs.readFileSync(alias, "utf8")).toBe("export {};\n");
-  });
-
   it.skipIf(process.platform !== "linux")("repairs a recursive named-user POSIX ACL", async () => {
     const f = fixture();
     execFileSync("setfacl", ["-R", "-m", "u:65534:rX", f.root]);
@@ -150,7 +139,8 @@ describe.skipIf(process.platform === "win32")("publication permission drift", ()
       throw Object.assign(new Error("read-only filesystem"), { code: "EROFS" });
     });
     await expect(f.matches()).resolves.toBe(true);
-    expect(f.warning).toHaveBeenCalledTimes(1);
-    expect(f.warning.mock.calls[0]?.[0]).toContain("Could not tighten 1 objects");
+    expect(f.warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Could not tighten 1 objects"),
+    );
   });
 });
