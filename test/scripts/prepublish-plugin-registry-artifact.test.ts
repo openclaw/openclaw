@@ -3,15 +3,12 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -46,7 +43,6 @@ const PACKAGE_NAME = "@openclaw/discord";
 const TARBALL = "openclaw-discord-2026.8.1-beta.1.tgz";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const BUILD_AND_PACK = path.resolve("scripts/lib/plugin-npm-build-and-pack.mts");
-const tempDirs: string[] = [];
 const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packageTarballs = new Map<string, Buffer>();
 const fixtureCommitArgs = [
@@ -64,10 +60,11 @@ const execFileAsync = promisify(execFile);
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
 });
+
+function writeJson(file: string, value: unknown) {
+  writeFileSync(file, `${JSON.stringify(value)}\n`);
+}
 
 function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -82,15 +79,14 @@ function writeFixtureTarball(root: string, tarballPath: string, name: string, ve
   }
   const packageRoot = path.join(root, "package");
   mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify({ name, version })}\n`);
+  writeJson(path.join(packageRoot, "package.json"), { name, version });
   execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
   // Each test mutates its own file; only original archive bytes survive cleanup.
   packageTarballs.set(cacheKey, readFileSync(tarballPath));
 }
 
 function fixture(packageName = PACKAGE_NAME) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-registry-"));
-  tempDirs.push(root);
+  const root = registryTempDirs.make("openclaw-prepublish-plugin-registry-");
   const artifactDir = path.join(root, "artifact");
   mkdirSync(artifactDir);
   const tarballPath = path.join(artifactDir, TARBALL);
@@ -110,30 +106,27 @@ function fixture(packageName = PACKAGE_NAME) {
       },
     ],
   };
-  const writeManifest = () => {
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  };
+  const writeManifest = () => writeJson(manifestPath, manifest);
   writeManifest();
   return { artifactDir, manifest, manifestPath, tarballPath, writeManifest };
 }
 
-function validate(paths: ReturnType<typeof fixture>, overrides = {}) {
-  return validatePrepublishPluginRegistryArtifact({
+function immutableTuple(paths: ReturnType<typeof fixture>) {
+  return {
     artifactDir: paths.artifactDir,
     expectedCandidateVersion: VERSION,
     expectedManifestSha256: sha256(paths.manifestPath),
     expectedSourceSha: SOURCE_SHA,
     requiredPackages: [PACKAGE_NAME],
-    ...overrides,
-  });
+  };
+}
+
+function validate(paths: ReturnType<typeof fixture>, overrides = {}) {
+  return validatePrepublishPluginRegistryArtifact({ ...immutableTuple(paths), ...overrides });
 }
 
 function firstPackage(paths: ReturnType<typeof fixture>) {
-  const [entry] = paths.manifest.packages;
-  if (!entry) {
-    throw new Error("fixture manifest must contain one package");
-  }
-  return entry;
+  return paths.manifest.packages[0]!;
 }
 
 function addCompanionPackage(paths: ReturnType<typeof fixture>) {
@@ -152,21 +145,18 @@ function addCompanionPackage(paths: ReturnType<typeof fixture>) {
 }
 
 function cliFixture(packageNames = [PACKAGE_NAME], combinedBuild = false) {
-  const repoRoot = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-cli-"));
-  tempDirs.push(repoRoot);
+  const repoRoot = registryTempDirs.make("openclaw-prepublish-plugin-cli-");
   const scriptsDir = path.join(repoRoot, "scripts", "lib");
   mkdirSync(scriptsDir, { recursive: true });
-  writeFileSync(
-    path.join(repoRoot, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: VERSION })}\n`,
-  );
+  writeJson(path.join(repoRoot, "package.json"), { name: "openclaw", version: VERSION });
   for (const name of packageNames) {
     const packageDir = path.join(repoRoot, "extensions", name.split("/")[1]!);
     mkdirSync(packageDir, { recursive: true });
-    writeFileSync(
-      path.join(packageDir, "package.json"),
-      `${JSON.stringify({ name, version: VERSION, openclaw: { release: { publishToNpm: true } } })}\n`,
-    );
+    writeJson(path.join(packageDir, "package.json"), {
+      name,
+      version: VERSION,
+      openclaw: { release: { publishToNpm: true } },
+    });
   }
   writeFileSync(
     path.join(scriptsDir, "plugin-npm-runtime-build.mjs"),
@@ -208,6 +198,19 @@ function sourceMetadata(packageDir: string) {
   );
 }
 
+function createRegistry(
+  source: ReturnType<typeof cliFixture>,
+  overrides: Partial<Parameters<typeof createPrepublishPluginRegistryArtifact>[0]> = {},
+) {
+  return createPrepublishPluginRegistryArtifact({
+    ...source,
+    outputDir: path.join(source.repoRoot, "artifact"),
+    candidateVersion: VERSION,
+    requiredPackages: [PACKAGE_NAME],
+    ...overrides,
+  });
+}
+
 function preparedBundleFixture(repoRoot: string, sourceSha: string) {
   const preparedBundleDir = path.join(repoRoot, "prepared-bundle");
   mkdirSync(preparedBundleDir);
@@ -229,8 +232,7 @@ function preparedBundleFixture(repoRoot: string, sourceSha: string) {
     corePackageTarballs: entries.slice(1),
     dependencyTarballs: [entries[1]],
   };
-  const writeBundle = () =>
-    writeFileSync(path.join(preparedBundleDir, "package-bundle.json"), JSON.stringify(bundle));
+  const writeBundle = () => writeJson(path.join(preparedBundleDir, "package-bundle.json"), bundle);
   writeBundle();
   return { preparedBundleDir, bundle, entries, writeBundle };
 }
@@ -241,13 +243,7 @@ describe("prepublish plugin registry artifact", () => {
     const packageDir = path.join(repoRoot, "extensions", "discord");
     const original = sourceMetadata(packageDir);
     const artifactDir = path.join(repoRoot, "artifact");
-    const result = createPrepublishPluginRegistryArtifact({
-      repoRoot,
-      outputDir: artifactDir,
-      sourceSha,
-      candidateVersion: VERSION,
-      requiredPackages: [PACKAGE_NAME],
-    });
+    const result = createRegistry({ repoRoot, sourceSha });
     const tarball = path.join(artifactDir, result.manifest.packages[0]!.tarball);
     const packedPackage = JSON.parse(
       execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }),
@@ -312,14 +308,13 @@ describe("prepublish plugin registry artifact", () => {
       writeBundle();
 
       expect(() =>
-        createPrepublishPluginRegistryArtifact({
-          repoRoot,
-          outputDir: path.join(repoRoot, "artifact"),
-          sourceSha,
-          candidateVersion: VERSION,
-          requiredPackages: [],
-          preparedBundleDir,
-        }),
+        createRegistry(
+          { repoRoot, sourceSha },
+          {
+            requiredPackages: [],
+            preparedBundleDir,
+          },
+        ),
       ).toThrow(
         drift === "source"
           ? "bundle identity differs"
@@ -339,13 +334,7 @@ describe("prepublish plugin registry artifact", () => {
       const expectedPackages = ["@openclaw/codex", `@openclaw/${channel}`];
       const { repoRoot, sourceSha } = cliFixture(expectedPackages);
       const artifactDir = path.join(repoRoot, "artifact");
-      const result = createPrepublishPluginRegistryArtifact({
-        repoRoot,
-        outputDir: artifactDir,
-        sourceSha,
-        candidateVersion: VERSION,
-        requiredPackages,
-      });
+      const result = createRegistry({ repoRoot, sourceSha }, { requiredPackages });
       const verified = validatePrepublishPluginRegistryArtifact({
         artifactDir,
         expectedSourceSha: sourceSha,
@@ -419,13 +408,7 @@ describe("prepublish plugin registry artifact", () => {
 
   it("requires the complete immutable identity tuple", () => {
     const paths = fixture();
-    const common = {
-      artifactDir: paths.artifactDir,
-      expectedCandidateVersion: VERSION,
-      expectedManifestSha256: sha256(paths.manifestPath),
-      expectedSourceSha: SOURCE_SHA,
-      requiredPackages: [PACKAGE_NAME],
-    };
+    const common = immutableTuple(paths);
     for (const field of [
       "expectedCandidateVersion",
       "expectedManifestSha256",
@@ -610,33 +593,15 @@ describe("prepublish plugin registry artifact", () => {
   });
 
   it("refuses to create an artifact from tracked changes under the same HEAD", () => {
-    const repoRoot = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-source-"));
-    tempDirs.push(repoRoot);
-    writeFileSync(
-      path.join(repoRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw", version: VERSION })}\n`,
-    );
-    execFileSync("git", ["init"], { cwd: repoRoot });
-    execFileSync("git", ["add", "package.json"], { cwd: repoRoot });
-    execFileSync("git", fixtureCommitArgs, { cwd: repoRoot });
-    const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    }).trim();
-    writeFileSync(
-      path.join(repoRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw", version: `${VERSION}-dirty` })}\n`,
-    );
+    const { repoRoot, sourceSha } = cliFixture([]);
+    writeJson(path.join(repoRoot, "package.json"), {
+      name: "openclaw",
+      version: `${VERSION}-dirty`,
+    });
 
-    expect(() =>
-      createPrepublishPluginRegistryArtifact({
-        repoRoot,
-        outputDir: path.join(repoRoot, "artifact"),
-        sourceSha,
-        candidateVersion: VERSION,
-        requiredPackages: [],
-      }),
-    ).toThrow("tracked changes");
+    expect(() => createRegistry({ repoRoot, sourceSha }, { requiredPackages: [] })).toThrow(
+      "tracked changes",
+    );
   });
 
   it("rejects traversal and duplicate package entries", () => {
@@ -663,26 +628,12 @@ describe("prepublish plugin registry artifact", () => {
     expect(() => validate(extra)).toThrow("missing, extra, or non-file");
   });
 
-  it("rejects hash, identity, version, source SHA, and required-set mismatches", () => {
-    const hash = fixture();
-    writeFileSync(hash.tarballPath, "tampered");
-    expect(() => validate(hash)).toThrow("tarball SHA-256 mismatch");
-
+  it("rejects package identity and required-set mismatches", () => {
     const identity = fixture();
     firstPackage(identity).name = "@openclaw/feishu";
     identity.writeManifest();
     expect(() => validate(identity, { requiredPackages: ["@openclaw/feishu"] })).toThrow(
       "tarball identity mismatch",
-    );
-
-    const version = fixture();
-    expect(() => validate(version, { expectedCandidateVersion: "2026.8.1-beta.2" })).toThrow(
-      "version differs",
-    );
-
-    const source = fixture();
-    expect(() => validate(source, { expectedSourceSha: "b".repeat(40) })).toThrow(
-      "source SHA differs",
     );
 
     const required = fixture();

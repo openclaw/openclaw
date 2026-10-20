@@ -8,9 +8,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const validator = join(process.cwd(), "scripts/pr-lib/review-transition-state.mjs");
 
 function git(root: string, ...args: string[]) {
-  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
-  expect(result.status, result.stdout + result.stderr).toBe(0);
+  const result = runGit(root, args);
   return result.stdout.trim();
+}
+
+function runGit(root: string, args: string[], status = 0, env = process.env) {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8", env });
+  expect(result.status, result.stdout + result.stderr).toBe(status);
+  return result;
 }
 
 function conflictFixture(renamed = false) {
@@ -40,11 +45,7 @@ function conflictFixture(renamed = false) {
 
 function mergedFixture(renamed = false) {
   const { root, target, pathname, context } = conflictFixture(renamed);
-  const merge = spawnSync("git", ["merge", "--no-edit", "main"], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  expect(merge.status, merge.stdout + merge.stderr).toBe(1);
+  runGit(root, ["merge", "--no-edit", "main"], 1);
   expect(git(root, "ls-files", "--unmerged").split("\n")).toHaveLength(3);
   writeFileSync(join(root, pathname), `resolved\n${context}`);
   git(root, "add", pathname);
@@ -56,17 +57,11 @@ function mergedFixture(renamed = false) {
 function rebasedFixture() {
   const { root, target } = conflictFixture();
   const original = git(root, "rev-parse", "HEAD");
-  const rebase = spawnSync("git", ["rebase", "main"], { cwd: root, encoding: "utf8" });
-  expect(rebase.status, rebase.stdout + rebase.stderr).toBe(1);
+  runGit(root, ["rebase", "main"], 1);
   expect(git(root, "ls-files", "--unmerged").split("\n")).toHaveLength(3);
   writeFileSync(join(root, "conflict.txt"), "resolved\n");
   git(root, "add", "conflict.txt");
-  const continued = spawnSync("git", ["rebase", "--continue"], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, GIT_EDITOR: "true" },
-  });
-  expect(continued.status, continued.stdout + continued.stderr).toBe(0);
+  runGit(root, ["rebase", "--continue"], 0, { ...process.env, GIT_EDITOR: "true" });
   expect(git(root, "ls-files", "--resolve-undo").split("\n")).toHaveLength(3);
   expect(git(root, "rev-parse", "ORIG_HEAD")).toBe(original);
   return { root, target };
@@ -110,24 +105,15 @@ describe("native transition of committed conflict resolutions", () => {
     },
   );
 
-  it.each([false, true])(
-    "accepts committed merge undo without changing the index (followup=%s)",
-    (followup) => {
-      const { root, target } = mergedFixture();
-      if (followup) {
-        writeFileSync(join(root, "repair.txt"), "subsequent compile repair\n");
-        git(root, "add", "repair.txt");
-        git(root, "commit", "-m", "followup");
-      }
-      const result = validate(root, target);
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-    },
-  );
-
-  it.each([false, true])(
-    "accepts committed rebase undo without changing the index (followup=%s)",
-    (followup) => {
-      const { root, target } = rebasedFixture();
+  it.each([
+    { operation: "merge", make: mergedFixture, followup: false },
+    { operation: "merge", make: mergedFixture, followup: true },
+    { operation: "rebase", make: rebasedFixture, followup: false },
+    { operation: "rebase", make: rebasedFixture, followup: true },
+  ])(
+    "accepts committed $operation undo without changing the index (followup=$followup)",
+    ({ make, followup }) => {
+      const { root, target } = make();
       if (followup) {
         writeFileSync(join(root, "repair.txt"), "subsequent compile repair\n");
         git(root, "add", "repair.txt");
