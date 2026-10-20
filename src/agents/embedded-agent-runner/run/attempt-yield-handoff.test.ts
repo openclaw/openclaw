@@ -1,4 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
@@ -75,14 +77,7 @@ describe("sessions_yield transcript handoff", () => {
         expect(manager.getAppendParentId()).toBe(seed.getAppendParentId());
         const { session } = await createTestSession({ sessionManager: manager });
         const user: AgentMessage = { role: "user", content: "Continue the task", timestamp: 1 };
-        const toolResult: AgentMessage = {
-          role: "toolResult",
-          toolCallId: "yield-call",
-          toolName: "sessions_yield",
-          content: [{ type: "text", text: "yielded" }],
-          isError: false,
-          timestamp: 2,
-        };
+        const toolResult = makeTextToolResult("yield-call", "sessions_yield", "yielded", false, 2);
         const aborted = createAssistant(testModel, [], "aborted");
         manager.appendMessage(user);
         manager.appendMessage(toolResult);
@@ -119,11 +114,7 @@ describe("sessions_yield transcript handoff", () => {
           expect(messages[0]).toMatchObject({ content: "Continue the task" });
           if (metadataId) {
             const retained = loadTranscriptEventsSync(target).find(
-              (entry) =>
-                typeof entry === "object" &&
-                entry !== null &&
-                "id" in entry &&
-                entry.id === metadataId,
+              (entry) => isRecord(entry) && entry.id === metadataId,
             );
             expect(JSON.stringify(retained).includes(metadata.text)).toBe(true);
           }

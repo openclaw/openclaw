@@ -2,13 +2,14 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
 import {
   normalizeCompactionRecoveryTranscriptTail,
@@ -24,6 +25,30 @@ const MID_TURN_PRECHECK_ERROR_MESSAGE = new MidTurnPrecheckSignal({
   toolResultReducibleChars: 0,
   effectiveReserveTokens: 100,
 }).message;
+
+function precheckError(content: Parameters<typeof makeAgentAssistantMessage>[0]["content"] = []) {
+  return makeAgentAssistantMessage({
+    content,
+    stopReason: "error",
+    errorMessage: MID_TURN_PRECHECK_ERROR_MESSAGE,
+    timestamp: 2,
+  });
+}
+
+function withRecovery(
+  run: (target: SessionTranscriptRuntimeTarget, manager: SessionManager) => Promise<void>,
+) {
+  return withOpenClawTestState({ label: "transcript-recovery" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "recovery",
+      sessionKey: "agent:main:recovery",
+      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await run(target, await SessionManager.openAsync(target, state.workspaceDir));
+  });
+}
 
 function interceptTranscriptCommit(databasePath: string, onCommit: () => void) {
   return probe.admission(workerAdmission, (request, grant, admit) => {
@@ -46,27 +71,9 @@ function interceptTranscriptCommit(databasePath: string, onCommit: () => void) {
 it.each(["yield", "precheck", "compaction"])(
   "publishes %s recovery only after the transcript rewrite commits",
   async (recovery) => {
-    await withOpenClawTestState({ label: "transcript-recovery" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "recovery",
-        sessionKey: "agent:main:recovery",
-        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const sessionManager = await SessionManager.openAsync(target, state.workspaceDir);
+    await withRecovery(async (target, sessionManager) => {
       const user: AgentMessage = { role: "user", content: "continue", timestamp: 1 };
-      const error: AgentMessage = {
-        role: "assistant",
-        content: [],
-        api: "openai-responses",
-        provider: "openai",
-        model: "test-model",
-        stopReason: "error",
-        errorMessage: MID_TURN_PRECHECK_ERROR_MESSAGE,
-        timestamp: 2,
-        usage: createZeroUsageFixture(),
-      };
+      const error = precheckError();
       await sessionManager.appendMessageAsync(user);
       await sessionManager.appendMessageAsync(error);
       await sessionManager.appendCustomEntryAsync("preserved-state", { retained: true });
@@ -106,31 +113,12 @@ it.each(["yield", "precheck", "compaction"])(
 );
 
 it("keeps a mid-turn routing error out of durable history and resumes without a rewrite", async () => {
-  await withOpenClawTestState({ label: "precheck-no-rewrite" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "precheck-no-rewrite",
-      sessionKey: "agent:main:precheck-no-rewrite",
-      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const sessionManager = guardSessionManager(
-      await SessionManager.openAsync(target, state.workspaceDir),
-    );
+  await withRecovery(async (target, manager) => {
+    const sessionManager = guardSessionManager(manager);
     const user: AgentMessage = { role: "user", content: "continue", timestamp: 1 };
     await sessionManager.appendMessageAsync(user);
     const before = (await SessionManager.openAsync(target)).getEntries();
-    const error: AgentMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-      api: "openai-responses",
-      provider: "openai",
-      model: "test-model",
-      stopReason: "error",
-      errorMessage: MID_TURN_PRECHECK_ERROR_MESSAGE,
-      timestamp: 2,
-      usage: createZeroUsageFixture(),
-    };
+    const error = precheckError([{ type: "text", text: "" }]);
     await sessionManager.appendMessageAsync(error);
     expect((await SessionManager.openAsync(target)).getEntries()).toEqual(before);
     const activeSession = { agent: { state: { messages: [user, error] } } };

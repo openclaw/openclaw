@@ -62,13 +62,8 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
         );
       },
     });
-    let releaseWrite = () => {};
-    const writeGate = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    const write = lifecycle.withTranscriptWrite(async () => {
-      await writeGate;
-    });
+    const writeGate = createDeferredCore();
+    const write = lifecycle.withTranscriptWrite(() => writeGate.promise);
     const cleanup = lifecycle.beginCleanup();
 
     let cleanupSettled = false;
@@ -78,7 +73,7 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
     await Promise.resolve();
     expect(cleanupSettled).toBe(false);
 
-    releaseWrite();
+    writeGate.resolve();
     await expect(write).resolves.toBeUndefined();
     await expect(cleanup).resolves.toBeUndefined();
     await expect(lifecycle.withTranscriptWrite(() => undefined)).rejects.toThrow(
@@ -118,15 +113,10 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
       const callbacksReleased = createDeferredCore();
       const releaseCallbacks = vi.fn(() => callbacksReleased.resolve());
       const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ onDrained: releaseOwner });
-      let releaseWrite = () => {};
-      const writeGate = new Promise<void>((resolve) => {
-        releaseWrite = resolve;
-      });
+      const writeGate = createDeferredCore();
       let nestedWrite: Promise<undefined> | undefined;
       const admitted = lifecycle.withTranscriptWrite(async () => {
-        await writeGate; // outlives the teardown budget
-        // Once dispose() returns (budget expired, callback still running), a nested
-        // write from this callback must still be admitted as a descendant.
+        await writeGate.promise; // Outlives the teardown budget; descendants remain admitted.
         nestedWrite = lifecycle.withTranscriptWrite(() => {
           expect(releaseOwner).not.toHaveBeenCalled();
           expect(releaseCallbacks).not.toHaveBeenCalled();
@@ -140,7 +130,7 @@ describe("createEmbeddedAttemptTranscriptLifecycle", () => {
       await disposeDone;
       expect(releaseOwner).not.toHaveBeenCalled();
       expect(releaseCallbacks).not.toHaveBeenCalled();
-      releaseWrite();
+      writeGate.resolve();
       await admitted;
       // Retiring the owner when the budget expires would reject this descendant.
       await expect(nestedWrite).resolves.toBeUndefined();
