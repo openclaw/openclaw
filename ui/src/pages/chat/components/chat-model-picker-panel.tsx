@@ -173,7 +173,7 @@ export function ChatModelPickerPanel(panel: {
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
     const auth = () => panel.params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
-    const authKind = createMemo(() => auth()?.kind);
+    const authKind = () => auth()?.kind;
     const showAuth = createMemo(
       () =>
         Boolean(auth()) &&
@@ -187,9 +187,8 @@ export function ChatModelPickerPanel(panel: {
           )
         ),
     );
-    const authLabel = createMemo(() =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined,
-    );
+    const authLabel = () =>
+      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
     const routeDetail = () => {
       const route = resolveModelRuntimeRoute(props.provider);
       return route ? t(`chat.modelControls.routes.${route}.detail`) : undefined;

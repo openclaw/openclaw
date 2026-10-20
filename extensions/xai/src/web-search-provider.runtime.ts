@@ -163,14 +163,15 @@ function resolveXaiToolSearchConfig(ctx: {
   );
 }
 
-function resolveConfiguredXaiWebSearchCredential(
+function resolveConfiguredXaiWebSearchAuth(
   searchConfig?: Record<string, unknown>,
-): string | undefined {
-  return resolveWebSearchProviderCredential({
+): XaiResolvedWebSearchAuth | undefined {
+  const apiKey = resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
     path: "plugins.entries.xai.config.webSearch.apiKey",
     envVars: [],
   });
+  return apiKey ? { apiKey, mode: "api-key" } : undefined;
 }
 
 function hasConfiguredXaiWebSearchCredentialRef(searchConfig?: Record<string, unknown>): boolean {
@@ -278,9 +279,9 @@ async function resolveXaiWebSearchAuth(
     });
   } catch (error) {
     ctx.signal?.throwIfAborted();
-    const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+    const configured = resolveConfiguredXaiWebSearchAuth(searchConfig);
     if (configured) {
-      return { apiKey: configured, mode: "api-key" };
+      return configured;
     }
     throw error;
   }
@@ -288,12 +289,9 @@ async function resolveXaiWebSearchAuth(
     return providerAuth;
   }
 
-  const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+  const configured = resolveConfiguredXaiWebSearchAuth(searchConfig);
   if (configured) {
-    return {
-      apiKey: configured,
-      mode: "api-key",
-    };
+    return configured;
   }
   if (hasConfiguredXaiWebSearchCredentialRef(searchConfig)) {
     return undefined;
@@ -307,12 +305,9 @@ async function resolveXaiWebSearchApiKeyFallback(
   searchConfig?: Record<string, unknown>,
 ): Promise<XaiResolvedWebSearchAuth | undefined> {
   ctx.signal?.throwIfAborted();
-  const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+  const configured = resolveConfiguredXaiWebSearchAuth(searchConfig);
   if (configured) {
-    return {
-      apiKey: configured,
-      mode: "api-key",
-    };
+    return configured;
   }
   if (hasConfiguredXaiWebSearchCredentialRef(searchConfig)) {
     return undefined;

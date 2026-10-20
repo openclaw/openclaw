@@ -20,7 +20,7 @@ import {
 } from "./reply-dispatch-outcome.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-type ReplyDirectiveParseMode = "always" | "auto" | "never";
+type ReplyDirectiveParseMode = "always" | "auto";
 
 export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
   payload: ReplyPayload;
@@ -49,7 +49,6 @@ export function normalizeReplyPayloadDirectives(params: {
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
   extractMarkdownImages?: boolean;
-  extractMediaDirectives?: boolean;
 }): { payload: ReplyPayload } {
   const parseMode = params.parseMode ?? "always";
   const sourceText = params.payload.text ?? "";
@@ -58,14 +57,13 @@ export function normalizeReplyPayloadDirectives(params: {
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        (params.extractMediaDirectives !== false && /media:/i.test(sourceText)) ||
+        /media:/i.test(sourceText) ||
         (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText))));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
         extractMarkdownImages: params.extractMarkdownImages,
-        extractMediaDirectives: params.extractMediaDirectives,
       })
     : undefined;
 

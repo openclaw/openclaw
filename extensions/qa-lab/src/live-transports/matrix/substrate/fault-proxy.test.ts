@@ -1,6 +1,7 @@
 import { once } from "node:events";
-import { createServer, request } from "node:http";
-import { text } from "node:stream/consumers";
+import { createServer, request as httpRequest } from "node:http";
+import { buffer, text } from "node:stream/consumers";
+import { setImmediate } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildRoomKeyBackupUnavailableFaultRule } from "../scenarios/scenario-runtime-e2ee-room.js";
@@ -9,7 +10,7 @@ import { startMatrixQaFaultProxy } from "./fault-proxy.js";
 const syncPath = "/_matrix/client/v3/sync";
 const backupPath = "/_matrix/client/v3/room_keys/version";
 const forwardedBody = { forwarded: true };
-type ForwardedRequest = { authorization?: string; body: string; method: string; url: string };
+type ForwardedRequest = { authorization?: string; body: Buffer; method: string; url: string };
 const servers: Array<{ close(): Promise<void> }> = [];
 
 async function startTargetServer(params?: {
@@ -21,7 +22,7 @@ async function startTargetServer(params?: {
     void (async () => {
       requests.push({
         ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}),
-        body: await text(req),
+        body: await buffer(req),
         method: req.method ?? "GET",
         url: req.url ?? "/",
       });
@@ -49,8 +50,12 @@ async function startTargetServer(params?: {
   return handle;
 }
 
-function forwardedRequest(url: string, overrides: Partial<ForwardedRequest> = {}) {
-  return { body: "", method: "GET", url, ...overrides };
+function forwardedRequest(
+  url: string,
+  overrides: Partial<Omit<ForwardedRequest, "body">> & { body?: string | Buffer } = {},
+) {
+  const { body = "", ...rest } = overrides;
+  return { body: typeof body === "string" ? Buffer.from(body) : body, method: "GET", url, ...rest };
 }
 function faultHit(method: string, ruleId: string, path = syncPath) {
   return { method, path, ruleId };
@@ -144,11 +149,95 @@ describe("Matrix QA fault proxy", () => {
     expect(target.requests).toHaveLength(1);
   });
 
+  it("forwards opaque binary upload bytes without decoding them", async () => {
+    let observed: Buffer | undefined;
+    const { proxy, target } = await startProxy({
+      onExchange: ({ request }) => {
+        observed = request.body;
+      },
+    });
+    const body = new Uint8Array([0, 255, 128, 195, 40]);
+    await expectReply(
+      await fetch(`${proxy.baseUrl}${syncPath}`, { method: "POST", body }),
+      200,
+      forwardedBody,
+    );
+    expect(observed).toEqual(Buffer.from(body));
+    expect(target.requests).toEqual([
+      forwardedRequest(syncPath, { method: "POST", body: Buffer.from(body) }),
+    ]);
+  });
+
+  it("returns 413 for a chunked overflow before the upload ends", async () => {
+    const { proxy, target } = await startProxy({ maxRequestBytes: 4 });
+    const reply = Promise.withResolvers<{
+      body: string;
+      connection?: string;
+      status?: number;
+    }>();
+    const upload = httpRequest(
+      `${proxy.baseUrl}${syncPath}`,
+      { method: "POST", headers: { "transfer-encoding": "chunked" } },
+      (res) => {
+        void text(res).then(
+          (body) =>
+            reply.resolve({ body, connection: res.headers.connection, status: res.statusCode }),
+          reply.reject,
+        );
+      },
+    );
+    const closed = new Promise<void>((resolve) => {
+      upload.once("close", resolve);
+    });
+    upload.once("error", reply.reject);
+    try {
+      upload.write("12345");
+      const response = await reply.promise;
+      expect([response.status, response.connection]).toEqual([413, "close"]);
+      expect(JSON.parse(response.body)).toMatchObject({
+        errcode: "MATRIX_QA_FAULT_PROXY_REQUEST_TOO_LARGE",
+      });
+      expect(target.requests).toEqual([]);
+    } finally {
+      upload.destroy();
+      await closed;
+    }
+  });
+
+  it("does not forward a truncated upload and still serves the next request", async () => {
+    const { proxy, target } = await startProxy();
+    const upload = httpRequest(`${proxy.baseUrl}${syncPath}`, {
+      method: "POST",
+      headers: { "content-length": "10", expect: "100-continue" },
+    });
+    const closed = new Promise<void>((resolve) => {
+      upload.once("close", resolve);
+    });
+    // The client deliberately tears down the partial upload.
+    upload.on("error", () => undefined);
+    const continuing = once(upload, "continue");
+    upload.flushHeaders();
+    try {
+      await continuing;
+      await new Promise<void>((resolve, reject) => {
+        upload.write("ab", (error) => (error ? reject(error) : resolve()));
+      });
+      await setImmediate();
+      upload.destroy();
+      await closed;
+      await expectReply(await fetch(`${proxy.baseUrl}${syncPath}`), 200, forwardedBody);
+      expect(target.requests).toEqual([forwardedRequest(syncPath)]);
+    } finally {
+      upload.destroy();
+      await closed;
+    }
+  });
+
   it("rejects request targets that resolve outside the configured origin", async () => {
     const { proxy, target } = await startProxy();
     const requestTarget = async (path: string) =>
       await new Promise<{ body: string; status: number | undefined }>((resolve, reject) => {
-        const req = request(proxy.baseUrl, { path }, (res) => {
+        const req = httpRequest(proxy.baseUrl, { path }, (res) => {
           void text(res).then((body) => resolve({ body, status: res.statusCode }), reject);
         });
         req.once("error", reject);

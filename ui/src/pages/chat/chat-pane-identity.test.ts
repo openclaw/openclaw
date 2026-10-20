@@ -26,8 +26,8 @@ import {
   connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
@@ -421,7 +421,7 @@ describe("chat pane approval requester identity", () => {
       allow.click();
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
-      cancelChatStreamRenderFrame(state);
+      chatRunPresentation(state).cancelFrame();
       view.unmount();
       pane.disconnectedCallback();
       container.remove();
@@ -494,7 +494,7 @@ function createGlobalFeaturePane(
   onTestFinished(() => {
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.disconnectedCallback();
-    cancelChatStreamRenderFrame(state);
+    chatRunPresentation(state).cancelFrame();
   });
   const emit = (payload: ProgressCardChangedEvent) => {
     const gateway = context.gateway as ApplicationContext["gateway"] & {

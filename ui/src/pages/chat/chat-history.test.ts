@@ -34,7 +34,6 @@ function createState(history: ChatHistoryResult) {
   vi.spyOn(state.sessions, "listBranches").mockResolvedValue([]);
   return Object.assign(state, {
     connectionEpoch: 1,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
   });
 }

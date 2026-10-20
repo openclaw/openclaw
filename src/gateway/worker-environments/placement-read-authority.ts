@@ -1,15 +1,11 @@
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot, freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   WorkerPlacementRecoveryCandidate,
   WorkerSessionPlacementReadResult,
 } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
-import type {
-  ClaimChange,
-  PlacementAuthorityOwner,
-  RetainedPlacement,
-} from "./placement-turn-authority.types.js";
+import type { ClaimChange, PlacementAuthorityOwner } from "./placement-turn-authority.types.js";
 
 export function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?: string): boolean {
   return [...owner.pending].some((change) => affectsPlacementObservation(change, sessionId));
@@ -33,7 +29,6 @@ export function prunePublication(owner: PlacementAuthorityOwner, sessionId: stri
     !owner.claims.has(sessionId) &&
     !owner.workspaceResults.has(sessionId) &&
     !owner.observations.has(sessionId) &&
-    !owner.placementReaders.has(sessionId) &&
     ![...owner.pending].some((change) => change.sessionId === sessionId)
   ) {
     owner.published.delete(sessionId);
@@ -43,41 +38,8 @@ export function prunePublication(owner: PlacementAuthorityOwner, sessionId: stri
   }
 }
 
-/** Install committed postimages without revoking a destination on ordinary turn claims. */
-export function applyPlacementReadPublication(
-  owner: PlacementAuthorityOwner,
-  change: ClaimChange,
-  sequence: number,
-): void {
-  for (const reader of owner.placementReaders.get(change.sessionId) ?? []) {
-    if (change.kind === "tools") {
-      continue;
-    }
-    reader.revoked ||= change.indeterminate === true;
-    if (sequence <= reader.sequence) {
-      continue;
-    }
-    if (change.kind === "claim") {
-      reader.sequence = sequence;
-      if (change.retired) {
-        reader.placement = undefined;
-      } else if (change.workspacePlacement) {
-        reader.placement = change.workspacePlacement;
-      } else {
-        reader.revoked = true;
-      }
-    } else if (change.kind === "workspace-result" && change.facts) {
-      reader.sequence = sequence;
-      reader.placement = change.facts.placement;
-    } else if (change.kind === "journal" && change.uncertain) {
-      reader.revoked = true;
-    }
-  }
-}
-
 export function retainSessionPlacementRead(
   sessionId: string,
-  placement: WorkerSessionPlacementRecord | undefined,
   captured: {
     owner: PlacementAuthorityOwner;
     authority: { release: () => void };
@@ -85,15 +47,6 @@ export function retainSessionPlacementRead(
   },
 ) {
   const { owner, authority, assertUsable } = captured;
-  const published = owner.placements.get(sessionId);
-  const reader: RetainedPlacement = {
-    placement: freezeJsonSnapshot(published ? published.placement : placement),
-    sequence: owner.sequence,
-    revoked: false,
-  };
-  const readers = owner.placementReaders.get(sessionId) ?? new Set<RetainedPlacement>();
-  readers.add(reader);
-  owner.placementReaders.set(sessionId, readers);
   return {
     prepareRead(this: void): Promise<void> | undefined {
       assertUsable();
@@ -104,11 +57,7 @@ export function retainSessionPlacementRead(
       const settlements = pending.flatMap((change) =>
         change.nativeSettlement ? [change.nativeSettlement] : [],
       );
-      if (
-        reader.revoked ||
-        pending.some((change) => change.indeterminate) ||
-        settlements.length !== pending.length
-      ) {
+      if (pending.some((change) => change.indeterminate) || settlements.length !== pending.length) {
         throw new Error(`Session ${sessionId} placement authority changed`);
       }
       if (settlements.length === 0) {
@@ -117,9 +66,6 @@ export function retainSessionPlacementRead(
       // Join the existing native owner; callers must release synchronous readers first.
       return Promise.all(settlements).then((outcomes) => {
         assertUsable();
-        if (reader.revoked) {
-          throw new Error(`Session ${sessionId} placement authority changed`);
-        }
         for (const outcome of outcomes) {
           if (outcome.kind !== "completed") {
             throw outcome.error;
@@ -129,30 +75,25 @@ export function retainSessionPlacementRead(
     },
     current(this: void) {
       assertUsable();
+      const published = owner.placements.get(sessionId);
       // Result, ACK, and journal writes leave this read's execution target unchanged.
       if (
-        reader.revoked ||
+        !published ||
         [...owner.pending].some(
           (change) => change.kind === "claim" && change.sessionId === sessionId,
         )
       ) {
         throw new Error(`Session ${sessionId} placement authority changed`);
       }
-      return reader.placement;
+      return freezeJsonSnapshot(published.placement);
     },
-    release(this: void) {
-      readers.delete(reader);
-      if (readers.size === 0 && owner.placementReaders.get(sessionId) === readers) {
-        owner.placementReaders.delete(sessionId);
-      }
-      authority.release();
-    },
+    release: authority.release,
   };
 }
 
 type PlacementReadObservation = {
   owner: PlacementAuthorityOwner;
-  observation: { revokedBy: Set<string>; indeterminate: boolean };
+  observation: { revoked: boolean; indeterminate: boolean };
   authority: { assertCurrent: () => void; release: () => void };
   assertUsable: () => void;
 };
@@ -175,10 +116,13 @@ export function retainProjection(
   ) {
     return;
   }
-  owner.projections.set(
-    sessionId,
-    retained === projection ? projection : structuredClone(projection),
-  );
+  if (retained !== projection) {
+    // Internal readers borrow owner facts; public adapters copy only their selected values.
+    freezeTrustedJsonSnapshot(placement);
+    Object.freeze(projection.projection);
+    Object.freeze(projection);
+  }
+  owner.projections.set(sessionId, projection);
   // Cold sessions can always rehydrate; residency is independent of durable ownership.
   if (owner.projections.size > 256) {
     owner.projections.delete(owner.projections.keys().next().value!);
@@ -201,10 +145,10 @@ export function projectCachedLocalPlacementTurnClaim(
   if (!retained) {
     return undefined;
   }
-  return structuredClone({
+  return {
     ...retained.projection,
     placements: new Map(retained.projection.placements).set(placement.sessionId, placement),
-  });
+  };
 }
 
 /** The authority owner retains exact reads until one of its writers publishes a change. */
@@ -224,10 +168,10 @@ export async function readCachedPlacementProjection(
       : (owner.projections.get(sessionId) ?? (await read()));
     signal?.throwIfAborted();
     assertUsable();
-    if (observation.revokedBy.size === 0 && !hasPendingPublication(owner, sessionId)) {
+    if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
       retainProjection(owner, sessionId, value);
     }
-    return structuredClone(value);
+    return value;
   } finally {
     authority.release();
   }
@@ -249,7 +193,7 @@ export async function prepareCachedPlacementPreservationRead(
     const baseline = owner.preservation ?? (await read());
     signal?.throwIfAborted();
     assertUsable();
-    if (observation.revokedBy.size === 0 && !hasPendingPublication(owner)) {
+    if (!observation.revoked && !hasPendingPublication(owner)) {
       owner.preservation = freezeJsonSnapshot(baseline);
     }
     return {
@@ -305,11 +249,7 @@ export async function readCachedPlacementRecoveryCandidates(
       owner.recoveryCandidatesEmpty && !hasPendingPublication(owner) ? [] : await read();
     signal?.throwIfAborted();
     assertUsable();
-    if (
-      candidates.length === 0 &&
-      observation.revokedBy.size === 0 &&
-      !hasPendingPublication(owner)
-    ) {
+    if (candidates.length === 0 && !observation.revoked && !hasPendingPublication(owner)) {
       owner.recoveryCandidatesEmpty = true;
     }
     return candidates;

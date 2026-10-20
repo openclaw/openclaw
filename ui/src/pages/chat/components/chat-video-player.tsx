@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
@@ -124,13 +124,12 @@ function ChatVideoPlayerContent(
   const preparing = () => sourceState.read().readiness === "preparing" && !props.preview;
   const loading = () => props.preview && !frameReady();
   const onExpand = () => (props.onExpand && sourceState.read().readySource ? expand : undefined);
-  const dimensions = createMemo(() =>
+  const dimensions = () =>
     props.mediaWidth && props.mediaHeight
       ? { "aspect-ratio": `${props.mediaWidth} / ${props.mediaHeight}` }
       : props.preview
         ? { "aspect-ratio": "16 / 9" }
-        : {},
-  );
+        : {};
   const Player = () => {
     const copyRef = attachmentContextCopyRef(() => ({ name: props.label, href: downloadHref() }));
     const viewport = createChatAttachmentViewportRef(() => {

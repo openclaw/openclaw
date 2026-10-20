@@ -252,11 +252,11 @@ function normalizeFontFamily(fontFamily?: string): string {
   return normalized || DEFAULT_DIFFS_TOOL_DEFAULTS.fontFamily;
 }
 
-export function normalizeDiffFontSize(fontSize?: number): number {
+function normalizeDiffFontSize(fontSize?: number): number {
   return clampInt(asFiniteNumber(fontSize) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.fontSize, 10, 24);
 }
 
-export function normalizeDiffLineSpacing(lineSpacing?: number): number {
+function normalizeDiffLineSpacing(lineSpacing?: number): number {
   return clampNumber(asFiniteNumber(lineSpacing) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.lineSpacing, 1, 3);
 }
 

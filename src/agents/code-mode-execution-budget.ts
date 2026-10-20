@@ -50,39 +50,29 @@ export async function waitForCodeModePending(
   const pausedAtMs = approvalWait.pausedMs;
   const timeoutMs = Math.max(1, budget.deadlineMs - performance.now());
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
   const settlement = new AbortController();
+  const waitSignal = signal ? AbortSignal.any([signal, settlement.signal]) : settlement.signal;
   try {
-    const bridgeReady = waitForPendingBridgeSettlement(
-      pending,
-      settlementMode,
-      settlement.signal,
-    ).then(() => true);
-    return await Promise.race([
-      bridgeReady,
-      new Promise<boolean>((resolve) => {
-        onAbort = () => resolve(false);
-        signal?.addEventListener("abort", onAbort, { once: true });
-        let remainingMs = timeoutMs;
-        let resumedAtMs = performance.now();
-        const arm = () => {
-          resumedAtMs = performance.now();
-          timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
-        };
-        approvalWait.onChange = (approvalPending) => {
-          if (approvalPending) {
-            // Preserve the unused guest budget while its owning approval remains inline.
-            clearTimeout(timer);
-            remainingMs = Math.max(1, remainingMs - (performance.now() - resumedAtMs));
-          } else {
-            arm();
-          }
-        };
-        if (!approvalWait.pending) {
-          arm();
-        }
-      }),
-    ]);
+    let remainingMs = timeoutMs;
+    let resumedAtMs = performance.now();
+    const arm = () => {
+      resumedAtMs = performance.now();
+      timer = setTimeout(() => settlement.abort(), Math.max(1, remainingMs));
+    };
+    approvalWait.onChange = (approvalPending) => {
+      if (approvalPending) {
+        // Preserve the unused guest budget while its owning approval remains inline.
+        clearTimeout(timer);
+        remainingMs = Math.max(1, remainingMs - (performance.now() - resumedAtMs));
+      } else {
+        arm();
+      }
+    };
+    if (!approvalWait.pending) {
+      arm();
+    }
+    await waitForPendingBridgeSettlement(pending, settlementMode, waitSignal);
+    return !waitSignal.aborted;
   } finally {
     settlement.abort();
     // Credit only approval time actually spent blocked here. A live sibling
@@ -90,9 +80,6 @@ export async function waitForCodeModePending(
     budget.deadlineMs += Math.max(0, approvalWait.pausedMs - pausedAtMs);
     if (timer) {
       clearTimeout(timer);
-    }
-    if (signal && onAbort) {
-      signal.removeEventListener("abort", onAbort);
     }
     approvalWait.onChange = undefined;
   }

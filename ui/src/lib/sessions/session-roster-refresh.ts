@@ -10,14 +10,6 @@ import {
 import { listen } from "../reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults, preserveCurrentSessionRow } from "./reconcile.ts";
-import type {
-  SessionGateway,
-  SessionListOptions,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionRefreshOptions,
-  SessionState,
-} from "./session-capability.ts";
 import { normalizeAgentId } from "./session-key.ts";
 import {
   canApplySessionListSnapshot,
@@ -48,6 +40,14 @@ import { requestSessionList, sessionListQueryKey } from "./session-requests.ts";
 import { createSessionRosterListReader } from "./session-roster-list-reader.ts";
 import { createSessionMutationRefresh } from "./session-roster-mutation-refresh.ts";
 import { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type {
+  SessionGateway,
+  SessionListOptions,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionRefreshOptions,
+  SessionState,
+} from "./session-types.ts";
 
 type SessionRosterRefreshHost = SessionListRefreshHost & {
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
@@ -558,6 +558,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     list: listReader.list,
     listSnapshot: primaryWindows.snapshot,
     subscribeList(scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) {
+      // Subscribers share the capability-owned membership window and its refresh lifecycle.
       return primaryWindows.subscribe(managedList(scope), listener, pageActive);
     },
     observeList: (scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) => {
@@ -630,6 +631,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         host.publish({ ...state, result });
       }
       staged.notify();
+      // Local overlays must settle even if a retained list has not revalidated this connection.
+      for (const entry of managedLists.values()) {
+        const decorated = host.decorate(entry.snapshot.result, entry);
+        if (decorated !== entry.snapshot.result) {
+          publishManagedList(entry, { ...entry.snapshot, result: decorated });
+        }
+      }
     },
     lastOptions: () => lastListOptions,
     retireWarmLists,

@@ -1,22 +1,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
 import type { ProfileContext } from "../server-context.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
-  inspectChromeGraphicsDiagnosticsMock: vi.fn(),
-}));
+const graphics = vi.hoisted(() => ({ endpoint: vi.fn(), read: vi.fn() }));
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
   takeChromeMcpSnapshot: vi.fn(async () => ({})),
 }));
 
-vi.mock("../chrome.graphics.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../chrome.graphics.js")>()),
-  inspectChromeGraphicsDiagnostics: inspectChromeGraphicsDiagnosticsMock,
+vi.mock("../chrome.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../chrome.js")>()),
+  getChromeWebSocketEndpoint: graphics.endpoint,
+}));
+vi.mock("../cdp.helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cdp.helpers.js")>()),
+  withCdpSocket: graphics.read,
 }));
 
 const { BrowserProfileUnavailableError } = await import("../errors.js");
@@ -162,7 +164,8 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 
 describe("basic browser routes", () => {
   beforeEach(() => {
-    inspectChromeGraphicsDiagnosticsMock.mockReset();
+    graphics.endpoint.mockReset();
+    graphics.read.mockReset();
   });
 
   it("reports version drift only from the selected extension profile owner", async () => {
@@ -291,26 +294,44 @@ describe("basic browser routes", () => {
       headlessSource: "request",
       graphics: null,
     });
-    expect(inspectChromeGraphicsDiagnosticsMock).not.toHaveBeenCalled();
+    expect(graphics.endpoint).not.toHaveBeenCalled();
   });
 
   it("retries unavailable graphics diagnostics and caches the first available result", async () => {
+    const clock = vi.spyOn(Date, "now");
+    onTestFinished(() => clock.mockRestore());
     const unavailable = {
       status: "unavailable",
       observedAt: 123,
       reason: "SystemInfo.getInfo timed out",
     } as const;
-    const available = { status: "available", observedAt: 456 } as const;
-    inspectChromeGraphicsDiagnosticsMock
-      .mockResolvedValueOnce(unavailable)
-      .mockResolvedValue(available);
+    const available = {
+      status: "available",
+      observedAt: 456,
+      acceleration: "unknown",
+      renderer: null,
+      vendor: null,
+      version: null,
+      backend: null,
+      devices: [],
+      featureStatus: {},
+      disabledFeatures: [],
+      driverBugWorkarounds: [],
+      videoDecoding: [],
+      videoEncoding: [],
+    } as const;
+    graphics.endpoint.mockResolvedValue({ url: "ws://127.0.0.1:18800/devtools/browser" });
+    graphics.read
+      .mockRejectedValueOnce(new Error(unavailable.reason))
+      .mockResolvedValue({ gpu: {} });
     const state = makeState({}, { ready: true });
     trackLaunch(state);
 
     for (const expected of [unavailable, available, available]) {
+      clock.mockReturnValue(expected.observedAt);
       expect((await callRoute({ state })).graphics).toEqual(expected);
     }
-    expect(inspectChromeGraphicsDiagnosticsMock).toHaveBeenCalledTimes(2);
+    expect(graphics.read).toHaveBeenCalledTimes(2);
   });
 
   it("passes valid start headless override to local managed profiles", async () => {

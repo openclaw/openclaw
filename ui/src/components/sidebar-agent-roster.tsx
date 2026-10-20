@@ -9,7 +9,7 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
@@ -65,13 +65,7 @@ function cachedRosterCards(host: RosterHost) {
 
 export function SidebarAgentRoster(props: RosterProps) {
   const context = useApplication();
-  const hostProjection = createMemo(() =>
-    projectSource(props.host, {
-      read: (host) => host,
-      subscribe: (host, notify) => host.subscribe(notify),
-      equality: "revision",
-    }),
-  );
+  const hostProjection = createMemo(() => projectOwner(props.host, (host) => host));
   const presented = () => props.active;
   const host = createParkedProjection(() => hostProjection().read(), presented);
   const store = rosterActivityStore(context);

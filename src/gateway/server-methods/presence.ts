@@ -17,6 +17,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { groupPresenceUsers, presenceUserKey } from "../../shared/presence-user.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
 import type { NodeSession } from "../node-session.types.js";
@@ -121,15 +122,7 @@ function projectDevices(
   include: NonNullable<PresenceQueryParams["include"]>,
   locations: ReadonlyMap<string, PresenceLocation>,
 ): PresenceDevice[] {
-  const grouped = new Map<string, Observation[]>();
-  for (const observation of observations) {
-    const group = grouped.get(observation.deviceId);
-    if (group) {
-      group.push(observation);
-    } else {
-      grouped.set(observation.deviceId, [observation]);
-    }
-  }
+  const grouped = groupRecords(observations, (observation) => observation.deviceId);
   return [...grouped.entries()]
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, group]) => {

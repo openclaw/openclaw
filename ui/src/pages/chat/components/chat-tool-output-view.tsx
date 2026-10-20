@@ -9,7 +9,7 @@ import {
   formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
+import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
@@ -19,12 +19,13 @@ import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 type OutputLoadState = "idle" | "loading" | "loaded" | "unavailable" | "error";
 type OutputResult = { state: OutputLoadState; card: ToolCard | null };
 type Props = {
-  content: ToolOutputSidebarContent | null;
-  loadFullMessage: SidebarFullMessageLoader | null;
-  connectionEpoch: number | undefined;
+  content?: ToolOutputSidebarContent | null;
+  loadFullMessage?: SidebarFullMessageLoader | null;
+  connectionEpoch?: number;
+  class?: JSX.HTMLAttributes<HTMLElement>["class"];
 };
 
-function ToolOutput(props: Props) {
+export function ChatToolOutput(props: Props) {
   const [retry, setRetry] = createSignal(0);
   const target = createMemo(() => ({
     content: props.content,
@@ -122,7 +123,7 @@ function ToolOutput(props: Props) {
   const text = () => card()?.outputText ?? "";
   const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
   return (
-    <>
+    <openclaw-chat-tool-output class={props.class}>
       <Show when={target()} keyed>
         {(current) => <RequestLifetime target={current} />}
       </Show>
@@ -170,14 +171,6 @@ function ToolOutput(props: Props) {
           </Show>
         </section>
       </Show>
-    </>
+    </openclaw-chat-tool-output>
   );
 }
-
-export const ChatToolOutput = defineSolidBridge<Props>("openclaw-chat-tool-output", ToolOutput, {
-  properties: {
-    content: { default: null, attribute: false },
-    loadFullMessage: { default: null, attribute: false },
-    connectionEpoch: { default: undefined, type: Number },
-  },
-});

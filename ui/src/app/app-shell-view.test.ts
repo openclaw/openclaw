@@ -426,15 +426,21 @@ it.each([false, true])(
       subscribe: () => () => {},
       invalidate: () => {},
     };
+    snapshot.mockReturnValue({ ...disconnected, deferredIntentCount: 1 });
     await settle();
     expect(presentation().querySelector("button")).toBe(retry);
-    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 2 queued — Retry now");
+    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 3 queued — Retry now");
+    expect(view.container.querySelector(".shell > .sr-only[role=status]")?.textContent).toBe(
+      "Disconnected · 3 queued",
+    );
     expect(document.activeElement).toBe(retry);
     queuedCount = 1;
     await settle();
     expect(presentation().querySelector("button")).toBe(retry);
-    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 1 queued — Retry now");
+    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 2 queued — Retry now");
     queuedCount = 0;
+    await settle();
+    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 1 queued — Retry now");
 
     snapshot.mockReturnValue({ ...disconnected, phase: "connecting" });
     await settle();

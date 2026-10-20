@@ -32,6 +32,7 @@ import {
 import type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 import {
   canUseReusableWrapperPayloadCandidates,
+  isPathScopedExecutableToken,
   planShellAuthorization,
   type ExecAuthorizationPlan,
 } from "./exec-authorization-plan.js";
@@ -159,10 +160,6 @@ function isSafeBinUsage(params: {
     return false;
   }
   return validateSafeBinArgv(argv, profile, { binName: execName });
-}
-
-function isPathScopedExecutableToken(token: string): boolean {
-  return token.includes("/") || token.includes("\\");
 }
 
 export type ExecAllowlistEvaluation = {

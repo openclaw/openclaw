@@ -87,15 +87,16 @@ describe("SettingsManager scoped persistence", () => {
 
   it("loads settings from a backend that supplies the pure read contract", () => {
     const manager = SettingsManager.fromStorage({
-      readSettingsScope: (scope) => JSON.stringify({ theme: scope }),
+      readSettingsScope: (scope) =>
+        JSON.stringify({ defaultThinkingLevel: scope === "global" ? "low" : "high" }),
       withLock: () => {
         throw new Error("This backend only supports pure reads");
       },
     });
     expect(manager.drainErrors()).toEqual([]);
-    expect(manager.getGlobalSettings()).toEqual({ theme: "global" });
-    expect(manager.getProjectSettings()).toEqual({ theme: "project" });
-    expect(manager.getTheme()).toBe("project");
+    expect(manager.getGlobalSettings()).toEqual({ defaultThinkingLevel: "low" });
+    expect(manager.getProjectSettings()).toEqual({ defaultThinkingLevel: "high" });
+    expect(manager.getDefaultThinkingLevel()).toBe("high");
   });
 
   it("preserves a pure-read backend error and still loads the other scope", () => {
@@ -105,7 +106,7 @@ describe("SettingsManager scoped persistence", () => {
         if (scope === "global") {
           throw error;
         }
-        return JSON.stringify({ theme: "project" });
+        return JSON.stringify({ defaultThinkingLevel: "high" });
       },
       withLock: () => {
         throw new Error("This backend only supports pure reads");
@@ -116,7 +117,7 @@ describe("SettingsManager scoped persistence", () => {
     expect(errors[0]?.scope).toBe("global");
     expect(errors[0]?.error).toBe(error);
     expect(manager.getGlobalSettings()).toEqual({});
-    expect(manager.getTheme()).toBe("project");
+    expect(manager.getDefaultThinkingLevel()).toBe("high");
   });
 
   it("normalizes a non-Error backend failure without losing the other scope", () => {
@@ -127,7 +128,7 @@ describe("SettingsManager scoped persistence", () => {
           // oxlint-disable-next-line typescript/only-throw-error -- Custom backends can throw non-Error values; exercise that normalization boundary.
           throw failure;
         }
-        read(JSON.stringify({ theme: "project" }));
+        read(JSON.stringify({ defaultThinkingLevel: "high" }));
       },
     });
     const errors = manager.drainErrors();
@@ -137,13 +138,13 @@ describe("SettingsManager scoped persistence", () => {
     expect(errors[0]?.error.message).toBe("Session settings could not be loaded");
     expect(errors[0]?.error.cause).toBe(failure);
     expect(manager.getGlobalSettings()).toEqual({});
-    expect(manager.getTheme()).toBe("project");
+    expect(manager.getDefaultThinkingLevel()).toBe("high");
   });
 
-  it("preserves external sibling changes while writing global and project scopes", async () => {
+  it("preserves external sibling changes while writing global settings", async () => {
     const storage = new InspectableSettingsStorage();
     storage.set("global", {
-      terminal: { showImages: true, imageWidthCells: 60 },
+      compaction: { enabled: true, reserveTokens: 16_384 },
       packages: ["npm:@openclaw/global"],
     });
     storage.set("project", {
@@ -152,12 +153,9 @@ describe("SettingsManager scoped persistence", () => {
     });
     const settingsManager = SettingsManager.fromStorage(storage);
 
-    const updatedSkills = ["new-skill"];
-    settingsManager.setShowImages(false);
-    settingsManager.setProjectSkillPaths(updatedSkills);
-    updatedSkills.push("caller-mutation");
+    settingsManager.setCompactionEnabled(false);
     storage.set("global", {
-      terminal: { showImages: true, imageWidthCells: 120, clearOnShrink: true },
+      compaction: { enabled: true, reserveTokens: 32_768, keepRecentTokens: 8_000 },
       packages: ["npm:@openclaw/global"],
     });
     storage.set("project", {
@@ -169,22 +167,26 @@ describe("SettingsManager scoped persistence", () => {
     await settingsManager.flush();
 
     expect(storage.get("global")).toEqual({
-      terminal: { showImages: false, imageWidthCells: 120, clearOnShrink: true },
+      compaction: { enabled: false, reserveTokens: 32_768, keepRecentTokens: 8_000 },
       packages: ["npm:@openclaw/global"],
     });
     expect(storage.get("project")).toEqual({
       packages: ["npm:@openclaw/external"],
-      skills: ["new-skill"],
+      skills: ["old-skill"],
       themes: ["external-theme"],
     });
 
     await settingsManager.reload();
-    expect(settingsManager.getShowImages()).toBe(false);
-    expect(settingsManager.getImageWidthCells()).toBe(120);
-    expect(settingsManager.getClearOnShrink()).toBe(true);
-    expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/external"]);
-    expect(settingsManager.getSkillPaths()).toEqual(["new-skill"]);
-    expect(settingsManager.getThemePaths()).toEqual(["external-theme"]);
+    expect(settingsManager.getCompactionSettings()).toEqual({
+      enabled: false,
+      reserveTokens: 32_768,
+      keepRecentTokens: 8_000,
+    });
+    expect(settingsManager.getProjectSettings()).toEqual({
+      packages: ["npm:@openclaw/external"],
+      skills: ["old-skill"],
+      themes: ["external-theme"],
+    });
   });
 
   it.each([
@@ -204,8 +206,7 @@ describe("SettingsManager scoped persistence", () => {
       expect(settingsManager.drainErrors()).toEqual([
         expect.objectContaining({ scope: "global", error: expect.any(error) }),
       ]);
-      settingsManager.setTheme("blocked-global-write");
-      settingsManager.setProjectSkillPaths(["new-skill"]);
+      settingsManager.setDefaultThinkingLevel("high");
       await settingsManager.flush();
 
       if (error === SyntaxError) {
@@ -213,7 +214,8 @@ describe("SettingsManager scoped persistence", () => {
       } else {
         expect(storage.get("global")).toBe(expected);
       }
-      expect(storage.get("project")).toEqual({ skills: ["new-skill"] });
+      expect(storage.get("project")).toEqual({ skills: ["old-skill"] });
+      expect(settingsManager.getProjectSettings()).toEqual({ skills: ["old-skill"] });
     },
   );
 });
@@ -245,41 +247,43 @@ describe("SettingsManager runtime overrides", () => {
     });
   });
 
-  it("preserves runtime overrides after project setting writes", async () => {
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { reserveTokens: 16_384 },
-    });
+  it("preserves runtime overrides after external project settings reload", async () => {
+    const storage = new InspectableSettingsStorage();
+    storage.set("global", { compaction: { reserveTokens: 16_384 } });
+    storage.set("project", { compaction: { reserveTokens: 20_000 } });
+    const settingsManager = SettingsManager.fromStorage(storage);
 
     settingsManager.applyOverrides({ compaction: { reserveTokens: 50_000 } });
-    settingsManager.setProjectPackages(["npm:@openclaw/example"]);
+    storage.set("project", {
+      compaction: { reserveTokens: 40_000 },
+      packages: ["npm:@openclaw/example"],
+    });
 
-    expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/example"]);
     expect(settingsManager.getCompactionReserveTokens()).toBe(50_000);
 
-    await settingsManager.flush();
     await settingsManager.reload();
 
-    expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/example"]);
+    expect(settingsManager.getProjectSettings()).toEqual({
+      compaction: { reserveTokens: 40_000 },
+      packages: ["npm:@openclaw/example"],
+    });
     expect(settingsManager.getCompactionReserveTokens()).toBe(50_000);
   });
 
-  it("recursively merges provider retry overrides and replaces arrays", () => {
+  it("recursively merges provider retry overrides", () => {
     const settingsManager = SettingsManager.inMemory({
       retry: {
         provider: { timeoutMs: 30_000, maxRetryDelayMs: 60_000 },
       },
-      packages: ["npm:@openclaw/base"],
     });
 
     settingsManager.applyOverrides({
       retry: { provider: { timeoutMs: 45_000 } },
-      packages: ["npm:@openclaw/override"],
     });
 
     expect(settingsManager.getProviderRetrySettings()).toEqual({
       timeoutMs: 45_000,
       maxRetryDelayMs: 60_000,
     });
-    expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/override"]);
   });
 });

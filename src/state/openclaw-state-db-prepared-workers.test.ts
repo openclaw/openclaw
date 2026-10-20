@@ -13,6 +13,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const preparationKey = "a".repeat(64);
@@ -55,6 +59,7 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
   closeOpenClawStateDatabaseForTest();
   const legacy = openNodeSqliteDatabase(databasePath);
   try {
+    addPreCutoverClientCredentialTablesForTest(legacy);
     removePreparedWorkerOwnershipColumns(legacy);
     legacy.exec(`
       DROP INDEX idx_plugin_state_listing;
@@ -108,12 +113,19 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
 
 describe("prepared worker schema migration", () => {
   it.each(["doctor repair"] as const)(
-    "upgrades deferred v16 content through %s without publishing over an old updater",
-    (via) => {
+    "upgrades deferred v16 content through captured %s without publishing over an old updater",
+    async (via) => {
       const { options, before } = createLegacyWorkers(16, true);
       if (via === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        expect(
+          (
+            await withStateMigrationBackupForTest(options, () =>
+              repairOpenClawStateDatabaseSchema(options),
+            )
+          ).warnings,
+        ).toEqual([]);
       }
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const { db } = openOpenClawStateDatabase(options);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
       expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
@@ -173,15 +185,19 @@ describe("prepared worker schema migration", () => {
   });
 
   it.each([{ version: 15, via: "runtime open" }])(
-    "preserves v$version workers and unresolved cleanup through $via",
-    ({ version, via }) => {
+    "preserves v$version workers and unresolved cleanup through captured $via",
+    async ({ version, via }) => {
       const { options, databasePath, before } = createLegacyWorkers(version);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
         kind: "prepared-worker-ownership-v17",
         path: databasePath,
       });
       if (via === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+        expect(
+          await withStateMigrationBackupForTest(options, () =>
+            repairOpenClawStateDatabaseSchema(options),
+          ),
+        ).toEqual({
           changes: [
             "Recorded prepared worker ownership and one-use lifecycle (v17)",
             "Replaced retained task indexes with ordered cron history indexes (v24)",
@@ -191,6 +207,7 @@ describe("prepared worker schema migration", () => {
           warnings: [],
         });
       }
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const { db } = openOpenClawStateDatabase(options);
       expect(db.prepare("SELECT rowid, * FROM worker_environments").all()).toEqual(
         before.environments.map((row) => ({
@@ -225,13 +242,19 @@ describe("prepared worker schema migration", () => {
       const after = readSnapshot(db);
       closeOpenClawStateDatabaseForTest();
       expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      expect(
+        (
+          await withStateMigrationBackupForTest(options, () =>
+            repairOpenClawStateDatabaseSchema(options),
+          )
+        ).warnings,
+      ).toEqual([]);
     },
   );
 
   it.each([{ version: 16, via: "doctor repair" }])(
     "rolls back all v$version migrations and markers after failed $via",
-    ({ version, via }) => {
+    async ({ version, via }) => {
       const { options, databasePath } = createLegacyWorkers(version);
       const legacy = openNodeSqliteDatabase(databasePath);
       legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
@@ -239,9 +262,15 @@ describe("prepared worker schema migration", () => {
       const before = readSnapshot(legacy);
       legacy.close();
       if (via === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(/prepared migration rollback/);
+        await expect(
+          withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options)),
+        ).rejects.toThrow(/prepared migration rollback/);
       } else {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+        expect(
+          await withStateMigrationBackupForTest(options, () =>
+            repairOpenClawStateDatabaseSchema(options),
+          ),
+        ).toEqual({
           changes: [],
           warnings: [expect.stringContaining("prepared migration rollback")],
         });
@@ -255,8 +284,9 @@ describe("prepared worker schema migration", () => {
     },
   );
 
-  it("enforces complete preparation facts and retains consumed bindings on canonical reopen", () => {
+  it("enforces complete preparation facts and retains consumed bindings on canonical reopen", async () => {
     const { options } = createLegacyWorkers();
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     const { db } = openOpenClawStateDatabase(options);
     const setPreparation = db.prepare(`UPDATE worker_environments SET preparation_key = ?,
       preparation_demand_at_ms = ?, preparation_expires_at_ms = ?, preparation_consumed_at_ms = ?`);

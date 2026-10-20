@@ -34,6 +34,7 @@ type SidebarIdentityMenuParams = {
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
   themeMode: ThemeMode;
+  onThemeChange?: (mode: ThemeMode, element: HTMLElement) => void;
   triggerWidth: number;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -286,6 +287,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
                   prop:mode={params.themeMode}
                   prop:menuItem={true}
                   prop:menuAttributes={menuAttributes}
+                  prop:onChange={params.onThemeChange}
                 />
               </span>
             ),

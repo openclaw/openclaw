@@ -144,7 +144,7 @@ const readerSource = String.raw`
               const originalLstat = fs.lstatSync;
               let committedDuringRead = false;
               // Preserve the observation, then commit before the next probe. A file-first
-              // reader returns stale defaults; the lock-first reader sees the committed theme.
+              // reader returns stale defaults; the lock-first reader sees the committed thinking level.
               const observe = (observed, selected) => {
                 if (selected && !committedDuringRead) {
                   committedDuringRead = true;
@@ -160,7 +160,7 @@ const readerSource = String.raw`
               console.log(JSON.stringify({
                 committedDuringRead,
                 errors: manager.drainErrors(),
-                theme: manager.getTheme(),
+                thinkingLevel: manager.getDefaultThinkingLevel(),
               }));
             `;
 const contenderSource = String.raw`
@@ -346,10 +346,10 @@ it.for([
               if (current !== undefined) throw new Error("first-writer fixture already has settings");
               writeSync(1, "ready\n");
               waitForRelease();
-              return JSON.stringify(field === "theme" ? { theme: scope + "-committed" } : { defaultModel: "mock-model" });
+              return JSON.stringify(field === "defaultThinkingLevel" ? { defaultThinkingLevel: scope === "global" ? "medium" : "high" } : { defaultModel: "mock-model" });
             });
           `,
-        [storageUrl.href, root, agentDir, scope, reading ? "theme" : "defaultModel"],
+        [storageUrl.href, root, agentDir, scope, reading ? "defaultThinkingLevel" : "defaultModel"],
       );
       try {
         await writer.waitFor("ready", "first writer exited before its peer");
@@ -373,7 +373,7 @@ it.for([
           expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({
             committedDuringRead: true,
             errors: [],
-            theme: `${scope}-committed`,
+            thinkingLevel: scope === "global" ? "medium" : "high",
           });
         } else {
           expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({

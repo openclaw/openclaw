@@ -10,7 +10,7 @@ export function projectChatSessionPresentation<T extends ChatPageHost>(
   state: T,
   context: ApplicationContext,
 ): T {
-  const listeners = new Set<() => void>();
+  let onChange: (() => void) | undefined;
   const presentation = projectSource(state, {
     read: (owner) =>
       chatSessionPresentationKey(
@@ -20,10 +20,10 @@ export function projectChatSessionPresentation<T extends ChatPageHost>(
         context.overlays?.snapshot?.approvalQueue,
       ),
     subscribe: (_owner, notify) => {
-      listeners.add(notify);
+      onChange = notify;
       const stop = context.sessions.subscribe(notify);
       return () => {
-        listeners.delete(notify);
+        onChange = undefined;
         stop();
       };
     },
@@ -45,7 +45,7 @@ export function projectChatSessionPresentation<T extends ChatPageHost>(
           return;
         }
         value = next;
-        listeners.forEach((listener) => listener());
+        onChange?.();
       },
     });
   }

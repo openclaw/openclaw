@@ -236,7 +236,6 @@ type ChatHeaderTestState = {
   chatSending: boolean;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
   chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
@@ -309,7 +308,6 @@ function createSettingsLaneHost(patch: SessionPatchRoute) {
     requestHandlers: {},
     sessionKey: "main",
     chatModelSwitchPromises: {},
-    chatThinkingLevel: "high",
     sessionsResult: createSessionsResultFromRows([
       {
         key: "main",
@@ -442,7 +440,6 @@ function createChatHeaderState(
     chatMessages: [],
     chatLoading: false,
     chatSending: false,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     lastError: null,
     chatAvatarUrl: null,
@@ -4357,7 +4354,6 @@ describe("chat model controls", () => {
     await expect(modelSwitch).resolves.toBe(false);
     await expect(thinkingPatch).resolves.toBe(false);
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }, { thinkingLevel: "ultra" }]);
-    expect(host.chatThinkingLevel).toBe("high");
   });
 
   it.each([

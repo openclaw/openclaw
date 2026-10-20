@@ -260,9 +260,7 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],
-    agentsValue: buildStatusAllAgentsValue({
-      agentStatus: params.agentStatus,
-    }),
+    agentsValue: buildStatusAllAgentsValue(params.agentStatus),
     suffixRows: [
       ...(params.surface.databaseEngines?.source !== "unavailable"
         ? [

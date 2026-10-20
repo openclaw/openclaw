@@ -155,7 +155,7 @@ describe("server-owned pending input display", () => {
   it("shows a durable receipt while an accepted input waits for workspace sync", () => {
     const queued = { ...input, state: "queued" as const };
 
-    const items = buildPendingInputItems([queued], undefined, ["run-queued"]);
+    const items = buildPendingInputItems([queued], ["run-queued"]);
 
     expect(items).toEqual(
       expect.arrayContaining([
@@ -178,7 +178,7 @@ describe("server-owned pending input display", () => {
   ] as const)(
     "keeps $state custody out of the worker-setup notice without eligible execution",
     ({ state, runId, notice }) => {
-      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], true);
+      const items = buildPendingInputItems([{ ...input, state, runId }], [], true);
 
       expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
         notice ? [notice] : [],

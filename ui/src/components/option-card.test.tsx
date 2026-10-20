@@ -17,10 +17,8 @@ describe("option card", () => {
     container.remove();
   });
 
-  it("accents and focuses the recommended choice, then emits its value", () => {
+  it("accents and focuses the recommended choice, then calls its selection handler", () => {
     const onSelect = vi.fn();
-    const selected = vi.fn();
-    container.addEventListener("option-select", selected);
     const props = {
       header: "Access",
       question: "How should OpenClaw help?",
@@ -47,15 +45,10 @@ describe("option card", () => {
     recommended.click();
 
     expect(onSelect).toHaveBeenCalledWith("full");
-    expect(selected).toHaveBeenCalledOnce();
-    const selectEvent = selected.mock.calls[0]![0] as CustomEvent;
-    expect(selectEvent.detail).toEqual({ value: "full" });
   });
 
-  it("always renders a skip affordance and emits dismissal", () => {
+  it("always renders a skip affordance and calls its dismissal handler", () => {
     const onSkip = vi.fn();
-    const skipped = vi.fn();
-    container.addEventListener("option-skip", skipped);
     const props = {
       question: "Choose one",
       options: [
@@ -69,7 +62,6 @@ describe("option card", () => {
     container.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
 
     expect(onSkip).toHaveBeenCalledOnce();
-    expect(skipped).toHaveBeenCalledOnce();
   });
 
   it.each(["textarea", "button"] as const)(

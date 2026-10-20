@@ -265,6 +265,22 @@ describe("Nostr outbound relay failover", () => {
     ]);
   });
 
+  it("prefers the last successful relay after falling back", async () => {
+    const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
+    const second = await relay();
+    const bus = await startBus([first.url, second.url]);
+
+    await bus.sendDm(RECIPIENT_PUBKEY, "initial fallback");
+    const nextId = await bus.sendDm(RECIPIENT_PUBKEY, "preferred relay");
+
+    expect(first.events).toHaveLength(1);
+    expect(second.events).toHaveLength(2);
+    expect(second.events[1]!.id).toBe(nextId);
+    expect(decrypt(RECIPIENT_KEY, bus.publicKey, second.events[1]!.content)).toBe(
+      "preferred relay",
+    );
+  });
+
   describe("registered message sender", () => {
     it("falls back past connection and publish failures, accounting only for EVENT handoffs", async () => {
       const refused = await relay({ rejectUpgrade: true });

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import path from "node:path";
@@ -63,6 +63,12 @@ const { values } = parseArgs({
     "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
+    "duration-ms": { type: "string", default: "3600000" },
+    "warmup-ms": { type: "string", default: "300000" },
+    "round-interval-ms": { type: "string", default: "15000" },
+    "memory-interval-ms": { type: "string", default: "60000" },
+    "retained-profile-ms": { type: "string", default: "600000" },
+    "reset-every-rounds": { type: "string", default: "20" },
     chunks: { type: "string", default: "100" },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
@@ -92,21 +98,28 @@ if (
     "chat.send",
     "transcript-broadcast",
     "attempt-retention",
+    "memory-soak",
     "plugins.reload",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, or plugins.reload",
+    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+const soakScenario = scenario === "memory-soak";
+const toolScenario = scenario === "chat.send" || retentionScenario || soakScenario;
 const turnScenario =
-  scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
+  scenario === "chat.send" ||
+  scenario === "transcript-broadcast" ||
+  retentionScenario ||
+  soakScenario;
 if (
   !values.allocations &&
   !values["stream-start-allocations"] &&
   scenario !== "transcript-broadcast" &&
-  !retentionScenario
+  !retentionScenario &&
+  !soakScenario
 ) {
   throw new Error("--scenario requires --allocations");
 }
@@ -126,6 +139,20 @@ if (exactClients > clientCount) {
 }
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
+const durationMs = integer(values["duration-ms"], "--duration-ms");
+const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
+const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
+const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
+const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
+if (
+  soakScenario &&
+  (values.allocations || values["stream-start-allocations"] || retainedProfileMs > durationMs)
+) {
+  throw new Error(
+    "memory-soak needs a retained profile no longer than its duration and no allocation-churn capture",
+  );
+}
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
@@ -191,13 +218,23 @@ cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
 cfg.plugins = {
   ...cfg.plugins,
-  entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+  entries: {
+    ...(soakScenario ? cfg.plugins?.entries : {}),
+    "memory-core": { config: { dreaming: { enabled: false } } },
+  },
 };
 if (values["active-work-diagnostics"]) {
   if (scenario !== "transcript-broadcast") {
     throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
   }
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
+if (soakScenario) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  if (cfg.plugins.allow?.length) {
+    cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "diagnostics-prometheus"])];
+  }
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
 let reloadPluginId: string | undefined;
@@ -272,6 +309,8 @@ let toolResults = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
+let reasoningResponses = 0;
+let reasoningReplayRequests = 0;
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -326,6 +365,8 @@ let cohort:
       arrivals: Set<number>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
+      reasoningSignatures: Map<string, string>;
+      incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
       ready: Promise<void>;
@@ -368,9 +409,30 @@ const mock = createServer((req, res) => {
           )
         : [];
     const toolOutput = toolOutputs.at(-1);
-    const continuation =
-      (scenario === "chat.send" || retentionScenario) && toolOutput !== undefined;
+    const continuation = toolScenario && toolOutput !== undefined;
     if (continuation) {
+      if (retentionScenario || soakScenario) {
+        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        if (
+          expectedSignature === undefined ||
+          !Array.isArray(input) ||
+          !input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+          )
+        ) {
+          throw new Error("synthetic reasoning signature did not survive the provider request");
+        }
+        const incompleteSignature = cohort?.incompleteReasoningSignatures.get(toolOutput.call_id);
+        if (
+          incompleteSignature !== undefined &&
+          input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === incompleteSignature,
+          )
+        ) {
+          throw new Error("reasoning-only output-limit signature was replayed during recovery");
+        }
+        reasoningReplayRequests++;
+      }
       if (
         toolOutputs.some(
           (toolResult) =>
@@ -444,7 +506,8 @@ const mock = createServer((req, res) => {
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
-      if (primary && (scenario === "chat.send" || retentionScenario) && cohort) {
+      let reasoningReplayKey = toolOutput?.call_id;
+      if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
@@ -458,6 +521,7 @@ const mock = createServer((req, res) => {
           };
         });
         toolCalls += items.length;
+        reasoningReplayKey = items.at(-1)?.call_id;
         toolAnswer = [
           ...items.flatMap((item, output_index) => [
             { type: "response.output_item.added", output_index, item: { ...item, arguments: "" } },
@@ -515,7 +579,37 @@ const mock = createServer((req, res) => {
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (
+          (retentionScenario || soakScenario) &&
+          (primary || continuation) &&
+          "response" in event &&
+          event.response !== undefined
+        ) {
+          const reasoning = {
+            type: "reasoning",
+            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            status: "completed",
+            summary: [],
+            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+          };
+          if (reasoningReplayKey) {
+            // Replay keeps completed reasoning and drops reasoning-only length stops.
+            const signatures =
+              event.type === "response.completed"
+                ? cohort?.reasoningSignatures
+                : cohort?.incompleteReasoningSignatures;
+            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          }
+          const output_index = event.response.output.length;
+          for (const type of ["response.output_item.added", "response.output_item.done"]) {
+            res.write(`data: ${JSON.stringify({ type, output_index, item: reasoning })}\n\n`);
+          }
+          res.write(
+            `data: ${JSON.stringify({ ...event, response: { ...event.response, output: [...event.response.output, reasoning] } })}\n\n`,
+          );
+        } else {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
         }
@@ -745,11 +839,17 @@ function summarizeCpuProfile(profilePath: string) {
       .slice(0, 40),
   };
 }
+let completedSoakRounds = 0;
+let sessionResets = 0;
 async function runRound(client: ReturnType<typeof createGatewayWsClient>, measuredRound?: number) {
-  if (retentionScenario) {
+  if (
+    retentionScenario ||
+    (soakScenario && resetEveryRounds > 0 && completedSoakRounds % resetEveryRounds === 0)
+  ) {
     // Retire each previous session generation so retained history is not the measurement.
     for (const key of keys) {
       await rpc(client, "sessions.reset", { key });
+      sessionResets++;
     }
   }
   const child = gateway;
@@ -805,6 +905,8 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     arrivals: new Set(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
+    reasoningSignatures: new Map(),
+    incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
     beforeRelease: finishAdmissionDiagnostics
       ? async () => {
@@ -905,6 +1007,9 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
       current.phases.completedAtEpochMs = epochNow();
     });
     await Promise.all([cohortReady, captureWork, turns]);
+    if (soakScenario) {
+      completedSoakRounds++;
+    }
     return { phases: current.phases, ...capture };
   } finally {
     clearTimeout(timeout);
@@ -1332,21 +1437,82 @@ try {
     }
     return undefined;
   };
-  await runScenario();
+  const warmupStartedAt = performance.now();
+  do {
+    const started = performance.now();
+    await runScenario();
+    await drainEvents();
+    if (!soakScenario) {
+      break;
+    }
+    await delay(
+      Math.max(
+        0,
+        Math.min(
+          roundIntervalMs - (performance.now() - started),
+          warmupMs - (performance.now() - warmupStartedAt),
+        ),
+      ),
+    );
+  } while (performance.now() - warmupStartedAt < warmupMs);
   console.log("PHASE warmed");
-  await drainEvents();
-  const initialRetainedResources = retentionScenario
-    ? await readGatewayResources(gateway, { collectGarbage: true })
-    : undefined;
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before fixture readiness and warmup");
     }
     await delay(startAt - Date.now());
   }
+  const initialRetainedResources =
+    retentionScenario || soakScenario
+      ? await readGatewayResources(gateway, { collectGarbage: true })
+      : undefined;
   const measurementStartedAt = Date.now();
+  const measuredGateway = gateway;
   const samples = [];
-  for (let round = 0; round < rounds; round++) {
+  const memorySamples: Array<{
+    atEpochMs: number;
+    elapsedMs: number;
+    completedRounds: number;
+    sessionResets: number;
+    collectedGarbage: boolean;
+    resources: Awaited<ReturnType<typeof readGatewayResources>>;
+  }> = [];
+  const sampleMemory = async (collectGarbage = false) => {
+    const resources = await readGatewayResources(measuredGateway, { collectGarbage });
+    const sample = {
+      atEpochMs: Date.now(),
+      elapsedMs: Date.now() - measurementStartedAt,
+      completedRounds: samples.length,
+      sessionResets,
+      collectedGarbage: collectGarbage,
+      resources,
+    };
+    memorySamples.push(sample);
+    appendFileSync(path.join(output, "memory-samples.jsonl"), `${JSON.stringify(sample)}\n`);
+    console.log(`MEMORY ${JSON.stringify(sample)}`);
+  };
+  const retainedProfilePath = path.join(output, "retained.heapprofile");
+  let retainedProfileStartedAt: number | undefined;
+  if (soakScenario) {
+    await sampleMemory();
+  }
+  for (
+    let round = 0;
+    soakScenario ? Date.now() - measurementStartedAt < durationMs : round < rounds;
+    round++
+  ) {
+    const roundStartedAt = Date.now();
+    if (
+      soakScenario &&
+      retainedProfileMs > 0 &&
+      retainedProfileStartedAt === undefined &&
+      roundStartedAt - measurementStartedAt >= durationMs - retainedProfileMs
+    ) {
+      await controlGatewayProfile(gateway, "heap", "start", retainedProfilePath, {
+        includeCollectedObjects: false,
+      });
+      retainedProfileStartedAt = Date.now();
+    }
     counters.clear();
     eventBytes.clear();
     sessionEventSizes.clear();
@@ -1363,6 +1529,8 @@ try {
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
+    reasoningResponses = 0;
+    reasoningReplayRequests = 0;
     recapRequests = 0;
     recapReceipts.length = 0;
     recapPhase = undefined;
@@ -1430,8 +1598,8 @@ try {
                     throw new Error("concurrent sessions.list did not return the requested page");
                   }
                   const ended = performance.now();
-                  const durationMs = ended - started;
-                  listLatencies.push(durationMs);
+                  const requestDurationMs = ended - started;
+                  listLatencies.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
                       method: "sessions.list",
@@ -1440,7 +1608,7 @@ try {
                       round,
                       startedAtEpochMs: performance.timeOrigin + started,
                       endedAtEpochMs: performance.timeOrigin + ended,
-                      durationMs,
+                      durationMs: requestDurationMs,
                     });
                   }
                   const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
@@ -1497,9 +1665,12 @@ try {
         `expected ${runCount} primary streams: peak=${peakPrimaryStreams}, requests=${primaryStreamRequests}`,
       );
     }
-    if (scenario === "chat.send" && (toolCalls !== 1 || toolResults !== 1)) {
+    if (
+      (scenario === "chat.send" || soakScenario) &&
+      (toolCalls !== runCount || toolResults !== runCount)
+    ) {
       throw new Error(
-        `expected one completed tool call per turn, calls=${toolCalls}, results=${toolResults}`,
+        `expected ${runCount} completed tool calls, calls=${toolCalls}, results=${toolResults}`,
       );
     }
     if (
@@ -1512,6 +1683,15 @@ try {
     ) {
       throw new Error(
         `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
+      );
+    }
+    if (
+      (retentionScenario || soakScenario) &&
+      (reasoningResponses !== runCount * (retentionScenario ? 3 : 2) ||
+        reasoningReplayRequests !== runCount * (retentionScenario ? 2 : 1))
+    ) {
+      throw new Error(
+        `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
@@ -1557,6 +1737,7 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...((retentionScenario || soakScenario) && { reasoningResponses, reasoningReplayRequests }),
       recapRequests,
       ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
@@ -1605,6 +1786,20 @@ try {
     };
     samples.push(sample);
     console.log(JSON.stringify(sample));
+    if (soakScenario) {
+      if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
+        await sampleMemory();
+      }
+      await delay(
+        Math.max(
+          0,
+          Math.min(
+            roundIntervalMs - (Date.now() - roundStartedAt),
+            durationMs - (Date.now() - measurementStartedAt),
+          ),
+        ),
+      );
+    }
     if (allocation) {
       console.table([
         {
@@ -1617,6 +1812,32 @@ try {
           "GC count": allocation.gcCount,
         },
       ]);
+    }
+  }
+  let retainedProfile;
+  if (soakScenario) {
+    await sampleMemory();
+    await sampleMemory(true);
+    if (retainedProfileStartedAt !== undefined) {
+      await controlGatewayProfile(gateway, "heap", "stop", retainedProfilePath);
+      const { sampledAllocatedBytes, topAllocationSites, ...profile } = readGatewayHeapProfile(
+        retainedProfilePath,
+        { includeCollectedObjects: false },
+      );
+      retainedProfile = {
+        ...profile,
+        startedAtEpochMs: retainedProfileStartedAt,
+        stoppedAtEpochMs: Date.now(),
+        sampledRetainedBytes: sampledAllocatedBytes,
+        topRetainedSites: topAllocationSites,
+      };
+    } else if (retainedProfileMs > 0) {
+      throw new Error("no retained profile window captured; shorten the round duration");
+    }
+    if (values["heap-snapshot"]) {
+      await readGatewayResources(gateway, {
+        snapshotPath: path.join(output, "settled.heapsnapshot"),
+      });
     }
   }
   const result = {
@@ -1650,6 +1871,21 @@ try {
     streamRequests,
     fixture,
     ...(retentionScenario ? { promptBytes, initialRetainedResources } : {}),
+    ...(soakScenario
+      ? {
+          durationMs,
+          warmupMs,
+          roundIntervalMs,
+          memoryIntervalMs,
+          retainedProfileMs,
+          resetEveryRounds,
+          sessionResets,
+          completedSoakRounds,
+          initialRetainedResources,
+          memorySamples,
+          retainedProfile,
+        }
+      : {}),
     samples,
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));

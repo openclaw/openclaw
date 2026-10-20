@@ -1574,6 +1574,9 @@ update_candidate() {
     update_env+=(OPENCLAW_ALLOW_ROOT=1)
   fi
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY:-}" ]; then
+    update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+  fi
   if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
     update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"
   fi
@@ -1873,6 +1876,39 @@ prepare_restart_inference() {
   restart_inference="mock-openai"
 }
 
+prepare_restart_plugin_release_selectors() {
+  local selector="latest" package_rows package_name
+  [ "$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL" != "beta" ] || selector="beta"
+  package_rows="$(node --input-type=module - "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:?managed restart requires the candidate plugin registry}" "$candidate_version" <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { readPluginInstallRecords } from "./scripts/e2e/lib/plugin-index-sqlite.mjs";
+const [root, version] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "prepublish-plugin-registry.json"), "utf8"));
+const published = new Set(manifest.packages.map((entry) => entry.name));
+for (const record of Object.values(readPluginInstallRecords())) {
+  const name = record.source === "npm" ? record.resolvedName : undefined;
+  if (
+    typeof name === "string" &&
+    published.has(name) &&
+    (record.resolvedVersion ?? record.version) === version &&
+    record.spec === `${name}@${version}`
+  ) {
+    process.stdout.write(`${name}\n`);
+  }
+}
+NODE
+  )" || return "$?"
+  while IFS= read -r package_name; do
+    [ -n "$package_name" ] || continue
+    # The first candidate update can persist a generated exact cohort target. Restore
+    # its release-line intent before the synthetic future hop so this restart lane
+    # tests managed cohort convergence instead of the operator-pin retention policy.
+    openclaw_e2e_fixture_plugin_command openclaw -- \
+      plugins update "$package_name@$selector" || return "$?"
+  done <<<"$package_rows"
+}
+
 prepare_restart_fixture() {
   prepare_candidate_tarball || return "$?"
   local fixture_dir fixture_package plugin_rows package_name plugin_source plugin_id plugin_phase
@@ -1926,12 +1962,17 @@ NODE
   # Installed official plugins, not just the runtime, follow the synthetic host
   # cohort. Keep the sealed candidate bytes and deliberately absent packages intact.
   OPENCLAW_NPM_REGISTRY_UPSTREAM="$NPM_CONFIG_REGISTRY" \
+    OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$restart_fixture_version,latest=$restart_fixture_version" \
     openclaw_prepublish_plugin_registry_start \
       "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
       "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" "$candidate_version" \
       "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
       "$fixture_dir/registry" restart_registry_pid \
       "${registry_args[@]}" || return "$?"
+  # Product diagnostics deliberately resolve official packages from public npm.
+  # Project those reads onto this survivor-only synthetic future cohort without
+  # weakening the production registry trust boundary.
+  export OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY="$NPM_CONFIG_REGISTRY"
 }
 
 repair_update_restart_auth() {
@@ -1947,6 +1988,7 @@ repair_update_restart_auth() {
     # Historical preservation has already passed. This separate current-runtime
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"
+    phase prepare-restart-plugin-selectors prepare_restart_plugin_release_selectors || return "$?"
     phase prepare-restart-fixture prepare_restart_fixture || return "$?"
     # New targets exercise absent containment and its warning. Frozen cuts
     # without that contract retain their original native-contained recovery.

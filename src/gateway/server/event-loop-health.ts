@@ -246,13 +246,7 @@ export function createGatewayEventLoopHealthMonitor(
     cancelWorkerCpuSample = () => {
       active = false;
     };
-    const readings = workers.map(async (worker) => {
-      try {
-        return await worker.cpuUsage();
-      } catch {
-        return undefined;
-      }
-    });
+    const readings = workers.map((worker) => worker.cpuUsage());
     void Promise.all(readings).then((usage) => {
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;

@@ -30,8 +30,8 @@ import {
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
@@ -51,7 +51,12 @@ export type ChatHistoryRunObservation = {
 };
 
 export type ChatRunError = {
-  kind?: "auth_refresh" | "state_contention" | "stop";
+  kind?:
+    | "auth_refresh"
+    | "state_contention"
+    | "stop"
+    | "chatgpt_business_usage_limit"
+    | "chatgpt_consumer_usage_limit";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -201,7 +206,7 @@ export function setChatRunError(
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
-  mutateChatRunState(state, () => {
+  chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);
     state.chatRunError = {
       ...(kind ? { kind } : {}),
@@ -508,8 +513,7 @@ function reconcileSessionRows(
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
-  return mutateChatRunState(
-    host,
+  return chatRunPresentation(host).batch(
     () => applyChatRunLifecycle(host, options),
     options.publishRunState === false ? false : "immediate",
   );
@@ -574,7 +578,7 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
     clearChatRunStatus(host);
   }
   if (options.publishRunState !== false) {
-    publishChatRunState(host);
+    chatRunPresentation(host).publish();
   }
 }
 
@@ -635,7 +639,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
     },
     Date.now(),
   );
-  publishChatRunState(host);
+  chatRunPresentation(host).publish();
   return true;
 }
 

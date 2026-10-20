@@ -24,6 +24,7 @@ import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-re
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
+  OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
   type OpenAIResponsesOptions,
   type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
@@ -38,13 +39,6 @@ import {
 import { getCompat } from "./openai-transport-params.js";
 import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
-
-const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
-  "openai",
-  "opencode",
-  "azure-openai-responses",
-  "github-copilot",
-]);
 
 function raiseMinimalReasoningForResponsesWebSearch(params: {
   model: Model;

@@ -28,7 +28,6 @@ import {
 } from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import {
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
@@ -601,11 +600,10 @@ export async function startNodeHostMcpManager(
 function listEnabledNodeHostMcpServers(
   servers: Record<string, McpServerConfig> | undefined,
 ): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(normalizeConfiguredMcpServers(servers))
+  return Object.entries(servers ?? {})
     .filter(
       ([serverName, config]) =>
         serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
     )
-    .map(([serverName, config]) => [serverName, config as McpServerConfig] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
 }

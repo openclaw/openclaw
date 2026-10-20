@@ -15,21 +15,16 @@ type QueueState<T> = QueueSummaryState & {
 };
 
 /** Build a summary prompt preview without mutating the source queue state. */
-export function previewQueueSummaryPrompt(params: {
-  state: QueueSummaryState;
-  noun: string;
-  title?: string;
-}): string | undefined {
-  if (params.state.droppedCount <= 0) {
+export function previewQueueSummaryPrompt(state: QueueSummaryState): string | undefined {
+  if (state.droppedCount <= 0) {
     return undefined;
   }
-  const title =
-    params.title ??
-    `[Queue overflow] Dropped ${params.state.droppedCount} ${params.noun}${params.state.droppedCount === 1 ? "" : "s"} due to cap.`;
-  const lines = [title];
-  if (params.state.summaryLines.length > 0) {
+  const lines = [
+    `[Queue overflow] Dropped ${state.droppedCount} message${state.droppedCount === 1 ? "" : "s"} due to cap.`,
+  ];
+  if (state.summaryLines.length > 0) {
     lines.push("Summary:");
-    for (const line of params.state.summaryLines) {
+    for (const line of state.summaryLines) {
       lines.push(`- ${line}`);
     }
   }
@@ -80,7 +75,6 @@ export function countPendingQueueItems<T>(items: readonly T[], inFlight?: Readon
 export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
   summarize: (item: T) => string;
-  summaryLimit?: number;
   onDrop?: (items: T[]) => void;
   onSummaryElide?: (lines: string[]) => void;
   inFlight?: ReadonlySet<T>;
@@ -125,11 +119,10 @@ export function applyQueueDropPolicy<T>(params: {
       params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
-    const limit = Math.max(0, params.summaryLimit ?? cap);
     const summaryLines = params.queue.summaryLines;
-    if (summaryLines.length > limit) {
+    if (summaryLines.length > cap) {
       // Round the cutoff first; subtraction can erase a fraction just below an integer.
-      const elidedLines = summaryLines.splice(0, summaryLines.length - Math.floor(limit));
+      const elidedLines = summaryLines.splice(0, summaryLines.length - Math.floor(cap));
       params.onSummaryElide?.(elidedLines);
     }
   }

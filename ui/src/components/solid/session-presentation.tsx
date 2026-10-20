@@ -575,21 +575,8 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
     </Show>
   );
   return {
-    get running() {
-      return running();
-    },
+    running,
     leadingIndicator,
-    get visible() {
-      return (
-        showGlyph() ||
-        (!props.trailingState &&
-          (session().isChild
-            ? Boolean(resolveSessionIdleBadge(session().status, t))
-            : session().unread))
-      );
-    },
-    get renderedIdentities() {
-      return renderedIdentities();
-    },
+    renderedIdentities,
   };
 }

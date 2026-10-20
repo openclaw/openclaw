@@ -69,7 +69,7 @@ it("restores and saves a main-agent draft after route teardown on the original G
     const firstPage = await queueIdentityBehindConfig(fixture);
     firstPage.dispose();
     const restoredPage = createAgentsPage(fixture.context);
-    expect(restoredPage.read().overview.identityDraft.name).toBe("Retained main-agent draft");
+    expect(restoredPage.read().readData().identityDraft.name).toBe("Retained main-agent draft");
 
     fixture.configWrite.resolve({});
     await waitForFast(() =>
@@ -94,13 +94,13 @@ it.each(["profile", "Gateway", "permission"] as const)(
         page.dispose();
         fixture.currentGateway.snapshot.selfUser = { id: "second-operator" };
         const secondPage = createAgentsPage(fixture.context);
-        expect(secondPage.read().overview.identityDraft.name).toBeNull();
+        expect(secondPage.read().readData().identityDraft.name).toBeNull();
       } else if (change === "Gateway") {
         page.dispose();
         const nextClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
         emitGatewaySnapshot(fixture.currentGateway, snapshot(nextClient));
         const secondPage = createAgentsPage(fixture.context);
-        expect(secondPage.read().overview.identityDraft.name).toBeNull();
+        expect(secondPage.read().readData().identityDraft.name).toBeNull();
       } else {
         fixture.currentGateway.snapshot.hello = gatewayHelloForMethods(
           ["agents.update", "config.set"],

@@ -1,6 +1,47 @@
+import { setImmediate } from "node:timers/promises";
+import type { ProviderFetchUsageSnapshotContext } from "openclaw/plugin-sdk/plugin-entry";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchOpenRouterUsage } from "./usage.js";
+import openrouterPlugin from "./index.js";
+
+const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+async function fetchOpenRouterUsage(
+  params: Pick<ProviderFetchUsageSnapshotContext, "token" | "timeoutMs" | "signal" | "fetchFn"> & {
+    baseUrl?: string;
+    request?: ModelProviderConfig["request"];
+  },
+) {
+  if (!provider.fetchUsageSnapshot) {
+    throw new Error("OpenRouter usage provider is not registered");
+  }
+  const snapshot = await provider.fetchUsageSnapshot({
+    config: {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: params.baseUrl ?? "https://openrouter.ai/api/v1",
+            request: params.request,
+            models: [],
+          },
+        },
+      },
+    },
+    env: {},
+    provider: "openrouter",
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    fetchFn: params.fetchFn,
+  });
+  if (!snapshot) {
+    throw new Error("OpenRouter usage provider returned no snapshot");
+  }
+  return snapshot;
+}
 
 function requestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -236,6 +277,62 @@ describe("OpenRouter usage", () => {
       "Invalid OpenRouter API base URL",
     );
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("bounds native response bodies after headers and releases both usage endpoints", async () => {
+    await withServer(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"data":');
+      },
+      async (baseUrl) => {
+        const headersReady = Promise.withResolvers<void>();
+        const released: string[] = [];
+        const parent = new AbortController();
+        const actualGuard = ssrfRuntime.fetchWithSsrFGuard;
+        let receivedHeaders = 0;
+        const guardedFetch = vi
+          .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+          .mockImplementation(async (params) => {
+            const guarded = await actualGuard(params).catch((error: unknown) => {
+              headersReady.reject(error);
+              throw error;
+            });
+            if (++receivedHeaders === 2) {
+              headersReady.resolve();
+            }
+            return {
+              ...guarded,
+              release: async () => {
+                await guarded.release();
+                released.push(new URL(params.url).pathname);
+              },
+            };
+          });
+        // HTTP and body reads stay native; advance only the request deadline clock.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const operation = fetchOpenRouterUsage({
+          token: "synthetic-private-key",
+          baseUrl,
+          request: { allowPrivateNetwork: true },
+          timeoutMs: 1,
+          signal: parent.signal,
+          fetchFn: fetch,
+        });
+        try {
+          await headersReady.promise;
+          await setImmediate();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await operation).toMatchObject({ windows: [], error: "Malformed usage response" });
+          expect(released.toSorted()).toEqual(["/credits", "/key"]);
+        } finally {
+          parent.abort();
+          vi.useRealTimers();
+          await operation.catch(() => undefined);
+          guardedFetch.mockRestore();
+        }
+      },
+    );
   });
 
   it("derives recurring budget usage from remaining credits when the period counter is absent", async () => {

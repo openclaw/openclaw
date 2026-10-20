@@ -31,7 +31,6 @@ type AgentIdentityCacheEntry = {
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
 const identityRequests = new WeakMap<GatewayBrowserClient, Map<string, AgentIdentityCacheEntry>>();
 
-/** Retire every UI surface's cached request when its connection or roster revision changes. */
 function invalidateAgentIdentityCache(
   client: GatewayBrowserClient | null,
   agentIds?: readonly string[],
@@ -142,6 +141,7 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
     }
   };
 
+  // This Gateway-lifetime owner retires identity caches across connection, access, and roster changes.
   gateway.subscribe(resetForGateway);
 
   const invalidate = (agentIds: readonly (string | null | undefined)[]) => {

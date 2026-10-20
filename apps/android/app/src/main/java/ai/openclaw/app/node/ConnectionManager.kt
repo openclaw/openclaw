@@ -148,6 +148,8 @@ class ConnectionManager internal constructor(
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
           add(USAGE_REFRESHING_CLIENT_CAPABILITY)
           add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
+          // Android does not consume presence rosters; accept deltas to avoid unused full snapshots.
+          add("presence-deltas")
         },
       commands = emptyList(),
       permissions = emptyMap(),

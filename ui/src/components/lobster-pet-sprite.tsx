@@ -1,4 +1,4 @@
-import { template, type JSX } from "@solidjs/web";
+import { template } from "@solidjs/web";
 
 export type LobsterEyeProps = { openEyeStyle: string; closedEyeStyle: string };
 
@@ -7,17 +7,4 @@ export type LobsterEyeProps = { openEyeStyle: string; closedEyeStyle: string };
 export function staticSprite(markup: string): () => Node[] {
   const clone = template(`<svg>${markup}</svg>`);
   return () => Array.from(clone().childNodes);
-}
-
-export function PasserSprite(props: { children: JSX.Element }) {
-  return (
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      {props.children}
-    </svg>
-  );
 }
