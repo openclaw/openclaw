@@ -110,14 +110,14 @@ it.each([
     await refreshPane(pane);
     await refreshChatModelCatalogOnDemand(pane.state);
     const container = document.createElement("div");
-    const query = <T extends HTMLElement>(selector: string): T | null =>
-      container.querySelector<T>(selector);
     const controlValues = () => {
-      const effort = query("[data-chat-thinking-select]");
+      const effort = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
       return {
         thinking: effort?.dataset.chatThinkingValue,
         fast: effort?.dataset.chatFastMode,
-        context: query("[data-chat-context-window-toggle]")?.getAttribute("aria-checked"),
+        context: container
+          .querySelector("[data-chat-context-window-toggle]")
+          ?.getAttribute("aria-checked"),
       };
     };
     const draw = () => {
@@ -138,8 +138,10 @@ it.each([
       return expectDefined(rendered.mock.calls.at(-1)?.[0], "mounted composer control props");
     };
     const props = draw();
-    await waitForSolid(() => expect(query(".chat-controls__model-menu")).not.toBeNull());
-    const effort = query("[data-chat-thinking-select]");
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
+    const effort = container.querySelector<HTMLElement>("[data-chat-thinking-select]");
     const initialThinking = initialState === "placeholder" ? "low" : "";
     const initialValues = { thinking: initialThinking, fast: "false", context: "false" };
     expect(effort?.dataset).toMatchObject({
@@ -156,7 +158,9 @@ it.each([
             : controls.onContextWindowSelect?.(reset ? "64k" : "128k", key),
       );
     if (setting === "context") {
-      expect(query<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
+      ).toBe(false);
     }
     operation = select(props);
     expect(patch).toHaveBeenCalledOnce();
