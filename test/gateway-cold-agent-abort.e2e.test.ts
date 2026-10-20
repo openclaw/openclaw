@@ -2,19 +2,14 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
 import {
   closeHttpServer,
-  connectProofClient,
   listenLoopback,
   readRequestText,
   respondJson,
 } from "./helpers/gateway-integration-fixtures.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
 import { awaitGateBeforeSettlement, createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
@@ -51,8 +46,6 @@ it(
         response.destroy(error instanceof Error ? error : new Error(String(error)));
       });
     });
-    let instance: OpenClawTestInstance | undefined;
-    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let final: Promise<unknown> | undefined;
     await runQaGatewayFixture(
       async () => {
@@ -60,81 +53,79 @@ it(
           `${await listenLoopback(server)}/v1`,
           modelId,
         );
-        instance = await createOpenClawTestInstance({
-          name: "cold-agent-abort",
-          config: {
-            plugins: { slots: { memory: "none" } },
-            agents: {
-              entries: { main: {} },
-              defaults: {
-                model: { primary: provider.modelRef, fallbacks: [] },
-                models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
-                skills: [],
-              },
-            },
-            tools: { profile: "minimal" },
-            models: {
-              mode: "replace",
-              providers: {
-                [provider.providerId]: {
-                  ...provider.config,
-                  request: { allowPrivateNetwork: true },
+        await withBuiltGateway(
+          {
+            name: "cold-agent-abort",
+            config: {
+              plugins: { slots: { memory: "none" } },
+              agents: {
+                entries: { main: {} },
+                defaults: {
+                  model: { primary: provider.modelRef, fallbacks: [] },
+                  models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
+                  skills: [],
                 },
               },
+              tools: { profile: "minimal" },
+              models: {
+                mode: "replace",
+                providers: {
+                  [provider.providerId]: {
+                    ...provider.config,
+                    request: { allowPrivateNetwork: true },
+                  },
+                },
+              },
+            } satisfies OpenClawConfig,
+            env: {
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+              OPENCLAW_SKIP_PROVIDERS: undefined,
+              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
             },
-          } satisfies OpenClawConfig,
-          env: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_SKIP_PROVIDERS: undefined,
-            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
           },
-        });
-        await instance.startGateway();
-        const started = instance;
-        client = await connectProofClient(started).catch(async (error: unknown) => {
-          // Capture the owned child before cleanup retires it.
-          throw new Error(`${String(error)}\n${await started.diagnose()}`, { cause: error });
-        });
-        final = client.request(
-          "agent",
-          {
-            agentId: "main",
-            sessionKey,
-            idempotencyKey: runId,
-            message: "Wait for cancellation.",
-            deliver: false,
-            timeout: 30,
-          },
-          { expectFinal: true, timeoutMs: 30_000, onAccepted: accepted.resolve },
-        );
-        await expect(
-          awaitGateBeforeSettlement(
-            Promise.all([accepted.promise, providerReceived.promise]),
-            final,
-            "agent completed before the cancellation request",
-          ),
-        ).resolves.toMatchObject([{ runId, status: "accepted" }, { model: modelId }]);
-        expect(providerAborted).toBe(false);
+          async (client) => {
+            final = client.request(
+              "agent",
+              {
+                agentId: "main",
+                sessionKey,
+                idempotencyKey: runId,
+                message: "Wait for cancellation.",
+                deliver: false,
+                timeout: 30,
+              },
+              { expectFinal: true, timeoutMs: 30_000, onAccepted: accepted.resolve },
+            );
+            await expect(
+              awaitGateBeforeSettlement(
+                Promise.all([accepted.promise, providerReceived.promise]),
+                final,
+                "agent completed before the cancellation request",
+              ),
+            ).resolves.toMatchObject([{ runId, status: "accepted" }, { model: modelId }]);
+            expect(providerAborted).toBe(false);
 
-        // Readiness uses HTTP and setup uses only agent: this is the first chat-family RPC.
-        const aborted = await client.request("chat.abort", { sessionKey, runId });
-        expect(aborted).toMatchObject({ aborted: true, runIds: [runId] });
-        // The agent RPC retains its cancellation wire status; agent.wait retains the terminal outcome.
-        expect(await final).toEqual({
-          runId,
-          status: "timeout",
-          summary: "aborted",
-          stopReason: "rpc",
-        });
-        expect(await client.request("agent.wait", { runId, timeoutMs: 1_000 })).toMatchObject({
-          status: "error",
-          stopReason: "rpc",
-        });
-        await vi.waitFor(() => expect(providerAborted).toBe(true), { timeout: 5_000 });
-        expect(providerRequests).toBe(1);
+            // Readiness uses HTTP and setup uses only agent: this is the first chat-family RPC.
+            expect(await client.request("chat.abort", { sessionKey, runId })).toMatchObject({
+              aborted: true,
+              runIds: [runId],
+            });
+            // The agent RPC retains its cancellation wire status; agent.wait retains the terminal outcome.
+            expect(await final).toEqual({
+              runId,
+              status: "timeout",
+              summary: "aborted",
+              stopReason: "rpc",
+            });
+            expect(await client.request("agent.wait", { runId, timeoutMs: 1_000 })).toMatchObject({
+              status: "error",
+              stopReason: "rpc",
+            });
+            await vi.waitFor(() => expect(providerAborted).toBe(true), { timeout: 5_000 });
+            expect(providerRequests).toBe(1);
+          },
+        );
       },
-      () => client && disconnectGatewayClient(client),
-      () => instance?.cleanup(),
       () => server.listening && closeHttpServer(server),
       () => Promise.allSettled(final ? [final] : []),
     );

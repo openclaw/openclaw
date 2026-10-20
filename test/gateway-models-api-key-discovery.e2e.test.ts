@@ -3,13 +3,8 @@ import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import type { ModelsAuthSetApiKeyResult } from "../packages/gateway-protocol/src/index.js";
 import type { ModelsListResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
+import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it(
@@ -40,104 +35,101 @@ it(
           response.end(JSON.stringify({ data: modelIds.map((id) => ({ id, name: id })) }));
         }),
     });
-    let instance: OpenClawTestInstance | undefined;
-    let connected: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     await runQaGatewayFixture(
       async () => {
-        instance = await createOpenClawTestInstance({
-          name: "models-api-key-discovery",
-          signal,
-          config: {
-            agents: { defaults: { modelPolicy: { allow: providers.map((id) => `${id}/*`) } } },
-            plugins: {
-              allow: [...providers],
-              entries: perProvider(() => ({ enabled: true })),
-              slots: { memory: "none" },
-            },
-            models: {
-              catalogRefresh: { enabled: false },
-              providers: perProvider((provider) => ({
-                baseUrl: `http://127.0.0.1:${endpoint.claim.port}/${provider}/v1`,
-                api: "openai-completions",
-                models: [],
-              })),
-            },
-            gateway: { mode: "local", reload: { mode: "hybrid" } },
-          },
-          env: {
-            // Self-hosted discovery intentionally skips HTTP in test mode.
-            VITEST: undefined,
-            NODE_ENV: undefined,
-            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-            OPENCLAW_SKIP_PROVIDERS: undefined,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-            OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
-            VLLM_API_KEY: undefined,
-            SGLANG_API_KEY: undefined,
-          },
-        });
-        await instance.startGateway();
-        const client = (connected = await connectProofClient(instance, {
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-        }));
-        for (const provider of providers) {
-          const providerRequests = () =>
-            requests.filter(({ url }) => url === `/${provider}/v1/models`);
-          const saved = await client.request<ModelsAuthSetApiKeyResult>("models.authSetApiKey", {
-            provider,
-            apiKey,
-            agentId: "main",
-          });
-          expect(saved.profileId).toBe(`${provider}:manual`);
-          const persisted = JSON.parse(await readFile(instance.configPath, "utf8"));
-          expect(persisted).toMatchObject({
-            models: { providers: { [provider]: { apiKey: saved.profileId } } },
-          });
-          await client.request("models.list", { agentId: "main", view: "all" });
-
-          await expect
-            .poll(providerRequests, {
-              timeout: 15_000,
-              message: `${provider} must request its model catalog`,
-            })
-            .toContainEqual({
-              url: `/${provider}/v1/models`,
-              authorization: `Bearer ${apiKey}`,
-            });
-          expect(providerRequests().map(({ authorization }) => authorization)).not.toContain(
-            `Bearer ${saved.profileId}`,
-          );
-
-          await expect
-            .poll(
-              async () => {
-                const catalog = await client.request<ModelsListResult>("models.list", {
-                  agentId: "main",
-                  view: "all",
-                });
-                return catalog.models
-                  .filter((model) => model.provider === provider)
-                  .map((model) => model.id)
-                  .toSorted();
+        await withBuiltGateway(
+          {
+            name: "models-api-key-discovery",
+            signal,
+            config: {
+              agents: { defaults: { modelPolicy: { allow: providers.map((id) => `${id}/*`) } } },
+              plugins: {
+                allow: [...providers],
+                entries: perProvider(() => ({ enabled: true })),
+                slots: { memory: "none" },
               },
-              { timeout: 15_000, message: `${provider} must publish discovered models` },
-            )
-            .toEqual(modelIds);
-        }
+              models: {
+                catalogRefresh: { enabled: false },
+                providers: perProvider((provider) => ({
+                  baseUrl: `http://127.0.0.1:${endpoint.claim.port}/${provider}/v1`,
+                  api: "openai-completions",
+                  models: [],
+                })),
+              },
+              gateway: { mode: "local", reload: { mode: "hybrid" } },
+            },
+            env: {
+              // Self-hosted discovery intentionally skips HTTP in test mode.
+              VITEST: undefined,
+              NODE_ENV: undefined,
+              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+              OPENCLAW_SKIP_PROVIDERS: undefined,
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+              OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+              OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
+              VLLM_API_KEY: undefined,
+              SGLANG_API_KEY: undefined,
+            },
+          },
+          async (client, instance) => {
+            for (const provider of providers) {
+              const providerRequests = () =>
+                requests.filter(({ url }) => url === `/${provider}/v1/models`);
+              const saved = await client.request<ModelsAuthSetApiKeyResult>(
+                "models.authSetApiKey",
+                {
+                  provider,
+                  apiKey,
+                  agentId: "main",
+                },
+              );
+              expect(saved.profileId).toBe(`${provider}:manual`);
+              const persisted = JSON.parse(await readFile(instance.configPath, "utf8"));
+              expect(persisted).toMatchObject({
+                models: { providers: { [provider]: { apiKey: saved.profileId } } },
+              });
+              await client.request("models.list", { agentId: "main", view: "all" });
+
+              await expect
+                .poll(providerRequests, {
+                  timeout: 15_000,
+                  message: `${provider} must request its model catalog`,
+                })
+                .toContainEqual({
+                  url: `/${provider}/v1/models`,
+                  authorization: `Bearer ${apiKey}`,
+                });
+              expect(providerRequests().map(({ authorization }) => authorization)).not.toContain(
+                `Bearer ${saved.profileId}`,
+              );
+
+              await expect
+                .poll(
+                  async () => {
+                    const catalog = await client.request<ModelsListResult>("models.list", {
+                      agentId: "main",
+                      view: "all",
+                    });
+                    return catalog.models
+                      .filter((model) => model.provider === provider)
+                      .map((model) => model.id)
+                      .toSorted();
+                  },
+                  { timeout: 15_000, message: `${provider} must publish discovered models` },
+                )
+                .toEqual(modelIds);
+            }
+          },
+          { scopes: ["operator.admin", "operator.read", "operator.write"] },
+        );
       },
-      () => connected && disconnectGatewayClient(connected),
-      () => instance?.cleanup(),
       () => {
         endpoint.listener.closeAllConnections();
         return endpoint.releaseListener();
       },
       () => endpoint.claim.release(),
     ).catch((error: unknown) => {
-      throw new Error(
-        `API-key discovery failed: ${JSON.stringify(requests)}\n${instance?.logs() ?? ""}`,
-        { cause: error },
-      );
+      throw new Error(`API-key discovery failed: ${JSON.stringify(requests)}`, { cause: error });
     });
   },
 );

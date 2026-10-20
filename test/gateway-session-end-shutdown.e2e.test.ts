@@ -3,27 +3,18 @@ import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionsCreateResult } from "../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
+import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const PLUGIN_ID = "session-end-shutdown-proof";
 const SESSION_KEY = "agent:main:dashboard:session-end-shutdown-proof";
-const HOOK_DELAY_MS = 10_000;
 const WAIT_OPTIONS = { timeout: 10_000, interval: 25 } as const;
 
-const instances: OpenClawTestInstance[] = [];
 const fixtureDirs = createTempDirTracker();
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
-  fixtureDirs.cleanup();
-});
+afterEach(fixtureDirs.cleanup);
 
 async function writeSessionEndPlugin(pluginDir: string, tracePath: string): Promise<void> {
   await mkdir(pluginDir, { recursive: true });
@@ -45,7 +36,7 @@ export default {
     api.on("session_end", async (event) => {
       if (event.sessionKey !== ${JSON.stringify(SESSION_KEY)} || event.reason !== "reset") return;
       appendFileSync(${JSON.stringify(tracePath)}, "started\\n");
-      await new Promise((resolve) => setTimeout(resolve, ${HOOK_DELAY_MS}));
+      await new Promise((resolve) => setTimeout(resolve, 10000));
       appendFileSync(${JSON.stringify(tracePath)}, "completed\\n");
     });
   },
@@ -71,57 +62,50 @@ it("finishes a real reset-started session_end hook after an operating-system SIG
   const tracePath = path.join(fixtureDir, "session-end.trace");
   await writeSessionEndPlugin(pluginDir, tracePath);
 
-  const instance = await createOpenClawTestInstance({
-    name: "session-end-shutdown",
-    config: {
-      plugins: {
-        enabled: true,
-        allow: [PLUGIN_ID],
-        load: { paths: [pluginDir] },
-        entries: { [PLUGIN_ID]: { enabled: true } },
-        slots: { memory: "none" },
-      },
-    } satisfies OpenClawConfig,
-    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
-    stopTimeoutMs: 10_000,
-    // Signal the Gateway itself before the custody owner cancels its worker tree.
-    gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
-  });
-  instances.push(instance);
-  await instance.startGateway();
+  await withBuiltGateway(
+    {
+      name: "session-end-shutdown",
+      config: {
+        plugins: {
+          enabled: true,
+          allow: [PLUGIN_ID],
+          load: { paths: [pluginDir] },
+          entries: { [PLUGIN_ID]: { enabled: true } },
+          slots: { memory: "none" },
+        },
+      } satisfies OpenClawConfig,
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+      stopTimeoutMs: 10_000,
+      // Signal the Gateway itself before the custody owner cancels its worker tree.
+      gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
+    },
+    async (client, instance) => {
+      await vi.waitFor(async () => {
+        const created = await client.request<SessionsCreateResult>("sessions.create", {
+          agentId: "main",
+          key: SESSION_KEY,
+        });
+        expect(created.key).toBe(SESSION_KEY);
+        expect(created.sessionId).toBeTruthy();
+      }, WAIT_OPTIONS);
 
-  const client = await connectProofClient(instance, {
-    role: "operator",
-    scopes: ["operator.admin", "operator.read", "operator.write"],
-  });
+      await client.request("sessions.reset", { key: SESSION_KEY, reason: "reset" });
+      await vi.waitFor(async () => {
+        expect(await readTrace(tracePath), instance.logs()).toEqual(["started"]);
+      }, WAIT_OPTIONS);
 
-  try {
-    await vi.waitFor(async () => {
-      const created = await client.request<{ key: string; sessionId: string }>("sessions.create", {
-        agentId: "main",
-        key: SESSION_KEY,
-      });
-      expect(created.key).toBe(SESSION_KEY);
-      expect(created.sessionId).toBeTruthy();
-    }, WAIT_OPTIONS);
+      const child = instance.child;
+      if (!child) {
+        throw new Error("Gateway process exited before its session-end hook was signaled");
+      }
+      const exited = once(child, "exit") as Promise<
+        [code: number | null, signal: NodeJS.Signals | null]
+      >;
+      expect(child.kill("SIGTERM")).toBe(true);
 
-    await client.request("sessions.reset", { key: SESSION_KEY, reason: "reset" });
-    await vi.waitFor(async () => {
-      expect(await readTrace(tracePath), instance.logs()).toEqual(["started"]);
-    }, WAIT_OPTIONS);
-
-    const child = instance.child;
-    if (!child) {
-      throw new Error("Gateway process exited before its session-end hook was signaled");
-    }
-    const exited = once(child, "exit") as Promise<
-      [code: number | null, signal: NodeJS.Signals | null]
-    >;
-    expect(child.kill("SIGTERM")).toBe(true);
-
-    await expect(exited).resolves.toEqual([0, null]);
-    await expect(readTrace(tracePath)).resolves.toEqual(["started", "completed"]);
-  } finally {
-    await disconnectGatewayClient(client).catch(() => undefined);
-  }
+      await expect(exited).resolves.toEqual([0, null]);
+      await expect(readTrace(tracePath)).resolves.toEqual(["started", "completed"]);
+    },
+    { role: "operator", scopes: ["operator.admin", "operator.read", "operator.write"] },
+  );
 }, 120_000);

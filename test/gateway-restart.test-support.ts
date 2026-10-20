@@ -34,11 +34,19 @@ export function restartProviderServer(
 }
 
 export function restartToolNames(body: Record<string, unknown>) {
-  return Array.isArray(body.tools)
-    ? body.tools.flatMap((tool) =>
-        isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-      )
-    : [];
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.flatMap((tool) =>
+    isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
+  );
+}
+
+function completedResponse(id: string, output: object[]) {
+  return {
+    id,
+    status: "completed",
+    output,
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  };
 }
 
 export function writeRestartToolCall(
@@ -66,22 +74,15 @@ export function writeRestartToolCall(
     { type: "response.output_item.done", output_index: 0, item },
     {
       type: "response.completed",
-      response: {
-        id: `resp_${key}_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
+      response: completedResponse(`resp_${key}_${ordinal}`, [item]),
     },
   ]);
 }
 
 export function writeRestartTitle(response: ServerResponse, text: string) {
   respondJson(response, {
-    id: "resp_title",
     object: "response",
-    status: "completed",
-    output: [
+    ...completedResponse("resp_title", [
       {
         type: "message",
         id: "msg_title",
@@ -89,8 +90,7 @@ export function writeRestartTitle(response: ServerResponse, text: string) {
         status: "completed",
         content: [{ type: "output_text", text, annotations: [] }],
       },
-    ],
-    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    ]),
   });
 }
 
@@ -111,7 +111,6 @@ export function readRestartSession(agentDir: string, sessionKey: string) {
 export function restartModelConfig(
   model: ReturnType<typeof buildMockOpenAiResponsesProvider>,
   workspace: string,
-  subagents?: { runTimeoutSeconds: number },
 ): Pick<OpenClawConfig, "models" | "agents"> {
   const { modelRef, providerId, config } = model;
   return {
@@ -136,7 +135,6 @@ export function restartModelConfig(
         skipBootstrap: true,
         skills: [],
         timeoutSeconds: 120,
-        ...(subagents ? { subagents } : {}),
       },
       entries: { main: {} },
     },

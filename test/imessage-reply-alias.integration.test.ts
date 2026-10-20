@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-  PluginStateActionAuthority,
-} from "../src/plugin-state/plugin-state-store.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
@@ -19,10 +14,10 @@ afterEach(async () => {
 
 it("matches a cold SQLite current-message binding through the registered iMessage adapter", async () => {
   await withOpenClawTestState({ label: "imessage-alias-worker" }, async (state) => {
-    const { createPluginStateKeyedStoreV2, createPluginStateSyncKeyedStore } =
+    const { createPluginStateRuntimeStores, createPluginStateSyncKeyedStore } =
       await import("../src/plugin-state/plugin-state-store.js");
-    const openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStore<T>("imessage", { ...options, env: state.env });
+    const seedStore = (namespace: string, maxEntries: number) =>
+      createPluginStateSyncKeyedStore("imessage", { namespace, maxEntries, env: state.env });
     const entry = {
       accountId: "work",
       messageId: "00000000-0000-4000-8000-000000000042",
@@ -32,35 +27,20 @@ it("matches a cold SQLite current-message binding through the registered iMessag
       timestamp: Date.now(),
     };
     // Seed the persisted upgrade contract before loading the plugin's memory cache.
-    openSyncKeyedStore({
-      namespace: "imessage.reply-cache",
-      maxEntries: 2000,
-    }).register(createHash("sha256").update(entry.messageId).digest("hex").slice(0, 32), entry, {
+    const entryKey = createHash("sha256").update(entry.messageId).digest("hex").slice(0, 32);
+    seedStore("imessage.reply-cache", 2000).register(entryKey, entry, {
       ttlMs: 6 * 60 * 60 * 1000,
     });
-    openSyncKeyedStore({
-      namespace: "imessage.reply-cache-counter",
-      maxEntries: 1,
-    }).register("short-id-counter", { counter: 7 });
+    seedStore("imessage.reply-cache-counter", 1).register("short-id-counter", { counter: 7 });
 
     const runtime = createPluginRuntimeMock({
       state: {
+        ...createPluginStateRuntimeStores("imessage", () => {}),
         resolveStateDir: () => state.stateDir,
-        openKeyedStoreV2: <T>(
-          options: OpenAsyncKeyedStoreOptions,
-          authority?: PluginStateActionAuthority,
-        ) =>
-          createPluginStateKeyedStoreV2<T>(
-            "imessage",
-            { ...options, env: state.env },
-            authority ?? { assertCurrent() {} },
-          ),
-        openSyncKeyedStore,
       },
     });
     const openSync = vi.spyOn(runtime.state, "openSyncKeyedStore");
-    const { imessageMessageActions, setIMessageRuntime } =
-      await import("../extensions/imessage/runtime-api.js");
+    const { setIMessageRuntime } = await import("../extensions/imessage/runtime-api.js");
     const { imessagePlugin } = await import("../extensions/imessage/api.js");
     setIMessageRuntime(runtime);
     const delivered = { content: [], details: { ok: true } };
@@ -74,7 +54,7 @@ it("matches a cold SQLite current-message binding through the registered iMessag
           origin: "bundled",
           plugin: {
             ...imessagePlugin,
-            actions: { ...imessageMessageActions, handleAction },
+            actions: { ...imessagePlugin.actions, handleAction },
           },
         },
       ]),
