@@ -1606,6 +1606,7 @@ src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
+src/plugins/plugin-retention-diagnostics.ts
 src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts

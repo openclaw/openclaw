@@ -16,7 +16,7 @@ import {
   resolveSystemEventQueueKey,
 } from "../../infra/system-event-ownership.js";
 import {
-  consumeSelectedSystemEventEntries,
+  adoptSelectedSystemEventEntries,
   isSystemEventTurnOwned,
   peekSystemEventEntries,
   type SystemEvent,
@@ -97,7 +97,7 @@ export async function drainFormattedSystemEvents(params: {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
   // Claimed turns and legacy exec wakes retain their own execution and delivery owner.
-  const queued = consumeSelectedSystemEventEntries(
+  const queued = adoptSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
       (event) => !isSystemEventTurnOwned(queueKey, event) && !isExecCompletionSystemEvent(event),

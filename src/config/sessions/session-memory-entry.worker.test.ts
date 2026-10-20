@@ -8,7 +8,7 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { prepareSessionMemoryEntries } from "./session-memory-entry.worker.js";
+import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
 
 it("batches export metadata while observing committed appends, rewrites and cold transitions", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-batch" }, async (state) => {
@@ -35,7 +35,7 @@ it("batches export metadata while observing committed appends, rewrites and cold
     const readBatch = async () => {
       const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
       try {
-        const entries = await prepareSessionMemoryEntries(requests);
+        const entries = await collectSessionMemoryEntries(requests);
         expect(
           observer.queries.filter(
             (sql) => /\bcount\(/i.test(sql) && /transcript_events/i.test(sql),
@@ -118,7 +118,7 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
       ]),
     ).toBe(true);
     const request = { absPath: scope.sessionKey, options: scope };
-    expect(await prepareSessionMemoryEntries([request])).toMatchObject([
+    expect(await collectSessionMemoryEntries([request])).toMatchObject([
       { entry: { content: "User: First.\nUser: Second.\nUser: Third." } },
     ]);
     const requests = ["second", "third"].map((entryId) => {
@@ -132,13 +132,23 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
         admission: { ...anchor, logicalTurnId: entryId, role: "user" as const },
       };
     });
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    let payloadBindings = 0;
+    const observer = observeSqliteReadSql(
+      requireNodeSqlite().StatementSync.prototype,
+      (sql, bindings) => {
+        if (sql.includes(' as "event_json"')) {
+          payloadBindings += bindings.length;
+        }
+      },
+    );
     try {
-      expect(await prepareSessionMemoryEntries(requests)).toMatchObject([
+      expect(await collectSessionMemoryEntries(requests)).toMatchObject([
         { entry: { content: "User: First." } },
         { entry: { content: "User: First.\nUser: Second." } },
       ]);
       expect(observer.queries.filter((sql) => sql.includes(' as "event_json"'))).toHaveLength(1);
+      // Each admission range needs at most one session and one sequence bound.
+      expect(payloadBindings).toBeLessThanOrEqual(4);
     } finally {
       observer.restore();
     }
@@ -172,7 +182,7 @@ it("waits for delivery before reading later export batches and retries a failed 
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
     const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const pending = prepareSessionMemoryEntries(requests, async (index, value) => {
+    const pending = collectSessionMemoryEntries(requests, async (index, value) => {
       expect(index).toBe(0);
       if (!("entry" in value) || !value.entry) {
         throw new Error("Expected a hot export");
@@ -211,13 +221,13 @@ it("waits for delivery before reading later export batches and retries a failed 
     ).toBe(true);
     const delivered: number[] = [];
     expect(
-      await prepareSessionMemoryEntries(requests, async (index, value) => {
+      await collectSessionMemoryEntries(requests, async (index, value) => {
         delivered.push(index);
         if (index === 2) {
           expect(value).toMatchObject({ entry: { content: "User: Committed after failure." } });
         }
       }),
-    ).toEqual([]);
+    ).toHaveLength(3);
     expect(delivered).toEqual([0, 1, 2]);
   });
 });

@@ -11,6 +11,7 @@ import {
 import type { SessionGitHubOptionsResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { GitHubIdentityError } from "../../agents/github-read-identity.js";
+import { canRefreshGitHubPublicationBase } from "../../agents/sandbox/github-publication.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
@@ -173,13 +174,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const caller = getGatewayToolCallerIdentity();
       const { params } = options;
       const sandbox = caller?.workspaceBaseRefreshSandbox;
-      if (!sandbox?.enabled || !sandbox.backend || sandbox.workspaceSource !== "managed-worktree") {
+      if (!canRefreshGitHubPublicationBase(sandbox)) {
         throw new Error(
-          "Run refresh_base from this workspace's sandboxed agent so its review base can be prepared.",
+          "refresh_base needs this session's writable managed sandbox workspace. Sessions that run directly on the host merge the base with git in their workspace, then publish.",
         );
-      }
-      if (sandbox.workspaceAccess === "ro") {
-        throw new Error("The workspace is read-only; refresh_base requires a writable sandbox.");
       }
       if (
         caller &&
