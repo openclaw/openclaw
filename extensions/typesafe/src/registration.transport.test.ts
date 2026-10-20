@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import { DecisionContractError, type DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -312,8 +312,14 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
     }
     const fetch = mockResponse({});
     await expect(
-      registeredProvider().evaluate({ state, questions: { q: { type: "boolean" } } }, context()),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+      registeredProvider().evaluate(
+        {
+          state,
+          questions: { q: { type: "boolean" } },
+        },
+        context(),
+      ),
+    ).rejects.toThrow(DecisionContractError);
     expect(hook).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   },

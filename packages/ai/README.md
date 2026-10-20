@@ -43,9 +43,9 @@ supports input progress; completed tool calls retain only parsed `arguments`.
 It is the live block, not a per-event snapshot: a consumer that lags behind the
 producer reads the latest value, or none once the call has finished.
 
-The Mistral adapter reports unreadable tool definitions as a stream error before
-sending a model request. It does not silently omit those tools from the request.
-Its pinned Mistral SDK chat client is bundled into the adapter; consumers do not
+The Anthropic and Mistral adapters report unreadable tool descriptors as
+a stream error before sending a model request rather than silently omitting them.
+The pinned Mistral SDK chat client is bundled into the adapter; consumers do not
 need the SDK's full package tree. The SDK's Apache-2.0 license ships as
 `dist/mistral.LICENSE`.
 

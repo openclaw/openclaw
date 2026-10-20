@@ -3,19 +3,51 @@ import { children, For, onCleanup, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  nextSettingsRadioName,
-  settingsRadioChange,
-  settingsRadioClick,
-  settingsRadioKeyDown,
-  settingsSwitchChange,
-  settingsSwitchClick,
-  settingsSwitchKeyDown,
-  type SettingsSegmentedProps,
-  type SettingsToggleControl,
-} from "../settings-controls.ts";
 import { Icon } from "./icon.tsx";
 import "../tooltip.ts";
+
+export type SettingsToggleControl = {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => boolean | void;
+  onAct?: (checked: boolean) => void;
+};
+
+type SettingsSegmentedOption<T extends string, Label> = {
+  value: T;
+  label: Label;
+  title?: string;
+  testId?: string;
+  disabled?: boolean;
+  compactLabel?: string;
+  ariaLabel?: string;
+};
+
+export type SettingsSegmentedProps<T extends string, Label> = {
+  value: T;
+  options: ReadonlyArray<SettingsSegmentedOption<T, Label>>;
+  inputRef?: (value: T, element: HTMLInputElement) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+  descriptionId?: string;
+  class?: string;
+} & (
+  | {
+      mode?: undefined;
+      onChange: (value: T, element: HTMLElement) => boolean | void;
+      onReselect?: (value: T, element: HTMLElement) => void;
+    }
+  | {
+      mode: "buttons";
+      variant?: "accent" | "primary" | "compact";
+      onClick?: (event: MouseEvent, value: T) => void;
+      onChange: (value: T) => void;
+      onReselect?: (value: T) => void;
+    }
+);
+
+let radioId = 0;
+const nextSettingsRadioName = () => `settings-radio-${++radioId}`;
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
@@ -276,9 +308,42 @@ function ToggleControl(
         checked={props.checked}
         disabled={props.disabled}
         aria-labelledby={props.labelledBy ?? labelId}
-        onClick={(event) => settingsSwitchClick(event, props)}
-        onChange={(event) => settingsSwitchChange(event, props)}
-        onKeyDown={(event) => settingsSwitchKeyDown(event, props)}
+        onClick={(event) => {
+          const input = event.currentTarget;
+          if (!input.matches(":disabled") && !props.disabled && input.checked !== props.checked) {
+            props.onAct?.(input.checked);
+          }
+        }}
+        onChange={(event) => {
+          const input = event.currentTarget;
+          if (
+            input.matches(":disabled") ||
+            props.disabled ||
+            props.onChange(input.checked) === false
+          ) {
+            input.checked = props.checked;
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+            return;
+          }
+          const input = event.currentTarget;
+          if (input.matches(":disabled") || props.disabled) {
+            return;
+          }
+          event.preventDefault();
+          const checked =
+            (event.key === "ArrowRight") !== (getComputedStyle(input).direction === "rtl");
+          if (checked === input.checked) {
+            return;
+          }
+          input.checked = checked;
+          props.onAct?.(checked);
+          if (props.onChange(checked) === false) {
+            input.checked = props.checked;
+          }
+        }}
       />
       <span class="settings-toggle__control" aria-hidden="true" />
       <Show when={!props.labelledBy}>
@@ -361,8 +426,8 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
         >
           <For each={props.options} keyed={(option) => option.value}>
             {(option) => {
-              let input: HTMLInputElement;
-              onCleanup(() => inputs.delete(input.value));
+              let inputElement: HTMLInputElement;
+              onCleanup(() => inputs.delete(inputElement.value));
               return (
                 <label
                   class={[
@@ -374,7 +439,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                 >
                   <input
                     ref={(element) => {
-                      input = element;
+                      inputElement = element;
                       inputs.set(option().value, element);
                       props.inputRef?.(option().value, element);
                     }}
@@ -385,11 +450,71 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                     checked={option().value === props.value}
                     disabled={props.disabled || option().disabled}
                     aria-label={option().ariaLabel}
-                    onClick={(event) => settingsRadioClick(event, option().value, props)}
-                    onChange={(event) =>
-                      settingsRadioChange(event, option().value, props, radios())
-                    }
-                    onKeyDown={(event) => settingsRadioKeyDown(event, radios())}
+                    onClick={(event) => {
+                      const input = event.currentTarget;
+                      if (
+                        props.mode === "buttons" ||
+                        props.disabled ||
+                        input.matches(":disabled")
+                      ) {
+                        return;
+                      }
+                      if (option().value === props.value) {
+                        props.onReselect?.(
+                          option().value,
+                          input.closest<HTMLElement>(".settings-segmented__btn") ?? input,
+                        );
+                      }
+                    }}
+                    onChange={(event) => {
+                      const input = event.currentTarget;
+                      if (props.mode === "buttons" || !input.checked) {
+                        return;
+                      }
+                      if (
+                        props.disabled ||
+                        input.matches(":disabled") ||
+                        props.onChange(
+                          option().value,
+                          input.closest<HTMLElement>(".settings-segmented__btn") ?? input,
+                        ) === false
+                      ) {
+                        for (const radio of radios()) {
+                          radio.checked = radio.value === props.value;
+                        }
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      const input = event.currentTarget;
+                      const group = input.closest('[role="radiogroup"]');
+                      if (!group || input.matches(":disabled")) {
+                        return;
+                      }
+                      const rtl = getComputedStyle(group).direction === "rtl";
+                      let step: number;
+                      switch (event.key) {
+                        case "ArrowRight":
+                          step = rtl ? -1 : 1;
+                          break;
+                        case "ArrowLeft":
+                          step = rtl ? 1 : -1;
+                          break;
+                        case "ArrowDown":
+                          step = 1;
+                          break;
+                        case "ArrowUp":
+                          step = -1;
+                          break;
+                        default:
+                          return;
+                      }
+                      event.preventDefault();
+                      const enabled = radios().filter((radio) => !radio.matches(":disabled"));
+                      const index = enabled.indexOf(input);
+                      const next = enabled[(index + step + enabled.length) % enabled.length];
+                      next?.focus();
+                      next?.click();
+                    }}
                   />
                   {option().label}
                 </label>
