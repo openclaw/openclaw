@@ -5,7 +5,7 @@ import { createOverlayHandlers } from "./tui-overlays.js";
 
 const createComponent = (): Component => ({ render: () => ["dummy"], invalidate() {} });
 
-function createHandle(hide = vi.fn()): OverlayHandle {
+function createHandle(hide = vi.fn()) {
   return {
     hide,
     setHidden: vi.fn(),
@@ -14,7 +14,7 @@ function createHandle(hide = vi.fn()): OverlayHandle {
     unfocus: vi.fn(),
     isFocused: vi.fn(() => false),
     getBounds: () => undefined,
-  };
+  } satisfies OverlayHandle;
 }
 
 describe("createOverlayHandlers", () => {

@@ -381,7 +381,7 @@ describe("login-qr", () => {
 
   it("rederives logged-out auth after restart when preserved creds have no active listener", async () => {
     const accountId = "restart-preserved-logged-out";
-    queueSilentSocket();
+    queueQrSocket();
     queueQrSocket("qr-after-restart-logout");
     waitForWaConnectionMock
       .mockRejectedValueOnce({ output: { statusCode: 401 } })
@@ -539,7 +539,7 @@ describe("login-qr", () => {
   });
 
   it("surfaces the latest QR after the socket rotates it", async () => {
-    queueRotatingQrSocket("qr-data", "qr-data-2", 100);
+    queueQrSocket("qr-data", { qr: "qr-data-2", delayMs: 100 });
     waitForWaConnectionMock.mockImplementation(waitForever);
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000 });

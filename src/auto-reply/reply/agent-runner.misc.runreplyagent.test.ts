@@ -1416,13 +1416,18 @@ describe("runReplyAgent response usage footer", () => {
           models: {
             providers: {
               [provider]: {
+                baseUrl: "https://example.test",
                 ...(bedrock ? { auth: "aws-sdk" as const } : {}),
                 models: [
                   {
                     id: model,
+                    name: model,
+                    reasoning: false,
+                    input: ["text"],
+                    maxTokens: 8192,
                     cost: bedrock
                       ? { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
-                      : { input: 3, output: 15 },
+                      : { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
                   },
                 ],
               },

@@ -20,9 +20,9 @@ type WorkflowStep = {
   uses?: string;
   with?: Record<string, unknown>;
 };
-type Dependencies = { dependencies: Record<string, string> };
 
 type Workflow = {
+  name: string;
   on: Record<string, { types?: string[]; workflows?: string[] }>;
   permissions: Record<string, string>;
   concurrency?: { group: string; "cancel-in-progress": boolean };
@@ -41,51 +41,17 @@ type Workflow = {
   >;
 };
 
-const workflow = parse(readFileSync(".github/workflows/security-review.yml", "utf8")) as Workflow;
-
-function evaluate(expression: string, context: Record<string, unknown>) {
-  return runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), context);
+function readWorkflow(name: string): Workflow {
+  return parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow;
 }
 
-function checkCondition(expression: string) {
-  return (context: Record<string, unknown>, allowed: boolean) => {
-    expect(Boolean(evaluate(expression, context))).toBe(allowed);
-  };
-}
-
-function checkRuntime(
-  expression: string,
-  rows: readonly (readonly [boolean, string, boolean, boolean?])[],
-) {
-  const check = checkCondition(expression);
-  for (const [allowed, runtime, cancelled, failed] of rows) {
-    check(
-      {
-        steps: { runtime: { outcome: runtime } },
-        cancelled: () => cancelled,
-        failure: () => failed,
-      },
-      allowed,
-    );
-  }
-}
-
-function runShell(command: string, options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
-  return spawnSync("bash", ["-e", "-c", command], { encoding: "utf8", ...options });
-}
-
-function expectEntryFailure(workspace: string, entry: string, stderr: string) {
-  const result = runSelectedEntry(workspace, entry);
-  expect({ status: result.status, stderr: result.stderr.trim() }).toEqual({ status: 1, stderr });
-}
-
-function readJson<T>(path: string): T {
-  return JSON.parse(readFileSync(path, "utf8")) as T;
-}
-
-function stepsUsing(steps: WorkflowStep[], action: string) {
-  return steps.filter((step) => step.uses?.startsWith(`${action}@`));
-}
+const reviewPermissions = {
+  contents: "read",
+  "pull-requests": "write",
+  actions: "read",
+  issues: "write",
+  statuses: "write",
+};
 const runtimeActionPath = ".github/actions/setup-security-review";
 const runtimeAction = parse(readFileSync(`${runtimeActionPath}/action.yml`, "utf8")) as {
   runs: { using: string; steps: WorkflowStep[] };
@@ -97,7 +63,9 @@ function materializeJobSources(
   name: "resolve" | "review",
   checkoutId = "checkout",
 ) {
-  const checkout = workflow.jobs[name]!.steps.find((step) => step.id === checkoutId);
+  const checkout = readWorkflow("security-review").jobs[name]!.steps.find(
+    (step) => step.id === checkoutId,
+  );
   const sparse = checkout?.with?.["sparse-checkout"];
   const checkoutPath = checkout?.with?.path;
   if (typeof sparse !== "string" || typeof checkoutPath !== "string") {
@@ -116,13 +84,15 @@ function materializeJobSources(
 }
 
 function stageJobSources(workspace: string, name: "resolve" | "review", recovered = false) {
-  const stage = workflow.jobs[name]!.steps.find((step) => step.id === "sources");
+  const stage = readWorkflow("security-review").jobs[name]!.steps.find(
+    (step) => step.id === "sources",
+  );
   expect(stage).toBeDefined();
   const env = Object.fromEntries(
     Object.entries(stage!.env ?? {}).map(([key, expression]) => [
       key,
       String(
-        evaluate(expression, {
+        runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), {
           steps: { checkout: { outcome: recovered ? "failure" : "success" } },
         }),
       ),
@@ -154,6 +124,7 @@ describe("security review workflow trust boundaries", () => {
       mkdirSync(join(failedSource, ".git"), { recursive: true });
       writeFileSync(join(failedSource, ".git/index.lock"), "failed checkout lock");
       materializeJobSources(workspace, name, "checkout_retry");
+      // A timed-out checkout must not change the scripts selected by recovery.
       writeFileSync(
         join(failedSource, "scripts/github/guard-shared.mjs"),
         'throw new Error("late write from failed checkout");',
@@ -161,9 +132,9 @@ describe("security review workflow trust boundaries", () => {
     }
     stageJobSources(workspace, name, recovered);
     if (name === "resolve") {
-      expectEntryFailure(
-        workspace,
-        "security-review-event.mjs",
+      const result = runSelectedEntry(workspace, "security-review-event.mjs");
+      expect(result.status).toBe(1);
+      expect(result.stderr.trim()).toBe(
         "GitHub token, event, event name, and repository are required.",
       );
     }
@@ -172,7 +143,8 @@ describe("security review workflow trust boundaries", () => {
       ["--input-type=module", "-e", 'import "./scripts/github/guard-shared.mjs"'],
       { cwd: workspace, env: {}, encoding: "utf8" },
     );
-    expect(probe).toMatchObject({ stderr: "", status: 0 });
+    expect(probe.stderr).toBe("");
+    expect(probe.status).toBe(0);
     expect(existsSync(join(workspace, ".git/index.lock"))).toBe(false);
     if (name === "review") {
       expect(readFileSync(join(workspace, runtimeActionPath, "action.yml"), "utf8")).toBe(
@@ -182,38 +154,42 @@ describe("security review workflow trust boundaries", () => {
   });
 
   it("executes trusted scripts and limits comment writes to the serialized review job", () => {
-    const sharedPermissions = { contents: "read", actions: "read", statuses: "write" };
-    expect(workflow.permissions).toEqual({ ...sharedPermissions, "pull-requests": "read" });
-    expect(workflow.jobs.review?.permissions).toEqual({
-      ...sharedPermissions,
-      "pull-requests": "write",
-      issues: "write",
+    const workflow = readWorkflow("security-review");
+    expect(workflow.permissions).toEqual({
+      contents: "read",
+      "pull-requests": "read",
+      actions: "read",
+      statuses: "write",
     });
+    expect(workflow.jobs.review?.permissions).toEqual(reviewPermissions);
     expect(workflow.concurrency).toBeUndefined();
-    const { concurrency, strategy, env } = workflow.jobs.review!;
-    expect({ concurrency, strategy, env }).toEqual({
-      concurrency: { group: "security-review-${{ matrix.head }}", "cancel-in-progress": false },
-      strategy: { "fail-fast": false, matrix: "${{ fromJSON(needs.resolve.outputs.matrix) }}" },
-      env: {
-        OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "${{ matrix.pr }}",
-        OPENCLAW_SECURITY_REVIEW_HEAD_SHA: "${{ matrix.head }}",
-      },
+    expect(workflow.jobs.review?.concurrency).toEqual({
+      group: "security-review-${{ matrix.head }}",
+      "cancel-in-progress": false,
+    });
+    expect(workflow.jobs.review?.strategy).toEqual({
+      "fail-fast": false,
+      matrix: "${{ fromJSON(needs.resolve.outputs.matrix) }}",
+    });
+    expect(workflow.jobs.review?.env).toEqual({
+      OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "${{ matrix.pr }}",
+      OPENCLAW_SECURITY_REVIEW_HEAD_SHA: "${{ matrix.head }}",
     });
     for (const name of ["resolve", "review"]) {
       const job = workflow.jobs[name]!;
-      const checkouts = stepsUsing(job.steps, "actions/checkout");
+      const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
       expect(checkouts).toHaveLength(2);
       expect(checkouts[1]?.with).toEqual({
         ...checkouts[0]?.with,
         path: "security-review-retry",
       });
-      expect(checkouts).toMatchObject([
-        {
-          "timeout-minutes": 5,
-          with: { path: "security-review-primary", "persist-credentials": false },
-        },
-        { uses: checkouts[0]?.uses, "timeout-minutes": 5 },
-      ]);
+      expect(checkouts[1]?.uses).toBe(checkouts[0]?.uses);
+      expect(checkouts[1]?.["timeout-minutes"]).toBe(5);
+      expect(checkouts[0]?.["timeout-minutes"]).toBe(5);
+      expect(checkouts[0]?.with).toMatchObject({
+        path: "security-review-primary",
+        "persist-credentials": false,
+      });
       for (const input of ["ref", "repository", "allow-unsafe-pr-checkout"]) {
         expect(checkouts[0]?.with).not.toHaveProperty(input);
       }
@@ -222,7 +198,7 @@ describe("security review workflow trust boundaries", () => {
       if (runtime.length > 0) {
         expect(runtime[0]?.["timeout-minutes"]).toBe(3);
       }
-      const bootstrap = stepsUsing(job.steps, "actions/setup-node");
+      const bootstrap = job.steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
       expect(bootstrap).toEqual(
         name === "resolve"
           ? [
@@ -261,6 +237,7 @@ describe("security review workflow trust boundaries", () => {
             );
             continue;
           }
+          // Final enforcement is exercised with preparation outputs below.
           if (step.env?.OPENCLAW_SECURITY_REVIEW_MODE !== "enforce") {
             expect(step.run).toBe(
               `node scripts/github/security-review${name === "resolve" ? "-event" : ""}.mjs`,
@@ -283,13 +260,20 @@ describe("security review workflow trust boundaries", () => {
     "bounds checkout recovery ($failures failures, cancelled=$cancelled)",
     ({ failures, attempts, jobFailed, cancelled }) => {
       for (const name of ["resolve", "review"]) {
-        const job = workflow.jobs[name]!;
+        const job = readWorkflow("security-review").jobs[name]!;
         const steps: Record<string, { outcome: string }> = {};
         let failed = false;
         let executed = 0;
-        for (const step of stepsUsing(job.steps, "actions/checkout")) {
+        for (const step of job.steps.filter((candidate) =>
+          candidate.uses?.startsWith("actions/checkout@"),
+        )) {
           const allowed: boolean = step.if
-            ? Boolean(evaluate(step.if, { steps, cancelled: () => cancelled }))
+            ? Boolean(
+                runInNewContext(step.if.replace(/^\$\{\{|\}\}$/gu, ""), {
+                  steps,
+                  cancelled: () => cancelled,
+                }),
+              )
             : !failed;
           const outcome: "skipped" | "failure" | "success" = !allowed
             ? "skipped"
@@ -301,7 +285,8 @@ describe("security review workflow trust boundaries", () => {
           }
           failed ||= outcome === "failure" && step["continue-on-error"] !== true;
         }
-        expect({ executed, failed }).toEqual({ executed: attempts, failed: jobFailed });
+        expect(executed).toBe(attempts);
+        expect(failed).toBe(jobFailed);
       }
     },
   );
@@ -313,7 +298,9 @@ describe("security review workflow trust boundaries", () => {
   ])(
     "reports bootstrap failure only for the current open head ($state, sameHead=$sameHead)",
     async ({ state, sameHead, publish }) => {
-      const [reporter] = stepsUsing(workflow.jobs.review!.steps, "actions/github-script");
+      const reporter = readWorkflow("security-review").jobs.review!.steps.find((step) =>
+        step.uses?.startsWith("actions/github-script@"),
+      );
       expect(reporter).toBeDefined();
       const sha = "a".repeat(40);
       const writes: unknown[] = [];
@@ -357,38 +344,54 @@ describe("security review workflow trust boundaries", () => {
             ]
           : [],
       );
-      checkRuntime(reporter!.if!, [
+      for (const [failed, runtime, cancelled, allowed] of [
         [true, "failure", false, true],
         [true, "skipped", false, true],
         [false, "success", false, false],
-        [false, "success", false, true],
-        [false, "skipped", true, true],
-      ]);
+        [true, "success", false, false],
+        [true, "skipped", true, false],
+      ] as const) {
+        expect(
+          Boolean(
+            runInNewContext(reporter!.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+              steps: { runtime: { outcome: runtime } },
+              failure: () => failed,
+              cancelled: () => cancelled,
+            }),
+          ),
+        ).toBe(allowed);
+      }
     },
   );
 
   it("uses PR, command, revocation, CI completion, and reconciliation events", () => {
-    expect(workflow.on).toEqual({
-      pull_request_target: {
-        types: expect.arrayContaining([
-          "opened",
-          "reopened",
-          "synchronize",
-          "ready_for_review",
-          "edited",
-          "closed",
-        ]),
-      },
-      issue_comment: { types: ["created", "edited", "deleted"] },
-      workflow_run: { workflows: ["CI"], types: ["completed"] },
-      schedule: [{ cron: "4-59/10 * * * *" }],
-    });
+    const workflow = readWorkflow("security-review");
+    expect(Object.keys(workflow.on).toSorted()).toEqual([
+      "issue_comment",
+      "pull_request_target",
+      "schedule",
+      "workflow_run",
+    ]);
+    expect(workflow.on.pull_request_target?.types).toEqual(
+      expect.arrayContaining([
+        "opened",
+        "reopened",
+        "synchronize",
+        "ready_for_review",
+        "edited",
+        "closed",
+      ]),
+    );
+    expect(workflow.on.issue_comment?.types).toEqual(["created", "edited", "deleted"]);
+    expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(workflow.on.schedule).toEqual([{ cron: "4-59/10 * * * *" }]);
     const concurrency = workflow.jobs.resolve!.concurrency!;
     expect(concurrency["cancel-in-progress"]).toBe(false);
+    const group = concurrency.group.replace(/^\$\{\{|\}\}$/gu, "");
     for (const eventName of Object.keys(workflow.on)) {
       for (const runId of [123, 456]) {
         expect(
-          evaluate(concurrency.group, {
+          runInNewContext(group, {
             github: { event_name: eventName, run_id: runId },
             format: (template: string, value: number) => template.replace("{0}", String(value)),
           }),
@@ -399,132 +402,162 @@ describe("security review workflow trust boundaries", () => {
         );
       }
     }
-    const pr = (allowed: boolean, action?: string, changes = {}) => ({
-      allowed,
-      eventName: "pull_request_target",
-      event: { action, changes },
-    });
-    const ci = (allowed: boolean, event: string) => ({
-      allowed,
-      eventName: "workflow_run",
-      event: { workflow_run: { event } },
-    });
-    const comment = (allowed: boolean, action: string, body = "", from = "", issue = false) => ({
-      allowed,
-      eventName: "issue_comment",
-      event: {
-        action,
-        comment: { body },
-        changes: { body: { from } },
-        issue: { pull_request: issue ? null : {} },
+    const condition = workflow.jobs.resolve!.if!.replace(/^\$\{\{|\}\}$/gu, "");
+    for (const event of [
+      { eventName: "pull_request_target", allowed: true },
+      { eventName: "pull_request_target", action: "synchronize", allowed: true },
+      { eventName: "pull_request_target", action: "closed", allowed: true },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { title: { from: "Previous title" } },
+        allowed: false,
       },
-    });
-    for (const { allowed, eventName, event } of [
-      pr(true),
-      pr(true, "synchronize"),
-      pr(true, "closed"),
-      pr(false, "edited", { title: { from: "Previous title" } }),
-      pr(false, "edited", { body: { from: "Previous body" } }),
-      pr(true, "edited", { body: { from: "" }, base: { ref: { from: "release" } } }),
-      pr(true, "edited", { maintainer_can_modify: { from: false } }),
-      pr(true, "edited"),
-      { allowed: true, eventName: "schedule", event: {} },
-      ci(true, "pull_request"),
-      ci(false, "push"),
-      ci(true, "workflow_dispatch"),
-      comment(true, "created", "/allow-security-sensitive-change"),
-      comment(true, "created", "/allow-dependencies-change"),
-      comment(false, "created", "Thanks"),
-      comment(true, "edited", "Command removed", "/allow-dependencies-change"),
-      comment(true, "edited", "/allow-security-sensitive-change", "Thanks"),
-      comment(true, "deleted", "/allow-dependencies-change"),
-      comment(false, "edited", "Thanks again", "Thanks"),
-      comment(false, "deleted", "Thanks"),
-      comment(false, "created", "/allow-dependencies-change", "", true),
-      comment(false, "edited", "", "", true),
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { body: { from: "Previous body" } },
+        allowed: false,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { body: { from: "" }, base: { ref: { from: "release" } } },
+        allowed: true,
+      },
+      {
+        eventName: "pull_request_target",
+        action: "edited",
+        changes: { maintainer_can_modify: { from: false } },
+        allowed: true,
+      },
+      { eventName: "pull_request_target", action: "edited", changes: {}, allowed: true },
+      { eventName: "schedule", allowed: true },
+      { eventName: "workflow_run", sourceEvent: "pull_request", allowed: true },
+      { eventName: "workflow_run", sourceEvent: "push", allowed: false },
+      { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
+      { action: "created", body: "/allow-security-sensitive-change", allowed: true },
+      { action: "created", body: "/allow-dependencies-change", allowed: true },
+      { action: "created", body: "Thanks", allowed: false },
+      {
+        action: "edited",
+        body: "Command removed",
+        previousBody: "/allow-dependencies-change",
+        allowed: true,
+      },
+      {
+        action: "edited",
+        body: "/allow-security-sensitive-change",
+        previousBody: "Thanks",
+        allowed: true,
+      },
+      { action: "deleted", body: "/allow-dependencies-change", allowed: true },
+      { action: "edited", body: "Thanks again", previousBody: "Thanks", allowed: false },
+      { action: "deleted", body: "Thanks", allowed: false },
+      { action: "created", body: "/allow-dependencies-change", issue: true, allowed: false },
+      { action: "edited", issue: true, allowed: false },
     ]) {
-      const result = evaluate(workflow.jobs.resolve!.if!, {
+      const result = runInNewContext(condition, {
         github: {
-          event_name: eventName,
-          event,
+          event_name: event.eventName ?? "issue_comment",
+          event: {
+            action: event.action,
+            comment: { body: event.body ?? "" },
+            changes:
+              event.changes ??
+              (event.eventName === "pull_request_target"
+                ? {}
+                : { body: { from: event.previousBody ?? "" } }),
+            issue: { pull_request: event.issue ? null : {} },
+            workflow_run: { event: event.sourceEvent },
+          },
         },
         contains: (value: string, search: string) =>
           value.toLowerCase().includes(search.toLowerCase()),
+        startsWith: (value: unknown, prefix: string) => String(value).startsWith(prefix),
+        vars: { OPENCLAW_RELEASE_PRIORITY_RUN: "" },
       });
-      expect(Boolean(result), JSON.stringify({ eventName, event })).toBe(allowed);
+      expect(Boolean(result), JSON.stringify(event)).toBe(event.allowed);
     }
   });
 
   it("fails a truncated reconciliation after the selected reviews finish", () => {
+    const workflow = readWorkflow("security-review");
     expect(workflow.jobs.resolve!.outputs?.truncated).toBe("${{ steps.event.outputs.truncated }}");
     const backlog = workflow.jobs["reconcile-backlog"]!;
-    const { needs, if: condition, permissions } = backlog;
-    expect({ needs, if: condition, permissions }).toEqual({
-      needs: ["resolve", "review"],
-      if: "${{ always() && needs.resolve.outputs.truncated == 'true' }}",
-      permissions: {},
-    });
+    expect(backlog.needs).toEqual(["resolve", "review"]);
+    expect(backlog.if).toBe("${{ always() && needs.resolve.outputs.truncated == 'true' }}");
+    expect(backlog.permissions).toEqual({});
     for (const truncated of ["true", "false", undefined]) {
       expect(
-        evaluate(backlog.if!, {
+        runInNewContext(backlog.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
           always: () => true,
           needs: { resolve: { outputs: { truncated } } },
         }),
       ).toBe(truncated === "true");
     }
-    const result = runShell(backlog.steps[0]!.run!, { env: {} });
+    const result = spawnSync("bash", ["-e", "-c", backlog.steps[0]!.run!], {
+      env: {},
+      encoding: "utf8",
+    });
     expect(result.status, result.stderr).toBe(1);
     expect(result.stdout).toContain("next scheduled pass continues from the same window");
   });
 
   it("limits autoscrub writes to PR events and always enforces after failures", () => {
-    const steps = workflow.jobs.review!.steps;
+    const steps = readWorkflow("security-review").jobs.review!.steps;
     const commands = steps.filter((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE);
-    const [prepare, autoscrub, enforce] = commands;
     expect(commands.map((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE)).toEqual([
       "prepare",
       "autoscrub",
       "enforce",
     ]);
-    expect(prepare?.if).toBe(
+    expect(commands[0]?.if).toBe(
       "github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number",
     );
-    const checkPrepare = checkCondition(prepare!.if!);
     for (const [eventName, action, target, allowed] of [
       ["pull_request_target", "synchronize", 42, true],
       ["pull_request_target", "synchronize", 43, false],
       ["pull_request_target", "closed", 42, false],
       ["issue_comment", "created", 42, false],
     ] as const) {
-      checkPrepare(
-        {
-          github: { event_name: eventName, event: { action, pull_request: { number: 42 } } },
-          matrix: { pr: target },
-        },
-        allowed,
-      );
+      expect(
+        Boolean(
+          runInNewContext(commands[0]!.if!, {
+            github: { event_name: eventName, event: { action, pull_request: { number: 42 } } },
+            matrix: { pr: target },
+          }),
+        ),
+      ).toBe(allowed);
     }
-    expect(autoscrub?.if).toBe(
+    expect(commands[1]?.if).toBe(
       "github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number && steps.detect.outputs.autoscrub == 'true'",
     );
-    checkRuntime(enforce!.if!, [
-      [true, "success", false],
-      [false, "failure", false],
-      [false, "skipped", false],
-      [false, "success", true],
-    ]);
-    const tokenSteps = stepsUsing(steps, "actions/create-github-app-token");
+    for (const [runtime, cancelled, allowed] of [
+      ["success", false, true],
+      ["failure", false, false],
+      ["skipped", false, false],
+      ["success", true, false],
+    ] as const) {
+      expect(
+        Boolean(
+          runInNewContext(commands[2]!.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+            steps: { runtime: { outcome: runtime } },
+            cancelled: () => cancelled,
+          }),
+        ),
+      ).toBe(allowed);
+    }
+    const tokenSteps = steps.filter((step) =>
+      step.uses?.startsWith("actions/create-github-app-token@"),
+    );
     expect(tokenSteps.map((step) => step.with?.["app-id"])).toEqual(["2729701", "2971289"]);
     for (const step of tokenSteps) {
       expect(step["continue-on-error"]).toBe(true);
-      for (const condition of [
-        "github.event_name == 'pull_request_target'",
-        "github.event.action != 'closed'",
-        "matrix.pr == github.event.pull_request.number",
-        "steps.detect.outputs.autoscrub == 'true'",
-      ]) {
-        expect(step.if).toContain(condition);
-      }
+      expect(step.if).toContain("github.event_name == 'pull_request_target'");
+      expect(step.if).toContain("github.event.action != 'closed'");
+      expect(step.if).toContain("matrix.pr == github.event.pull_request.number");
+      expect(step.if).toContain("steps.detect.outputs.autoscrub == 'true'");
       expect(step.with).toMatchObject({
         owner: "${{ steps.detect.outputs.autoscrub-owner }}",
         repositories: "${{ steps.detect.outputs.autoscrub-repository }}",
@@ -535,13 +568,15 @@ describe("security review workflow trust boundaries", () => {
       ]);
     }
     expect(tokenSteps[1]?.if).toContain("steps.app-token.outcome == 'failure'");
-    expect(autoscrub?.env?.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN).toBe(
+    expect(commands[1]?.env?.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN).toBe(
       "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
     );
-    expect(enforce?.env).not.toHaveProperty("OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN");
+    expect(commands[2]?.env).not.toHaveProperty("OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN");
     for (const completed of ["true", "false", ""]) {
-      const command = enforce!.run!.replace("${{ steps.detect.outputs.completed }}", completed);
-      const result = runShell(`node() { echo enforced; }\n${command}`);
+      const command = commands[2]!.run!.replace("${{ steps.detect.outputs.completed }}", completed);
+      const result = spawnSync("bash", ["-e", "-c", `node() { echo enforced; }\n${command}`], {
+        encoding: "utf8",
+      });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe(
         completed === "true" ? "Security review completed during preparation." : "enforced",
@@ -576,11 +611,15 @@ describe("security review workflow trust boundaries", () => {
       const selectedRuntimePath = join(workspace, runtimeActionPath);
       const selectedRuntime = parse(
         readFileSync(join(selectedRuntimePath, "action.yml"), "utf8"),
-      ) as typeof runtimeAction;
+      ) as {
+        runs: { steps: WorkflowStep[] };
+      };
       const installLog = join(root, "install.json");
       const packages = Object.fromEntries(
         ["yaml", "minimatch"].map((name) => [name, realpathSync(`node_modules/${name}`)]),
       );
+      // The external installer is replaced; the composite's shell and Node's ESM
+      // resolution run unchanged against the repository's real installed packages.
       writeFileSync(
         join(bin, "npm"),
         `#!${process.execPath}
@@ -610,19 +649,20 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
           RUNNER_TEMP: runnerTemp,
         },
       });
-      const installed = readJson<{
+      const installed = JSON.parse(readFileSync(installLog, "utf8")) as {
         args: string[];
         cwd: string;
         manifest: unknown;
         lock: unknown;
-      }>(installLog);
-      const { cwd, ...installation } = installed;
-      expect(cwd.startsWith(`${realpathSync(runnerTemp)}/`)).toBe(true);
-      expect(installation).toEqual({
-        args: ["ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-        manifest: readJson(`${runtimeActionPath}/package.json`),
-        lock: readJson(`${runtimeActionPath}/package-lock.json`),
-      });
+      };
+      expect(installed.args).toEqual(["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+      expect(installed.cwd.startsWith(`${realpathSync(runnerTemp)}/`)).toBe(true);
+      expect(installed.manifest).toEqual(
+        JSON.parse(readFileSync(`${runtimeActionPath}/package.json`, "utf8")),
+      );
+      expect(installed.lock).toEqual(
+        JSON.parse(readFileSync(`${runtimeActionPath}/package-lock.json`, "utf8")),
+      );
       const probe = join(workspace, "scripts/github/probe.mjs");
       writeFileSync(
         probe,
@@ -631,19 +671,23 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       expect(
         JSON.parse(execFileSync(process.execPath, [probe], { env: {}, encoding: "utf8" })),
       ).toEqual(["secrets", true, true]);
-      expectEntryFailure(
-        workspace,
-        "security-review.mjs",
+      const entry = "security-review.mjs";
+      const loaded = runSelectedEntry(workspace, entry);
+      expect(loaded.status).toBe(1);
+      expect(loaded.stderr.trim()).toBe(
         "GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.",
       );
     },
   );
 
   it("keeps the frozen runtime dependency closure on the canonical repository pins and integrity", () => {
-    const manifest = readJson<Dependencies & { overrides: Record<string, string> }>(
-      `${runtimeActionPath}/package.json`,
-    );
-    const root = readJson<Dependencies>("package.json");
+    const manifest = JSON.parse(readFileSync(`${runtimeActionPath}/package.json`, "utf8")) as {
+      dependencies: Record<string, string>;
+      overrides: Record<string, string>;
+    };
+    const root = JSON.parse(readFileSync("package.json", "utf8")) as {
+      dependencies: Record<string, string>;
+    };
     const workspace = parse(readFileSync("pnpm-workspace.yaml", "utf8")) as {
       overrides: Record<string, string>;
     };
@@ -653,9 +697,12 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       packages: Record<string, { resolution: { integrity: string } }>;
       snapshots: Record<string, { dependencies?: Record<string, string> }>;
     };
-    const lock = readJson<{
-      packages: Record<string, { version: string; integrity: string }>;
-    }>(`${runtimeActionPath}/package-lock.json`);
+    const lock = JSON.parse(readFileSync(`${runtimeActionPath}/package-lock.json`, "utf8")) as {
+      packages: Record<
+        string,
+        { version: string; integrity: string; dependencies?: Record<string, string> }
+      >;
+    };
     expect(manifest.dependencies).toEqual({
       yaml: root.dependencies.yaml,
       minimatch: root.dependencies.minimatch,

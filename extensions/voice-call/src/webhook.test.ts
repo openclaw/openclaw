@@ -54,7 +54,9 @@ vi.mock("./realtime-transcription.runtime.js", () => ({
 }));
 
 beforeEach(() => {
-  onTestFinished(() => vi.restoreAllMocks());
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
 });
 
 vi.mock("./response-generator.js", () => ({

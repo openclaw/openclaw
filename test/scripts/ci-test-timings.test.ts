@@ -569,9 +569,9 @@ describe("runtime placement observations", () => {
     (compactMode) => {
       selectRuntimeConsumers();
       const originalShards = fullSuiteVitestShards.slice();
-      onTestFinished(() =>
-        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards),
-      );
+      onTestFinished(() => {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+      });
       const runtimeConfig = "test/vitest/vitest.runtime-config.config.ts";
       const infrastructure = "test/vitest/vitest.infra.config.ts";
       const configs = new Set([

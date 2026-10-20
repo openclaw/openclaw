@@ -1,19 +1,18 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getProcessSupervisor, type ProcessSupervisor } from "../process/supervisor/index.js";
-import type { ManagedRun, RunExit } from "../process/supervisor/types.js";
+import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
+import {
+  getProcessSupervisor,
+  type ManagedRun,
+  type ProcessSupervisor,
+} from "../process/supervisor/index.js";
+import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createTuiLocalCliRunner } from "./tui-local-cli.js";
 
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: vi.fn() }));
 vi.mock("../infra/openclaw-cli-invocation.js", () => ({
-  resolveCurrentOpenClawCliInvocation: (args: readonly string[]) => ({
-    command: "/host/node",
-    args: ["/host/openclaw.mjs", ...args],
-    cwd: "/host/package",
-    env: { TSX_TSCONFIG_PATH: "/host/tsconfig.json" },
-  }),
+  resolveCurrentOpenClawCliInvocation: vi.fn(),
 }));
-const command = ["browser", "extension", "setup"];
 
 const exit: RunExit = {
   reason: "exit",
@@ -26,8 +25,14 @@ const exit: RunExit = {
   noOutputTimedOut: false,
 };
 
-type Options = { output?: string; result?: Partial<RunExit>; error?: Error; pending?: boolean };
-function harness(options: Options = {}) {
+function harness(
+  options: {
+    output?: string;
+    result?: Partial<RunExit>;
+    error?: Error;
+    pendingSpawn?: boolean;
+  } = {},
+) {
   const result = createDeferred<RunExit>();
   const admission = createDeferred();
   const run: ManagedRun = {
@@ -38,8 +43,10 @@ function harness(options: Options = {}) {
     cancel: vi.fn(() => result.resolve({ ...exit, reason: "manual-cancel" })),
     detachOutput: vi.fn(),
   };
+  let spawnInput: SpawnInput | undefined;
   const spawn = vi.fn<ProcessSupervisor["spawn"]>(async (input) => {
-    if (options.pending) {
+    spawnInput = input;
+    if (options.pendingSpawn) {
       await admission.promise;
     }
     input.assertCurrent?.();
@@ -53,66 +60,89 @@ function harness(options: Options = {}) {
     }
     return run;
   });
-  const cleanup = vi.fn(async () => run.cancel());
-  vi.mocked(getProcessSupervisor).mockReturnValue({
+  const cleanup = vi.fn(async () => {
+    run.cancel();
+  });
+  const supervisor: ProcessSupervisor = {
     spawn,
     cancel: vi.fn(),
     cancelScope: vi.fn(() => run.cancel()),
     acquireScopeCleanup: vi.fn(() => cleanup),
-  });
+  };
+  vi.mocked(getProcessSupervisor).mockReturnValue(supervisor);
   const runner = createTuiLocalCliRunner();
-  return { runner, spawn, run, cleanup, admission, send: () => runner.runJson(command) };
+  return { runner, spawn, run, cleanup, admission, result, supervisor, input: () => spawnInput };
 }
 
-it.each([
-  { output: '{"safe":true}', reason: null },
-  { output: "secret-non-json", reason: "invalid_response" },
-  { output: '"' + "s".repeat(40_000) + '"', reason: "invalid_response" },
-  { output: "secret-error", result: { exitCode: 1 }, reason: "execution_failed" },
-  { output: "secret-timeout", result: { timedOut: true }, reason: "timeout" },
-  { error: new Error("secret-spawn-error"), reason: "execution_failed" },
-])("projects subprocess output to a bounded result ($reason)", async ({ reason, ...options }) => {
-  const h = harness(options);
-  expect(h.spawn).not.toHaveBeenCalled();
-  await expect(h.send()).resolves.toEqual(
-    reason === null ? { ok: true, value: { safe: true } } : { ok: false, reason },
-  );
-  if (reason === null) {
-    expect(h.spawn.mock.calls[0]?.[0]).toMatchObject({
-      mode: "child",
-      argv: ["/host/node", "/host/openclaw.mjs", ...command],
-      cwd: "/host/package",
-      captureOutput: false,
-      stdinMode: "pipe-closed",
-      env: { TSX_TSCONFIG_PATH: "/host/tsconfig.json" },
+beforeEach(() => {
+  vi.mocked(resolveCurrentOpenClawCliInvocation).mockReset();
+  vi.mocked(resolveCurrentOpenClawCliInvocation).mockImplementation((args) => ({
+    command: "/host/node",
+    args: ["/host/openclaw.mjs", ...args],
+    cwd: "/host/package",
+    env: { TSX_TSCONFIG_PATH: "/host/tsconfig.json" },
+  }));
+});
+
+describe("TUI local CLI subprocess owner", () => {
+  it.each([
+    { output: '{"safe":true}', reason: null },
+    { output: "secret-non-json", reason: "invalid_response" },
+    { output: '"' + "s".repeat(40_000) + '"', reason: "invalid_response" },
+    { output: "secret-error", result: { exitCode: 1 }, reason: "execution_failed" },
+    { output: "secret-timeout", result: { timedOut: true }, reason: "timeout" },
+    { error: new Error("secret-spawn-error"), reason: "execution_failed" },
+  ])("projects subprocess output to a bounded result ($reason)", async ({ reason, ...options }) => {
+    const h = harness(options);
+    expect(h.spawn).not.toHaveBeenCalled();
+    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual(
+      reason === null ? { ok: true, value: { safe: true } } : { ok: false, reason },
+    );
+    if (reason === null) {
+      expect(h.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "child",
+          argv: ["/host/node", "/host/openclaw.mjs", "browser", "extension", "setup"],
+          cwd: "/host/package",
+          captureOutput: false,
+          stdinMode: "pipe-closed",
+          env: expect.objectContaining({ TSX_TSCONFIG_PATH: "/host/tsconfig.json" }),
+        }),
+      );
+      expect(h.run.detachOutput).toHaveBeenCalledOnce();
+    }
+    await h.runner.shutdown();
+    expect(h.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("cancels an active run, refuses overlapping actions, and allows a later inspect", async () => {
+    const h = harness();
+    const running = h.runner.runJson(["browser", "extension", "setup"]);
+    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual({
+      ok: false,
+      reason: "busy",
     });
-    expect(h.run.detachOutput).toHaveBeenCalledOnce();
-  }
-  await h.runner.shutdown();
-  expect(h.cleanup).toHaveBeenCalledOnce();
-});
+    expect(h.runner.cancel()).toBe(true);
+    await expect(running).resolves.toEqual({ ok: false, reason: "cancelled" });
+    expect(h.runner.cancel()).toBe(false);
+    await h.runner.runJson(["browser", "extension", "setup"]);
+    expect(h.spawn).toHaveBeenCalledTimes(2);
+    await h.runner.shutdown();
+  });
 
-it("cancels an active run, refuses overlapping actions, and allows a later inspect", async () => {
-  const h = harness();
-  const running = h.send();
-  await expect(h.send()).resolves.toEqual({ ok: false, reason: "busy" });
-  expect(h.runner.cancel()).toBe(true);
-  await expect(running).resolves.toEqual({ ok: false, reason: "cancelled" });
-  expect(h.runner.cancel()).toBe(false);
-  await h.send();
-  expect(h.spawn).toHaveBeenCalledTimes(2);
-  await h.runner.shutdown();
-});
-
-it.each(["cancel", "shutdown"] as const)("%s fences delayed launch admission", async (method) => {
-  const h = harness({ pending: true });
-  const running = h.send();
-  await h.runner[method]();
-  expect(() => h.spawn.mock.calls[0]?.[0].assertCurrent?.()).toThrow("cancelled");
-  h.admission.resolve();
-  await expect(running).resolves.toEqual({ ok: false, reason: "cancelled" });
-  await h.runner.shutdown();
-  await h.runner.shutdown();
-  expect(h.cleanup).toHaveBeenCalledOnce();
-  await expect(h.send()).resolves.toEqual({ ok: false, reason: "closed" });
+  it.each(["cancel", "shutdown"] as const)("%s fences delayed launch admission", async (method) => {
+    const h = harness({ pendingSpawn: true });
+    const running = h.runner.runJson(["browser", "extension", "setup"]);
+    await h.runner[method]();
+    expect(() => h.input()?.assertCurrent?.()).toThrow("cancelled");
+    h.admission.resolve();
+    await expect(running).resolves.toEqual({ ok: false, reason: "cancelled" });
+    await h.runner.shutdown();
+    await h.runner.shutdown();
+    expect(h.cleanup).toHaveBeenCalledOnce();
+    await expect(h.runner.runJson(["browser", "extension", "setup"])).resolves.toEqual({
+      ok: false,
+      reason: "closed",
+    });
+  });
 });

@@ -79,8 +79,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
         );
       }
     },
-    cleanup() {
-      return (compiler?.cleanup() ?? Promise.resolve()).finally(() => lifetime.cleanup());
+    async cleanup() {
+      try {
+        await compiler?.cleanup();
+      } finally {
+        await lifetime.cleanup();
+      }
     },
   };
 }

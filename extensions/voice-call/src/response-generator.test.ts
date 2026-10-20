@@ -13,7 +13,7 @@ type EmbeddedAgentArgs = Parameters<AgentRuntime["runEmbeddedAgent"]>[0];
 type ReplyPayload = Parameters<NonNullable<EmbeddedAgentArgs["onBlockReply"]>>[0];
 type VoiceResponseParams = Parameters<typeof generateVoiceResponse>[0];
 const defaultSessionKey = "agent:main:voice:15550001111";
-const voiceConfig = (overrides: Parameters<typeof normalizeVoiceCallConfig>[0] = {}) =>
+const voiceConfig = (overrides: Partial<ReturnType<typeof normalizeVoiceCallConfig>> = {}) =>
   normalizeVoiceCallConfig({ responseTimeoutMs: 5000, ...overrides });
 const sessionEntry = (overrides: Partial<TestSessionEntry> = {}): TestSessionEntry => ({
   sessionId: "existing-session",
@@ -52,7 +52,7 @@ function createAgentRuntime(
   );
   const runEmbeddedAgent = vi.fn(async (args: EmbeddedAgentArgs) => {
     for (const payload of options?.blockReplyPayloads ?? []) {
-      args.onBlockReply?.(payload, { assistantMessageIndex: 0 });
+      await args.onBlockReply?.(payload, { assistantMessageIndex: 0 });
     }
     await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     return {
@@ -275,7 +275,7 @@ describe("generateVoiceResponse", () => {
     });
     const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
     runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
-      args.onBlockReply?.({ text: '{"spoken":"Already ready."}' });
+      await args.onBlockReply?.({ text: '{"spoken":"Already ready."}' });
       expect(await args.resolveReplyDelivery?.()).toBe("missing");
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
       expect(await args.resolveReplyDelivery?.()).toBe("pending");
@@ -326,9 +326,12 @@ describe("generateVoiceResponse", () => {
 
   it("discards pre-tool narration before the completed answer", async () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
-      args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
+      await args.onBlockReply?.(
+        { text: '{"spoken":"I will check."}' },
+        { assistantMessageIndex: 0 },
+      );
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      args.onBlockReply?.(spoken("The result is ready."), { assistantMessageIndex: 1 });
+      await args.onBlockReply?.(spoken("The result is ready."), { assistantMessageIndex: 1 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "The result is ready.");
 
@@ -339,8 +342,13 @@ describe("generateVoiceResponse", () => {
   it("discards deferred pre-tool narration delivered after the tool boundary", async () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      args.onBlockReply?.({ text: '{"spoken":"I will check."}' }, { assistantMessageIndex: 0 });
-      args.onBlockReply?.(spoken("The deferred result is ready."), { assistantMessageIndex: 1 });
+      await args.onBlockReply?.(
+        { text: '{"spoken":"I will check."}' },
+        { assistantMessageIndex: 0 },
+      );
+      await args.onBlockReply?.(spoken("The deferred result is ready."), {
+        assistantMessageIndex: 1,
+      });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "The deferred result is ready.");
 
@@ -351,7 +359,7 @@ describe("generateVoiceResponse", () => {
   it("keeps final delivery when a post-tool payload has no boundary metadata", async () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      args.onBlockReply?.({ text: '{"spoken":"Unclassified response."}' });
+      await args.onBlockReply?.({ text: '{"spoken":"Unclassified response."}' });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "Complete fallback response.");
 
@@ -362,9 +370,9 @@ describe("generateVoiceResponse", () => {
   it("resets a rejected attempt tool boundary before the accepted retry", async () => {
     const { result, onEarlyText } = await runStreamingScenario(async (args) => {
       await args.onBlockReplyFlush?.({ reason: "tool_start", assistantMessageIndex: 0 });
-      args.onBlockReply?.(spoken("Rejected tool response."), { assistantMessageIndex: 1 });
+      await args.onBlockReply?.(spoken("Rejected tool response."), { assistantMessageIndex: 1 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: false });
-      args.onBlockReply?.(spoken("Accepted retry response."), { assistantMessageIndex: 0 });
+      await args.onBlockReply?.(spoken("Accepted retry response."), { assistantMessageIndex: 0 });
       await args.onBlockReplyFlush?.({ reason: "pre_compaction", attemptAccepted: true });
     }, "Accepted retry response.");
 
