@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -12,10 +12,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { runPluginsSearchCommand } from "./plugins-search-command.js";
 
 const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
-type FixtureServer = {
-  child: ChildProcess;
-  closed: Promise<void>;
-};
+type FixtureServer = { child: ChildProcess; closed: Promise<void> };
 const servers: FixtureServer[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const previousEnv = captureEnv([
@@ -87,99 +84,71 @@ async function startFixtureServer(signal: AbortSignal) {
 }
 
 function createRuntime() {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  let exitCode: number | undefined;
-  const runtime: RuntimeEnv = {
-    log: (...args) => logs.push(args.map(String).join(" ")),
-    error: (...args) => errors.push(args.map(String).join(" ")),
-    exit: (code) => {
-      exitCode = code;
-    },
-  };
   return {
-    runtime,
-    logs,
-    errors,
-    get exitCode() {
-      return exitCode;
-    },
+    log: vi.fn<RuntimeEnv["log"]>(),
+    error: vi.fn<RuntimeEnv["error"]>(),
+    exit: vi.fn<RuntimeEnv["exit"]>(),
   };
 }
 
-async function readRequestLog(baseUrl: string): Promise<string[]> {
+function output(runtime: ReturnType<typeof createRuntime>, stream: "log" | "error" = "log") {
+  return runtime[stream].mock.calls.map((args) => args.map(String).join(" ")).join("\n");
+}
+
+it("keeps plugin discovery separate from skills and surfaces empty and failed lookups", async ({
+  signal,
+}) => {
+  const { baseUrl, root } = await startFixtureServer(signal);
+  process.env.OPENCLAW_CLAWHUB_URL = baseUrl;
+  process.env.CLAWHUB_CONFIG_PATH = path.join(root, "missing-config.json");
+  delete process.env.CLAWHUB_TOKEN;
+  delete process.env.CLAWHUB_AUTH_TOKEN;
+
+  const terminal = createRuntime();
+  await runPluginsSearchCommand("calendar", { limit: 5 }, terminal);
+  const terminalOutput = output(terminal);
+  expect(terminal.exit).not.toHaveBeenCalled();
+  expect(
+    terminalOutput.split("\n").filter((line) => line.startsWith("@acme/calendar  ")),
+  ).toHaveLength(1);
+  expect(terminalOutput).toContain("bundle-plugin | official | v3.0.0");
+  expect(terminalOutput).toContain("Install: openclaw plugins install @acme/calendar");
+  expect(terminalOutput).not.toContain("calendar-skill");
+
+  const json = createRuntime();
+  await runPluginsSearchCommand("calendar", { json: true, limit: 5 }, json);
+  const jsonOutput = JSON.parse(output(json)) as {
+    results: Array<{ score: number; package: { name: string; family: string } }>;
+  };
+  expect(jsonOutput.results[0]).toMatchObject({
+    score: 12,
+    package: { name: "@acme/calendar", family: "bundle-plugin" },
+  });
+  expect(
+    jsonOutput.results.filter((entry) => entry.package.name === "@acme/calendar"),
+  ).toHaveLength(1);
+
+  const skills = await searchSkillsFromClawHub({ query: "calendar", limit: 5, baseUrl });
+  expect(skills).toEqual([expect.objectContaining({ score: 99, slug: "calendar-skill" })]);
+
+  const empty = createRuntime();
+  await runPluginsSearchCommand("empty", { limit: 5 }, empty);
+  expect(empty.exit).not.toHaveBeenCalled();
+  expect(empty.log.mock.calls).toEqual([["No ClawHub plugins found."]]);
+
+  const unavailable = createRuntime();
+  await runPluginsSearchCommand("unavailable", { limit: 5 }, unavailable);
+  expect(unavailable.exit).toHaveBeenLastCalledWith(1);
+  expect(output(unavailable, "error")).toContain("catalog unavailable");
+
   const response = await fetch(`${baseUrl}/__fixture__/requests`);
   expect(response.status).toBe(200);
-  const body = (await response.json()) as { requests: string[] };
-  return body.requests;
-}
-
-describe("openclaw plugins search ClawHub E2E", () => {
-  it("keeps plugin discovery separate from skills and surfaces empty and failed lookups", async ({
-    signal,
-  }) => {
-    const { baseUrl, root } = await startFixtureServer(signal);
-    process.env.OPENCLAW_CLAWHUB_URL = baseUrl;
-    process.env.CLAWHUB_CONFIG_PATH = path.join(root, "missing-config.json");
-    delete process.env.CLAWHUB_TOKEN;
-    delete process.env.CLAWHUB_AUTH_TOKEN;
-
-    const terminal = createRuntime();
-    await runPluginsSearchCommand("calendar", { limit: 5 }, terminal.runtime);
-    const terminalOutput = terminal.logs.join("\n");
-    expect(terminal.exitCode).toBeUndefined();
-    expect(
-      terminalOutput.split("\n").filter((line) => line.startsWith("@acme/calendar  ")),
-    ).toHaveLength(1);
-    expect(terminalOutput).toContain("bundle-plugin | official | v3.0.0");
-    expect(terminalOutput).toContain("Install: openclaw plugins install @acme/calendar");
-    expect(terminalOutput).not.toContain("calendar-skill");
-
-    const json = createRuntime();
-    await runPluginsSearchCommand("calendar", { json: true, limit: 5 }, json.runtime);
-    const jsonOutput = JSON.parse(json.logs.join("\n")) as {
-      results: Array<{ score: number; package: { name: string; family: string } }>;
-    };
-    expect(jsonOutput.results[0]).toMatchObject({
-      score: 12,
-      package: {
-        name: "@acme/calendar",
-        family: "bundle-plugin",
-      },
-    });
-    expect(
-      jsonOutput.results.filter((entry) => entry.package.name === "@acme/calendar"),
-    ).toHaveLength(1);
-
-    const skills = await searchSkillsFromClawHub({
-      query: "calendar",
-      limit: 5,
-      baseUrl,
-    });
-    expect(skills).toEqual([
-      expect.objectContaining({
-        score: 99,
-        slug: "calendar-skill",
-      }),
-    ]);
-
-    const empty = createRuntime();
-    await runPluginsSearchCommand("empty", { limit: 5 }, empty.runtime);
-    expect(empty.exitCode).toBeUndefined();
-    expect(empty.logs).toEqual(["No ClawHub plugins found."]);
-
-    const unavailable = createRuntime();
-    await runPluginsSearchCommand("unavailable", { limit: 5 }, unavailable.runtime);
-    expect(unavailable.exitCode).toBe(1);
-    expect(unavailable.errors.join("\n")).toContain("catalog unavailable");
-
-    const requests = await readRequestLog(baseUrl);
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        "GET /api/v1/packages/search?q=calendar&family=code-plugin&limit=5",
-        "GET /api/v1/packages/search?q=calendar&family=bundle-plugin&limit=5",
-        "GET /api/v1/search?q=calendar&limit=5",
-      ]),
-    );
-  }, 30_000);
-});
+  const { requests } = (await response.json()) as { requests: string[] };
+  expect(requests).toEqual(
+    expect.arrayContaining([
+      "GET /api/v1/packages/search?q=calendar&family=code-plugin&limit=5",
+      "GET /api/v1/packages/search?q=calendar&family=bundle-plugin&limit=5",
+      "GET /api/v1/search?q=calendar&limit=5",
+    ]),
+  );
+}, 30_000);

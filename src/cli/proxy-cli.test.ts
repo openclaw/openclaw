@@ -1,15 +1,8 @@
-// Proxy CLI tests cover proxy command registration and option parsing.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerProxyCli } from "./proxy-cli.js";
 
-const {
-  runDebugProxyCoverageCommand,
-  runDebugProxyQueryCommand,
-  runDebugProxySessionsCommand,
-  runDebugProxyStartCommand,
-  runProxyValidateCommand,
-} = vi.hoisted(() => ({
+const handlers = vi.hoisted(() => ({
   runDebugProxyCoverageCommand: vi.fn(),
   runDebugProxyQueryCommand: vi.fn(),
   runDebugProxySessionsCommand: vi.fn(),
@@ -18,21 +11,15 @@ const {
 }));
 
 vi.mock("./proxy-cli.runtime.js", () => ({
-  runDebugProxyCoverageCommand,
+  ...handlers,
   runDebugProxyPurgeCommand: vi.fn(),
-  runDebugProxyQueryCommand,
   runDebugProxyRunCommand: vi.fn(),
-  runDebugProxySessionsCommand,
-  runDebugProxyStartCommand,
-  runProxyValidateCommand,
   readDebugProxyBlobCommand: vi.fn(),
 }));
 
 describe("proxy cli", () => {
   function createProgram() {
-    const program = new Command();
-    program.exitOverride();
-    program.configureOutput({
+    const program = new Command().exitOverride().configureOutput({
       writeErr: () => undefined,
       writeOut: () => undefined,
     });
@@ -40,51 +27,35 @@ describe("proxy cli", () => {
     return program;
   }
 
-  beforeEach(() => {
-    runDebugProxyCoverageCommand.mockReset();
-    runDebugProxyQueryCommand.mockReset();
-    runDebugProxySessionsCommand.mockReset();
-    runDebugProxyStartCommand.mockReset();
-    runProxyValidateCommand.mockReset();
-  });
+  beforeEach(() => vi.resetAllMocks());
+
+  const argv = (...args: string[]) => ["node", "openclaw", "proxy", ...args];
 
   it("registers the debug proxy subcommands", () => {
-    const program = new Command();
-    registerProxyCli(program);
-
-    const proxy = program.commands.find((command) => command.name() === "proxy");
-    expect(proxy?.commands.map((command) => command.name())).toEqual([
-      "start",
-      "run",
-      "validate",
-      "coverage",
-      "sessions",
-      "query",
-      "blob",
-      "purge",
-    ]);
+    const proxy = createProgram().commands.find((command) => command.name() === "proxy");
+    expect(proxy?.commands.map((command) => command.name())).toEqual(
+      "start run validate coverage sessions query blob purge".split(" "),
+    );
   });
 
   it.each([
     {
-      args: ["proxy", "coverage", "--json"],
-      invoke: runDebugProxyCoverageCommand,
+      args: ["coverage", "--json"],
+      invoke: handlers.runDebugProxyCoverageCommand,
       expected: undefined,
     },
     {
-      args: ["proxy", "sessions", "--json", "--limit", "5"],
-      invoke: runDebugProxySessionsCommand,
+      args: ["sessions", "--json", "--limit", "5"],
+      invoke: handlers.runDebugProxySessionsCommand,
       expected: { json: true, limit: 5 },
     },
     {
-      args: ["proxy", "query", "--json", "--preset", "double-sends", "--session", "capture-1"],
-      invoke: runDebugProxyQueryCommand,
+      args: ["query", "--json", "--preset", "double-sends", "--session", "capture-1"],
+      invoke: handlers.runDebugProxyQueryCommand,
       expected: { json: true, preset: "double-sends", sessionId: "capture-1" },
     },
   ])("passes --json through proxy reporting command $args", async ({ args, invoke, expected }) => {
-    const program = createProgram();
-
-    await program.parseAsync(["node", "openclaw", ...args]);
+    await createProgram().parseAsync(argv(...args));
 
     if (expected === undefined) {
       expect(invoke).toHaveBeenCalledWith();
@@ -94,28 +65,26 @@ describe("proxy cli", () => {
   });
 
   it.each([
-    [["proxy", "sessions", "--limit", "abc"], /--limit must be an integer/],
-    [["proxy", "sessions", "--limit", "0"], /--limit must be a positive integer/],
-    [["proxy", "start", "--port", "-1"], /--port must be between 0 and 65535/],
-    [["proxy", "run", "--port", "65536"], /--port must be between 0 and 65535/],
+    [["sessions", "--limit", "abc"], /--limit must be an integer/],
+    [["sessions", "--limit", "0"], /--limit must be a positive integer/],
+    [["start", "--port", "-1"], /--port must be between 0 and 65535/],
+    [["run", "--port", "65536"], /--port must be between 0 and 65535/],
   ])("rejects invalid numeric option %s", (args, expected) => {
-    const program = createProgram();
-
-    expect(() => program.parse(["node", "openclaw", ...args])).toThrow(expected);
+    expect(() => createProgram().parse(argv(...args))).toThrow(expected);
   });
 
   it("normalizes signed decimal numeric options through the shared parser", async () => {
     const program = createProgram();
 
-    await program.parseAsync(["node", "openclaw", "proxy", "start", "--port", "+08080"]);
-    await program.parseAsync(["node", "openclaw", "proxy", "validate", "--timeout-ms", "+01000"]);
-    await program.parseAsync(["node", "openclaw", "proxy", "sessions", "--limit", "+05"]);
+    await program.parseAsync(argv("start", "--port", "+08080"));
+    await program.parseAsync(argv("validate", "--timeout-ms", "+01000"));
+    await program.parseAsync(argv("sessions", "--limit", "+05"));
 
-    expect(runDebugProxyStartCommand).toHaveBeenCalledWith({
+    expect(handlers.runDebugProxyStartCommand).toHaveBeenCalledWith({
       host: "127.0.0.1",
       port: 8080,
     });
-    expect(runProxyValidateCommand).toHaveBeenCalledWith({
+    expect(handlers.runProxyValidateCommand).toHaveBeenCalledWith({
       allowedUrls: undefined,
       apnsAuthority: undefined,
       apnsReachability: undefined,
@@ -125,6 +94,6 @@ describe("proxy cli", () => {
       proxyUrl: undefined,
       timeoutMs: 1000,
     });
-    expect(runDebugProxySessionsCommand).toHaveBeenCalledWith({ limit: 5 });
+    expect(handlers.runDebugProxySessionsCommand).toHaveBeenCalledWith({ limit: 5 });
   });
 });
