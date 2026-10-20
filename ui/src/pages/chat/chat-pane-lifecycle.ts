@@ -74,6 +74,7 @@ import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { adoptInitialChatRun } from "./run-lifecycle.ts";
 import { applyChatCacheSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 import { closeSlot } from "./sidebar-layout.ts";
 
@@ -353,6 +354,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
         admitChatSubmission(pageState, getChatPendingInputs(pageState)?.page.items);
+        adoptInitialChatRun(pageState);
       }
     }
     chatState.attach(pageState);
@@ -584,6 +586,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
         admitChatSubmission(this.state, getChatPendingInputs(this.state)?.page.items);
+        adoptInitialChatRun(this.state);
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

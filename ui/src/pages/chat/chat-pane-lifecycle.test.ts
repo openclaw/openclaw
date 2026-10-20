@@ -298,6 +298,8 @@ it("claims the connected client's first message before attaching the pane", () =
     expect(attachedState?.chatMessages).toMatchObject([
       { role: "user", content: [{ type: "text", text: "keep the first prompt visible" }] },
     ]);
+    // The create ACK already started this run; the working claw must not wait for roster events.
+    expect(attachedState?.chatRunId).toBe("initial-run");
   } finally {
     pane.disconnectedCallback();
   }

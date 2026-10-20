@@ -23,6 +23,7 @@ registerEnglishCatalog(registerNewSessionSetupEnglish);
 const NewSessionSubmission = lazy(() => import("./draft-submission-view.tsx"), {
   export: "NewSessionSubmission",
 });
+export const preloadNewSessionSubmission = () => void NewSessionSubmission.preload();
 
 type DraftAction = { label: string; onClick: () => void; disabled?: boolean };
 export type DraftErrorProps = { message: string; action?: DraftAction };

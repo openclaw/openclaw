@@ -200,6 +200,19 @@ export function adoptStartedChatRun(
   }
 }
 
+/** sessions.create acknowledged the first turn the way chat.send does; adopt
+ *  its run before roster events catch up so the working claw never drops. */
+export function adoptInitialChatRun(host: Parameters<typeof adoptStartedChatRun>[0]): void {
+  const initial = host.chatSubmissions?.readInitial(
+    host.sessionKey,
+    host.client ?? null,
+    host.currentSessionId,
+  );
+  if (initial?.pending && !host.chatRunId) {
+    adoptStartedChatRun(host, initial.pendingRunId, initial.message.timestamp);
+  }
+}
+
 export function setChatRunError(
   state: { chatRunError?: ChatRunError | null },
   summary: string,
