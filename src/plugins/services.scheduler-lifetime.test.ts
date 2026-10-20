@@ -15,9 +15,7 @@ import { createServiceRegistration } from "./services.test-support.js";
 const registration = (service: Parameters<typeof createServiceRegistration>[0]) =>
   createServiceRegistration(service, { pluginId: service.id, source: "synthetic" });
 
-it("starts service stop before joining scheduled work and preserves sibling scheduling", async ({
-  signal,
-}) => {
+it("stops before joining work and preserves siblings", async ({ signal }) => {
   const clock = createGatewaySchedulerClock();
   const siblingRearmed = createDeferredCore();
   const scheduler = createTestGatewayScheduler({
@@ -105,7 +103,7 @@ it("starts service stop before joining scheduled work and preserves sibling sche
 });
 
 it.for([false, true])(
-  "retains a tracked child after a strict stop deadline, synchronous hook failure=%s",
+  "retains child past deadline; stop throws=%s",
   async (failStop, { signal }) => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);

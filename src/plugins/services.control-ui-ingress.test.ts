@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { queryObjects } from "node:v8";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { bindGatewayControlUiIngressHost } from "../gateway/remote-control-ui-ingress-host.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -29,12 +29,6 @@ beforeAll(async () => {
 });
 afterAll(() => state?.cleanup());
 
-const services = new Set<PluginServicesHandle>();
-afterEach(async () => {
-  await Promise.all([...services].map((service) => service.stop()));
-  services.clear();
-});
-
 async function fixture(recordOptions: Partial<PluginRecord> = {}) {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({ id: "ingress-test", origin: "bundled", ...recordOptions });
@@ -53,16 +47,10 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
     controlUiBasePath: "",
     getResolvedAuth: () => ({ mode: "token", token, allowTailscale: false }),
     getRuntimeConfig: () => ({ gateway: { auth: { mode: "token", token } } }),
-    handleRequest: async (_req, res) => {
-      res.setHeader("Content-Type", "text/html");
-      res.end("synthetic Control UI");
-    },
-    handleSandboxRequest: async (_req, res) => {
-      res.end("synthetic sandbox");
-    },
-    handleUpgrade: async (_req, socket) => {
-      socket.destroy();
-    },
+    handleRequest: async (_req, res) =>
+      void res.setHeader("Content-Type", "text/html").end("synthetic Control UI"),
+    handleSandboxRequest: async (_req, res) => void res.end("synthetic sandbox"),
+    handleUpgrade: async (_req, socket) => void socket.destroy(),
     signal: new AbortController().signal,
   });
   markPluginRegistryActive(registry);
@@ -80,7 +68,7 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
     },
   });
   const service = await startPluginServices({ registry, config: {} });
-  services.add(service);
+  onTestFinished(() => service.stop());
   assert(serviceContext, "Service did not start");
   return { service, serviceContext, registry, record };
 }
@@ -112,17 +100,12 @@ it.each([
   { origin: "global" as const, trustedOfficialInstall: true, available: true },
   { origin: "global" as const, available: false },
   { origin: "workspace" as const, available: false },
-])(
-  "uses admitted provenance for $origin (available=$available)",
-  async ({ available, ...record }) => {
-    const { serviceContext } = await fixture(record);
-    if (available) {
-      expect(serviceContext.controlUiIngress).toMatchObject({ capabilityVersion: 2 });
-    } else {
-      expect(serviceContext.controlUiIngress).toBeUndefined();
-    }
-  },
-);
+])("ingress provenance: $origin/$available", async ({ available, ...record }) => {
+  const { serviceContext } = await fixture(record);
+  expect(serviceContext.controlUiIngress).toEqual(
+    available ? expect.objectContaining({ capabilityVersion: 2 }) : undefined,
+  );
+});
 
 it.each(["stop", "revoke"])("revokes retained ingress authority on %s", async (action) => {
   class RetiringCaller {

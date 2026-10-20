@@ -7,6 +7,7 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { resolvePluginSetupRegistry } from "./setup-registry.js";
+import type { ProviderPlugin } from "./types.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 
@@ -28,58 +29,47 @@ function setupManifest(
   return { plugins: [plugin], diagnostics: [] };
 }
 
-it.each(["cjs", "mjs"])(
-  "reuses bundled %s setup code while retiring each inventory's callbacks",
-  async (extension) => {
-    const event = `bundled-setup-evaluation-${extension}`;
-    const evaluated = vi.fn();
-    process.on(event, evaluated);
-    const rootDir = temp.make("bundled-setup-identity-");
-    const source = path.join(rootDir, `setup-api.${extension}`);
-    const manifestRegistry = setupManifest("bundled-owner", rootDir, source, {
-      origin: "bundled",
-      setupSource: source,
-    });
-    const definition = `{
+it.each(["cjs", "mjs"])("reuses bundled %s setup", async (extension) => {
+  const event = `bundled-setup-evaluation-${extension}`;
+  const evaluated = vi.fn();
+  process.on(event, evaluated);
+  const rootDir = temp.make("bundled-setup-identity-");
+  const source = path.join(rootDir, `setup-api.${extension}`);
+  const manifestRegistry = setupManifest("bundled-owner", rootDir, source, {
+    origin: "bundled",
+    setupSource: source,
+  });
+  fs.writeFileSync(
+    source,
+    `process.emit(${JSON.stringify(event)}); let registrations = 0;
+        ${extension === "mjs" ? "export default" : "module.exports ="} {
         register(api) {
           const registration = ++registrations;
-          api.registerProvider({ id: "bundled-owner", label: "Bundled setup", auth: [],
-            resolveConfigApiKey: () => String(registration),
-          });
+          api.registerProvider({ id: "bundled-owner", resolveConfigApiKey: () => String(registration) });
         }
-      }`;
-    fs.writeFileSync(
-      source,
-      `process.emit(${JSON.stringify(event)}); let registrations = 0;
-        ${extension === "mjs" ? "export default" : "module.exports ="} ${definition};`,
-    );
-    const caches = Array.from({ length: 3 }, () => createPluginCache());
-    const query = { provider: "bundled-owner", env: {} };
-    try {
-      let previous:
-        | ReturnType<typeof resolvePluginSetupRegistry>["providers"][number]["provider"]
-        | undefined;
-      for (const [index, cache] of caches.entries()) {
-        const result = withPluginCache(cache, () =>
-          resolvePluginSetupRegistry({ manifestRegistry }),
-        );
-        expect(result.diagnostics).toEqual([]);
-        expect(result.providers).toHaveLength(1);
-        const current = result.providers[0]!.provider;
-        if (index > 0) {
-          await retirePluginCache(caches[index - 1]!);
-          expect(() => previous!.resolveConfigApiKey?.(query)).toThrow(/reloaded|disabled|retir/);
-        }
-        expect(current.resolveConfigApiKey?.(query)).toBe(String(index + 1));
-        previous = current;
+      };`,
+  );
+  const caches = Array.from({ length: 3 }, () => createPluginCache());
+  const query = { provider: "bundled-owner", env: {} };
+  try {
+    let previous: ProviderPlugin | undefined;
+    for (const [index, cache] of caches.entries()) {
+      const result = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+      expect(result).toMatchObject({ diagnostics: [], providers: [expect.anything()] });
+      const current = result.providers[0]!.provider;
+      if (index > 0) {
+        await retirePluginCache(caches[index - 1]!);
+        expect(() => previous!.resolveConfigApiKey?.(query)).toThrow(/reloaded|disabled|retir/);
       }
-      expect(evaluated).toHaveBeenCalledOnce();
-    } finally {
-      await Promise.all(caches.map((cache) => retirePluginCache(cache)));
-      process.off(event, evaluated);
+      expect(current.resolveConfigApiKey?.(query)).toBe(String(index + 1));
+      previous = current;
     }
-  },
-);
+    expect(evaluated).toHaveBeenCalledOnce();
+  } finally {
+    await Promise.all(caches.map((cache) => retirePluginCache(cache)));
+    process.off(event, evaluated);
+  }
+});
 describe("installed setup artifacts", () => {
   afterEach(clearPluginMetadataLifecycleCaches);
 

@@ -6,17 +6,13 @@ import { startPluginServices, type PluginServicesHandle } from "./services.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
-// Allow GC convergence; the broken owner remains reachable even after 100 passes.
-const GC_PASSES = 32;
 const scenario = process.argv[2];
 const counts = { starts: 0, stops: 0 };
 const scheduler = createTestGatewayScheduler();
 type Reference = { label: string; value: WeakRef<object> };
 
-function createUnownedControl() {
-  // End the creation frame so an async module's temporary cannot retain the control.
-  return new WeakRef({ unowned: true });
-}
+// End the creation frame so an async module's temporary cannot retain the control.
+const createUnownedControl = () => new WeakRef({ unowned: true });
 
 function createRegistry() {
   const registry = createEmptyPluginRegistry();
@@ -72,14 +68,13 @@ const { handle, references } =
   scenario === "generations" ? await createGenerations() : await createPublishedHandle();
 const control = createUnownedControl();
 try {
-  for (let pass = 0; pass < GC_PASSES; pass += 1) {
+  // Allow GC convergence; the broken owner remains reachable even after 100 passes.
+  for (let pass = 0; pass < 32; pass += 1) {
     await setImmediate();
     gc();
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
-  const retained = references
-    .filter(({ value }) => value.deref() !== undefined)
-    .map(({ label }) => label);
+  const retained = references.flatMap(({ label, value }) => (value.deref() ? [label] : []));
   const beforeReload = { ...counts };
   await handle.reload({}, new Set(["retention-probe"]));
   assert.equal(counts.starts, beforeReload.starts + 1, "Newest service must restart");
@@ -87,10 +82,8 @@ try {
   assert.equal(counts.starts - counts.stops, 1, "Exactly one service must remain active");
   assert.deepEqual(retained, [], "Completed generation or publication state retained");
 } finally {
-  try {
-    await handle.stop({ strict: true });
-    assert.equal(counts.starts, counts.stops, "Every service start must have a settled stop");
-  } finally {
-    await scheduler.stop();
-  }
+  await handle
+    .stop({ strict: true })
+    .then(() => assert.equal(counts.starts, counts.stops, "Unsettled service stop"))
+    .finally(() => scheduler.stop());
 }
