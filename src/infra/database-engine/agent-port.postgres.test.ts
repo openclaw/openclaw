@@ -45,6 +45,7 @@ import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { writePortAnchor } from "./port-backup.test-support.js";
 import { files } from "./port-command.integration.test-support.js";
 import type { PortEndpoint } from "./port-descriptor.js";
 import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
@@ -514,15 +515,7 @@ describe.skipIf(!connection)("agent database port", () => {
     await client.query(
       `DELETE FROM "${namespace}".context_engine_turn_outbox WHERE advancement_key = 'retired'`,
     );
-    {
-      using anchor = openNodeSqliteDatabase(anchorPath);
-      anchor.exec(
-        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-      );
-      anchor
-        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-        .run(storeId, namespace);
-    }
+    writePortAnchor(anchorPath, storeId, namespace);
     await descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" });
     const config = { database: { engine: "postgres" as const, postgres: { connection } } };
     withDatabaseEngineSelection(
@@ -639,13 +632,7 @@ describe.skipIf(!connection)("agent database port", () => {
           )
           .run(anchorPath, OPENCLAW_AGENT_SCHEMA_VERSION);
         await port(sqlite(registry), pg(stateNamespace), stateDescriptor, stateStoreId);
-        using anchor = openNodeSqliteDatabase(registryPath);
-        anchor.exec(
-          "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-        );
-        anchor
-          .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-          .run(stateStoreId, stateNamespace);
+        writePortAnchor(registryPath, stateStoreId, stateNamespace);
       }
       const capture = {
         backupRoot: path.join(directory, `update-backup-${registryEngine}`),
