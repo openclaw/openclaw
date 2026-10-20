@@ -14,14 +14,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCurrentGitHubPublicationOptionsIdentity } from "./github-publication-availability.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -47,6 +44,8 @@ import {
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { withStateDirEnv } from "./session-utils.test-support.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 afterEach(() => memorySessionActorOwners.reset());
 
@@ -100,29 +99,48 @@ async function request(
   return respond.mock.calls[0]?.[1];
 }
 
+async function expectModelViews(
+  context: GatewayRequestContext,
+  key: string,
+  agentId: string,
+  expected: Partial<GatewaySessionRow>,
+  historyContext = context,
+) {
+  const row = getSessionRowProjection(context)?.snapshot({ key, agentId }).row;
+  const described = await request(context, "sessions.describe", { key, agentId });
+  const history = await request(historyContext, "chat.history", { sessionKey: key, agentId });
+  expect.soft({ row, described, history }).toMatchObject({
+    row: expected,
+    described: { session: expected },
+    history: { sessionInfo: expected },
+  });
+}
+
+function configureStores(
+  stateDir: string,
+  agentIds: string[],
+  session: OpenClawConfig["session"] = {},
+) {
+  const cfg: OpenClawConfig = {
+    agents: { ownership: "explicit", entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
+    session: {
+      store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      ...session,
+    },
+  };
+  setRuntimeConfigSnapshot(cfg, cfg);
+  return cfg;
+}
+
 async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) => Promise<void>) {
   await withStateDirEnv("gateway-global-lookup-", async ({ stateDir }) => {
-    const cfg = {
-      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-      session: {
-        scope: "global",
-        mainKey,
-        store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-      },
-    } satisfies OpenClawConfig;
-    setRuntimeConfigSnapshot(cfg, cfg);
-    try {
-      for (const agentId of ["main", "research"]) {
-        for (const sessionKey of ["global", `agent:${agentId}:global`]) {
-          await seedEntry(sessionKey, `${agentId}-${sessionKey}`, {}, agentId);
-        }
+    const cfg = configureStores(stateDir, ["main", "research"], { scope: "global", mainKey });
+    for (const agentId of ["main", "research"]) {
+      for (const sessionKey of ["global", `agent:${agentId}:global`]) {
+        await seedEntry(sessionKey, `${agentId}-${sessionKey}`, {}, agentId);
       }
-      await run(cfg);
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      resetConfigRuntimeState();
     }
+    await run(cfg);
   });
 }
 
@@ -152,13 +170,7 @@ describe("global session lookup ownership", () => {
 
   it("does not create a database for a retired scalar owner", async () => {
     await withStateDirEnv("gateway-scalar-store-admission-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
-        session: {
-          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
+      const cfg = configureStores(stateDir, ["main"]);
       const key = "agent:retired:dashboard:new-session";
       expect(
         await resolveGatewaySessionStoreTargetInWorker({
@@ -200,13 +212,7 @@ describe("global session lookup ownership", () => {
     "does not plan a replacement after a deleted-main match or selection error (duplicate: %s)",
     async (duplicate) => {
       await withStateDirEnv("gateway-prepared-legacy-owner-", async ({ stateDir }) => {
-        const cfg: OpenClawConfig = {
-          agents: { ownership: "explicit", entries: { research: {} } },
-          session: {
-            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-          },
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
+        const cfg = configureStores(stateDir, ["research"]);
         const key = "agent:main:retained";
         for (const sessionKey of duplicate ? [key, "agent:main:main"] : [key]) {
           await seedEntry(sessionKey, sessionKey);
@@ -511,7 +517,7 @@ it("keeps inherited model selection aligned across list, exact rows and events",
       updatedAt: 2,
       parentSessionKey: parentKey,
     });
-    const expected = {
+    const expected: Partial<GatewaySessionRow> = {
       modelProvider: "openai",
       model: "gpt-5.5",
       modelOverrideSource: "inherited",
@@ -523,24 +529,15 @@ it("keeps inherited model selection aligned across list, exact rows and events",
       request: { agentId: "main", limit: 10 },
     });
     expect(listed.sessions.find((row) => row.key === childKey)).toMatchObject(expected);
-    expect
-      .soft(getSessionRowProjection(context)?.snapshot({ key: childKey, agentId: "main" }).row)
-      .toMatchObject(expected);
-
-    expect
-      .soft(await request(context, "sessions.describe", { key: childKey }))
-      .toMatchObject({ session: expected });
-    expect
-      .soft(
-        await request(
-          createDirectChatContext({
-            sessionRowProjectionOwner: context.sessionRowProjectionOwner,
-          }),
-          "chat.history",
-          { sessionKey: childKey },
-        ),
-      )
-      .toMatchObject({ sessionInfo: expected });
+    await expectModelViews(
+      context,
+      childKey,
+      "main",
+      expected,
+      createDirectChatContext({
+        sessionRowProjectionOwner: context.sessionRowProjectionOwner,
+      }),
+    );
 
     const broadcast = vi.fn();
     const eventContext = {
@@ -589,7 +586,7 @@ it.each([
       if (storePath) {
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       }
-      const catalog = ["llama3.1:8b", "qwen3:8b", "qwen3:14b", "qwen3:32b"].map((id) => ({
+      const catalog = ["llama3.1:8b", "qwen3:8b", "qwen3:14b"].map((id) => ({
         id,
         name: id,
         provider: "ollama",
@@ -597,15 +594,7 @@ it.each([
       }));
       const context = createDirectChatContext({
         getRuntimeConfig: () => cfg,
-        loadGatewayModelCatalogSnapshot: async () => ({
-          entries: catalog,
-          routeVariants: catalog,
-          agentId: "main",
-          agentDir: "/tmp/fixture-agent",
-          workspaceDir: "/tmp/fixture-workspace",
-          config: cfg,
-          catalogComplete: true,
-        }),
+        loadGatewayModelCatalog: async () => catalog,
         readPreparedGatewayModelCatalog: async () => ({ entries: catalog }),
       });
       const invoke = (method: string, params: Record<string, unknown>) =>
@@ -693,25 +682,7 @@ it.each([
         });
         expect.soft(searched.sessions.some((row) => row.key === created.key)).toBe(true);
       }
-      expect
-        .soft(getSessionRowProjection(context)?.snapshot({ key: created.key, agentId: "work" }).row)
-        .toMatchObject(expected);
-      await expect
-        .soft(
-          invoke("sessions.describe", {
-            key: created.key,
-            agentId: "work",
-          }),
-        )
-        .resolves.toMatchObject({ session: expected });
-      await expect
-        .soft(
-          invoke("chat.history", {
-            sessionKey: created.key,
-            agentId: "work",
-          }),
-        )
-        .resolves.toMatchObject({ sessionInfo: expected });
+      await expectModelViews(context, created.key, "work", expected);
       const allAgents = await listSessions({ client, context, request: { limit: 20 } });
       expect(allAgents.sessions.find((row) => row.key === created.key)).toMatchObject(expected);
     });
