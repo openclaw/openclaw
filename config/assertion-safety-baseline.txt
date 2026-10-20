@@ -535,7 +535,6 @@ extensions/msteams/src/sdk-proactive.ts	1
 extensions/msteams/src/sdk.ts	3
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
-extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
