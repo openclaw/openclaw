@@ -62,17 +62,13 @@ type Receipt = {
 };
 type Operation<Input, Output> = { input: Input; output: Output };
 type Value = { value: string };
+type DomainCommand = {
+  type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
+  input: Value;
+};
 export type FixtureOperations = {
   append: Operation<Value, Receipt>;
-  "database.domain.execute": Operation<
-    {
-      command: {
-        type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
-        input: Value;
-      };
-    },
-    Receipt
-  >;
+  "database.domain.execute": Operation<{ command: DomainCommand }, Receipt>;
   read: Operation<undefined, string[]>;
   takeReplyOwnership: Operation<undefined, ReplyOwnership[]>;
   commitThenExit: Operation<Value, never>;
@@ -151,20 +147,14 @@ function createFixtureBackend(
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       }
     });
-    writes += 1;
-    return {
-      actor,
-      writes,
-      threadId,
-      ...(input?.type === "prepare"
-        ? {
-            readerOwnership: {
-              preparation: [...preparationOwners],
-              execution: captureSqliteReaderOwner(),
-            },
-          }
-        : {}),
-    };
+    const receipt: Receipt = { actor, writes: ++writes, threadId };
+    if (input?.type === "prepare") {
+      receipt.readerOwnership = {
+        preparation: [...preparationOwners],
+        execution: captureSqliteReaderOwner(),
+      };
+    }
+    return receipt;
   }
   function closeNative(): undefined {
     clearNodeSqliteKyselyCacheForDatabase(db);

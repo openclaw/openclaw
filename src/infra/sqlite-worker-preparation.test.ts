@@ -163,27 +163,24 @@ export function createSqliteWorkerBackend(input, context) {
   const options = { moduleUrl: pathToFileURL(modulePath), databasePath, input: undefined };
   const preparation = { key: "captured" };
   try {
-    const opening = broker.open<PreparedFixture>(options, undefined, undefined, {
-      preparation,
-    });
+    const opening = broker.open<PreparedFixture>(options, undefined, undefined, { preparation });
     preparation.key = "changed-after-admission";
-    const first = await opening;
-    assert.ok(first);
-    const ordinary = await broker.open<PreparedFixture>(options);
-    assert.ok(ordinary);
-    const anotherPreparation = await broker.open<PreparedFixture>(options, undefined, undefined, {
-      preparation: { key: "must-not-reinitialize" },
-    });
-    assert.ok(anotherPreparation);
-
+    const clients = [
+      await opening,
+      await broker.open<PreparedFixture>(options),
+      await broker.open<PreparedFixture>(options, undefined, undefined, {
+        preparation: { key: "must-not-reinitialize" },
+      }),
+    ];
     expect(await readFile(databasePath, "utf8")).toBe("captured");
-    for (const store of [first, ordinary, anotherPreparation]) {
+    for (const store of clients) {
+      assert.ok(store);
       expect(await store.execute({ type: "read", input: undefined })).toEqual({
         preparation: { key: "captured" },
         input: undefined,
       });
     }
-    await Promise.all([first.close(), ordinary.close(), anotherPreparation.close()]);
+    await Promise.all(clients.map((store) => store?.close()));
   } finally {
     await broker.close();
   }
