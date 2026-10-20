@@ -6,6 +6,10 @@ import { linePlugin } from "../channel-plugin-api.js";
 import { LineConfigSchema } from "./config-schema.js";
 import { lineStatusAdapter } from "./status.js";
 
+function config(line: NonNullable<OpenClawConfig["channels"]>["line"]): OpenClawConfig {
+  return { channels: { line } };
+}
+
 const directory = linePlugin.directory;
 if (!directory?.listPeers || !directory.listGroups) {
   throw new Error("LINE directory callbacks are missing");
@@ -17,20 +21,16 @@ const groupSender = `U${"2".repeat(32)}`;
 const roomSender = `U${"3".repeat(32)}`;
 const group = `C${"5".repeat(32)}`;
 const room = `R${"6".repeat(32)}`;
-const directoryConfig: OpenClawConfig = {
-  channels: {
-    line: {
-      allowFrom: [user, `line:user:${user}`, "*", "accessGroup:operators"],
-      groupAllowFrom: [groupSender, user],
-      groups: {
-        [`group:${group}`]: { allowFrom: [roomSender] },
-        [group]: {},
-        [`room:${room}`]: {},
-        "*": { requireMention: false },
-      },
-    },
+const directoryConfig = config({
+  allowFrom: [user, `line:user:${user}`, "*", "accessGroup:operators"],
+  groupAllowFrom: [groupSender, user],
+  groups: {
+    [`group:${group}`]: { allowFrom: [roomSender] },
+    [group]: {},
+    [`room:${room}`]: {},
+    "*": { requireMention: false },
   },
-};
+});
 
 describe("LINE configured directory", () => {
   it("lists unique sendable users from all configured sender scopes", async () => {
@@ -58,20 +58,14 @@ const allowlist = linePlugin.allowlist;
 
 describe("line allowlist adapter", () => {
   it("reads dm/group allowlists and group overrides from line config", () => {
-    const cfg = {
-      channels: {
-        line: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          groupPolicy: "allowlist",
-          allowFrom: ["Ualice"],
-          groupAllowFrom: ["Ubob"],
-          groups: {
-            Cgroup1: { allowFrom: ["Ucarol"] },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = config({
+      enabled: true,
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      allowFrom: ["Ualice"],
+      groupAllowFrom: ["Ubob"],
+      groups: { Cgroup1: { allowFrom: ["Ucarol"] } },
+    });
 
     expect(allowlist?.readConfig?.({ cfg, accountId: "default" })).toEqual({
       dmAllowFrom: ["Ualice"],
@@ -87,7 +81,7 @@ describe("line allowlist adapter", () => {
       channels: { line: { allowFrom: ["Ufrank"] } },
     };
     const result = allowlist?.applyConfigEdit?.({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       parsedConfig,
       accountId: "default",
       scope: "dm",
@@ -165,15 +159,13 @@ describe("LINE status issues", () => {
 
 describe("LINE reply-to mode", () => {
   it("accepts configured modes and lets an account override the channel", () => {
-    const cfg = {
-      channels: {
-        line: LineConfigSchema.parse({
-          channelAccessToken: "token",
-          replyToMode: "all",
-          accounts: { work: { channelAccessToken: "work-token", replyToMode: "first" } },
-        }),
-      },
-    };
+    const cfg = config(
+      LineConfigSchema.parse({
+        channelAccessToken: "token",
+        replyToMode: "all",
+        accounts: { work: { channelAccessToken: "work-token", replyToMode: "first" } },
+      }),
+    );
     const resolve = linePlugin.threading!.resolveReplyToMode!;
     expect(resolve({ cfg, accountId: "work", chatType: "group" })).toBe("first");
     expect(resolve({ cfg, chatType: "group" })).toBe("all");

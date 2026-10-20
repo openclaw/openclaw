@@ -1,4 +1,3 @@
-// Line tests cover probe plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeLineBot } from "./probe.js";
 import { createPendingLineResponse, stubLineApiFetch } from "./probe.test-support.js";
@@ -10,39 +9,38 @@ afterEach(() => {
 });
 
 describe("probeLineBot", () => {
-  const identity = {
-    displayName: "bot",
-    userId: "U0",
-    basicId: "@bot",
-  };
-  // The probe reads the webhook switch after the optional quota reads, so every
-  // sequence that gets that far declares its answer rather than falling through to
-  // the support stub's unexpected-request guard.
+  const identity = { displayName: "bot", userId: "U0", basicId: "@bot" };
   const webhookResponse = (active: boolean) =>
     Response.json({ endpoint: "https://gateway.example/line/webhook", active });
+  const stubProbe = (...responses: Parameters<typeof stubLineApiFetch>) =>
+    stubLineApiFetch(Response.json(identity), ...responses);
+  const stubWebhook = (response: Response) => stubProbe(Response.json({ type: "none" }), response);
+  async function finish(
+    probing: Promise<unknown>,
+    ...bodies: ReturnType<typeof createPendingLineResponse>[]
+  ) {
+    for (const body of bodies) {
+      body.finish();
+    }
+    await vi.runAllTimersAsync();
+    await probing;
+  }
 
   it("stays healthy and cancels an optional quota body before the probe deadline", async () => {
     vi.useFakeTimers();
     const pending = createPendingLineResponse({ type: "none" });
-    const fetchMock = stubLineApiFetch(
-      Response.json(identity),
-      pending.response,
-      webhookResponse(true),
-    );
+    const fetchMock = stubProbe(pending.response, webhookResponse(true));
     const probing = probeLineBot("token", 300);
     try {
       await vi.advanceTimersByTimeAsync(200);
       const result = await probing;
       expect(result).toMatchObject({ ok: true, bot: identity });
       expect(result.quota).toBeUndefined();
-      // The stalled quota read spends only its own slice; the webhook read still gets
-      // a bounded budget of what remains, so it runs rather than being starved.
+      // Exhausting the quota slice must leave time for the webhook read.
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(pending.cancel).toHaveBeenCalledOnce();
     } finally {
-      pending.finish();
-      await vi.runAllTimersAsync();
-      await probing;
+      await finish(probing, pending);
     }
   });
 
@@ -57,18 +55,12 @@ describe("probeLineBot", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(pending.cancel).toHaveBeenCalledOnce();
     } finally {
-      pending.finish();
-      await vi.runAllTimersAsync();
-      await probing;
+      await finish(probing, pending);
     }
   });
 
   it("keeps a limited response without an amount unknown", async () => {
-    const fetchMock = stubLineApiFetch(
-      Response.json(identity),
-      Response.json({ type: "limited" }),
-      webhookResponse(true),
-    );
+    const fetchMock = stubProbe(Response.json({ type: "limited" }), webhookResponse(true));
 
     const result = await probeLineBot("token", 5000);
     expect(result).toMatchObject({ ok: true, bot: identity });
@@ -85,8 +77,7 @@ describe("probeLineBot", () => {
       setTimeout(pending.finish, 1200);
       return pending.response;
     };
-    const fetchMock = stubLineApiFetch(
-      Response.json(identity),
+    const fetchMock = stubProbe(
       delayedBody({ type: "limited", value: 200 }),
       delayedBody({ totalUsage: 70 }),
       webhookResponse(true),
@@ -99,69 +90,42 @@ describe("probeLineBot", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(2001);
-      // Three LINE reads plus the webhook read that follows the exhausted quota budget.
       expect(fetchMock).toHaveBeenCalledTimes(4);
       expect(bodies).toHaveLength(2);
       expect(completed).toEqual([undefined]);
       expect(await reading).toMatchObject({ ok: true, bot: identity });
       expect(bodies[1]?.cancel).toHaveBeenCalledOnce();
     } finally {
-      for (const pending of bodies) {
-        pending.finish();
-      }
-      await vi.runAllTimersAsync();
-      await reading;
+      await finish(reading, ...bodies);
     }
   });
 
-  it.each([{ active: false, expected: "disabled" }] as const)(
-    "reports a registered webhook that is active=$active",
-    async ({ active, expected }) => {
-      stubLineApiFetch(
-        Response.json(identity),
-        Response.json({ type: "none" }),
-        webhookResponse(active),
-      );
-
-      // LINE returns the registered URL; the probe deliberately does not carry it,
-      // because it would then reach logs and status output with no action to take on it.
-      const result = await probeLineBot("token", 5000);
-      expect(result.webhook).toEqual({ status: expected });
-    },
-  );
+  it("reports a disabled webhook without exposing the registered URL", async () => {
+    stubWebhook(webhookResponse(false));
+    const result = await probeLineBot("token", 5000);
+    expect(result.webhook).toEqual({ status: "disabled" });
+  });
 
   it("reports an unregistered webhook when LINE answers 404", async () => {
-    stubLineApiFetch(
-      Response.json(identity),
-      Response.json({ type: "none" }),
-      Response.json({ message: "Not found" }, { status: 404 }),
-    );
+    stubWebhook(Response.json({ message: "Not found" }, { status: 404 }));
 
     await expect(probeLineBot("token", 5000)).resolves.toMatchObject({
       webhook: { status: "unset" },
     });
   });
 
-  // An answer that is not the documented boolean is not evidence either: reporting it
-  // as disabled would send an operator to a console switch that is already on.
   it("leaves the webhook unreported when active is not a boolean", async () => {
-    stubLineApiFetch(
-      Response.json(identity),
-      Response.json({ type: "none" }),
-      Response.json({ endpoint: "https://gateway.example/line/webhook", active: "yes" }),
-    );
+    stubWebhook(Response.json({ endpoint: "https://gateway.example/line/webhook", active: "yes" }));
 
     const result = await probeLineBot("token", 5000);
     expect(result.ok).toBe(true);
     expect(result.webhook).toBeUndefined();
   });
 
-  // The webhook lookup is an optional extra inside the probe's deadline. If it could
-  // spend that deadline, a healthy token would be reported as a broken channel.
   it("stays healthy when the webhook lookup never settles", async () => {
     vi.useFakeTimers();
     const pending = createPendingLineResponse({ endpoint: "https://x", active: true });
-    stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }), pending.response);
+    stubWebhook(pending.response);
     const probing = probeLineBot("token", 300);
     try {
       await vi.advanceTimersByTimeAsync(299);
@@ -169,9 +133,7 @@ describe("probeLineBot", () => {
       expect(result).toMatchObject({ ok: true, bot: identity });
       expect(result.webhook).toBeUndefined();
     } finally {
-      pending.finish();
-      await vi.runAllTimersAsync();
-      await probing;
+      await finish(probing, pending);
     }
   });
 });
