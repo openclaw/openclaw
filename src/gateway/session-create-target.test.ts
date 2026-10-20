@@ -15,18 +15,22 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { readSessionCreateTarget } from "./session-create-target.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
+const params = { cfg: {}, commandSource: "test", operatorRoleActor: { kind: "system" as const } };
+function seed(env: NodeJS.ProcessEnv, sessionKey: string) {
+  const scope = { agentId: "main", sessionKey, env };
+  replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
+  return scope;
+}
+const readTarget = (
+  target: Parameters<typeof readSessionCreateTarget>[1],
+  commitGuard?: () => void,
+) => readSessionCreateTarget({ ...params, commitGuard }, target, "original", [target.canonicalKey]);
+
 it("prepares the current creation target metadata without caller-thread SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const key = "agent:main:create-target";
-    const params = {
-      cfg: {},
-      key,
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" as const },
-    };
-    const scope = { agentId: "main", sessionKey: key, env };
-    replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
-    const target = await resolveGatewaySessionStoreTargetInWorker({ ...params, env });
+    const scope = seed(env, key);
+    const target = await resolveGatewaySessionStoreTargetInWorker({ ...params, key, env });
     replaceSessionEntrySync(scope, {
       sessionId: "original",
       updatedAt: 2,
@@ -54,7 +58,7 @@ it("prepares the current creation target metadata without caller-thread SQLite",
       .run(sibling);
     const sql = observeHostDataSql();
     try {
-      expect(await readSessionCreateTarget(params, target, "original", [key])).toMatchObject({
+      expect(await readTarget(target)).toMatchObject({
         ok: true,
         value: {
           sessionId: "original",
@@ -72,10 +76,7 @@ it("prepares the current creation target metadata without caller-thread SQLite",
 it("rechecks creation authority after queued reader admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const key = "agent:main:create-target-revoked";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key, env },
-      { sessionId: "original", updatedAt: 1 },
-    );
+    seed(env, key);
     const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key, env });
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -86,20 +87,11 @@ it("rechecks creation authority after queued reader admission", async () => {
     await entered.promise;
     let current = true;
     const revoked = new Error("creation caller revoked");
-    const read = readSessionCreateTarget(
-      {
-        cfg: {},
-        commandSource: "test",
-        commitGuard: () => {
-          if (!current) {
-            throw revoked;
-          }
-        },
-      },
-      target,
-      "original",
-      [key],
-    );
+    const read = readTarget(target, () => {
+      if (!current) {
+        throw revoked;
+      }
+    });
     current = false;
     const refused = expect(read).rejects.toBe(revoked);
     release.resolve();
@@ -112,10 +104,7 @@ it.for(["metadata", "database"] as const)(
   async (preparation, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const key = "agent:main:create-target-unblocked";
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key, env },
-        { sessionId: "original", updatedAt: 1 },
-      );
+      seed(env, key);
       const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key, env });
       const database = {
         agentId: target.agentId,
@@ -139,14 +128,10 @@ it.for(["metadata", "database"] as const)(
             signal,
           );
         } else {
-          expect(
-            await withinTest(
-              readSessionCreateTarget({ cfg: {}, commandSource: "test" }, target, "original", [
-                key,
-              ]),
-              signal,
-            ),
-          ).toMatchObject({ ok: true, value: { sessionId: "original", updatedAt: 1 } });
+          expect(await withinTest(readTarget(target), signal)).toMatchObject({
+            ok: true,
+            value: { sessionId: "original", updatedAt: 1 },
+          });
         }
       } finally {
         release.resolve();

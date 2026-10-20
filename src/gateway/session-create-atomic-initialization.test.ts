@@ -6,50 +6,48 @@ import {
 import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
+import type {
+  CreatedGatewaySession,
+  CreateGatewaySessionParams,
+} from "./session-create-service.types.js";
 
-async function appendImportedMessage(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}) {
-  await withSessionTranscriptWriteLock(
-    {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    async (transcript) => {
-      await transcript.appendMessage({
-        message: { role: "user", content: "Imported snapshot", timestamp: 1 },
-      });
-    },
-  );
+function createSession(
+  key: string,
+  afterCreate: CreateGatewaySessionParams["afterCreate"],
+  atomicInitialization = true,
+) {
+  return createGatewaySession({
+    cfg: {},
+    key,
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" },
+    atomicInitialization: atomicInitialization ? true : undefined,
+    afterCreate,
+  });
+}
+
+async function appendImportedMessage(created: CreatedGatewaySession) {
+  const scope = {
+    agentId: created.agentId,
+    sessionId: created.entry.sessionId,
+    sessionKey: created.key,
+    storePath: created.storePath,
+  };
+  await withSessionTranscriptWriteLock(scope, async (transcript) => {
+    await transcript.appendMessage({
+      message: { role: "user", content: "Imported snapshot", timestamp: 1 },
+    });
+  });
+  return scope;
 }
 
 describe("atomic Gateway session initialization", () => {
   it("publishes a usable session only after its transcript initializer succeeds", async () => {
     await withOpenClawTestState({ label: "atomic-session-success" }, async () => {
-      let transcriptScope:
-        | { agentId: string; sessionId: string; sessionKey: string; storePath: string }
-        | undefined;
-      const created = await createGatewaySession({
-        cfg: {},
-        key: "agent:main:atomic-success",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        atomicInitialization: true,
-        afterCreate: async (entry) => {
-          expect(entry.entry.initializationPending).toBe(true);
-          transcriptScope = {
-            agentId: entry.agentId,
-            sessionId: entry.entry.sessionId,
-            sessionKey: entry.key,
-            storePath: entry.storePath,
-          };
-          await appendImportedMessage(transcriptScope);
-        },
+      let transcriptScope: Awaited<ReturnType<typeof appendImportedMessage>> | undefined;
+      const created = await createSession("agent:main:atomic-success", async (entry) => {
+        expect(entry.entry.initializationPending).toBe(true);
+        transcriptScope = await appendImportedMessage(entry);
       });
 
       expect(created).toMatchObject({
@@ -73,21 +71,9 @@ describe("atomic Gateway session initialization", () => {
   it("removes the new session and transcript when initialization fails", async () => {
     await withOpenClawTestState({ label: "atomic-session-failure" }, async () => {
       const sessionKey = "agent:main:atomic-failure";
-      const created = await createGatewaySession({
-        cfg: {},
-        key: sessionKey,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        atomicInitialization: true,
-        afterCreate: async (entry) => {
-          await appendImportedMessage({
-            agentId: entry.agentId,
-            sessionId: entry.entry.sessionId,
-            sessionKey: entry.key,
-            storePath: entry.storePath,
-          });
-          throw new Error("snapshot changed");
-        },
+      const created = await createSession(sessionKey, async (entry) => {
+        await appendImportedMessage(entry);
+        throw new Error("snapshot changed");
       });
 
       expect(created).toMatchObject({
@@ -101,15 +87,13 @@ describe("atomic Gateway session initialization", () => {
   it("preserves the existing post-commit contract for ordinary session creation", async () => {
     await withOpenClawTestState({ label: "ordinary-session-initializer" }, async () => {
       const sessionKey = "agent:main:ordinary-initializer";
-      const created = await createGatewaySession({
-        cfg: {},
-        key: sessionKey,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        afterCreate: async () => {
+      const created = await createSession(
+        sessionKey,
+        async () => {
           throw new Error("initial turn failed");
         },
-      });
+        false,
+      );
 
       expect(created).toMatchObject({
         ok: true,

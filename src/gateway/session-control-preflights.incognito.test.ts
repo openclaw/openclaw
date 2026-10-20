@@ -1,5 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
@@ -21,6 +21,23 @@ const cfg = { agents: { entries: { main: {}, absent: {} } } };
 const sessionKey = "agent:main:dashboard:incognito-preflight";
 let location: { agentId: string; path: string };
 let env: NodeJS.ProcessEnv;
+let sql: ReturnType<typeof observeMainThreadSql>;
+
+beforeEach(() => {
+  sql = observeMainThreadSql();
+});
+afterEach(() => {
+  sql.restore();
+  vi.restoreAllMocks();
+});
+
+function expectRefused(options: GatewayRequestHandlerOptions, message: string) {
+  expect(options.respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: "INVALID_REQUEST", message }),
+  );
+}
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-control-preflights-") };
@@ -67,64 +84,41 @@ it.each(["main", "absent"] as const)(
   "refuses private provider continuation before session acquisition (%s)",
   async (agentId) => {
     const target = vi.spyOn(sharing, "resolveSessionSharingTargetAsync");
-    const sql = observeMainThreadSql();
-    try {
-      const options = request("sessions.providerReview.continue", {
-        sessionKey: `agent:${agentId}:dashboard:incognito-preflight`,
-        sessionId: "private-preflight",
-        reviewId: "private-review",
-        idempotencyKey: "private-run",
-      });
-      await sessionProviderReviewHandlers[options.req.method]!(options);
-      expect(options.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message:
-            "Could not continue this chat. Refresh its current findings before trying again.",
-        }),
-      );
-      expect(target).not.toHaveBeenCalled();
-      expect(
-        memorySessionActorOwners.read({
-          agentId: "absent",
-          path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "absent", env }),
-        }),
-      ).toBeUndefined();
-      sql.expectIdle();
-    } finally {
-      target.mockRestore();
-      sql.restore();
-    }
+    const options = request("sessions.providerReview.continue", {
+      sessionKey: `agent:${agentId}:dashboard:incognito-preflight`,
+      sessionId: "private-preflight",
+      reviewId: "private-review",
+      idempotencyKey: "private-run",
+    });
+    await sessionProviderReviewHandlers[options.req.method]!(options);
+    expectRefused(
+      options,
+      "Could not continue this chat. Refresh its current findings before trying again.",
+    );
+    expect(target).not.toHaveBeenCalled();
+    expect(
+      memorySessionActorOwners.read({
+        agentId: "absent",
+        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "absent", env }),
+      }),
+    ).toBeUndefined();
+    sql.expectIdle();
   },
 );
 
 it.each(["create", "status", "destroy"] as const)(
   "refuses private attached-environment %s without SQL",
   async (action) => {
-    const sql = observeMainThreadSql();
-    try {
-      const options = request(`environments.session.${action}`, {
-        sessionKey,
-        ...(action === "create"
-          ? { profileId: "development", idempotencyKey: "private-environment" }
-          : {}),
-        ...(action === "destroy" ? { environmentId: "private-environment" } : {}),
-      });
-      await environmentsSessionHandlers[options.req.method]!(options);
-      expect(options.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: "A persistent conversation is required for an attached environment",
-        }),
-      );
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    const options = request(`environments.session.${action}`, {
+      sessionKey,
+      ...(action === "create"
+        ? { profileId: "development", idempotencyKey: "private-environment" }
+        : {}),
+      ...(action === "destroy" ? { environmentId: "private-environment" } : {}),
+    });
+    await environmentsSessionHandlers[options.req.method]!(options);
+    expectRefused(options, "A persistent conversation is required for an attached environment");
+    sql.expectIdle();
   },
 );
 
@@ -139,27 +133,21 @@ it("reports private activity recaps unavailable without acquiring a source or sc
     async dispose() {},
   };
   const target = vi.spyOn(sharing, "resolveSessionSharingTargetAsync");
-  const sql = observeMainThreadSql();
-  try {
-    const options = request("sessions.activitySummary.ensure", {
-      sessions: [{ key: sessionKey }],
-    });
-    options.context.sessionActivitySummaries = service;
-    await sessionActivitySummaryHandlers[options.req.method]!(options);
-    expect(options.respond).toHaveBeenCalledWith(true, {
-      sessions: [
-        {
-          key: sessionKey,
-          agentId: "main",
-          activitySummary: { state: "unavailable", canEnsure: true },
-        },
-      ],
-    });
-    expect(ensure).not.toHaveBeenCalled();
-    expect(target).not.toHaveBeenCalled();
-    sql.expectIdle();
-  } finally {
-    target.mockRestore();
-    sql.restore();
-  }
+  const options = request("sessions.activitySummary.ensure", {
+    sessions: [{ key: sessionKey }],
+  });
+  options.context.sessionActivitySummaries = service;
+  await sessionActivitySummaryHandlers[options.req.method]!(options);
+  expect(options.respond).toHaveBeenCalledWith(true, {
+    sessions: [
+      {
+        key: sessionKey,
+        agentId: "main",
+        activitySummary: { state: "unavailable", canEnsure: true },
+      },
+    ],
+  });
+  expect(ensure).not.toHaveBeenCalled();
+  expect(target).not.toHaveBeenCalled();
+  sql.expectIdle();
 });
