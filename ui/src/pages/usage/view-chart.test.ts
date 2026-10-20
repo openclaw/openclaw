@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { CostDailyEntry, UsageProps } from "./types.ts";
@@ -10,39 +10,34 @@ import { DailyChartCompact } from "./view-chart.tsx";
 import { createUsageProps } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
-afterEach(() => document.body.replaceChildren());
-
 function renderDailyChart(
   daily: CostDailyEntry[],
   chartMode: "tokens" | "cost" = "cost",
   dailyChartMode: "total" | "by-type" = "total",
 ) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const onSelectDay = vi.fn<(day: string, shiftKey: boolean, orderedDays: string[]) => void>();
-  mountSolid(
-    () =>
-      DailyChartCompact({
-        dailyEntries: daily,
-        selectedDays: [],
-        chartMode,
-        dailyChartMode,
-        onDailyChartModeChange: () => {},
-        onSelectDay,
-        range: {
-          startDate: daily[0]?.date ?? "2026-05-01",
-          endDate: daily.at(-1)?.date ?? "2026-05-01",
-          complete: true,
-        },
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    DailyChartCompact({
+      dailyEntries: daily,
+      selectedDays: [],
+      chartMode,
+      dailyChartMode,
+      onDailyChartModeChange: () => {},
+      onSelectDay: () => {},
+      range: {
+        startDate: daily[0]?.date ?? "2026-05-01",
+        endDate: daily.at(-1)?.date ?? "2026-05-01",
+        complete: true,
+      },
+    }),
   );
   flush();
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
+  return container;
+}
+
+function mountUsage(props: UsageProps) {
+  const view = mountSolid(() => renderUsage(props));
+  flush();
+  return view.container;
 }
 
 describe("DailyChartCompact", () => {
@@ -60,39 +55,33 @@ describe("DailyChartCompact", () => {
         selectedDays: current.selectedDays.includes(day) ? [] : [day],
       })),
     );
-    const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(
-      () =>
-        renderUsage({
-          ...base,
-          get filters() {
-            return filters();
-          },
-          data: { ...base.data, totals: entry, costDaily: [entry] },
-          callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onSelectDay } },
-        }),
-      { container },
-    );
-    flush();
+    const container = mountUsage({
+      ...base,
+      get filters() {
+        return filters();
+      },
+      data: { ...base.data, totals: entry, costDaily: [entry] },
+      callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onSelectDay } },
+    });
     const bar = expectDefined(
       container.querySelector<HTMLElement>(".daily-bar-wrapper"),
       "daily usage bar",
     );
     bar.focus();
+    const expectSelection = (pressed: string) => {
+      flush();
+      expect(container.querySelector(".daily-bar-wrapper")).toBe(bar);
+      expect(document.activeElement).toBe(bar);
+      expect(bar.getAttribute("aria-pressed")).toBe(pressed);
+    };
 
     bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true, ["2026-05-04"]);
-    flush();
-    expect(container.querySelector(".daily-bar-wrapper")).toBe(bar);
-    expect(document.activeElement).toBe(bar);
-    expect(bar.getAttribute("aria-pressed")).toBe("true");
+    expectSelection("true");
 
     bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false, ["2026-05-04"]);
-    flush();
-    expect(container.querySelector(".daily-bar-wrapper")).toBe(bar);
-    expect(document.activeElement).toBe(bar);
-    expect(bar.getAttribute("aria-pressed")).toBe("false");
+    expectSelection("false");
 
     const space = new KeyboardEvent("keydown", {
       bubbles: true,
@@ -120,9 +109,9 @@ describe("DailyChartCompact", () => {
       ...dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, cost),
       ...(stacked ? { inputCost: 0.000004, outputCost: 0.000006 } : {}),
     }));
-    const { container } = renderDailyChart(daily, "cost", stacked ? "by-type" : "total");
+    const container = renderDailyChart(daily, "cost", stacked ? "by-type" : "total");
     expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
+      Array.from(container.querySelectorAll(".daily-chart-scale span"), (entry) =>
         entry.textContent?.trim(),
       ),
     ).toEqual(labels);
@@ -157,20 +146,14 @@ describe("DailyChartCompact", () => {
     const onDatesChange = vi.fn((patch: Partial<UsageProps["filters"]>) =>
       setFilters((current) => ({ ...current, ...patch })),
     );
-    const container = document.body.appendChild(document.createElement("div"));
     try {
-      mountSolid(
-        () =>
-          renderUsage({
-            ...base,
-            get filters() {
-              return filters();
-            },
-            callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onDatesChange } },
-          }),
-        { container },
-      );
-      flush();
+      const container = mountUsage({
+        ...base,
+        get filters() {
+          return filters();
+        },
+        callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onDatesChange } },
+      });
       const preset = [
         ...container.querySelectorAll<HTMLButtonElement>(".usage-presets button"),
       ].find((button) => button.textContent?.trim() === "7d")!;
@@ -185,7 +168,6 @@ describe("DailyChartCompact", () => {
       expect(document.activeElement).toBe(preset);
       expect(preset.getAttribute("aria-pressed")).toBe("true");
     } finally {
-      container.remove();
       vi.useRealTimers();
     }
   });

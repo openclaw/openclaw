@@ -1,14 +1,25 @@
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageCreator } from "../../../../src/shared/usage-types.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 
-afterEach(() => {
-  document.body.replaceChildren();
-});
+function group(creator: SessionUsageCreator, totalTokens = 0, totalCost = 0, sessionCount = 2) {
+  return {
+    ...creator,
+    totals: { ...createEmptyCostUsageTotals(), totalTokens, totalCost },
+    sessionCount,
+    daily: [],
+    sessionActivity: [],
+  };
+}
+
+function selectIdentity(select: HTMLSelectElement, value: string) {
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
 
 it("keeps all creator choices after filtering and passes opaque identities through row and select actions", () => {
   const alex: SessionUsageCreator = {
@@ -25,35 +36,22 @@ it("keeps all creator choices after filtering and passes opaque identities throu
     actor: { type: "human", id: "jordan", label: "Jordan Lee" },
   };
   const onSelect = vi.fn<(key: string | null) => void>();
-  const container = document.createElement("div");
-  document.body.append(container);
   const [options, setOptions] = createSignal<SessionUsageCreator[]>([alex, jordan]);
-  mountSolid(
-    () => [
-      UsageCreatorFilter({
-        get options() {
-          return options();
-        },
-        selectedKey: alex.key,
-        onSelect,
-      }),
-      UsageCreators({
-        groups: [
-          {
-            ...alex,
-            totals: { ...createEmptyCostUsageTotals(), totalTokens: 1200, totalCost: 2.5 },
-            sessionCount: 3,
-            daily: [],
-            sessionActivity: [],
-          },
-        ],
-        selectedKey: alex.key,
-        mode: "tokens",
-        onSelect,
-      }),
-    ],
-    { container },
-  );
+  const { container } = mountSolid(() => [
+    UsageCreatorFilter({
+      get options() {
+        return options();
+      },
+      selectedKey: alex.key,
+      onSelect,
+    }),
+    UsageCreators({
+      groups: [group(alex, 1200, 2.5, 3)],
+      selectedKey: alex.key,
+      mode: "tokens",
+      onSelect,
+    }),
+  ]);
   flush();
 
   const select = container.querySelector("select")!;
@@ -81,17 +79,14 @@ it("keeps all creator choices after filtering and passes opaque identities throu
   expect(unavailable.value).toBe(alex.key);
   expect(unavailable.selectedOptions[0]?.textContent?.trim()).toBe("Selected identity");
   expect(container.textContent).not.toContain(alex.key);
-  unavailable.value = "";
-  unavailable.dispatchEvent(new Event("change", { bubbles: true }));
+  selectIdentity(unavailable, "");
   expect(onSelect).toHaveBeenLastCalledWith(null);
 
   setOptions([alex, jordan]);
   flush();
-  select.value = jordan.key;
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  selectIdentity(select, jordan.key);
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);
-  select.value = "";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  selectIdentity(select, "");
   expect(onSelect).toHaveBeenLastCalledWith(null);
 });
 
@@ -100,26 +95,13 @@ it.each([
   { actor: { type: "system" as const }, label: "System" },
 ])("labels $label attribution explicitly without displaying the filter key", ({ actor, label }) => {
   const onSelect = vi.fn<(key: string | null) => void>();
-  const container = document.createElement("div");
-  document.body.append(container);
-  mountSolid(
-    () =>
-      UsageCreators({
-        groups: [
-          {
-            key: "unattributed:opaque-key",
-            actor,
-            totals: createEmptyCostUsageTotals(),
-            sessionCount: 2,
-            daily: [],
-            sessionActivity: [],
-          },
-        ],
-        selectedKey: null,
-        mode: "cost",
-        onSelect,
-      }),
-    { container },
+  const { container } = mountSolid(() =>
+    UsageCreators({
+      groups: [group({ key: "unattributed:opaque-key", actor })],
+      selectedKey: null,
+      mode: "cost",
+      onSelect,
+    }),
   );
   flush();
 

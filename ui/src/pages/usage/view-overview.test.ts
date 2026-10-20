@@ -4,26 +4,15 @@ import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
 import { createUsageOverview, createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
-  messages: {
-    total: 4,
-    user: 2,
-    assistant: 2,
-    toolCalls: 0,
-    toolResults: 0,
-    errors: 0,
-  },
-  tools: {
-    totalCalls: 0,
-    uniqueTools: 0,
-    tools: [],
-  },
+  messages: { total: 4, user: 2, assistant: 2, toolCalls: 0, toolResults: 0, errors: 0 },
+  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
   byModel: [],
   byProvider: [],
   byAgent: [],
@@ -31,16 +20,54 @@ const aggregates = {
   daily: [],
 } as unknown as UsageAggregates;
 
+function mountView(render: Parameters<typeof mountSolid>[0]) {
+  const view = mountSolid(render);
+  flush();
+  return view;
+}
+
+function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () => UsageAggregates) {
+  return mountView(() =>
+    UsageInsights({
+      get totals() {
+        return currentTotals();
+      },
+      get aggregates() {
+        return currentAggregates();
+      },
+      stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
+      showCostHint: false,
+      showCostShares: true,
+      errorHours: [],
+      sessionCount: 1,
+      totalSessions: 1,
+    }),
+  );
+}
+
+function sessionDisplay() {
+  const base = createUsageProps();
+  const [display, setDisplay] = createSignal(base.display);
+  const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
+    setDisplay((current) => ({ ...current, ...patch })),
+  );
+  const usage = {
+    ...base,
+    get display() {
+      return display();
+    },
+    callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
+  };
+  return { base, usage, setDisplay, onChange };
+}
+
 afterEach(() => {
-  document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("UsageInsights", () => {
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
     const [currentTotals, setCurrentTotals] = createSignal(totals);
     const [currentAggregates, setCurrentAggregates] = createSignal({
       ...aggregates,
@@ -50,29 +77,7 @@ describe("UsageInsights", () => {
       ],
     });
 
-    mountSolid(
-      () =>
-        UsageInsights({
-          get totals() {
-            return currentTotals();
-          },
-          get aggregates() {
-            return currentAggregates();
-          },
-          stats: {
-            durationCount: 0,
-            avgDurationMs: 0,
-            errorRate: 0,
-          },
-          showCostHint: false,
-          showCostShares: true,
-          errorHours: [],
-          sessionCount: 1,
-          totalSessions: 1,
-        }),
-      { container },
-    );
-    flush();
+    const { container } = mountInsights(currentTotals, currentAggregates);
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
     const cacheCard = container
@@ -90,26 +95,20 @@ describe("UsageInsights", () => {
         chip.getAttribute("data-agent-id"),
       ),
     ).toEqual(["main", "research"]);
-    expect(
-      buttons.every(
-        (button) =>
-          button.type === "button" &&
-          !button.hasAttribute("title") &&
-          Boolean(button.getAttribute("aria-label")),
-      ),
-    ).toBe(true);
-    expect(
-      tooltips.every((tooltip) => {
-        const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
-        const content = tooltip.querySelector('[slot="content"]');
-        return Boolean(
-          button &&
-          buttons.includes(button) &&
-          content &&
-          button.getAttribute("aria-label") !== content.textContent,
-        );
-      }),
-    ).toBe(true);
+    for (const button of buttons) {
+      expect([
+        button.type,
+        button.hasAttribute("title"),
+        Boolean(button.getAttribute("aria-label")),
+      ]).toEqual(["button", false, true]);
+    }
+    for (const tooltip of tooltips) {
+      const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
+      const content = tooltip.querySelector('[slot="content"]');
+      expect(buttons).toContain(button);
+      expect(content).not.toBeNull();
+      expect(button?.getAttribute("aria-label")).not.toBe(content?.textContent);
+    }
 
     await Promise.all(tooltips.map((tooltip) => tooltip.updateComplete));
     const button = buttons[0]!;
@@ -135,53 +134,23 @@ describe("UsageInsights", () => {
     ).toBe("8");
   });
   it("hides cost shares while the overall total is a lower bound", () => {
-    const container = document.createElement("div");
     const complete = { ...totals, totalCost: 10 };
     const partialTotals = { ...complete, usageReport: { state: "unavailable" as const } };
-    mountSolid(
-      () =>
-        UsageInsights({
-          totals: partialTotals,
-          aggregates: {
-            ...aggregates,
-            byProvider: [{ provider: "openai", count: 1, totals: complete }],
-          },
-          stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-          showCostHint: false,
-          showCostShares: true,
-          errorHours: [],
-          sessionCount: 1,
-          totalSessions: 1,
-        }),
-      { container },
+    const { container } = mountInsights(
+      () => partialTotals,
+      () => ({ ...aggregates, byProvider: [{ provider: "openai", count: 1, totals: complete }] }),
     );
-    flush();
     // A complete provider's share of an incomplete total is unknown, not 100%.
     expect(container.textContent).toContain("openai");
     expect(container.textContent).not.toContain("of cost");
   });
 
   it("labels usage without a known price as unpriced, never free", () => {
-    const container = document.createElement("div");
     const unpriced = { ...totals, totalCost: 0, missingCostEntries: 3 };
-    mountSolid(
-      () =>
-        UsageInsights({
-          totals: unpriced,
-          aggregates: {
-            ...aggregates,
-            byProvider: [{ provider: "ollama", count: 1, totals: unpriced }],
-          },
-          stats: { durationCount: 0, avgDurationMs: 0, errorRate: 0 },
-          showCostHint: false,
-          showCostShares: true,
-          errorHours: [],
-          sessionCount: 1,
-          totalSessions: 1,
-        }),
-      { container },
+    const { container } = mountInsights(
+      () => unpriced,
+      () => ({ ...aggregates, byProvider: [{ provider: "ollama", count: 1, totals: unpriced }] }),
     );
-    flush();
     const provider = [...container.querySelectorAll(".usage-list-item")].find((item) =>
       item.textContent?.includes("ollama"),
     );
@@ -192,7 +161,6 @@ describe("UsageInsights", () => {
 
 describe("usage overview presentation owners", () => {
   it("preserves filter-chip order, session-only title, labels, and clear callbacks", () => {
-    const container = document.createElement("div");
     const onClearDays = vi.fn();
     const onClearHours = vi.fn();
     const onClearSessions = vi.fn();
@@ -203,15 +171,12 @@ describe("usage overview presentation owners", () => {
       selectedSessions: ["agent:main:usage"],
     });
     Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
-    mountSolid(
-      () =>
-        renderFilterChips(
-          [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-          props,
-        ),
-      { container },
+    const { container } = mountView(() =>
+      renderFilterChips(
+        [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
+        props,
+      ),
     );
-    flush();
 
     const chips = [...container.querySelectorAll<HTMLElement>(".filter-chip")];
     expect(chips.map((chip) => chip.querySelector("button")?.getAttribute("aria-label"))).toEqual([
@@ -229,18 +194,14 @@ describe("usage overview presentation owners", () => {
 
 describe("renderCostWindowComparison", () => {
   it("preserves sub-cent totals and daily averages", () => {
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        renderCostWindowComparison(
-          [dailyEntry("2026-07-01", 300, 0.003)],
-          "2026-06-02",
-          "2026-07-01",
-          "local",
-        ),
-      { container },
+    const { container } = mountView(() =>
+      renderCostWindowComparison(
+        [dailyEntry("2026-07-01", 300, 0.003)],
+        "2026-06-02",
+        "2026-07-01",
+        "local",
+      ),
     );
-    flush();
 
     const range = container.querySelector(".cost-window-card--range");
     expect(range?.querySelector(".cost-window-card__value")?.textContent?.trim()).toBe("$0.0030");
@@ -257,23 +218,8 @@ describe("SessionsCard", () => {
   });
 
   it("exposes the selected session view to assistive technology", () => {
-    const base = createUsageProps();
-    const [display, setDisplay] = createSignal(base.display);
-    const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
-      setDisplay((current) => ({ ...current, ...patch })),
-    );
-    const usage = {
-      ...base,
-      get display() {
-        return display();
-      },
-      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
-    };
-    const container = document.body.appendChild(document.createElement("div"));
-    const view = mountSolid(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }), {
-      container,
-    });
-    flush();
+    const { usage, onChange } = sessionDisplay();
+    const view = mountView(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }));
 
     const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
     const recent = view.getByRole<HTMLButtonElement>("button", {
@@ -294,32 +240,17 @@ describe("SessionsCard", () => {
   });
 
   it("preserves sort focus while waiting for the server to reorder rows", () => {
-    const base = createUsageProps();
-    const [display, setDisplay] = createSignal(base.display);
+    const { usage, onChange } = sessionDisplay();
     const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
-    const onChange = vi.fn((patch: Partial<UsageProps["display"]>) =>
-      setDisplay((current) => ({ ...current, ...patch })),
+    const { container } = mountView(() =>
+      SessionsCard({
+        get sessions() {
+          return sessions();
+        },
+        usage,
+        totalSessions: 2,
+      }),
     );
-    const usage = {
-      ...base,
-      get display() {
-        return display();
-      },
-      callbacks: { ...base.callbacks, display: { ...base.callbacks.display, onChange } },
-    };
-    const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(
-      () =>
-        SessionsCard({
-          get sessions() {
-            return sessions();
-          },
-          usage,
-          totalSessions: 2,
-        }),
-      { container },
-    );
-    flush();
     const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
     select.focus();
     select.value = "cost";
@@ -353,19 +284,15 @@ describe("SessionsCard", () => {
       },
       callbacks: { ...base.callbacks, details: { ...base.callbacks.details, onSelectSession } },
     };
-    const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(
-      () =>
-        SessionsCard({
-          get sessions() {
-            return sessions();
-          },
-          usage,
-          totalSessions: 2,
-        }),
-      { container },
+    const { container } = mountView(() =>
+      SessionsCard({
+        get sessions() {
+          return sessions();
+        },
+        usage,
+        totalSessions: 2,
+      }),
     );
-    flush();
     const first = container.querySelector<HTMLButtonElement>(".session-bar-selection")!;
     first.focus();
 
@@ -399,14 +326,7 @@ describe("SessionsCard", () => {
     const sessionUsage = entry.usage!;
     sessionUsage.durationMs = 60_000;
     sessionUsage.usageReport = { state: "unavailable" };
-    const base = createUsageProps();
-    const [display, setDisplay] = createSignal(base.display);
-    const usage = {
-      ...base,
-      get display() {
-        return display();
-      },
-    };
+    const { base, usage, setDisplay } = sessionDisplay();
     const overview = createUsageOverview({
       total: 1,
       tableSessionCount: 1,
@@ -417,13 +337,11 @@ describe("SessionsCard", () => {
         usageReport: sessionUsage.usageReport,
       },
     });
-    const container = document.createElement("div");
     try {
       await i18n.setLocale("en");
-      mountSolid(() => SessionsCard({ sessions: [entry], usage, overview, totalSessions: 1 }), {
-        container,
-      });
-      flush();
+      const { container } = mountView(() =>
+        SessionsCard({ sessions: [entry], usage, overview, totalSessions: 1 }),
+      );
       const row = container.querySelector(".session-bar-row");
       const value = () => row?.querySelector(".session-bar-value")?.textContent;
       const average = () => container.querySelector(".sessions-card-stats > span")?.textContent;
@@ -473,13 +391,9 @@ describe("SessionsCard", () => {
         recentSessions: ["A", "missing"],
       },
     };
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
-      { container },
+    const { container } = mountView(() =>
+      SessionsCard({ sessions: [session("B"), session("A")], usage, overview, totalSessions: 2 }),
     );
-    flush();
     expect(
       [...container.querySelectorAll(".session-bar-title")].map((entry) => entry.textContent),
     ).toEqual(["B", "A"]);
