@@ -85,6 +85,18 @@ const completed = <T extends object>(result: T) => ({
 });
 const notificationMatching = (method: string) =>
   expect.objectContaining({ notification: expect.objectContaining({ method }) });
+const releaseViews = (...views: NativeMcpServerView[]) => ({
+  async [Symbol.asyncDispose]() {
+    await Promise.all(views.map((view) => view.release()));
+  },
+});
+async function continuation(view: NativeMcpServerView, signal: AbortSignal) {
+  const response = await callTool(view, "probe", signal);
+  if (response.kind !== "input-required") {
+    throw new Error("Missing modern continuation");
+  }
+  return response;
+}
 
 describe("private MCP projection operations at the session owner", () => {
   it("keeps complete pages and utility results from a roots-sensitive legacy peer", async ({
@@ -93,65 +105,63 @@ describe("private MCP projection operations at the session owner", () => {
     const { acquire } = await fixture();
     const caller = context();
     const view = await acquire(caller);
-    try {
-      expect(view.getProtocolEra()).toBe("legacy");
-      expect(view.getProtocolVersion()).toBe("2025-11-25");
-      expect(view.getServerInfo()).toEqual({ name: "typed-fixture", version: "1.0.0" });
-      expect(view.getInstructions()).toBe("Keep the full envelope.");
-      const first = await view.listTools(undefined, options(signal));
-      const probe = withMetadata({
-        name: "probe",
-        title: "Probe title",
-        description: JSON.stringify({ roots: caller.roots, capabilities: caller.capabilities }),
-        inputSchema: { type: "object", properties: {} },
-        annotations: { readOnlyHint: true },
-      });
-      expect(first).toEqual(page("tools", [probe], "page:2"));
-      const prompt = withMetadata({
-        name: "greeting",
-        description: "Greeting prompt",
-        arguments: [{ name: "name", required: true }],
-      });
-      const pages = [
-        [view.listTools, "tools", null],
-        [view.listResources, "resources", withMetadata({ ...note, name: "Note" })],
-        [
-          view.listResourceTemplates,
-          "resourceTemplates",
-          withMetadata({ uriTemplate: "fixture://{name}", name: "Template" }),
-        ],
-        [view.listPrompts, "prompts", prompt],
-      ] as const;
-      for (const [list, key, entry] of pages) {
-        if (entry) {
-          expect(await list(undefined, options(signal))).toEqual(page(key, [entry], "page:2"));
-        }
-        expect(await list({ cursor: first.nextCursor }, options(signal))).toEqual(page(key, []));
+    await using cleanup = releaseViews(view);
+    void cleanup;
+    expect(view.getProtocolEra()).toBe("legacy");
+    expect(view.getProtocolVersion()).toBe("2025-11-25");
+    expect(view.getServerInfo()).toEqual({ name: "typed-fixture", version: "1.0.0" });
+    expect(view.getInstructions()).toBe("Keep the full envelope.");
+    const first = await view.listTools(undefined, options(signal));
+    const probe = withMetadata({
+      name: "probe",
+      title: "Probe title",
+      description: JSON.stringify({ roots: caller.roots, capabilities: caller.capabilities }),
+      inputSchema: { type: "object", properties: {} },
+      annotations: { readOnlyHint: true },
+    });
+    expect(first).toEqual(page("tools", [probe], "page:2"));
+    const prompt = withMetadata({
+      name: "greeting",
+      description: "Greeting prompt",
+      arguments: [{ name: "name", required: true }],
+    });
+    const pages = [
+      [view.listTools, "tools", null],
+      [view.listResources, "resources", withMetadata({ ...note, name: "Note" })],
+      [
+        view.listResourceTemplates,
+        "resourceTemplates",
+        withMetadata({ uriTemplate: "fixture://{name}", name: "Template" }),
+      ],
+      [view.listPrompts, "prompts", prompt],
+    ] as const;
+    for (const [list, key, entry] of pages) {
+      if (entry) {
+        expect(await list(undefined, options(signal))).toEqual(page(key, [entry], "page:2"));
       }
-      expect(await view.readResource({ uri: note.uri }, options(signal))).toEqual(
-        completed({
-          contents: [withMetadata({ ...note, text: "full resource" })],
-        }),
-      );
-      expect(await view.getPrompt(greeting, options(signal))).toEqual(
-        completed({
-          description: "Complete greeting",
-          messages: [{ role: "user", content: withMetadata({ type: "text", text: "Hello Ada" }) }],
-        }),
-      );
-      expect(
-        await view.complete(
-          { ref: { type: "ref/prompt", name: "greeting" }, argument: { name: "name", value: "A" } },
-          options(signal),
-        ),
-      ).toEqual(
-        withMetadata({
-          completion: { values: ["Ada", "Alan"], total: 3, hasMore: true },
-        }),
-      );
-    } finally {
-      await view.release();
+      expect(await list({ cursor: first.nextCursor }, options(signal))).toEqual(page(key, []));
     }
+    expect(await view.readResource({ uri: note.uri }, options(signal))).toEqual(
+      completed({
+        contents: [withMetadata({ ...note, text: "full resource" })],
+      }),
+    );
+    expect(await view.getPrompt(greeting, options(signal))).toEqual(
+      completed({
+        description: "Complete greeting",
+        messages: [{ role: "user", content: withMetadata({ type: "text", text: "Hello Ada" }) }],
+      }),
+    );
+    expect(
+      await view.complete(
+        { ref: { type: "ref/prompt", name: "greeting" }, argument: { name: "name", value: "A" } },
+        options(signal),
+      ),
+    ).toEqual(
+      withMetadata({
+        completion: { values: ["Ada", "Alan"], total: 3, hasMore: true },
+      }),
+    );
   });
 
   for (const reason of ["idle", "changed"]) {
@@ -159,22 +169,20 @@ describe("private MCP projection operations at the session owner", () => {
       const { runtime, file, acquire } = await fixture();
       const caller = context();
       const view = await acquire(caller);
-      try {
-        if (reason === "changed") {
-          await view.rootsChanged(options(signal));
-          await withinTest(receipts.waitFor(file, "recv notifications/roots/list_changed"), signal);
-        }
-        expect(runtime.activeLeases).toBe(0);
-        receipts.release(file, "request-roots-" + reason);
-        await withinTest(receipts.waitFor(file, "roots settled " + reason), signal);
-        const report = (await fs.readFile(file + ".log", "utf8"))
-          .split("\n")
-          .find((line) => line.startsWith("roots " + reason + " "));
-        expect(report).toBe("roots " + reason + " " + JSON.stringify({ result: caller.roots }));
-        expect(runtime.activeLeases).toBe(0);
-      } finally {
-        await view.release();
+      await using cleanup = releaseViews(view);
+      void cleanup;
+      if (reason === "changed") {
+        await view.rootsChanged(options(signal));
+        await withinTest(receipts.waitFor(file, "recv notifications/roots/list_changed"), signal);
       }
+      expect(runtime.activeLeases).toBe(0);
+      receipts.release(file, "request-roots-" + reason);
+      await withinTest(receipts.waitFor(file, "roots settled " + reason), signal);
+      const report = (await fs.readFile(file + ".log", "utf8"))
+        .split("\n")
+        .find((line) => line.startsWith("roots " + reason + " "));
+      expect(report).toBe("roots " + reason + " " + JSON.stringify({ result: caller.roots }));
+      expect(runtime.activeLeases).toBe(0);
     });
   }
 
@@ -189,73 +197,63 @@ describe("private MCP projection operations at the session owner", () => {
       acquire(),
     ]);
     const other = await acquire(context("file:///workspace/b", sharedContext));
-    const noRoots = await acquire({
-      ...context(undefined, sharedContext),
-      capabilities: {},
-    });
+    const noRoots = await acquire({ ...context(undefined, sharedContext), capabilities: {} });
     const secondRequester = await acquire(context(undefined, sharedContext), create("second"));
+    await using cleanup = releaseViews(first, same, sameRoots, other, noRoots, secondRequester);
+    void cleanup;
+    const inspect = async (view: typeof first) => toolPayload(view, "probe", signal);
+    const original = await inspect(first);
+    expect(await inspect(same)).toEqual(original);
+    expect(await inspect(sameRoots)).not.toEqual(original);
+    expect(await inspect(other)).toMatchObject({
+      roots: { roots: [{ uri: "file:///workspace/b", name: "Workspace" }] },
+    });
+    const isolated = await inspect(other);
+    expect(isolated).not.toEqual(original);
+    const admittedAt = runtime.lastUsedAt + 10_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
     try {
-      const inspect = async (view: typeof first) => toolPayload(view, "probe", signal);
-      const original = await inspect(first);
-      expect(await inspect(same)).toEqual(original);
-      expect(await inspect(sameRoots)).not.toEqual(original);
-      expect(await inspect(other)).toMatchObject({
-        roots: { roots: [{ uri: "file:///workspace/b", name: "Workspace" }] },
-      });
-      const isolated = await inspect(other);
-      expect(isolated).not.toEqual(original);
-      const admittedAt = runtime.lastUsedAt + 10_000;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt);
-      try {
-        expect(await inspect(noRoots)).toMatchObject({ capabilities: {}, roots: { roots: [] } });
-        expect(runtime.lastUsedAt).toBe(admittedAt);
-        expect(runtime.activeLeases).toBe(0);
-      } finally {
-        clock.mockRestore();
-      }
-      expect(await inspect(secondRequester)).not.toEqual(original);
+      expect(await inspect(noRoots)).toMatchObject({ capabilities: {}, roots: { roots: [] } });
+      expect(runtime.lastUsedAt).toBe(admittedAt);
       expect(runtime.activeLeases).toBe(0);
-      await other.release();
-      await withinTest(receipts.waitForExit(file + ":" + processId(isolated)), signal);
-      await expect(callTool(other, "probe", signal)).rejects.toThrow("released");
-      const ordinaryCatalog = await runtime.getCatalog();
-      expect(ordinaryCatalog.tools[0]?.description).toBe(
-        JSON.stringify({ roots: { roots: [] }, capabilities: {} }),
-      );
-      const ordinaryResult = await runtime.callTool("fixture", "probe", {});
-      const ordinaryText = ordinaryResult.content[0];
-      if (ordinaryText?.type !== "text") {
-        throw new Error("Expected ordinary MCP tool text");
-      }
-      expect(JSON.parse(ordinaryText.text)).toMatchObject({
-        roots: { roots: [] },
-        capabilities: {},
-      });
-      expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(6);
-      expect(await inspect(first)).toEqual(original);
-      await first.release();
-      expect(await inspect(same)).toEqual(original);
-      const closed = createDeferred();
-      let throwingListenerCalls = 0;
-      same.subscribe((event) => {
-        if (event.kind === "closed") {
-          throwingListenerCalls += 1;
-          throw new Error("fixture subscriber failed");
-        }
-      });
-      same.subscribe((event) => {
-        if (event.kind === "closed") {
-          closed.resolve();
-        }
-      });
-      await runtime.dispose();
-      await withinTest(closed.promise, signal);
-      expect(throwingListenerCalls).toBe(1);
     } finally {
-      await Promise.all(
-        [first, same, sameRoots, other, noRoots, secondRequester].map((view) => view.release()),
-      );
+      clock.mockRestore();
     }
+    expect(await inspect(secondRequester)).not.toEqual(original);
+    expect(runtime.activeLeases).toBe(0);
+    await other.release();
+    await withinTest(receipts.waitForExit(file + ":" + processId(isolated)), signal);
+    await expect(callTool(other, "probe", signal)).rejects.toThrow("released");
+    const ordinaryCatalog = await runtime.getCatalog();
+    expect(ordinaryCatalog.tools[0]?.description).toBe(
+      JSON.stringify({ roots: { roots: [] }, capabilities: {} }),
+    );
+    const ordinaryResult = await runtime.callTool("fixture", "probe", {});
+    const ordinaryText = ordinaryResult.content[0];
+    if (ordinaryText?.type !== "text") {
+      throw new Error("Expected ordinary MCP tool text");
+    }
+    expect(JSON.parse(ordinaryText.text)).toMatchObject({ roots: { roots: [] }, capabilities: {} });
+    expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(6);
+    expect(await inspect(first)).toEqual(original);
+    await first.release();
+    expect(await inspect(same)).toEqual(original);
+    const closed = createDeferred();
+    let throwingListenerCalls = 0;
+    same.subscribe((event) => {
+      if (event.kind === "closed") {
+        throwingListenerCalls += 1;
+        throw new Error("fixture subscriber failed");
+      }
+    });
+    same.subscribe((event) => {
+      if (event.kind === "closed") {
+        closed.resolve();
+      }
+    });
+    await runtime.dispose();
+    await withinTest(closed.promise, signal);
+    expect(throwingListenerCalls).toBe(1);
   });
 
   it("binds callbacks and notifications to the caller and rejects revoked work after an await", async ({
@@ -338,9 +336,7 @@ describe("private MCP projection operations at the session owner", () => {
         _meta: { fixture: "custom" },
       };
       expect(customRequests).toEqual([customRequest, customRequest]);
-      expect(await toolPayload(first, "url", signal)).toEqual({
-        action: "accept",
-      });
+      expect(await toolPayload(first, "url", signal)).toEqual({ action: "accept" });
       const completion = callTool(second, "completeUrl", signal);
       await withinTest(
         awaitGateBeforeSettlement(
@@ -380,22 +376,18 @@ describe("private MCP projection operations at the session owner", () => {
       await first.release();
       await callTool(second, "notify", signal);
       const refreshed = await acquire(secondContext);
-      try {
-        expect(refreshed.runtime.peekCatalog()?.diagnostics ?? []).toEqual([]);
-        await withinTest(receipts.waitFor(file, "listed sample second-sample"), signal);
-        const previousPid = processId(await toolPayload(refreshed, "probe", signal));
-        await expect(callTool(refreshed, "crash", signal)).rejects.toThrow();
-        await withinTest(receipts.waitForExit(file + ":" + previousPid), signal);
-        const reconnected = await acquire(secondContext);
-        try {
-          expect(processId(await toolPayload(reconnected, "probe", signal))).not.toBe(previousPid);
-          await withinTest(receipts.waitFor(file, "listed sample second-sample", 2), signal);
-        } finally {
-          await reconnected.release();
-        }
-      } finally {
-        await refreshed.release();
-      }
+      await using refreshedCleanup = releaseViews(refreshed);
+      void refreshedCleanup;
+      expect(refreshed.runtime.peekCatalog()?.diagnostics ?? []).toEqual([]);
+      await withinTest(receipts.waitFor(file, "listed sample second-sample"), signal);
+      const previousPid = processId(await toolPayload(refreshed, "probe", signal));
+      await expect(callTool(refreshed, "crash", signal)).rejects.toThrow();
+      await withinTest(receipts.waitForExit(file + ":" + previousPid), signal);
+      const reconnected = await acquire(secondContext);
+      await using reconnectedCleanup = releaseViews(reconnected);
+      void reconnectedCleanup;
+      expect(processId(await toolPayload(reconnected, "probe", signal))).not.toBe(previousPid);
+      await withinTest(receipts.waitFor(file, "listed sample second-sample", 2), signal);
     } finally {
       samplingReady.resolve();
       await Promise.all([first.release(), second.release()]);
@@ -463,15 +455,13 @@ describe("private MCP projection operations at the session owner", () => {
     await expect(acquire(refused)).rejects.toThrow();
     await withinTest(receipts.waitFor(file, "initialize refused capabilities"), signal);
     const healthy = await acquire();
-    try {
-      expect(await toolPayload(healthy, "probe", signal)).toMatchObject({
-        roots: context().roots,
-        capabilities: { roots: { listChanged: true } },
-      });
-      expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(2);
-    } finally {
-      await healthy.release();
-    }
+    await using cleanup = releaseViews(healthy);
+    void cleanup;
+    expect(await toolPayload(healthy, "probe", signal)).toMatchObject({
+      roots: context().roots,
+      capabilities: { roots: { listChanged: true } },
+    });
+    expect((await fs.readFile(file + ".log", "utf8")).match(/^started /gm)).toHaveLength(2);
   });
 
   it("preserves owner deadlines, human-input holds, and uncertain child cleanup", async ({
@@ -568,48 +558,34 @@ describe("private MCP projection operations at the session owner", () => {
       }
     };
     const first = await acquire(caller);
-    const second = await acquire({
-      ...caller,
-      assertCurrent() {},
+    const second = await acquire({ ...caller, assertCurrent() {} });
+    await using cleanup = releaseViews(first, second);
+    void cleanup;
+    expect(first.getProtocolEra()).toBe("modern");
+    expect(first.getProtocolVersion()).toBe("2026-07-28");
+    const pending = await continuation(first, signal);
+    expect(pending.kind).toBe("input-required");
+    expect(pending.result).toMatchObject({
+      resultType: "input_required",
+      requestState: "fixture-state",
+      inputRequests: { roots: { method: "roots/list" } },
+      _meta: metadata,
     });
-    try {
-      expect(first.getProtocolEra()).toBe("modern");
-      expect(first.getProtocolVersion()).toBe("2026-07-28");
-      const pending = await callTool(first, "probe", signal);
-      expect(pending.kind).toBe("input-required");
-      if (pending.kind !== "input-required") {
-        throw new Error("Missing modern continuation");
-      }
-      expect(pending.result).toMatchObject({
-        resultType: "input_required",
-        requestState: "fixture-state",
-        inputRequests: { roots: { method: "roots/list" } },
-        _meta: metadata,
-      });
-      const resumed = await pending.resume({ roots: caller.roots }, options(signal));
-      expect(payload(resumed)).toMatchObject({ responses: { roots: caller.roots } });
-      expect(() => pending.resume({ roots: caller.roots }, options(signal))).toThrow(
-        "already resumed",
-      );
-      const revoked = await callTool(first, "probe", signal);
-      if (revoked.kind !== "input-required") {
-        throw new Error("Missing second continuation");
-      }
-      current = false;
-      expect(() => revoked.resume({ roots: caller.roots }, options(signal))).toThrow(
-        "modern caller revoked",
-      );
-      const independent = await callTool(second, "probe", signal);
-      if (independent.kind !== "input-required") {
-        throw new Error("Missing independent continuation");
-      }
-      expect(
-        payload(await independent.resume({ roots: context().roots }, options(signal))),
-      ).toMatchObject({ responses: { roots: context().roots } });
-      expect((await fs.readFile(file + ".log", "utf8")).match(/^resumed /gm)).toHaveLength(2);
-      expect(runtime.activeLeases).toBe(0);
-    } finally {
-      await Promise.all([first.release(), second.release()]);
-    }
+    const resumed = await pending.resume({ roots: caller.roots }, options(signal));
+    expect(payload(resumed)).toMatchObject({ responses: { roots: caller.roots } });
+    expect(() => pending.resume({ roots: caller.roots }, options(signal))).toThrow(
+      "already resumed",
+    );
+    const revoked = await continuation(first, signal);
+    current = false;
+    expect(() => revoked.resume({ roots: caller.roots }, options(signal))).toThrow(
+      "modern caller revoked",
+    );
+    const independent = await continuation(second, signal);
+    expect(
+      payload(await independent.resume({ roots: context().roots }, options(signal))),
+    ).toMatchObject({ responses: { roots: context().roots } });
+    expect((await fs.readFile(file + ".log", "utf8")).match(/^resumed /gm)).toHaveLength(2);
+    expect(runtime.activeLeases).toBe(0);
   });
 });

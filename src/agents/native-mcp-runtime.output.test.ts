@@ -9,7 +9,7 @@ import {
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireNativeMcpServer, type NativeMcpServerView } from "./native-mcp-runtime.js";
-import { createFixtureRuntime, options } from "./native-mcp-runtime.test-support.js";
+import { context, createFixtureRuntime, options } from "./native-mcp-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -71,15 +71,10 @@ if (${JSON.stringify(era)} === "modern") {
 `,
   );
   const runtime = createFixtureRuntime(directory, file, "output");
-  const context = {
-    capabilityContext: {},
-    capabilities: { roots: {} },
-    roots: { roots: [] },
-    assertCurrent() {},
-  };
+  const caller = { ...context(), capabilities: { roots: {} }, roots: { roots: [] } };
   const views: NativeMcpServerView[] = [];
   const acquire = async () => {
-    const view = await acquireNativeMcpServer(runtime, "fixture", context);
+    const view = await acquireNativeMcpServer(runtime, "fixture", caller);
     views.push(view);
     return view;
   };
@@ -98,10 +93,7 @@ if (${JSON.stringify(era)} === "modern") {
   return { file, receipts, acquire, value, [Symbol.asyncDispose]: close };
 }
 
-const completeValue = (count: number) => ({
-  kind: "complete",
-  result: { structuredContent: { count } },
-});
+const completed = { kind: "complete", result: { content: [], structuredContent: { count: 7 } } };
 const schemaError = "does not match the tool's output schema";
 
 async function changeSchema(view: NativeMcpServerView, signal: AbortSignal) {
@@ -121,36 +113,21 @@ async function changeSchema(view: NativeMcpServerView, signal: AbortSignal) {
 }
 
 it.for(["legacy", "modern"] as const)(
-  "validates completed %s tool results against their output schema",
+  "validates %s results and retains the admitted schema across catalog refresh",
   async (era, { signal }) => {
     await using peer = await fixture(era, signal);
     const view = await peer.acquire();
     await expect(peer.value(view, "oops")).rejects.toThrow(schemaError);
-    expect(await peer.value(view, 7)).toMatchObject({
-      kind: "complete",
-      result: { content: [], structuredContent: { count: 7 } },
-    });
-  },
-);
-
-it.for(["legacy", "modern"] as const)(
-  "retains the admitted %s output schema across catalog refresh",
-  async (era, { signal }) => {
-    await using peer = await fixture(era, signal);
-    const view = await peer.acquire();
     const pending = peer.value(view, 7, { hold: true });
     void pending.catch(() => {});
     try {
       await withinTest(peer.receipts.waitFor(peer.file, "held"), signal);
       await changeSchema(view, signal);
       const next = await peer.acquire();
-      expect(
-        (await next.listTools(undefined, options(signal))).tools[0]?.outputSchema,
-      ).toMatchObject({
-        properties: { count: { type: "string" } },
-      });
+      const schema = (await next.listTools(undefined, options(signal))).tools[0]?.outputSchema;
+      expect(schema).toMatchObject({ properties: { count: { type: "string" } } });
       peer.receipts.release(peer.file, "finish");
-      expect(await pending).toMatchObject(completeValue(7));
+      expect(await pending).toMatchObject(completed);
       await expect(peer.value(next, 7)).rejects.toThrow(schemaError);
     } finally {
       peer.receipts.release(peer.file, "finish");
@@ -159,18 +136,15 @@ it.for(["legacy", "modern"] as const)(
   },
 );
 
-it("validates resumed results with the continuation's original output schema", async ({
-  signal,
-}) => {
+it("validates resumed results with the original schema", async ({ signal }) => {
   await using peer = await fixture("modern", signal);
   const view = await peer.acquire();
   const pending = await peer.value(view, 7, { continue: true });
   assert(pending.kind === "input-required");
   await changeSchema(view, signal);
   const next = await peer.acquire();
-  expect(await pending.resume({ roots: { roots: [] } }, options(signal))).toMatchObject(
-    completeValue(7),
-  );
+  const resumed = await pending.resume({ roots: { roots: [] } }, options(signal));
+  expect(resumed).toMatchObject(completed);
   const invalid = await peer.value(next, 7, { continue: true });
   assert(invalid.kind === "input-required");
   await expect(invalid.resume({ roots: { roots: [] } }, options(signal))).rejects.toThrow(

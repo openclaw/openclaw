@@ -1,11 +1,9 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import type { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
-vi.mock("./model-auth-env.js", () => ({
-  resolveEnvApiKey: () => null,
-}));
+vi.mock("./model-auth-env.js", () => ({ resolveEnvApiKey: () => null }));
 
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
@@ -43,15 +41,12 @@ vi.mock("./models-config.providers.normalize.js", async (importOriginal) => ({
 
 vi.mock("./models-config.providers.implicit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./models-config.providers.implicit.js")>()),
-  resolveImplicitProviders: vi.fn(),
+  resolveImplicitProviders: async ({
+    explicitProviders,
+  }: Parameters<typeof resolveImplicitProviders>[0]) => explicitProviders ?? {},
 }));
 
-const resolveImplicitProvidersMock = vi.mocked(resolveImplicitProviders);
-const tokenProfile = (token: string) => ({
-  type: "token" as const,
-  provider: "github-copilot",
-  token,
-});
+const tokenCredential = { type: "token" as const, provider: "github-copilot" };
 const expectedAuth = (profile: string, apiKey: string, discoveryApiKey = apiKey) => ({
   apiKey,
   discoveryApiKey,
@@ -60,50 +55,38 @@ const expectedAuth = (profile: string, apiKey: string, discoveryApiKey = apiKey)
   profileId: `github-copilot:${profile}`,
 });
 
-beforeEach(() => {
-  resolveImplicitProvidersMock
-    .mockReset()
-    .mockImplementation(async ({ explicitProviders }) => explicitProviders ?? {});
-});
-
 it.each([
-  {
-    name: "uses the first github-copilot profile when env tokens are missing",
-    env: {},
-    profiles: {
-      "github-copilot:alpha": tokenProfile("alpha-token"),
-      "github-copilot:beta": tokenProfile("beta-token"),
+  [
+    "uses the first github-copilot profile when env tokens are missing",
+    {},
+    {
+      "github-copilot:alpha": { ...tokenCredential, token: "alpha-token" },
+      "github-copilot:beta": { ...tokenCredential, token: "beta-token" },
     },
-    expected: expectedAuth("alpha", "alpha-token"),
-  },
-  {
-    name: "uses tokenRef env var when github-copilot profile omits plaintext token",
-    env: { COPILOT_REF_TOKEN: "token-from-ref-env" },
-    profiles: {
+    expectedAuth("alpha", "alpha-token"),
+  ],
+  [
+    "uses tokenRef env var when github-copilot profile omits plaintext token",
+    { COPILOT_REF_TOKEN: "token-from-ref-env" },
+    {
       "github-copilot:default": {
-        type: "token" as const,
-        provider: "github-copilot",
+        ...tokenCredential,
         tokenRef: { source: "env" as const, provider: "default", id: "COPILOT_REF_TOKEN" },
       },
     },
-    expected: expectedAuth("default", "COPILOT_REF_TOKEN", "token-from-ref-env"),
-  },
-] as const)("$name", ({ env, profiles, expected }) => {
+    expectedAuth("default", "COPILOT_REF_TOKEN", "token-from-ref-env"),
+  ],
+] as const)("%s", (_name, env, profiles, expected) => {
   const auth = createProviderAuthResolver(env, { version: 1, profiles });
   expect(auth("github-copilot")).toEqual(expected);
 });
 
 it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
-  const kilocodeProvider = {
-    baseUrl: "https://api.kilo.ai/api/gateway/v1",
-    api: "openai-completions" as const,
-    models: [],
-  };
-  const existing = {
-    providers: { kilocode: { ...kilocodeProvider, baseUrl: "https://api.kilo.ai/api/gateway" } },
-  };
+  const baseUrl = "https://api.kilo.ai/api/gateway";
+  const provider = { baseUrl: `${baseUrl}/v1`, api: "openai-completions" as const, models: [] };
+  const existing = { providers: { kilocode: { ...provider, baseUrl } } };
   const plan = await planModelsJsonForTest({
-    cfg: { models: { providers: { kilocode: kilocodeProvider } } },
+    cfg: { models: { providers: { kilocode: provider } } },
     agentDir: "/tmp/openclaw-agent",
     env: {},
     existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
