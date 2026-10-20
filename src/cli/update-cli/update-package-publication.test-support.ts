@@ -22,47 +22,44 @@ export async function createInterruptedPackagePublication(
 ) {
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
-  fs.writeFileSync(
-    path.join(stageRoot, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2.0.0",
-      type: "module",
-      main: "dist/index.js",
-      exports: {
-        ".": { import: "./dist/index.js", default: ["./dist/index.js", null] },
-        "./nested": "./dist/nested/index.js",
-        "./cli-entry": "./openclaw.mjs",
-        "./package.json": "./package.json",
-      },
-      bin: { openclaw: "openclaw.mjs" },
-    }),
-  );
-  fs.writeFileSync(path.join(stageRoot, "openclaw.mjs"), 'import "./dist/index.js";\n');
+  const write = (file: string, value: string | object) =>
+    fs.writeFileSync(
+      path.join(stageRoot, file),
+      typeof value === "string" ? value : JSON.stringify(value),
+    );
+  write("package.json", {
+    name: "openclaw",
+    version: "2.0.0",
+    type: "module",
+    main: "dist/index.js",
+    exports: {
+      ".": { import: "./dist/index.js", default: ["./dist/index.js", null] },
+      "./nested": "./dist/nested/index.js",
+      "./cli-entry": "./openclaw.mjs",
+      "./package.json": "./package.json",
+    },
+    bin: { openclaw: "openclaw.mjs" },
+  });
+  write("openclaw.mjs", 'import "./dist/index.js";\n');
   const stagedLauncher = path.join(f.params.stage.layout.binDir, "openclaw");
   fs.unlinkSync(stagedLauncher);
   fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", stagedLauncher);
-  fs.writeFileSync(path.join(stageRoot, "README.md"), "Synthetic package README\n");
-  fs.writeFileSync(path.join(stageRoot, "LICENSE"), "Synthetic package license\n");
+  write("README.md", "Synthetic package README\n");
+  write("LICENSE", "Synthetic package license\n");
   for (const dependency of ["dep-a", "@scope/dep-b", "dep-a/node_modules/dep-c"]) {
     const directory = path.join(stageRoot, "node_modules", dependency);
     fs.mkdirSync(directory, { recursive: true });
-    fs.writeFileSync(
-      path.join(directory, "package.json"),
-      JSON.stringify({ name: path.basename(dependency), version: "1.0.0", type: "commonjs" }),
-    );
+    write(`node_modules/${dependency}/package.json`, {
+      name: path.basename(dependency),
+      version: "1.0.0",
+      type: "commonjs",
+    });
   }
   fs.mkdirSync(path.join(stageRoot, "dist/nested"));
-  fs.writeFileSync(path.join(stageRoot, "dist/nested/index.js"), "export {};\n");
+  write("dist/nested/index.js", "export {};\n");
   fs.mkdirSync(path.join(stageRoot, "dist/scoped"));
-  fs.writeFileSync(
-    path.join(stageRoot, "dist/scoped/package.json"),
-    JSON.stringify({ type: "module" }),
-  );
-  fs.writeFileSync(
-    path.join(stageRoot, "dist/build-info.json"),
-    JSON.stringify({ version: "2.0.0" }),
-  );
+  write("dist/scoped/package.json", { type: "module" });
+  write("dist/build-info.json", { version: "2.0.0" });
   await writePackageDistInventory(stageRoot);
   const reader = createPackageIntegrityReader();
   const prepared = await withUpdateCommandExecutor(randomUUID(), async (executor) => {

@@ -81,6 +81,52 @@ function failure(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult {
   };
 }
 
+function step(
+  name: string,
+  command: string,
+  overrides: Partial<UpdateRunResult["steps"][number]> = {},
+) {
+  return { name, command, cwd: "/fixture", durationMs: 0, exitCode: 1, ...overrides };
+}
+function observeGateway(version: string, healthy = true, gatewayBuildId?: string) {
+  vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
+    health: {
+      runtime: { status: "running", pid: 12345 },
+      portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+      healthy,
+      staleGatewayPids: [],
+      expectedVersion: version,
+      gatewayVersion: version,
+      ...(gatewayBuildId ? { gatewayBuildId } : {}),
+    },
+    readyz: healthy,
+    http: { healthz: 200, readyz: healthy ? 200 : 503 },
+    launchAgentRecovery: null,
+  });
+}
+function publish(
+  run: ReturnType<typeof createRun>,
+  result: UpdateRunResult,
+  options: { json?: boolean; restart?: boolean; coreAlreadyCurrent?: boolean } = {},
+) {
+  const { coreAlreadyCurrent = false, ...opts } = options;
+  return publishUpdateCommandTerminalResult(
+    { opts: { json: true, run, ...opts }, coreAlreadyCurrent },
+    result,
+    { rolledBack: false },
+  );
+}
+function expectReportedAction(
+  run: ReturnType<typeof createRun>,
+  output: { mock: { calls: unknown[][] } },
+) {
+  const stored = getUpdateRun(run.runId, { env: run.env });
+  const action = stored?.origin.nextAction;
+  expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
+  expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+  return { stored, action };
+}
+
 beforeEach(() => {
   vi.mocked(isContainerEnvironment).mockReturnValue(true);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "");
@@ -127,20 +173,7 @@ describe("update recovery reporting", () => {
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     vi.spyOn(gatewayLock, "readActiveGatewayLockPort").mockResolvedValue(19123);
     const restart = vi.spyOn(serviceRecovery, "maybeRestartServiceAfterFailedMutableUpdate");
-    vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
-      health: {
-        runtime: { status: "running", pid: 12345 },
-        portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
-        healthy: true,
-        staleGatewayPids: [],
-        expectedVersion: "2026.7.1",
-        gatewayVersion: "2026.7.1",
-        gatewayBuildId: "installed-build",
-      },
-      readyz: true,
-      http: { healthz: 200, readyz: 200 },
-      launchAgentRecovery: null,
-    });
+    observeGateway("2026.7.1", true, "installed-build");
     await verifyUpdateFailureRecovery({
       result,
       root: checkout.install,
@@ -148,12 +181,8 @@ describe("update recovery reporting", () => {
       opts: { json: true, run },
       serviceStopped: false,
     });
-    await publishUpdateCommandTerminalResult(
-      { opts: { json: true, run }, coreAlreadyCurrent: false },
-      result,
-      { rolledBack: false },
-    );
-    const stored = getUpdateRun(run.runId, { env: run.env });
+    await publish(run, result);
+    const { stored, action } = expectReportedAction(run, output);
     expect(stored).toMatchObject({
       status: "failed",
       reason: "snapshot-capacity-insufficient",
@@ -165,13 +194,10 @@ describe("update recovery reporting", () => {
         rollbackOutcome: { status: "not-needed" },
       },
     });
-    const action = stored?.origin.nextAction;
     expect(action).toContain("Your Gateway is still serving 2026.7.1; nothing to restore.");
     expect(action).toContain("Fix snapshot-capacity-insufficient");
     expect(action).toContain("openclaw --profile work update");
     expect(action).not.toMatch(/candidate|migrated|Rollback refused|gateway stop|update repair/i);
-    expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-    expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
     expect(restart).not.toHaveBeenCalled();
     expect(checkout.git(checkout.install, "rev-parse", "HEAD")).toBe(beforeSha);
     for (const [file, content] of Object.entries(runtime)) {
@@ -187,13 +213,9 @@ describe("update recovery reporting", () => {
           recovery: { serviceRestartSafe: true, version: "2.0.0", service: "healthy" },
           rollbackOutcome: { status, reason: "recorded rollback detail" },
           steps: [
-            {
-              name: "installed gateway recovery admission",
-              command: "admit installed gateway recovery",
-              cwd: "/fixture",
-              durationMs: 0,
+            step("installed gateway recovery admission", "admit installed gateway recovery", {
               exitCode: 0,
-            },
+            }),
           ],
         }),
         env: {},
@@ -253,14 +275,9 @@ describe("update recovery reporting", () => {
         ...(reason === "unreadable-state"
           ? {
               steps: [
-                {
-                  name: "doctor",
-                  command: "openclaw doctor",
-                  cwd: "/fixture",
-                  durationMs: 0,
-                  exitCode: 1,
+                step("doctor", "openclaw doctor", {
                   failureFacts: [{ check: "doctor-maintenance", code: reason }],
-                },
+                }),
               ],
             }
           : {}),
@@ -344,15 +361,11 @@ describe("update recovery reporting", () => {
       vi.mocked(isContainerEnvironment).mockReturnValue(false);
       const run = createRun();
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-      const failedStep = {
-        name: "validating",
-        command: "validate runtime inventory",
-        cwd: "/fixture",
+      const failedStep = step("validating", "validate runtime inventory", {
         durationMs: 1,
-        exitCode: 1,
         stderrTail: "Cannot safely retain a host-owned plugin dependency",
         failureFacts: [{ check: "updater-runtime-retention", code: "host-owned-plugin-link" }],
-      };
+      });
       const result = failure({
         reason: "update-failed",
         before: { version: "2026.9.6" },
@@ -361,19 +374,7 @@ describe("update recovery reporting", () => {
         steps: [failedStep],
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
-      vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
-        health: {
-          runtime: { status: "running", pid: 12345 },
-          portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
-          healthy,
-          staleGatewayPids: [],
-          expectedVersion: "2026.9.6",
-          gatewayVersion: "2026.9.6",
-        },
-        readyz: healthy,
-        http: { healthz: 200, readyz: healthy ? 200 : 503 },
-        launchAgentRecovery: null,
-      });
+      observeGateway("2026.9.6", healthy);
       await verifyUpdatedGateway({
         result,
         opts: { run },
@@ -382,11 +383,7 @@ describe("update recovery reporting", () => {
         requireRunningService: true,
         purpose: "recovery",
       });
-      await publishUpdateCommandTerminalResult(
-        { opts: { run }, coreAlreadyCurrent: false },
-        result,
-        { rolledBack: false },
-      );
+      await publish(run, result, { json: undefined });
       const stored = getUpdateRun(run.runId, { env: run.env });
       expect(stored?.status).toBe("failed");
       expect(stored?.reason).toBe("update-failed");
@@ -423,46 +420,30 @@ describe("update recovery reporting", () => {
       const run = createRun({ profile: "work" });
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const steps: UpdateRunResult["steps"] = [
-        {
-          name: "finalize-doctor",
-          command: "openclaw doctor --fix",
-          cwd: "/fixture",
-          durationMs: 0,
-          exitCode: 1,
+        step("finalize-doctor", "openclaw doctor --fix", {
           stderrTail: "Doctor config promotion refused: authority-check-failed",
-        },
-        {
-          name: "database rollback",
-          command: "preserve migrated databases",
-          cwd: "/fixture",
-          durationMs: 0,
-          exitCode: 1,
-        },
+        }),
+        step("database rollback", "preserve migrated databases"),
       ];
       if (state === "unsettled") {
-        steps.push({
-          name: "doctor process settlement",
-          command: "settle doctor process groups",
-          cwd: "/fixture",
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: "Doctor child PID 12345 remains unsettled.",
-        });
+        steps.push(
+          step("doctor process settlement", "settle doctor process groups", {
+            stderrTail: "Doctor child PID 12345 remains unsettled.",
+          }),
+        );
       }
       if (state === "starting") {
-        steps.push({
-          name: "gateway recovery verification",
-          command: "verify gateway readiness",
-          cwd: "/fixture",
-          durationMs: 0,
-          exitCode: null,
-          termination: "timeout",
-          advisory: { kind: "recoverable-maintenance", message: "Gateway is still starting." },
-        });
+        steps.push(
+          step("gateway recovery verification", "verify gateway readiness", {
+            exitCode: null,
+            termination: "timeout",
+            advisory: { kind: "recoverable-maintenance", message: "Gateway is still starting." },
+          }),
+        );
       }
 
-      await publishUpdateCommandTerminalResult(
-        { opts: { json: true, run }, coreAlreadyCurrent: false },
+      await publish(
+        run,
         failure({
           reason: "state-migrated-no-rollback",
           steps,
@@ -474,11 +455,9 @@ describe("update recovery reporting", () => {
           },
           verification: { serviceRunning: state === "starting" },
         }),
-        { rolledBack: false },
       );
 
-      const stored = getUpdateRun(run.runId, { env: run.env });
-      const action = stored?.origin.nextAction;
+      const { stored, action } = expectReportedAction(run, output);
       expect(stored).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
       expect(action).toContain("openclaw --profile work update repair");
       expect(action).toContain("recovery snapshots");
@@ -489,8 +468,6 @@ describe("update recovery reporting", () => {
       } else if (state === "stopped") {
         expect(action).toContain("Keep the Gateway stopped");
       }
-      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
     },
   );
 
@@ -536,104 +513,67 @@ describe("update recovery reporting", () => {
 
   it("records an untouched dirty checkout", async () => {
     const run = createRun();
-    const { env } = run;
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    await publishUpdateCommandTerminalResult(
-      { opts: { json: true, run }, coreAlreadyCurrent: false },
+    await publish(
+      run,
       failure({
         mode: "git",
         reason: "dirty",
         steps: [],
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       }),
-      { rolledBack: false },
     );
-    const stored = getUpdateRun(run.runId, { env });
-    const action = stored?.origin.nextAction;
+    const { action } = expectReportedAction(run, output);
     expect(action).toContain("before installation");
     expect(action).toContain("checkout was preserved");
     expect(action).toContain("Commit your changes and retry");
     expect(action).not.toContain("could not prove a runnable installation");
-    expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-    expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
   });
 
   it("persists activation timeout guidance for the owning profile", async () => {
     const run = createRun({ profile: "work" });
-    const { env } = run;
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    await publishUpdateCommandTerminalResult(
-      { opts: { json: true, run }, coreAlreadyCurrent: false },
-      failure({ reason: "update-activation-timeout", steps: [] }),
-      { rolledBack: false },
-    );
+    await publish(run, failure({ reason: "update-activation-timeout", steps: [] }));
 
-    const stored = getUpdateRun(run.runId, { env });
+    const { stored, action } = expectReportedAction(run, output);
     expect(stored).toMatchObject({
       status: "failed",
       phase: "finished",
       reason: "update-activation-timeout",
     });
-    const action = stored?.origin.nextAction;
     expect(action).toContain("openclaw --profile work update status");
     expect(action).toContain("openclaw --profile work doctor");
     expect(action).toContain("Wait for the owning updater and its child processes to stop");
     expect(action).toContain("openclaw --profile work update repair");
-    expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-    expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
   });
 
   it.each([
-    ["unknown", true, true, "global-install-foreign-destination"],
-    ["bun", true, true, "global-install-failed"],
-  ] as const)(
-    "publishes consistent %s recovery (json=%s, container=%s, reason=%s)",
-    async (mode, json, container, reason) => {
-      vi.mocked(isContainerEnvironment).mockReturnValue(container);
-      const run = createRun();
-      const { env } = run;
-      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      const result = await publishUpdateCommandTerminalResult(
-        { opts: { json, run }, coreAlreadyCurrent: false },
-        failure({ mode, reason }),
-        { rolledBack: false },
+    ["unknown", "global-install-foreign-destination"],
+    ["bun", "global-install-failed"],
+  ] as const)("publishes consistent %s container recovery (reason=%s)", async (mode, reason) => {
+    const run = createRun();
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const result = await publish(run, failure({ mode, reason }));
+    const { stored, action } = expectReportedAction(run, output);
+    expect(result.status).toBe("error");
+    expect(stored?.status).toBe("failed");
+    if (reason === "global-install-foreign-destination") {
+      expect(action).toBe(
+        `${foreignDetail} Detected a foreign npm destination inside a container. Pull or build an OpenClaw image with the target version, then recreate or redeploy the container with the same state/config mounts. In-container package changes are not durable.`,
       );
-      const stored = getUpdateRun(run.runId, { env });
-      expect(result.status).toBe("error");
-      expect(stored?.status).toBe("failed");
-      const action = stored?.origin.nextAction;
-      if (reason === "global-install-foreign-destination") {
-        expect(action).toBe(
-          container
-            ? `${foreignDetail} Detected a foreign npm destination inside a container. Pull or build an OpenClaw image with the target version, then recreate or redeploy the container with the same state/config mounts. In-container package changes are not durable.`
-            : foreignDetail,
-        );
-      }
-      if (container) {
-        expect(action).toContain("inside a container");
-        expect(action).toContain("Pull or build an OpenClaw image");
-        expect(action).toContain(redeploy);
-        expect(action).toContain("same state/config mounts");
-        expect(action).not.toMatch(/sudo|npm config set prefix/);
-      } else {
-        expect(action).toBe(
-          reason === "global-install-foreign-destination" ? foreignDetail : hostGuidance,
-        );
-      }
-      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
-      if (json) {
-        expect(output).toHaveBeenCalledOnce();
-        expect(output.mock.calls[0]?.[0]).toMatchObject({
-          status: "error",
-          run: { origin: { nextAction: action } },
-        });
-      } else {
-        expect(log.mock.calls.flat().join("\n")).toContain(action);
-      }
-    },
-  );
+    }
+    expect(action).toContain("inside a container");
+    expect(action).toContain("Pull or build an OpenClaw image");
+    expect(action).toContain(redeploy);
+    expect(action).toContain("same state/config mounts");
+    expect(action).not.toMatch(/sudo|npm config set prefix/);
+    expect(output).toHaveBeenCalledOnce();
+    expect(output.mock.calls[0]?.[0]).toMatchObject({
+      status: "error",
+      run: { origin: { nextAction: action } },
+    });
+  });
 
   it("recognizes permission failures from suffixed package steps", () => {
     const result = failure();
@@ -674,8 +614,8 @@ describe("update recovery reporting", () => {
     async (coreAlreadyCurrent) => {
       const run = createRun({ profile: "work" });
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      await publishUpdateCommandTerminalResult(
-        { opts: { json: true, restart: false, run }, coreAlreadyCurrent },
+      await publish(
+        run,
         {
           status: "ok",
           mode: "npm",
@@ -699,14 +639,12 @@ describe("update recovery reporting", () => {
             },
           },
         },
-        { rolledBack: false },
+        { restart: false, coreAlreadyCurrent },
       );
-      const stored = getUpdateRun(run.runId, { env: run.env });
+      const { stored } = expectReportedAction(run, output);
       const action =
         "Plugins updated; Gateway restart skipped (--no-restart). Run `openclaw --profile work gateway restart` to activate them in the running Gateway.";
       expect(stored?.origin.nextAction).toBe(action);
-      expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-      expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
     },
   );
 });

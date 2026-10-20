@@ -20,11 +20,18 @@ vi.mock("./update-command-readiness.js", async (importOriginal) => ({
 
 async function verifyObservation(
   run: NonNullable<UpdateCommandOptions["run"]>,
-  health: GatewayRestartSnapshot,
+  health: Partial<GatewayRestartSnapshot>,
   readyz = false,
 ) {
   vi.mocked(observeUpdateGatewayReadiness).mockResolvedValue({
-    health,
+    health: {
+      runtime: { status: "running", pid: 12345 },
+      portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+      expectedVersion: "2026.9.4",
+      ...health,
+    },
     readyz,
     http: undefined,
     launchAgentRecovery: null,
@@ -39,29 +46,22 @@ async function verifyObservation(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
+function createRun() {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("update-verification-") };
+  return { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+}
 
 it.each([undefined, "2026.9.2", "2026.9.4"])(
   "reports only the currently observed version during startup (%s)",
   async (gatewayVersion) => {
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: tempDirs.make("update-identity-unavailable-"),
-    };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const run = createRun();
+    const { env } = run;
     recordUpdateRunVerification(
       run.runId,
       { runningVersion: "2026.9.2", runningBuildId: "previous-build", versionMatch: true },
       { env },
     );
-    const verified = await verifyObservation(run, {
-      runtime: { status: "running", pid: 12345 },
-      portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
-      healthy: false,
-      staleGatewayPids: [],
-      expectedVersion: "2026.9.4",
-      gatewayVersion,
-    });
-    expect(verified.ok).toBe(false);
+    expect((await verifyObservation(run, { gatewayVersion })).ok).toBe(false);
     const recorded = finishUpdateRun(
       run.runId,
       {
@@ -87,15 +87,12 @@ it.each([undefined, "2026.9.2", "2026.9.4"])(
 );
 
 it("records HTTP-verified activation as success with an authentication warning", async () => {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("update-http-verified-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const run = createRun();
+  const { env } = run;
   const verified = await verifyObservation(
     run,
     {
-      runtime: { status: "running", pid: 12345 },
-      portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
       healthy: true,
-      staleGatewayPids: [],
       expectedVersion: "2026.10.4",
       gatewayVersion: "2026.10.4",
       authenticationError: "device identity required",
