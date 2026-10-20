@@ -34,6 +34,7 @@ function configPath(): string {
   return path.join(stateDir, "openclaw.json");
 }
 
+// mock-isolation: Read only this test's in-memory config store, never the operator's config.
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: async () => {
     const config = configStore.get(configPath());

@@ -5,6 +5,7 @@ const { detectAndLoadPromptImages } = vi.hoisted(() => ({
   detectAndLoadPromptImages: vi.fn(),
 }));
 
+// mock-isolation: Supply image-load results without reading media or starting image tooling.
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages,
 }));
