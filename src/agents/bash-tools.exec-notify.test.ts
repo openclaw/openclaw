@@ -240,21 +240,6 @@ describe("background exec completion obligations", () => {
       expect(enqueue).not.toHaveBeenCalled();
     }));
 
-  it("retains completion until adoption", () =>
-    withFixture(async ({ background, read }) => {
-      const process = await background();
-      process.exitCode = 0;
-      await maybeNotifyOnExit(process, "completed", false);
-      expect((await read())?.pendingExecNotifications).toHaveProperty(
-        processSessionInstanceId(process),
-      );
-      const notification = lastNotification();
-      expect(notification.text).toContain("Exec completed");
-      expect(notification.options.expectedTarget).toBe(process.notifySessionTarget);
-      await notification.options.onAdopted?.();
-      expect((await read())?.pendingExecNotifications).toBeUndefined();
-    }));
-
   it.each(["cancelled", "removed"] as const)("clears explicitly %s processes", (action) =>
     withFixture(async ({ background, read }) => {
       const process = await background();
@@ -307,9 +292,16 @@ describe("background exec completion obligations", () => {
   it("distinguishes receipts with reused slug and start time", () =>
     withFixture(async ({ background, read }) => {
       const first = await background({ id: "reused-process" });
+      first.exitCode = 0;
       await maybeNotifyOnExit(first, "completed", false);
+      expect((await read())?.pendingExecNotifications).toHaveProperty(
+        processSessionInstanceId(first),
+      );
       const firstNotification = lastNotification();
+      expect(firstNotification.text).toContain("Exec completed");
+      expect(firstNotification.options.expectedTarget).toBe(first.notifySessionTarget);
       await firstNotification.options.onAdopted?.();
+      expect((await read())?.pendingExecNotifications).toBeUndefined();
       deleteSession(first.id);
       await first.clearExitNotification?.();
       const successor = await background({ id: first.id });

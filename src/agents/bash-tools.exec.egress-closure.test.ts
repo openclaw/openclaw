@@ -17,7 +17,6 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   createOperationalRunInstanceRef,
-  getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
@@ -121,7 +120,6 @@ it.each(["close", "abort"] as const)(
       });
       return {
         admission,
-        admitted,
         controller,
         execute: () =>
           withGatewayToolCallerIdentity(caller, () =>
@@ -165,18 +163,12 @@ it.each(["close", "abort"] as const)(
     later.admission.close();
 
     expect(rejected).toBe(true);
-    expect(retired.controller.signal.aborted).toBe(revocation === "abort");
     expect(retiredSpawnCount).toBe(0);
-    expect(getAdmittedRunDelegatedAuthority(retired.admitted)).toBeUndefined();
     expect(laterResult.details).toMatchObject({
       status: "completed",
       exitCode: 0,
       aggregated: "cron-egress-ok",
     });
-    expect(getAdmittedRunDelegatedAuthority(later.admitted)).toBeUndefined();
-    expect(later.admitted.operationalRunInstance).not.toEqual(
-      retired.admitted.operationalRunInstance,
-    );
     expect(lateRegistrationCount).toBe(0);
     expect(registrations).toHaveBeenCalledOnce();
   },

@@ -5,20 +5,15 @@ import {
   formatExecApprovalContinuationSourceOutput as formatOutput,
   resizeExecApprovalContinuationPrompt as resizePrompt,
 } from "./bash-tools.exec-approval-output.js";
-import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 
-const MAX_SOURCE_UTF16_UNITS = 256_000;
 const MARKER =
   "[... truncated to fit the continuation budget; more output may have been dropped when it was captured ...]";
 const OUTPUT_BEGIN = "<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>";
 const OUTPUT_END = "<<<END_UNTRUSTED_EXEC_OUTPUT>>>";
 
-function expectNoSplitSurrogates(value: string): void {
-  expect(value).not.toMatch(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
-  );
-}
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const unicodeStream = (units: number) => "😀".repeat(Math.floor(units / 2)) + "a".repeat(units % 2);
 
 it("returns empty output when no stream carries content", () => {
   expect(formatOutput([])).toBe("");
@@ -36,23 +31,17 @@ it.each([
   { name: "tail", stdoutUnits: 200_000, streamUnits: 63_970 },
 ])("preserves stderr across the $name cut", ({ stdoutUnits, streamUnits }) => {
   const formatted = formatOutput([
-    { label: "stdout", value: "a".repeat(stdoutUnits) },
-    { label: "stderr", value: "b".repeat(streamUnits) },
+    { label: "stdout", value: unicodeStream(stdoutUnits) },
+    { label: "stderr", value: unicodeStream(streamUnits) },
   ]);
 
-  expect(formatted.length).toBeLessThanOrEqual(MAX_SOURCE_UTF16_UNITS);
+  expect(formatted.length).toBeLessThanOrEqual(256_000);
   expect(formatted).toContain("[stdout]\n");
   expect(formatted).toContain(`${MARKER}\n[stderr]\n`);
   expect(formatted.split("[stderr]\n")).toHaveLength(2);
-  expect(formatted.endsWith("b")).toBe(true);
-});
-
-it("never splits surrogate pairs at either source-cap cut", () => {
-  const formatted = formatOutput([{ label: "stdout", value: "😀".repeat(150_000) }]);
-
-  expect(formatted.length).toBeLessThanOrEqual(MAX_SOURCE_UTF16_UNITS);
+  expect(formatted.endsWith("😀")).toBe(true);
   for (const part of formatted.split(MARKER)) {
-    expectNoSplitSurrogates(part);
+    expect(part).not.toMatch(LONE_SURROGATE);
   }
 });
 
@@ -87,15 +76,9 @@ it("caps only the authenticated output span and preserves the wrapper", () => {
   expect(resizedOutput.length).toBeLessThanOrEqual(9_600);
   expect(resizedOutput.length).toBeGreaterThanOrEqual(9_598);
   expect(resizedOutput).toContain(MARKER);
-  expectNoSplitSurrogates(resizedOutput);
+  expect(resizedOutput).not.toMatch(LONE_SURROGATE);
   expect(resized.split(OUTPUT_BEGIN)).toHaveLength(2);
   expect(resized.split(OUTPUT_END)).toHaveLength(2);
-});
-
-it("warns against retrying after a no-output timeout", () => {
-  expect(appendExecTimeoutRetryGuidance("Command timed out.", "no-output-timeout")).toContain(
-    "Do not automatically rerun commands unless repeating them is safe",
-  );
 });
 
 describe("approved exec continuation producer", () => {

@@ -51,35 +51,35 @@ afterEach(() => {
   }
 });
 
-async function session(name: string, owner = actor) {
+async function session(name: string) {
   const sessionKey = `agent:main:dashboard:incognito-${name}`;
   const entry = { sessionId: name, lifecycleRevision: "original", updatedAt: 1 };
-  const handle = await owner.acquire(
-    { database: owner.identity, sessionKey },
+  const handle = await actor.acquire(
+    { database: actor.identity, sessionKey },
     { assertCurrent() {}, assertReadable() {} },
   );
-  const binding = { actor: handle, authority, agentId: owner.agentId, path: owner.path };
+  const binding = { actor: handle, authority, agentId: actor.agentId, path: actor.path };
   bindings.push(binding);
   expect(
     await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
   ).toMatchObject({ kind: "committed" });
-  const followup = {
-    approvalId: name,
-    agentId: "main",
-    sessionKey,
-    expectedSessionId: name,
-    resultText: `Exec finished (gateway id=${name}, code 0)\nprivate result`,
-    turnSourceChannel: "telegram",
-    turnSourceTo: "123",
-    internalRuntimeHandoffId: `handoff-${name}`,
-  };
   return {
     entry,
     binding,
-    target: { agentId: "main", sessionKey, storePath: owner.path },
+    target: { agentId: "main", sessionKey, storePath: actor.path },
     send: (overrides: Partial<Parameters<typeof sendExecApprovalFollowup>[0]> = {}) =>
       runWithSessionActorStorage(binding, () =>
-        sendExecApprovalFollowup({ ...followup, ...overrides }),
+        sendExecApprovalFollowup({
+          approvalId: name,
+          agentId: "main",
+          sessionKey,
+          expectedSessionId: name,
+          resultText: `Exec finished (gateway id=${name}, code 0)\nprivate result`,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "123",
+          internalRuntimeHandoffId: `handoff-${name}`,
+          ...overrides,
+        }),
       ),
   };
 }

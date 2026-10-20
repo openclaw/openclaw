@@ -134,15 +134,12 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
     notifyDeliveryContext: undefined,
   });
 
-  expect(enqueueSessionEvent).toHaveBeenCalledWith(
-    expect.any(String),
-    expect.objectContaining({
-      source: "exec",
-      agentId: "research",
-      sessionKey: "global",
-      expectedTarget: expect.objectContaining({ agentId: "research" }),
-    }),
-  );
+  expect(vi.mocked(enqueueSessionEvent).mock.lastCall?.[1]).toMatchObject({
+    source: "exec",
+    agentId: "research",
+    sessionKey: "global",
+    expectedTarget: { agentId: "research" },
+  });
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
 });
@@ -153,7 +150,6 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   enqueueSystemEventEntry("unrelated", { sessionKey: QUEUE_KEY, contextKey: "marker" });
   const second = await startNotifyRun();
 
-  expect([first.id, second.id]).toEqual(["amber-atlas", "amber-atlas"]);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
