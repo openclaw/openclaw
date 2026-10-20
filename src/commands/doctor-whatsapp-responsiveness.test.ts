@@ -29,6 +29,7 @@ const cpuPressure: GatewayEventLoopHealth = {
   cpuCoreRatio: 2,
 };
 const localTuis = () => [{ pid: 101, command: "openclaw-tui --profile another-profile" }];
+const pressured = { cfg, status: { eventLoop: cpuPressure }, listLocalTuiProcesses: localTuis };
 
 describe("doctor WhatsApp responsiveness", () => {
   beforeEach(() => {
@@ -68,8 +69,7 @@ describe("doctor WhatsApp responsiveness", () => {
   });
 
   it("keeps pressure advice factual and shared with the note", () => {
-    const params = { cfg, status: { eventLoop: cpuPressure }, listLocalTuiProcesses: localTuis };
-    const findings = collectWhatsappResponsivenessHealthFindings(params);
+    const findings = collectWhatsappResponsivenessHealthFindings(pressured);
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/whatsapp-responsiveness",
@@ -83,7 +83,7 @@ describe("doctor WhatsApp responsiveness", () => {
           "Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.",
       }),
     ]);
-    noteWhatsappResponsivenessHealth(params);
+    noteWhatsappResponsivenessHealth(pressured);
     expect(noteMock).toHaveBeenCalledWith(
       [findings[0]?.message, "Local TUI pids: 101", findings[0]?.fixHint].join("\n"),
       "WhatsApp responsiveness",
@@ -91,22 +91,18 @@ describe("doctor WhatsApp responsiveness", () => {
   });
 
   it.each([
-    { name: "missing status during maintenance", cfg, status: undefined, tuis: localTuis },
+    { name: "missing status during maintenance", status: undefined },
     {
       name: "healthy Gateway",
-      cfg,
       status: { eventLoop: { ...cpuPressure, degraded: false, reasons: [] } },
-      tuis: localTuis,
     },
     {
       name: "WhatsApp disabled",
       cfg: { channels: { whatsapp: { enabled: false } } },
-      status: { eventLoop: cpuPressure },
-      tuis: localTuis,
     },
-    { name: "no local TUI", cfg, status: { eventLoop: cpuPressure }, tuis: () => [] },
-  ])("stays quiet with $name", ({ cfg: caseConfig, status, tuis }) => {
-    const params = { cfg: caseConfig, status, listLocalTuiProcesses: tuis };
+    { name: "no local TUI", listLocalTuiProcesses: () => [] },
+  ])("stays quiet with $name", ({ name: _name, ...overrides }) => {
+    const params = { ...pressured, ...overrides };
     expect(collectWhatsappResponsivenessHealthFindings(params)).toEqual([]);
     noteWhatsappResponsivenessHealth(params);
     expect(noteMock).not.toHaveBeenCalled();

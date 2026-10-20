@@ -1,4 +1,3 @@
-// Doctor repairs delegate both missing and stale dashboard assets to their owner.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +32,14 @@ vi.mock("../infra/control-ui-assets.js", async (importOriginal) => ({
 import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 
 const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+let prompter: DoctorPrompter;
+
+async function writeIndex(html: string) {
+  const index = path.join(mocks.root, "dist/control-ui/index.html");
+  await fs.mkdir(path.dirname(index), { recursive: true });
+  await fs.writeFile(index, html);
+  return index;
+}
 
 function createPrompter(): DoctorPrompter {
   return {
@@ -44,6 +51,7 @@ function createPrompter(): DoctorPrompter {
 describe("Control UI doctor repair owner", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    prompter = createPrompter();
     mocks.root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-repair-")),
     );
@@ -77,8 +85,6 @@ describe("Control UI doctor repair owner", () => {
         updateHint: "Update OpenClaw.app to update this Gateway.",
       }),
     );
-    const prompter = createPrompter();
-
     await maybeRepairUiProtocolFreshness(runtime, prompter);
 
     expect(mocks.note).toHaveBeenCalledWith(
@@ -93,42 +99,44 @@ describe("Control UI doctor repair owner", () => {
     expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
-  it("repairs an existing dashboard whose startup JavaScript is missing", async () => {
-    const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(indexPath), { recursive: true });
-    await fs.writeFile(indexPath, '<script src="./assets/startup.js"></script>');
-    const prompter = createPrompter();
-
+  it.each([false, true])("repairs source assets (protocol changed=%s)", async (force) => {
+    await writeIndex(
+      force
+        ? `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${mocks.buildId}-${"a".repeat(64)}"></html>`
+        : '<script src="./assets/startup.js"></script>',
+    );
     await maybeRepairUiProtocolFreshness(runtime, prompter);
-
-    expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
+    expect(prompter[force ? "confirmAggressiveAutoFix" : "confirmAutoFix"]).toHaveBeenCalledOnce();
     expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
       root: mocks.root,
       expectedBuildId: mocks.buildId,
-      force: false,
+      force,
       onBuildStart: expect.any(Function),
     });
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(force ? 1 : 0);
+    if (force) {
+      expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+      expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
+      expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
+    }
   });
 
   it.each(["incomplete", "markerless", "dev-build"])(
     "checks packaged UI identity without rebuilding it: %s",
     async (failure) => {
-      const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
       const buildId = failure === "dev-build" ? "dev" : null;
       const marker = buildId
         ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${buildId}-${"a".repeat(64)}"`
         : "";
       const html = `<html${marker}><script src="./assets/startup.js"></script></html>`;
-      await fs.writeFile(indexPath, html);
+      const indexPath = await writeIndex(html);
       if (failure !== "incomplete") {
         await fs.mkdir(path.join(path.dirname(indexPath), "assets"));
         await fs.writeFile(path.join(path.dirname(indexPath), "assets/startup.js"), "// startup");
       }
       await fs.rm(path.join(mocks.root, "ui", "package.json"));
 
-      await maybeRepairUiProtocolFreshness(runtime, createPrompter());
+      await maybeRepairUiProtocolFreshness(runtime, prompter);
 
       if (failure === "dev-build") {
         expect(mocks.note).not.toHaveBeenCalled();
@@ -144,30 +152,6 @@ describe("Control UI doctor repair owner", () => {
     },
   );
 
-  it("forces the canonical owner to rebuild source assets after protocol changes", async () => {
-    const indexPath = path.join(mocks.root, "dist", "control-ui", "index.html");
-    await fs.mkdir(path.dirname(indexPath), { recursive: true });
-    await fs.writeFile(
-      indexPath,
-      `<html ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${mocks.buildId}-${"a".repeat(64)}"></html>`,
-    );
-    const prompter = createPrompter();
-
-    await maybeRepairUiProtocolFreshness(runtime, prompter);
-
-    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
-    expect(prompter.confirmAggressiveAutoFix).toHaveBeenCalledOnce();
-    expect(mocks.ensureControlUiAssetsBuilt).toHaveBeenCalledWith(runtime, {
-      root: mocks.root,
-      expectedBuildId: mocks.buildId,
-      force: true,
-      onBuildStart: expect.any(Function),
-    });
-    expect(mocks.note).toHaveBeenCalledWith("UI rebuild complete.", "UI");
-    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("ui:build"), "UI Freshness");
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-  });
-
   it("reports owner-normalized build failures instead of claiming repair success", async () => {
     mocks.ensureControlUiAssetsBuilt.mockResolvedValueOnce({
       ok: false,
@@ -175,7 +159,7 @@ describe("Control UI doctor repair owner", () => {
       message: "Control UI build failed: spawn ENOENT",
     });
 
-    await maybeRepairUiProtocolFreshness(runtime, createPrompter());
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
 
     expect(mocks.note).toHaveBeenCalledWith("Control UI build failed: spawn ENOENT", "UI");
     expect(mocks.note).not.toHaveBeenCalledWith("UI build complete.", "UI");

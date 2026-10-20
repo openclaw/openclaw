@@ -34,6 +34,24 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+function catalog(count: number, provider: (index: number) => string) {
+  return Array.from({ length: count }, (_, index) => ({
+    provider: provider(index),
+    id: `model-${index}`,
+    name: `Model ${index}`,
+  }));
+}
+function pick(
+  prompter: ReturnType<typeof makePrompter>,
+  models: Record<string, { alias: string }> = {},
+) {
+  return promptDefaultModel({
+    config: { agents: { defaults: { model: "zeta/model-0", models } } },
+    prompter,
+    allowKeep: false,
+  });
+}
+
 describe("default model provider menu", () => {
   it.each([
     { count: 30, selection: "*", singleProvider: false },
@@ -43,11 +61,9 @@ describe("default model provider menu", () => {
   ])(
     "preserves counts and choices for $count models ($selection, single=$singleProvider)",
     async ({ count, selection, singleProvider }) => {
-      prepared.catalog = Array.from({ length: count }, (_, index) => ({
-        provider: singleProvider || index < 15 ? "zeta" : index < 30 ? "alpha" : "beta",
-        id: `model-${index}`,
-        name: `Model ${index}`,
-      }));
+      prepared.catalog = catalog(count, (index) =>
+        singleProvider || index < 15 ? "zeta" : index < 30 ? "alpha" : "beta",
+      );
       const prompts: WizardSelectParams<unknown>[] = [];
       const prompter = makePrompter({
         select: async (params) => {
@@ -62,15 +78,7 @@ describe("default model provider menu", () => {
           return choice.value;
         },
       });
-      const result = await promptDefaultModel({
-        config: {
-          agents: {
-            defaults: { model: "zeta/model-0", models: { "alpha/model-15": { alias: "compact" } } },
-          },
-        },
-        prompter,
-        allowKeep: false,
-      });
+      const result = await pick(prompter, { "alpha/model-15": { alias: "compact" } });
       const modelPrompt = count > 30 && !singleProvider ? 1 : 0;
       expect(prompts).toHaveLength(modelPrompt + 1);
       if (modelPrompt === 1) {
@@ -100,22 +108,12 @@ describe("default model provider menu", () => {
   );
 
   it("propagates provider-menu cancellation before choosing a model", async () => {
-    prepared.catalog = Array.from({ length: 31 }, (_, index) => ({
-      provider: index % 2 ? "alpha" : "zeta",
-      id: `model-${index}`,
-      name: `Model ${index}`,
-    }));
+    prepared.catalog = catalog(31, (index) => (index % 2 ? "alpha" : "zeta"));
     const cancellation = new WizardCancelledError();
     const select = vi.fn(async () => {
       throw cancellation;
     });
-    await expect(
-      promptDefaultModel({
-        config: { agents: { defaults: { model: "zeta/model-0" } } },
-        prompter: makePrompter({ select }),
-        allowKeep: false,
-      }),
-    ).rejects.toBe(cancellation);
+    await expect(pick(makePrompter({ select }))).rejects.toBe(cancellation);
     expect(select).toHaveBeenCalledTimes(1);
     expect(selectedHook).not.toHaveBeenCalled();
   });

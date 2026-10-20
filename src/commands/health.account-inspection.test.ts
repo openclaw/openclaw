@@ -1,4 +1,3 @@
-// Health inspection tests cover metadata-only accounts and operational hook boundaries.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,6 +10,16 @@ const tempDirs = createTempDirTracker();
 let plugins: HealthTestPlugin[] = [];
 let sessionStorePath: string;
 let health: Awaited<ReturnType<typeof loadFreshHealthModulesForTest>>;
+
+function inspectAccounts(config: HealthTestPlugin["config"], status: HealthTestPlugin["status"]) {
+  const id = "health-inspection-fixture";
+  plugins = [
+    { ...health.createChannelTestPluginBase({ id, label: "Inspection" }), config, status },
+  ];
+  return health
+    .getHealthSnapshot({ probe: true })
+    .then((snapshot) => snapshot.channels[id]?.accounts);
+}
 
 describe("collectGatewayHealthSnapshot account inspection", () => {
   beforeAll(async () => {
@@ -42,38 +51,29 @@ describe("collectGatewayHealthSnapshot account inspection", () => {
       }
       return { accountId: "healthy", configured: true, name: "Resolved healthy account" };
     });
-    plugins = [
+    const accounts = await inspectAccounts(
       {
-        ...health.createChannelTestPluginBase({
-          id: "health-inspection-fixture",
-          label: "Inspection",
-        }),
-        config: {
-          listAccountIds: () => ["default", "healthy"],
-          resolveAccount: (_cfg, accountId) => {
-            if (accountId !== "healthy") {
-              throw new Error("credential unavailable");
-            }
-            return { accountId, enabled: true, configured: true, token: "healthy-token" };
-          },
-          inspectAccount: (_cfg, accountId) => ({
-            accountId,
-            enabled: true,
-            configured: true,
-            tokenStatus: accountId === "healthy" ? "available" : "configured_unavailable",
-          }),
+        listAccountIds: () => ["default", "healthy"],
+        resolveAccount: (_cfg, accountId) => {
+          if (accountId !== "healthy") {
+            throw new Error("credential unavailable");
+          }
+          return { accountId, enabled: true, configured: true, token: "healthy-token" };
         },
-        status: { probeAccount, buildAccountSnapshot },
+        inspectAccount: (_cfg, accountId) => ({
+          accountId,
+          enabled: true,
+          configured: true,
+          tokenStatus: accountId === "healthy" ? "available" : "configured_unavailable",
+        }),
       },
-    ];
-
-    const snapshot = await health.getHealthSnapshot({ probe: true });
-    expect(snapshot.channels["health-inspection-fixture"]?.accounts).toMatchObject({
+      { probeAccount, buildAccountSnapshot },
+    );
+    expect(accounts).toMatchObject({
       default: { configured: true, tokenStatus: "configured_unavailable" },
       healthy: { configured: true, name: "Resolved healthy account" },
     });
-    expect(probeAccount).toHaveBeenCalledTimes(1);
-    expect(probeAccount).toHaveBeenCalledWith(
+    expect(probeAccount).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         account: expect.objectContaining({ accountId: "healthy", token: "healthy-token" }),
       }),
@@ -85,26 +85,21 @@ describe("collectGatewayHealthSnapshot account inspection", () => {
     const runtimeOnly = vi.fn(() => {
       throw new Error("runtime hook received an inspection summary");
     });
-    plugins = [
+    const accounts = await inspectAccounts(
       {
-        ...health.createChannelTestPluginBase({ id: "health-partial-fixture", label: "Partial" }),
-        config: {
-          listAccountIds: () => ["default"],
-          inspectAccount: () => undefined,
-          resolveAccount: () => {
-            throw new Error("account resolution failed");
-          },
-        },
-        status: {
-          probeAccount: runtimeOnly,
-          buildAccountSnapshot: runtimeOnly,
-          buildChannelSummary: runtimeOnly,
+        listAccountIds: () => ["default"],
+        inspectAccount: () => undefined,
+        resolveAccount: () => {
+          throw new Error("account resolution failed");
         },
       },
-    ];
-
-    const snapshot = await health.getHealthSnapshot({ probe: true });
-    const account = snapshot.channels["health-partial-fixture"]?.accounts?.default;
+      {
+        probeAccount: runtimeOnly,
+        buildAccountSnapshot: runtimeOnly,
+        buildChannelSummary: runtimeOnly,
+      },
+    );
+    const account = accounts?.default;
     expect(account?.configured).toBeUndefined();
     expect(account?.stateReason).toBe("configuration status unavailable");
     expect(runtimeOnly).not.toHaveBeenCalled();
