@@ -136,10 +136,8 @@ describe("manifest model id normalization", () => {
     const readBytes = vi.spyOn(fs, "readSync");
     const secondRecords = listNormalizerRecords();
     expect(firstRecords).toHaveLength(1);
-    expect(secondRecords).toHaveLength(1);
     expect(secondRecords).toEqual(firstRecords);
     expect(secondRecords[0]?.manifest).toBe(firstRecords[0]?.manifest);
-    expect(readFile).not.toHaveBeenCalled();
-    expect(readBytes).not.toHaveBeenCalled();
+    expect([readFile.mock.calls, readBytes.mock.calls]).toEqual([[], []]);
   });
 });

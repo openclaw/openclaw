@@ -64,11 +64,8 @@ export async function withChildAudience(
     if (resolution.status !== "granted") {
       throw new Error(resolution.reason);
     }
-    try {
-      await run({ audience: resolution.audience, root, child, write, storePath });
-    } finally {
-      resolution.release();
-    }
+    using _ = { [Symbol.dispose]: resolution.release };
+    await run({ audience: resolution.audience, root, child, write, storePath });
   });
 }
 

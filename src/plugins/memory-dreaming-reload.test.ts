@@ -77,10 +77,7 @@ it("keeps successor sweeps and diary publication owned after another registratio
     } satisfies PluginRuntime["subagent"];
     const host = createPluginRegistry({
       logger,
-      runtime: createLazyPluginRuntime({
-        ...loaderOptions,
-        runtimeOptions: { subagent },
-      }),
+      runtime: createLazyPluginRuntime({ ...loaderOptions, runtimeOptions: { subagent } }),
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({
@@ -93,11 +90,7 @@ it("keeps successor sweeps and diary publication owned after another registratio
     const api = host.createApi(record, { config });
     const instance = getPluginInstance(record) as PluginInstance;
     instances.push(instance);
-    bindPluginInstanceModuleLoader({
-      instance,
-      ...pluginSource,
-      ...loaderOptions,
-    });
+    bindPluginInstanceModuleLoader({ instance, ...pluginSource, ...loaderOptions });
     const module = instance.loadModule(memorySource) as { default: OpenClawPluginDefinition };
     assert(module.default.register);
     runPluginRegisterSyncInRegistry(module.default.register, api, host.registry, record.id);
@@ -168,13 +161,12 @@ it("keeps successor sweeps and diary publication owned after another registratio
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(stopped).toBe(false);
-    completion.resolve({ text: "The violet telescope gathered constellations above the library." });
+    const text = "The violet telescope gathered constellations above the library.";
+    completion.resolve({ text });
     await stopping;
     stops.pop();
     await expect(successor.instance.dispose()).resolves.toEqual({ errors: [] });
-    expect(await fs.readFile(path.join(state.workspaceDir, "DREAMS.md"), "utf8")).toContain(
-      "The violet telescope gathered constellations above the library.",
-    );
+    expect(await fs.readFile(path.join(state.workspaceDir, "DREAMS.md"), "utf8")).toContain(text);
     expect(logger.error.mock.calls).toEqual([]);
   } finally {
     completion.resolve({ text: "settled" });

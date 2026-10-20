@@ -17,6 +17,12 @@ import type {
 } from "./memory-provider-types.js";
 import { getActiveMemoryProviderCore } from "./memory-runtime.js";
 
+const providerOptions = (audience: MemoryAudience) => ({
+  cfg: {},
+  agentId: "main",
+  context: childMemoryContext(audience),
+});
+
 // Check live authority after async work, immediately before reading.
 function partitionedProvider(
   context: MemoryCallerContext,
@@ -55,11 +61,7 @@ it.each(["child reset", "parent lifecycle change"] as const)(
           await releaseRead.promise;
         });
       await withNativeMemoryProvider(openProvider, async () => {
-        const { provider } = await getActiveMemoryProviderCore({
-          cfg: {},
-          agentId: "main",
-          context: childMemoryContext(audience),
-        });
+        const { provider } = await getActiveMemoryProviderCore(providerOptions(audience));
         const search = provider!.search({ query: "orders" });
         await reachedRead.promise;
         if (change === "child reset") {
@@ -90,11 +92,7 @@ it("gives a conversation caller its host-minted conversation audience at open", 
       return partitionedProvider(context, reads);
     };
     await withNativeMemoryProvider(openProvider, async () => {
-      const { provider } = await getActiveMemoryProviderCore({
-        cfg: {},
-        agentId: "main",
-        context: childMemoryContext(audience),
-      });
+      const { provider } = await getActiveMemoryProviderCore(providerOptions(audience));
       const page = await provider!.search({ query: "orders" });
       expect(page.hits.map((entry) => entry.reference.id)).toEqual(["conversation"]);
       expect(opened).toEqual([audience]);

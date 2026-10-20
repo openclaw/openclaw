@@ -68,16 +68,12 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
     expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({ level: "info", code: "explicit-config-plugin-selection" }),
     );
-    expect(
+    const sources = (fragment: string) =>
       registry.diagnostics
-        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
-        .map((diagnostic) => diagnostic.source),
-    ).toEqual([globalDir, configDir]);
-    expect(
-      registry.diagnostics
-        .filter((diagnostic) => diagnostic.message.includes("without channelConfigs metadata"))
-        .map((diagnostic) => diagnostic.source),
-    ).toEqual([]);
+        .filter((diagnostic) => diagnostic.message.includes(fragment))
+        .map((diagnostic) => diagnostic.source);
+    expect(sources("extension entry unreadable")).toEqual([globalDir, configDir]);
+    expect(sources("without channelConfigs metadata")).toEqual([]);
   });
 
   it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
@@ -85,17 +81,16 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
     writeManifest(dir, { id: "external-chat", channels: ["external-chat"] });
     const candidate = createPluginCandidate(dir, "global");
 
-    const disabledRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(disabledRegistry, "without channelConfigs metadata");
-
-    const allowlistRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { allow: ["other-plugin"] } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(allowlistRegistry, "without channelConfigs metadata");
+    for (const plugins of [
+      { entries: { "external-chat": { enabled: false } } },
+      { allow: ["other-plugin"] },
+    ]) {
+      const registry = loadPluginManifestRegistryCore({
+        config: { plugins },
+        candidates: [candidate],
+      });
+      expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+    }
   });
 });
 

@@ -23,16 +23,16 @@ const schemaFor = (registry = manifestRegistry) =>
 const priorityPath = (scope: string, provider = "vllm") =>
   `${scope}.models.${provider}/model.params.priorityScheduling`;
 type Models = Record<string, { params: Record<string, unknown> }>;
-const agentConfig = (models: Models, agentModels?: Models) => ({
-  agents: {
-    defaults: { models },
-    ...(agentModels && { entries: { main: { models: agentModels } } }),
-  },
-});
 const validate = (models: Models, agentModels?: Models, registry = manifestRegistry) =>
-  validateConfigObjectRawWithPlugins(agentConfig(models, agentModels), {
-    pluginMetadataSnapshot: { manifestRegistry: registry },
-  });
+  validateConfigObjectRawWithPlugins(
+    {
+      agents: {
+        defaults: { models },
+        ...(agentModels && { entries: { main: { models: agentModels } } }),
+      },
+    },
+    { pluginMetadataSnapshot: { manifestRegistry: registry } },
+  );
 
 describe("provider-owned model params", () => {
   it("rejects invalid vLLM model options in default and per-agent scopes", () => {
