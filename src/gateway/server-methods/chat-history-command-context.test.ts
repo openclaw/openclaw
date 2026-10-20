@@ -31,124 +31,118 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it.each([
-  {
-    name: "context-free status",
-    markers: { excludeFromContext: true, __openclaw: { contextFreeCommand: true } },
-    paired: true,
-  },
-  { name: "ordinary user turn", markers: {}, paired: false },
-  { name: "exclusion alone", markers: { excludeFromContext: true }, paired: false },
-  {
-    name: "command marker alone",
-    markers: { __openclaw: { contextFreeCommand: true } },
-    paired: false,
-  },
-  {
-    name: "non-boolean exclusion",
-    markers: { excludeFromContext: "true", __openclaw: { contextFreeCommand: true } },
-    paired: false,
-  },
-  {
-    name: "non-boolean command marker",
-    markers: { excludeFromContext: true, __openclaw: { contextFreeCommand: "true" } },
-    paired: false,
-  },
-])("preserves command outcome pairing across $name", async ({ markers, paired }) => {
-  setRuntimeConfigSnapshot({});
-  const sessionKey = "agent:main:command-context";
-  const sessionId = "command-context-session";
-  const entry = { sessionId, updatedAt: 42 };
-  const scope = {
-    agentId: "main",
-    sessionKey,
-    sessionId,
-    storePath: path.join(tempDirs.make("openclaw-history-command-context-"), "sessions.json"),
-  };
-  await replaceSessionEntry(scope, entry);
-  await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);
-  const head = readTranscriptDisplayDelta(scope);
-  if (head.kind !== "page") {
-    throw new Error("Expected an initial transcript cursor");
-  }
-  const cursor = head.cursor;
-  const call = {
-    role: "assistant",
-    __openclaw: { runId: "command-run" },
-    content: [
-      { type: "toolCall", id: "command", name: "exec", arguments: { command: "printf done" } },
-    ],
-  };
-  const user = { role: "user", content: [{ type: "text", text: "/status" }], ...markers };
-  const status = {
-    role: "assistant",
-    content: [{ type: "text", text: "Status: running." }],
-    ...markers,
-  };
-  const result = {
-    role: "toolResult",
-    __openclaw: { runId: "command-run" },
-    toolCallId: "command",
-    toolName: "exec",
-    isError: false,
-    details: { status: "completed", exitCode: 0, aggregated: "done" },
-    content: [{ type: "text", text: "done" }],
-  };
-  for (const [eventId, message] of [
-    ["command-call", call],
-    ["status-user", user],
-    ["status-reply", status],
-    ["command-result", result],
-  ] as const) {
-    await appendTranscriptMessage(scope, { eventId, message });
-  }
-  const saved = readTranscriptDisplayDelta(scope, { cursor });
-  const page = await readChatHistoryPage({
-    entry,
-    provider: "openai",
-    sessionId,
-    storePath: scope.storePath,
-    sessionAgentId: "main",
-    canonicalKey: sessionKey,
-    max: 20,
-    maxHistoryBytes: 1_000_000,
-    effectiveMaxChars: 10_000,
-    offset: undefined,
-    messageId: undefined,
-    ignoreCliSessionImports: true,
-  });
-  const delta = await readChatHistoryDelta({
-    agentId: "main",
-    cursor,
-    scope,
-    sessionKey,
-    sessionSnapshot: buildGatewaySessionSnapshot({
+  ["context-free status", true, true, true],
+  ["ordinary user turn", undefined, undefined, false],
+  ["exclusion alone", true, undefined, false],
+  ["command marker alone", undefined, true, false],
+  ["non-boolean exclusion", "true", true, false],
+  ["non-boolean command marker", true, "true", false],
+] as const)(
+  "preserves command outcome pairing across %s",
+  async (_name, exclusion, command, paired) => {
+    const markers = {
+      ...(exclusion === undefined ? {} : { excludeFromContext: exclusion }),
+      ...(command === undefined ? {} : { __openclaw: { contextFreeCommand: command } }),
+    };
+    setRuntimeConfigSnapshot({});
+    const sessionKey = "agent:main:command-context";
+    const sessionId = "command-context-session";
+    const entry = { sessionId, updatedAt: 42 };
+    const scope = {
       agentId: "main",
-      includeSession: true,
-      sessionRow: { key: sessionKey, kind: "direct", ...entry },
-    }),
-  });
-  if (delta.kind !== "delta") {
-    throw new Error("Expected the command exchange delta");
-  }
-  const completed = { toolCallId: "command", phase: "end", status: "completed" };
-  for (const activity of [page.activity, delta.activity]) {
-    expect(activity).toMatchObject([
-      {
-        messageId: "command-call",
-        items: [
-          paired ? completed : { toolCallId: "command", phase: "end", summary: "Outcome unknown" },
-        ],
-      },
-      { messageId: "command-result", items: [completed] },
-    ]);
-    if (!paired) {
-      expect(activity?.[0]?.items[0]).not.toHaveProperty("status");
+      sessionKey,
+      sessionId,
+      storePath: path.join(tempDirs.make("openclaw-history-command-context-"), "sessions.json"),
+    };
+    await replaceSessionEntry(scope, entry);
+    await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);
+    const head = readTranscriptDisplayDelta(scope);
+    if (head.kind !== "page") {
+      throw new Error("Expected an initial transcript cursor");
     }
-  }
-  for (const messages of [page.messages, delta.messages.map((envelope) => envelope.message)]) {
-    expect(messages).toMatchObject(
-      [call, user, status, result].map(({ role, content }) => ({ role, content })),
-    );
-  }
-  expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
-});
+    const cursor = head.cursor;
+    const call = {
+      role: "assistant",
+      __openclaw: { runId: "command-run" },
+      content: [
+        { type: "toolCall", id: "command", name: "exec", arguments: { command: "printf done" } },
+      ],
+    };
+    const text = (role: string, content: string) => ({
+      role,
+      content: [{ type: "text", text: content }],
+      ...markers,
+    });
+    const user = text("user", "/status");
+    const status = text("assistant", "Status: running.");
+    const result = {
+      role: "toolResult",
+      __openclaw: { runId: "command-run" },
+      toolCallId: "command",
+      toolName: "exec",
+      isError: false,
+      details: { status: "completed", exitCode: 0, aggregated: "done" },
+      content: [{ type: "text", text: "done" }],
+    };
+    for (const [eventId, message] of [
+      ["command-call", call],
+      ["status-user", user],
+      ["status-reply", status],
+      ["command-result", result],
+    ] as const) {
+      await appendTranscriptMessage(scope, { eventId, message });
+    }
+    const saved = readTranscriptDisplayDelta(scope, { cursor });
+    const page = await readChatHistoryPage({
+      entry,
+      provider: "openai",
+      sessionId,
+      storePath: scope.storePath,
+      sessionAgentId: "main",
+      canonicalKey: sessionKey,
+      max: 20,
+      maxHistoryBytes: 1_000_000,
+      effectiveMaxChars: 10_000,
+      offset: undefined,
+      messageId: undefined,
+      ignoreCliSessionImports: true,
+    });
+    const delta = await readChatHistoryDelta({
+      agentId: "main",
+      cursor,
+      scope,
+      sessionKey,
+      sessionSnapshot: buildGatewaySessionSnapshot({
+        agentId: "main",
+        includeSession: true,
+        sessionRow: { key: sessionKey, kind: "direct", ...entry },
+      }),
+    });
+    if (delta.kind !== "delta") {
+      throw new Error("Expected the command exchange delta");
+    }
+    const completed = { toolCallId: "command", phase: "end", status: "completed" };
+    for (const activity of [page.activity, delta.activity]) {
+      expect(activity).toMatchObject([
+        {
+          messageId: "command-call",
+          items: [
+            paired
+              ? completed
+              : { toolCallId: "command", phase: "end", summary: "Outcome unknown" },
+          ],
+        },
+        { messageId: "command-result", items: [completed] },
+      ]);
+      if (!paired) {
+        expect(activity?.[0]?.items[0]).not.toHaveProperty("status");
+      }
+    }
+    for (const messages of [page.messages, delta.messages.map((envelope) => envelope.message)]) {
+      expect(messages).toMatchObject(
+        [call, user, status, result].map(({ role, content }) => ({ role, content })),
+      );
+    }
+    expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
+  },
+);

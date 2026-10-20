@@ -16,20 +16,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureAbortedPartial, deferAbortedPartialPersistence } from "./chat-aborted-partial.js";
 
 it.each([
-  {
-    name: "rejected partial",
-    code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
-    wrapped: false,
-    retained: false,
-  },
-  {
-    name: "wrapped rejected partial",
-    code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
-    wrapped: true,
-    retained: false,
-  },
-  { name: "unrelated format failure", code: undefined, wrapped: false, retained: true },
-])("honors the settled producer's $name", async ({ code, wrapped, retained }) => {
+  ["rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, false, false],
+  ["wrapped rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, true, false],
+  ["unrelated format failure", undefined, false, true],
+] as const)("honors the settled producer's %s", async (_name, code, wrapped, retained) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
       agentId: "main",
