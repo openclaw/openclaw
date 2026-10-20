@@ -1,4 +1,3 @@
-// Check Deprecated Api Usage tests cover check deprecated api usage script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,10 +6,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildDeprecatedPluginSdkModuleSpecifiers } from "../../scripts/lib/deprecated-plugin-sdk-usage.mts";
 
-const GUARD_SCRIPT_PATH = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../scripts/check-deprecated-api-usage.mts",
+const GUARD_SCRIPT_PATH = fileURLToPath(
+  new URL("../../scripts/check-deprecated-api-usage.mts", import.meta.url),
 );
+const inbound = "openclaw/plugin-sdk/inbound-reply-dispatch";
+const migration = "use focused non-deprecated plugin SDK subpaths";
+const facade = "use openclaw/plugin-sdk/channel-inbound";
+const message =
+  "deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)";
+const onceEach = (paths: string) => Object.fromEntries(paths.split(" ").map((file) => [file, 1]));
 
 function runRules(sourceByRepoPath: Record<string, string>, ruleIds = ["facade-internal-imports"]) {
   // realpath first: macOS os.tmpdir() is a /var -> /private/var symlink and the
@@ -82,10 +86,8 @@ describe("scripts/check-deprecated-api-usage", () => {
   it("reads overlapping rule inputs once while preserving complete diagnostic order", () => {
     const result = runRules(
       {
-        "src/a.ts":
-          'import { x } from "openclaw/plugin-sdk/inbound-reply-dispatch";\nimport { y } from "@openclaw/plugin-sdk/inbound-reply-dispatch";\ndeliverOutboundPayloads();',
-        "extensions/probe/src/a.ts":
-          'export { x } from "openclaw/plugin-sdk/inbound-reply-dispatch";\ndeliverOutboundPayloads();',
+        "src/a.ts": `import { x } from "${inbound}";\nimport { y } from "@${inbound}";\ndeliverOutboundPayloads();`,
+        "extensions/probe/src/a.ts": `export { x } from "${inbound}";\ndeliverOutboundPayloads();`,
         "packages/a.ts":
           'import { x } from "openclaw/plugin-sdk/agent-media-payload";\ndeliverOutboundPayloads();',
         "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();",
@@ -104,33 +106,26 @@ describe("scripts/check-deprecated-api-usage", () => {
     expect(result.stderr).toBe(
       [
         "Deprecated API usage guard failed:",
-        "- plugin-sdk-compat-subpaths: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
-        "- plugin-sdk-compat-subpaths: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use focused non-deprecated plugin SDK subpaths)",
-        "- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/agent-media-payload (use focused non-deprecated plugin SDK subpaths)",
-        "- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (extensions must use focused non-deprecated plugin SDK subpaths)",
-        "- facade-internal-imports: src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
-        "- facade-internal-imports: src/a.ts:2: @openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
-        "- facade-internal-imports: extensions/probe/src/a.ts:1: openclaw/plugin-sdk/inbound-reply-dispatch (use openclaw/plugin-sdk/channel-inbound)",
-        "- message-api: src/a.ts:3: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
-        "- message-api: extensions/probe/src/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
-        "- message-api: packages/a.ts:2: deliverOutboundPayloads (use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext)",
+        `- plugin-sdk-compat-subpaths: src/a.ts:1: ${inbound} (${migration})`,
+        `- plugin-sdk-compat-subpaths: src/a.ts:2: @${inbound} (${migration})`,
+        `- plugin-sdk-compat-subpaths: packages/a.ts:1: openclaw/plugin-sdk/agent-media-payload (${migration})`,
+        `- extension-plugin-sdk-compat-subpaths: extensions/probe/src/a.ts:1: ${inbound} (extensions must ${migration})`,
+        `- facade-internal-imports: src/a.ts:1: ${inbound} (${facade})`,
+        `- facade-internal-imports: src/a.ts:2: @${inbound} (${facade})`,
+        `- facade-internal-imports: extensions/probe/src/a.ts:1: ${inbound} (${facade})`,
+        `- message-api: src/a.ts:3: ${message}`,
+        `- message-api: extensions/probe/src/a.ts:2: ${message}`,
+        `- message-api: packages/a.ts:2: ${message}`,
         "",
       ].join("\n"),
     );
-    expect(result.io.files).toEqual({
-      "src/a.ts": 1,
-      "src/infra/outbound/deliver.ts": 1,
-      "packages/a.ts": 1,
-      "extensions/probe/src/a.ts": 1,
-    });
-    expect(result.io.directories).toEqual({
-      src: 1,
-      "src/infra": 1,
-      "src/infra/outbound": 1,
-      packages: 1,
-      extensions: 1,
-      "extensions/probe": 1,
-      "extensions/probe/src": 1,
-    });
+    expect(result.io.files).toEqual(
+      onceEach("src/a.ts src/infra/outbound/deliver.ts packages/a.ts extensions/probe/src/a.ts"),
+    );
+    expect(result.io.directories).toEqual(
+      onceEach(
+        "src src/infra src/infra/outbound packages extensions extensions/probe extensions/probe/src",
+      ),
+    );
   });
 });

@@ -1,4 +1,3 @@
-// Check Docs Mdx tests cover check docs mdx script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -8,62 +7,25 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const checkerPath = path.resolve(import.meta.dirname, "../../scripts/check-docs-mdx.mjs");
+const frontmatter = "---\ntitle: Example\n---\n";
+const component = "<Note>\n  </Note>\n";
+const mdxError = { type: "mdx", line: 5, column: 1 };
 
 describe("scripts/check-docs-mdx", () => {
   it.each([
-    {
-      name: "plain component",
-      prefix: "",
-      body: "<Note>\n  </Note>\n",
-      error: null,
-    },
-    {
-      name: "LF frontmatter",
-      prefix: "---\ntitle: Example\n---\n",
-      body: "<Note>\n  </Note>\n",
-      error: null,
-    },
-    {
-      name: "CRLF frontmatter",
-      prefix: "---\r\ntitle: Example\r\n---\r\n",
-      body: "<Note>\r\n  </Note>\r\n",
-      error: null,
-    },
-    {
-      name: "YAML document-end delimiter",
-      prefix: "---\ntitle: Example\n...\n",
-      body: "<Note>\n  </Note>\n",
-      error: null,
-    },
-    {
-      name: "LF MDX expression",
-      prefix: "---\ntitle: Example\n---\n",
-      body: "{\n",
-      error: { type: "mdx", line: 5, column: 1 },
-    },
-    {
-      name: "CRLF MDX expression",
-      prefix: "---\r\ntitle: Example\r\n---\r\n",
-      body: "{\r\n",
-      error: { type: "mdx", line: 5, column: 1 },
-    },
-    {
-      name: "valid LF document",
-      prefix: "---\ntitle: Example\n---\n",
-      body: "# Valid\n",
-      error: null,
-    },
-    {
-      name: "valid CRLF document",
-      prefix: "---\r\ntitle: Example\r\n---\r\n",
-      body: "# Valid\r\n",
-      error: null,
-    },
-  ])("reports original source locations for $name", ({ prefix, body, error }) => {
+    ["plain component", component, null],
+    ["LF frontmatter", frontmatter + component, null],
+    ["CRLF frontmatter", (frontmatter + component).replaceAll("\n", "\r\n"), null],
+    ["YAML document-end delimiter", "---\ntitle: Example\n...\n" + component, null],
+    ["LF MDX expression", frontmatter + "{\n", mdxError],
+    ["CRLF MDX expression", (frontmatter + "{\n").replaceAll("\n", "\r\n"), mdxError],
+    ["valid LF document", frontmatter + "# Valid\n", null],
+    ["valid CRLF document", (frontmatter + "# Valid\n").replaceAll("\n", "\r\n"), null],
+  ])("reports original source locations for %s", (_name, source, error) => {
     const root = createTempDir("openclaw-mdx-source-lines-");
     const sourcePath = path.join(root, "page.mdx");
     const reportPath = path.join(root, "report.json");
-    writeFileSync(sourcePath, prefix + body);
+    writeFileSync(sourcePath, source);
 
     const result = spawnSync(
       process.execPath,

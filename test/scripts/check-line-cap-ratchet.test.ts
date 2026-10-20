@@ -7,7 +7,13 @@ import { main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+const errors = vi.fn<typeof console.error>();
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  errors.mockClear();
+  vi.spyOn(console, "error").mockImplementation(errors);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -26,12 +32,16 @@ function git(root: string, ...args: string[]) {
 }
 
 function source(lines: number) {
-  return (
-    Array.from({ length: lines }, (_, index) => `export const value${index} = ${index};`).join(
-      "\n",
-    ) + "\n"
-  );
+  return Array.from({ length: lines }, (_, i) => `export const value${i} = ${i};\n`).join("");
 }
+
+const check = (root: string, ...args: string[]) => main(root, ["--base", "HEAD", ...args]);
+const writeSource = (root: string, lines: number) =>
+  fs.writeFileSync(path.join(root, "src/file.ts"), source(lines));
+const expectGrowth = (file = "src/file.ts", from = 5, to = 6) =>
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(`${file}: ${from} -> ${to} counted lines (cap 3)`),
+  );
 
 function fixture(lines = 5, severity = "warn", ignorePatterns: string[] = []) {
   const root = tempDirs.make("openclaw-line-cap-test-");
@@ -62,19 +72,17 @@ describe("line-cap growth ratchet", () => {
   it("warns for CI growth, writes the summary, and still rejects broken source", () => {
     const root = fixture();
     const summary = path.join(root, "summary.md");
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    fs.writeFileSync(path.join(root, "src/file.ts"), source(6));
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    writeSource(root, 6);
+    expect(check(root)).toBe(1);
     vi.stubEnv("GITHUB_ACTIONS", "true");
     vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     expect(errors).toHaveBeenCalledWith(
       expect.stringContaining("::warning file=src/file.ts,line=1,col=0,"),
     );
     expect(fs.readFileSync(summary, "utf8")).toContain("5 -&gt; 6 counted lines");
     fs.writeFileSync(path.join(root, "src/file.ts"), "export const = broken;");
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(check(root)).toBe(1);
   });
 
   it("measures ignored repository-contained scratch while preserving explicit exclusions", () => {
@@ -85,21 +93,17 @@ describe("line-cap growth ratchet", () => {
     vi.stubEnv("TMPDIR", scratch);
     vi.stubEnv("TMP", scratch);
     vi.stubEnv("TEMP", scratch);
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     const target = path.join(root, "src/file.ts");
     fs.writeFileSync(target, source(6));
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
-    expect(errors).toHaveBeenCalledWith(
-      expect.stringContaining("src/file.ts: 5 -> 6 counted lines (cap 3)"),
-    );
+    expect(check(root)).toBe(1);
+    expectGrowth();
     fs.writeFileSync(target, source(4));
     for (const directory of ["ignored", "generated"]) {
       fs.mkdirSync(path.join(root, "src", directory));
       fs.writeFileSync(path.join(root, "src", directory, "excluded.ts"), source(8));
     }
     errors.mockClear();
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     expect(errors).not.toHaveBeenCalled();
   });
 
@@ -110,30 +114,24 @@ describe("line-cap growth ratchet", () => {
     const scratchAlias = path.join(root, "scratch-alias");
     fs.symlinkSync(scratch, scratchAlias, process.platform === "win32" ? "junction" : "dir");
     vi.stubEnv(process.platform === "win32" ? "TEMP" : "TMPDIR", scratchAlias);
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     fs.writeFileSync(path.join(root, "src/file.ts"), source(5) + "// changed comment\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     const renamed = "src/renamed space #%.ts";
     git(root, "mv", "src/file.ts", renamed);
     fs.writeFileSync(path.join(root, renamed), source(4) + "\n/* comment\n comment */\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     fs.writeFileSync(path.join(root, renamed), source(6));
     git(root, "add", ".");
     fs.writeFileSync(path.join(root, renamed), source(4));
-    expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
-    expect(errors).toHaveBeenCalledWith(
-      expect.stringContaining(`${renamed}: 5 -> 6 counted lines (cap 3)`),
-    );
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root, "--staged")).toBe(1);
+    expectGrowth(renamed);
+    expect(check(root)).toBe(0);
     fs.mkdirSync(path.join(root, "src/generated"));
     fs.writeFileSync(path.join(root, "src/generated/ignored.ts"), source(10));
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     fs.writeFileSync(path.join(root, "src/new.ts"), source(4));
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
-    expect(errors).toHaveBeenCalledWith(
-      expect.stringContaining("src/new.ts: 3 -> 4 counted lines (cap 3)"),
-    );
+    expect(check(root)).toBe(1);
+    expectGrowth("src/new.ts", 3, 4);
   });
 
   it("handles repaired under-cap head without relaxing the head check", () => {
@@ -142,10 +140,8 @@ describe("line-cap growth ratchet", () => {
     fs.writeFileSync(target, "const duplicate = 1;\nconst duplicate = 2;\n");
     git(root, "add", ".");
     git(root, "commit", "-m", "broken base");
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     fs.writeFileSync(target, source(3));
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     expect(errors).not.toHaveBeenCalled();
   });
 
@@ -158,7 +154,6 @@ describe("line-cap growth ratchet", () => {
     git(origin, "clone", "--filter=blob:none", pathToFileURL(origin).href, root);
     const packs = path.join(root, ".git", "objects", "pack");
     const before = fs.readdirSync(packs).filter((file) => file.endsWith(".pack"));
-    vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--base", "HEAD~"])).toBe(0);
     expect(fs.readdirSync(packs).filter((file) => file.endsWith(".pack"))).toEqual(before);
   });
@@ -170,16 +165,12 @@ describe("line-cap growth ratchet", () => {
     fs.writeFileSync(target, directive + source(5));
     git(root, "add", ".");
     git(root, "commit", "-m", "inherited suppression");
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     fs.writeFileSync(target, directive + source(4));
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(check(root)).toBe(0);
     const growing = directive + source(6);
     fs.writeFileSync(target, growing);
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
-    expect(errors).toHaveBeenCalledWith(
-      expect.stringContaining("src/file.ts: 5 -> 6 counted lines (cap 3)"),
-    );
+    expect(check(root)).toBe(1);
+    expectGrowth();
     expect(fs.readFileSync(target, "utf8")).toBe(growing);
   });
 });

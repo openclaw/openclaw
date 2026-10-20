@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,12 +6,12 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
-import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
@@ -41,15 +41,7 @@ describe("deadcode command reporting", () => {
     const kind = wrapper === "exports" ? "unused-export" : "unused-file";
     const receipts = await openFixtureReceiptChannel();
     let child: ChildProcess | undefined;
-    let completion:
-      | Promise<{
-          error: Error | undefined;
-          signal: NodeJS.Signals | null;
-          status: number | null;
-          stdout: string;
-          stderr: string;
-        }>
-      | undefined;
+    let completion: ReturnType<typeof runNodeScript> | undefined;
 
     try {
       // Synthetic Knip output only: keep the real CLI, launcher and child processes.
@@ -83,8 +75,7 @@ fs.writeFileSync(marker(index, "completed"), outcome);
 sendReceipt(String(index), "completed");
 `,
       );
-      child = spawn(
-        process.execPath,
+      completion = runNodeScript(
         resolveRuntimeWorkerArgv(
           resolveRuntimeWorkerUrl(
             wrapper === "exports"
@@ -92,31 +83,17 @@ sendReceipt(String(index), "completed");
               : toolingMtsEntrypoints.deadcodeUnusedFiles,
           ),
         ),
+        { ...process.env, npm_execpath: pnpm },
+        undefined,
         {
           cwd: process.cwd(),
-          env: { ...process.env, npm_execpath: pnpm },
-          stdio: ["ignore", "pipe", "pipe"],
+          executable: process.execPath,
+          signal,
+          onReady: (process) => {
+            child = process;
+          },
         },
       );
-      const stdout = createBoundedChildOutput();
-      const stderr = createBoundedChildOutput();
-      child.stdout?.on("data", stdout.append);
-      child.stderr?.on("data", stderr.append);
-      completion = new Promise((resolve) => {
-        let error: Error | undefined;
-        child?.once("error", (cause) => {
-          error = cause;
-        });
-        child?.once("close", (status, exitSignal) => {
-          resolve({
-            error,
-            status,
-            signal: exitSignal,
-            stdout: stdout.text(),
-            stderr: stderr.text(),
-          });
-        });
-      });
       const completed = completion;
       const waitForPhase = (index: number, phase: string) =>
         awaitGateBeforeSettlement(
@@ -140,7 +117,7 @@ sendReceipt(String(index), "completed");
       const result = await withinTest(completed, signal);
       const output = result.stdout + result.stderr;
       expect(result.error, output).toBeUndefined();
-      expect(result.signal, output).toBeNull();
+      expect(child?.signalCode, output).toBeNull();
       expect(result.status, output).toBe(
         outcomes.every((outcome) => outcome === "success") ? 0 : 1,
       );
