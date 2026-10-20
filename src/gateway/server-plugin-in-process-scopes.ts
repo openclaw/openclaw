@@ -3,6 +3,7 @@ import { isInProcessSessionRun } from "./in-process-session-run.js";
 import { projectOperatorScopesForMethod } from "./method-scopes.js";
 import {
   ADMIN_SCOPE,
+  APPROVALS_SCOPE,
   READ_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
@@ -67,6 +68,16 @@ export function resolveInProcessGatewaySyntheticScopes(params: {
     : syntheticScopeMode === "exact"
       ? requestedSyntheticScopes
       : params.syntheticScopes;
+  // Child runs must retain existing approval capability to request operator review.
+  // operatorScopes already reflects source, caller, and scoped System ceilings.
+  if (
+    params.method === "agent" &&
+    syntheticScopeMode === "minimum" &&
+    operatorScopes?.includes(APPROVALS_SCOPE) &&
+    !syntheticScopes?.includes(APPROVALS_SCOPE)
+  ) {
+    syntheticScopes?.push(APPROVALS_SCOPE);
+  }
   if (
     syntheticScopeMode !== "exact" &&
     operatorScopes?.includes(ADMIN_SCOPE) &&
