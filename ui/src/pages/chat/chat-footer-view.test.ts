@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -38,22 +38,17 @@ it("keeps Swarm progress between the transcript and composer", () => {
   const sessionKey = "agent:main:parent";
   const childKey = "agent:main:subagent:worker";
   const groupId = `swarm:${sessionKey}:turn-42`;
-  const swarm = {
-    groups: [
-      {
-        groupId,
-        createdAt: 1,
-        children: [{ sessionKey: childKey, status: "running" as const }],
-        queued: 0,
-        running: 1,
-        done: 0,
-        failed: 0,
-      },
-    ],
-    otherActiveGroups: 0,
+  const group = {
+    groupId,
+    createdAt: 1,
+    children: [{ sessionKey: childKey, status: "running" as const }],
+    queued: 0,
+    running: 1,
+    done: 0,
+    failed: 0,
   };
   const sessions: GatewaySessionRow[] = [
-    { key: sessionKey, kind: "direct", swarm },
+    { key: sessionKey, kind: "direct", swarm: { groups: [group], otherActiveGroups: 0 } },
     { key: childKey, kind: "direct", swarmGroupId: groupId, label: "Worker A" },
   ];
   const container = renderChatView({
@@ -67,16 +62,6 @@ it("keeps Swarm progress between the transcript and composer", () => {
   expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
 });
 
-async function connectApprovalCard(container: HTMLElement) {
-  document.body.append(container);
-  onTestFinished(() => container.remove());
-  const host = expectDefined(
-    container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
-    "inline approval host",
-  );
-  await host.updateComplete;
-}
-
 it("places inline approval above the composer and enforces its grant projection", async () => {
   const onApprovalDecision = vi.fn();
   const request = { command: "rm -rf build", commandSpans: [{ startIndex: 0, endIndex: 5 }] };
@@ -87,18 +72,16 @@ it("places inline approval above the composer and enforces its grant projection"
     createdAtMs: 1,
     expiresAtMs: 61_000,
   } satisfies ExecApprovalRequest;
+  const approvalProps = { inlineApproval, onApprovalDecision };
 
-  const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-  onTestFinished(() => nowSpy.mockRestore());
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
 
   const render = async (approvalCanGrant: boolean, approvalErrors?: Map<string, string>) => {
-    const container = renderChatView({
-      inlineApproval,
-      approvalCanGrant,
-      approvalErrors,
-      onApprovalDecision,
-    });
-    await connectApprovalCard(container);
+    const container = renderChatView({ ...approvalProps, approvalCanGrant, approvalErrors });
+    await expectDefined(
+      container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
+      "inline approval host",
+    ).updateComplete;
     return container;
   };
   const container = await render(

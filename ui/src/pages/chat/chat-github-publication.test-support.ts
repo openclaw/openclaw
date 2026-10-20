@@ -1,16 +1,14 @@
 import { expect, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   GitHubPublicationOwner,
   type GitHubPublicationOptions,
   type GitHubPublicationPresentationBinding,
 } from "../../lib/sessions/github-publication-owner.ts";
 
-type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] & {
-  client: Pick<GatewayBrowserClient, "request">;
-  key: string;
-  target: ConstructorParameters<typeof GitHubPublicationOwner>[0]["target"];
-};
+type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] &
+  Pick<ConstructorParameters<typeof GitHubPublicationOwner>[0], "client" | "target"> & {
+    key: string;
+  };
 
 export const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
 export const account = { accountId: 2, login: "alice-tools" };
@@ -79,10 +77,8 @@ export function setup(initialOptions = options) {
       if (!current || next.key !== current.key) {
         binding?.detach();
         operation?.reset();
-        current = next;
         operation = new GitHubPublicationOwner({
-          client: next.client,
-          target: next.target,
+          ...next,
           isCurrent: () => current.key === next.key && current.isCurrent(),
           reserve: () => {},
           release: () => {},
