@@ -18,8 +18,6 @@ import {
 } from "./inference-runtime.test-support.js";
 import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
-const prepareModelWithPolicy = prepareSimpleCompletionModel;
-
 const model: Model = {
   ...logicalModel,
   id: "operator-update-fixture",
@@ -39,30 +37,43 @@ const configured: OpenClawConfig = {
     },
   },
 };
+const requiredConfig = () => ({ ...config, cloudWorkers: { requiredProfile: "required" } });
+const target = () => ({ ...params(request(), vi.fn()).sessionTarget, sessionEntry });
+const acquire = (runtime: ReturnType<typeof setup>, runtimeConfig: OpenClawConfig) =>
+  runtime.acquireRuntimeLease({
+    config: runtimeConfig,
+    agentId: "runtime-agent",
+    agentDir: "/gateway-agent",
+    workspaceDir: WORKSPACE,
+  });
+const approve = (
+  runtimeSnapshot: Parameters<typeof resolveApprovedWorkerModel>[0]["runtimeSnapshot"],
+  overrides: Partial<Parameters<typeof resolveApprovedWorkerModel>[0]> = {},
+) =>
+  resolveApprovedWorkerModel({
+    target: target(),
+    modelRef,
+    runtimeSnapshot,
+    assertCurrent: () => undefined,
+    ...overrides,
+  });
 
 describe("worker prompt credential-owned transcript policy", () => {
   it("forwards current required worker authority through real model preparation", async () => {
-    const required = { ...config, cloudWorkers: { requiredProfile: "required" } };
+    const required = requiredConfig();
     const runtime = setup(sessionEntry, { config: required });
     const reached = new Error("admitted selected-model resolver reached");
     const resolver = vi.fn(async () => {
       throw reached;
     });
     runtime.prepareModel.mockImplementation((input, assertCurrent) =>
-      prepareModelWithPolicy({ ...input, modelResolver: resolver }, assertCurrent),
+      prepareSimpleCompletionModel({ ...input, modelResolver: resolver }, assertCurrent),
     );
-    await using lease = await runtime.acquireRuntimeLease({
-      config: required,
-      agentId: "runtime-agent",
-      agentDir: "/gateway-agent",
-      workspaceDir: WORKSPACE,
-    });
+    await using lease = await acquire(runtime, required);
     const assertCurrent = vi.fn();
     await expect(
-      resolveApprovedWorkerModel({
-        target: { ...params(request(), vi.fn()).sessionTarget, sessionEntry },
+      approve(lease.snapshot, {
         modelRef: request().modelRef,
-        runtimeSnapshot: lease.snapshot,
         assertCurrent,
       }),
     ).rejects.toBe(reached);
@@ -77,7 +88,7 @@ describe("worker prompt credential-owned transcript policy", () => {
   it.each(["wrong session", "revoked selection"] as const)(
     "rejects required worker %s before provider preparation",
     async (state) => {
-      const required = { ...config, cloudWorkers: { requiredProfile: "required" } };
+      const required = requiredConfig();
       const runtime = setup(sessionEntry, { config: required });
       const selected = createDeferred();
       let current = true;
@@ -87,20 +98,14 @@ describe("worker prompt credential-owned transcript policy", () => {
           return undefined;
         });
       }
-      await using lease = await runtime.acquireRuntimeLease({
-        config: required,
-        agentId: "runtime-agent",
-        agentDir: "/gateway-agent",
-        workspaceDir: WORKSPACE,
-      });
-      const pending = resolveApprovedWorkerModel({
+      await using lease = await acquire(runtime, required);
+      const pending = approve(lease.snapshot, {
         target: {
-          ...params(request(), vi.fn()).sessionTarget,
+          ...target(),
           sessionEntry:
             state === "wrong session" ? { ...sessionEntry, sessionId: "other" } : sessionEntry,
         },
         modelRef: request().modelRef,
-        runtimeSnapshot: lease.snapshot,
         assertCurrent: () => {
           if (!current) {
             throw new Error("worker claim revoked");
@@ -123,12 +128,7 @@ describe("worker prompt credential-owned transcript policy", () => {
       config: { ...structuredClone(configured), cloudWorkers: { requiredProfile: "required" } },
       configuredRuntimeModel: model,
     });
-    await using lease = await runtime.acquireRuntimeLease({
-      config: configured,
-      agentId: "runtime-agent",
-      agentDir: "/gateway-agent",
-      workspaceDir: WORKSPACE,
-    });
+    await using lease = await acquire(runtime, configured);
     const approved = await prepareWorkerTurnModel({
       target: params(request(), vi.fn()).sessionTarget,
       modelRef,
@@ -168,18 +168,8 @@ describe("worker prompt credential-owned transcript policy", () => {
           profileId: PROFILE,
         },
       });
-      await using lease = await runtime.acquireRuntimeLease({
-        config: configured,
-        agentId: "runtime-agent",
-        agentDir: "/gateway-agent",
-        workspaceDir: WORKSPACE,
-      });
-      const approved = await resolveApprovedWorkerModel({
-        target: { ...params(request(), vi.fn()).sessionTarget, sessionEntry },
-        modelRef,
-        runtimeSnapshot: lease.snapshot,
-        assertCurrent: () => undefined,
-      });
+      await using lease = await acquire(runtime, configured);
+      const approved = await approve(lease.snapshot);
       assert(approved && !("error" in approved));
       expect(approved.transcriptPolicy.inHistorySystemUpdates).toBe(!oauth);
       expect(runtime.resolveAuthSelection).toHaveBeenCalledOnce();

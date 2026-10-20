@@ -69,6 +69,16 @@ describe("worker live Gateway chat projection", () => {
 
   const message = (text: string) =>
     makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+  const signedText = (text: string, id: string, phase: string) => ({
+    type: "text" as const,
+    text,
+    textSignature: JSON.stringify({ v: 1, id, phase }),
+  });
+  const snapshots = () =>
+    harness.requestParams("worker.live-event").flatMap((params) => {
+      const { event } = params as WorkerLiveEventParams;
+      return event.kind === "assistant" ? [event.payload] : [];
+    });
   const expectChatText = async (text: string) => {
     const latestText = () => {
       const event = harness.chat.events.at(-1);
@@ -97,93 +107,77 @@ describe("worker live Gateway chat projection", () => {
   };
 
   it.each([
-    {
-      name: "exact silence",
-      chunks: ["NO_", "REPLY"],
-      published: [],
-      visible: "",
-    },
-    {
-      name: "whitespace-wrapped exact silence",
-      chunks: [" \nNO_", "REPLY \t"],
-      published: [],
-      visible: "",
-    },
-    {
-      name: "a leading control line split across chunks",
-      chunks: ["NO", "_REPLY", "\n", "Visible answer."],
-      published: ["Visible answer."],
-      visible: "Visible answer.",
-    },
-    {
-      name: "a visible suffix that literally spells NO_REPLY",
-      chunks: ["NO_REPLY", "\nNO_", "REPLY"],
-      published: ["NO_", "NO_REPLY"],
-      visible: "NO_REPLY",
-    },
-  ])("prepares $name before worker publication and Gateway projection", async (scenario) => {
-    const live = await liveProjection();
-    live.start();
-    let text = "";
-    {
-      using clock = vi.spyOn(Date, "now");
-      const startedAt = Date.now();
-      for (const [index, chunk] of scenario.chunks.entries()) {
-        // Exercise each protocol snapshot independently of worker preview pacing.
-        clock.mockReturnValue(startedAt + index * 100);
-        text += chunk;
-        live.preview(message(text), 0, chunk);
-      }
-    }
-    live.end(message(text));
-    await live.finish();
-    const published = harness.requestParams("worker.live-event").flatMap((params) => {
-      const { event } = params as WorkerLiveEventParams;
-      return event.kind === "assistant" ? [event.payload.text] : [];
-    });
-    expect(published).toEqual(scenario.published);
-    if (scenario.visible) {
-      await expectChatText(scenario.visible);
-    } else {
-      expect(harness.chat.events).toEqual([]);
-      expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer ?? "").toBe("");
-    }
-  });
-
-  it.each([
-    {
-      prefix: "Before tool\n",
-      final: "",
-      expectedFinal: "Before tool\n",
-      name: "empty final after pre-tool text",
-    },
-    { prefix: "", final: "", expectedFinal: "", name: "empty final clears rendered draft" },
-  ])("projects a scoped worker $name", async ({ prefix, final, expectedFinal }) => {
-    const live = await liveProjection();
-    if (prefix) {
+    ["exact silence", ["NO_", "REPLY"], [], ""],
+    ["whitespace-wrapped exact silence", [" \nNO_", "REPLY \t"], [], ""],
+    [
+      "a leading control line split across chunks",
+      ["NO", "_REPLY", "\n", "Visible answer."],
+      ["Visible answer."],
+      "Visible answer.",
+    ],
+    [
+      "a visible suffix that literally spells NO_REPLY",
+      ["NO_REPLY", "\nNO_", "REPLY"],
+      ["NO_", "NO_REPLY"],
+      "NO_REPLY",
+    ],
+  ] as const)(
+    "prepares %s before worker publication and Gateway projection",
+    async (_name, chunks, published, visible) => {
+      const live = await liveProjection();
       live.start();
-      live.end(message(prefix));
-      live.runtime.handleSessionEvent({
-        type: "tool_execution_start",
-        toolCallId: "read-1",
-        toolName: "read",
-        args: {},
+      let text = "";
+      {
+        using clock = vi.spyOn(Date, "now");
+        const startedAt = Date.now();
+        for (const [index, chunk] of chunks.entries()) {
+          // Exercise each protocol snapshot independently of worker preview pacing.
+          clock.mockReturnValue(startedAt + index * 100);
+          text += chunk;
+          live.preview(message(text), 0, chunk);
+        }
+      }
+      live.end(message(text));
+      await live.finish();
+      expect(snapshots().map((snapshot) => snapshot.text)).toEqual(published);
+      if (visible) {
+        await expectChatText(visible);
+      } else {
+        expect(harness.chat.events).toEqual([]);
+        expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer ?? "").toBe("");
+      }
+    },
+  );
+
+  it.each(["Before tool\n", ""])(
+    "projects an empty worker final after prefix %j",
+    async (prefix) => {
+      const live = await liveProjection();
+      if (prefix) {
+        live.start();
+        live.end(message(prefix));
+        live.runtime.handleSessionEvent({
+          type: "tool_execution_start",
+          toolCallId: "read-1",
+          toolName: "read",
+          args: {},
+        });
+      }
+      live.start();
+      live.preview(message("Draft with stale suffix"));
+      await expectChatText(
+        prefix ? "Before tool\n\nDraft with stale suffix" : "Draft with stale suffix",
+      );
+      live.end(message(""));
+      await live.finish();
+      await expectChatText(prefix);
+      expect(harness.chat.events.at(-1)).toMatchObject({
+        state: "delta",
+        deltaText: prefix,
+        replace: true,
       });
-    }
-    live.start();
-    live.preview(message("Draft with stale suffix"));
-    await expectChatText(
-      prefix ? "Before tool\n\nDraft with stale suffix" : "Draft with stale suffix",
-    );
-    live.end(message(final));
-    await live.finish();
-    await expectChatText(expectedFinal);
-    expect(harness.chat.events.at(-1)).toMatchObject({
-      state: "delta",
-      deltaText: expectedFinal,
-      replace: true,
-    });
-  });
+    },
+  );
 
   it("replaces repeated bounded Unicode worker snapshots without replaying prior text", async () => {
     const live = await liveProjection();
@@ -196,14 +190,12 @@ describe("worker live Gateway chat projection", () => {
     live.end(message("🚀".repeat(9_000) + "ABC"));
     const expected = "Before tool\n\n" + "🚀".repeat(1_023) + "…";
     await expectChatText(expected);
-    const snapshots = harness.requestParams("worker.live-event").flatMap((params) => {
-      const { event } = params as WorkerLiveEventParams;
-      return event.kind === "assistant" ? [event.payload] : [];
-    });
-    expect(snapshots.slice(1).every((snapshot) => Buffer.byteLength(snapshot.text) <= 4_096)).toBe(
-      true,
-    );
-    expect(snapshots.every((snapshot) => !snapshot.text.includes("\uFFFD"))).toBe(true);
+    expect(
+      snapshots()
+        .slice(1)
+        .every((snapshot) => Buffer.byteLength(snapshot.text) <= 4_096),
+    ).toBe(true);
+    expect(snapshots().every((snapshot) => !snapshot.text.includes("\uFFFD"))).toBe(true);
     live.end(message("Short"));
     await expectChatText("Before tool\n\nShort");
     await live.finish();
@@ -232,34 +224,21 @@ describe("worker live Gateway chat projection", () => {
   it("filters explicit mixed commentary from both worker snapshots and deltas", async () => {
     const live = await liveProjection();
     live.start();
-    const answer = {
-      type: "text" as const,
-      text: "Answer",
-      textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
-    };
+    const answer = signedText("Answer", "answer", "final_answer");
     live.preview(makeAgentAssistantMessage({ content: [answer] }));
     await expectChatText(answer.text);
     const mixed = makeAgentAssistantMessage({
-      content: [
-        answer,
-        {
-          type: "text",
-          text: "Private commentary",
-          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-        },
-      ],
+      content: [answer, signedText("Private commentary", "commentary", "commentary")],
     });
     live.preview(mixed, 1);
     live.end(mixed);
     await live.finish();
     await expectChatText(answer.text);
-    const snapshots = harness.requestParams("worker.live-event").flatMap((params) => {
-      const { event } = params as WorkerLiveEventParams;
-      return event.kind === "assistant" ? [event.payload] : [];
-    });
-    expect(snapshots.map(({ text, delta }) => text + delta).join("")).not.toContain(
-      "Private commentary",
-    );
+    expect(
+      snapshots()
+        .map(({ text, delta }) => text + delta)
+        .join(""),
+    ).not.toContain("Private commentary");
   });
 
   it("recovers a missed worker preview by snapshot through reordered delivery and ACK replay", async () => {
@@ -282,28 +261,17 @@ describe("worker live Gateway chat projection", () => {
   it("preserves a final block that shares the commentary prefix", async () => {
     const live = await liveProjection();
     live.start();
-    const commentary = {
-      type: "text" as const,
-      text: "Answer",
-      textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-    };
+    const commentary = signedText("Answer", "commentary", "commentary");
     live.preview(makeAgentAssistantMessage({ content: [commentary] }));
-    const final = {
-      type: "text" as const,
-      text: "Answer again",
-      textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
-    };
+    const final = signedText("Answer again", "final", "final_answer");
     const mixed = makeAgentAssistantMessage({ content: [commentary, final] });
     live.preview(mixed, 1);
     live.end(mixed);
     await live.finish();
     await expectChatText(final.text);
-    const visibleDeltas = harness.requestParams("worker.live-event").flatMap((params) => {
-      const { event } = params as WorkerLiveEventParams;
-      return event.kind === "assistant" && event.payload.phase !== "commentary"
-        ? [event.payload.delta]
-        : [];
-    });
+    const visibleDeltas = snapshots()
+      .filter(({ phase }) => phase !== "commentary")
+      .map(({ delta }) => delta);
     expect(visibleDeltas.join("")).toBe(final.text);
   });
 });
