@@ -28,7 +28,6 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import { readMessageIdempotencyKey } from "../config/sessions/transcript-message-identity.js";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   captureAgentHarnessCompletionCustody,
   deliverAgentHarnessCompletion,
@@ -45,14 +44,10 @@ import * as userTurnTranscript from "../sessions/user-turn-transcript.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
 import { createRegisteredCompletionPair } from "./server.subagent-completion-authority.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
-import {
-  agentCommandMock,
-  installGatewayTestHooks,
-  prepareGatewayReplyRuntimeForTest,
-} from "./test-helpers.js";
+import { agentCommandMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
 type OwnerChange = "live" | "operator-revoked" | "requester-replaced";
 
@@ -111,11 +106,6 @@ async function createCompletion(context: GatewayRequestContext) {
   client.internal = { operatorRunAuthority: source.authority };
   const root = tryBeginGatewayRootWorkAdmission("test:native-completion")!;
   let custody: AgentHarnessCompletionCustody | undefined;
-  const dispose = () => {
-    custody?.release();
-    source.release();
-    root.release();
-  };
   try {
     const retainedCustody = expectDefined(
       await root.run(async () =>
@@ -133,9 +123,6 @@ async function createCompletion(context: GatewayRequestContext) {
     );
     custody = retainedCustody;
     retainedCustody.settleExecution();
-    // The original request has ended. Only its retained completion owns the handoff.
-    source.release();
-    root.release();
     return {
       sessionScope,
       idempotencyKey,
@@ -162,11 +149,15 @@ async function createCompletion(context: GatewayRequestContext) {
           result: "Retained child result",
           isSourceSessionAdmissionAllowed: () => retainedCustody.isCurrent(),
         }),
-      [Symbol.dispose]: dispose,
+      [Symbol.dispose]: () => retainedCustody.release(),
     };
   } catch (error) {
-    dispose();
+    custody?.release();
     throw error;
+  } finally {
+    // End the original request; only retained completion custody owns the handoff.
+    source.release();
+    root.release();
   }
 }
 
@@ -180,29 +171,7 @@ async function reachBoundary(boundary: Promise<void>, delivery: Promise<unknown>
 }
 
 describe("native completion final-effect authority", () => {
-  let harness: GatewayServerHarness;
-  let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
-  installGatewayTestHooks({
-    scope: "suite",
-    setup: async () => {
-      const module = await import("./server-kernel.js");
-      const create = module.createGatewayKernel;
-      const capture = vi
-        .spyOn(module, "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          kernel = await create(...args);
-          return kernel;
-        });
-      try {
-        harness = await startGatewayServerHarness();
-      } finally {
-        capture.mockRestore();
-      }
-    },
-    cleanup: async () => {
-      await harness?.close();
-    },
-  });
+  const getContext = installAuthorityProofGateway();
   registerAgentSessionLoopTestLifecycle();
   afterEach(() => vi.restoreAllMocks());
 
@@ -210,7 +179,7 @@ describe("native completion final-effect authority", () => {
     "keeps registered turn delivery independent when %s source is revoked in flight",
     async (revokedSource, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
-      const context = kernel.gatewayRequestContext;
+      const context = getContext();
       const pair = await createRegisteredCompletionPair(context);
       const gates = [createGate(), createGate()] as const;
       const sources: unknown[] = [];
@@ -287,23 +256,20 @@ describe("native completion final-effect authority", () => {
             ? [readMessageIdempotencyKey(event.message)]
             : [],
         );
-        expect(inputKeys).toHaveLength(allowed.length);
-        expect(inputKeys).toEqual(
-          expect.arrayContaining(allowed.map((run) => `${run.idempotencyKey}:user`)),
-        );
+        expect(inputKeys).toEqual(allowed.map((run) => `${run.idempotencyKey}:user`));
         expect((await listSessionPendingInputs(pair.requesterScope)).total).toBe(0);
         const stored = loadSubagentRegistryFromSqlite();
         const runtimeContext = JSON.stringify(requesterRuntimeContext);
         for (const [index, run] of pair.runs.entries()) {
           expect(sources[index]).toBe(run.source.authority.source);
+          expect(stored.get(run.runId)?.delivery?.status === "delivered").toBe(
+            index !== revokedIndex,
+          );
+          expect(runtimeContext.includes(run.result)).toBe(index !== revokedIndex);
           if (index === revokedIndex) {
-            expect(stored.get(run.runId)?.delivery?.status).not.toBe("delivered");
             expect(context.dedupe.has(`agent:${run.idempotencyKey}`)).toBe(false);
-            expect(runtimeContext).not.toContain(run.result);
           } else {
-            expect(stored.get(run.runId)?.delivery?.status).toBe("delivered");
             expect(context.dedupe.get(`agent:${run.idempotencyKey}`)).toMatchObject({ ok: true });
-            expect(runtimeContext).toContain(run.result);
           }
           expect(JSON.stringify(events)).not.toContain(run.result);
           resumeSubagentRun(run.runId);
@@ -328,7 +294,7 @@ describe("native completion final-effect authority", () => {
     "revalidates %s authority at real Gateway input staging",
     async (change, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
-      const context = kernel.gatewayRequestContext;
+      const context = getContext();
       using completion = await createCompletion(context);
       const before = completion.transcript();
       const { entered, resume } = createGate();
@@ -386,7 +352,7 @@ describe("native completion final-effect authority", () => {
     "revalidates %s authority after the real recorder during automatic compaction",
     async (change, { signal }) => {
       await prepareGatewayReplyRuntimeForTest();
-      const context = kernel.gatewayRequestContext;
+      const context = getContext();
       using completion = await createCompletion(context);
       const actualRuns = await vi.importActual<typeof sessionQueries>(
         "../sessions/session-controller.queries.js",
@@ -396,15 +362,10 @@ describe("native completion final-effect authority", () => {
       vi.spyOn(sessionQueries, "isSessionRunActive").mockImplementation(isSessionRunActive);
       const { entered, resume } = createGate();
       const { entered: compacting, resume: resumeCompaction } = createGate();
-      const modelEntered = createDeferred();
       const queued = createDeferred();
-      let finishModel: (() => void) | undefined;
-      let closing = false;
       const release = () => {
-        closing = true;
         resume.resolve();
         resumeCompaction.resolve();
-        finishModel?.();
       };
       signal.addEventListener("abort", release, { once: true });
       const sessionManager = SessionManager.open(completion.sessionScope);
@@ -425,32 +386,24 @@ describe("native completion final-effect authority", () => {
           new Map([["session_before_compact", [beforeCompact]]]),
         ),
       });
-      streamMocks.streamSimple.mockImplementation(() => {
-        if (finishModel || closing) {
-          return createAssistantResultStream(createAssistant(testModel, "Child received"));
-        }
-        const stream = createAssistantMessageEventStream();
-        finishModel = () => {
-          stream.push({
-            type: "done",
-            reason: "stop",
-            message: createAssistant(testModel, "Ready", "stop", testModel.contextWindow),
-          });
-          stream.end();
-        };
-        modelEntered.resolve();
-        return stream;
-      });
+      streamMocks.streamSimple
+        .mockImplementation(() =>
+          createAssistantResultStream(createAssistant(testModel, "Child received")),
+        )
+        .mockImplementationOnce(() =>
+          createAssistantResultStream(
+            createAssistant(testModel, "Ready", "stop", testModel.contextWindow),
+          ),
+        );
       await withSessionTurn(
         { ...completion.sessionScope, abortSignal: signal },
         async (operation) => {
-          const activeRunId = `active-${randomUUID()}`;
           const prepared = prepareCatalogExecutor({
             replyOperation: expectDefined(operation, "Native completion requires an admitted turn"),
             activeSession: session,
             sessionKey: completion.sessionScope.sessionKey,
             attempt: {
-              runId: activeRunId,
+              runId: `active-${randomUUID()}`,
               sessionId: completion.sessionScope.sessionId,
               config: context.getRuntimeConfig(),
               deferTerminalLifecycle: true,
@@ -486,8 +439,6 @@ describe("native completion final-effect authority", () => {
           );
           try {
             prompt = session.prompt("Wait for the native child");
-            await reachBoundary(modelEntered.promise, prompt);
-            finishModel?.();
             await reachBoundary(compacting.promise, prompt);
             expect(prepared.subscription.isCompacting()).toBe(true);
             const before = completion.transcript();

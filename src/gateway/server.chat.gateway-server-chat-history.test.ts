@@ -52,6 +52,19 @@ async function sendChat(idempotencyKey: string, fields: Record<string, unknown> 
     ...fields,
   });
 }
+async function readHistory() {
+  const res = await rpcReq<{ messages?: unknown[]; sessionId?: string }>(ws, "chat.history", {
+    sessionKey: "main",
+  });
+  expect(res.ok).toBe(true);
+  return res.payload;
+}
+const textFieldReply = (content: string, timestamp: number) => ({
+  role: "assistant",
+  text: "real text field reply",
+  content,
+  timestamp,
+});
 
 describe("gateway server chat", () => {
   const loadChatHistoryWithMessages = async (
@@ -60,11 +73,7 @@ describe("gateway server chat", () => {
     return withMainSessionStore(async () => {
       await replaceMainTranscriptMessages(messages);
 
-      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(res.ok).toBe(true);
-      return res.payload?.messages ?? [];
+      return (await readHistory())?.messages ?? [];
     });
   };
 
@@ -216,28 +225,19 @@ describe("gateway server chat", () => {
         return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
       };
 
-      dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
-      const imgRes = await sendChat("idem-img", {
-        message: "see image",
-        attachments: [
+      const expectedDispatches: { runId: string; images: unknown[] }[] = [];
+      for (const [runId, message, attachment] of [
+        [
+          "idem-img",
+          "see image",
           {
             type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: pngB64,
-            },
+            source: { type: "base64", media_type: "image/png", data: pngB64 },
           },
         ],
-      });
-      expect(imgRes.ok).toBe(true);
-      expect(typeof imgRes.payload?.runId).toBe("string");
-      await waitForAgentRunDrained("idem-img");
-      expect(inlineDispatches).toEqual([{ runId: "idem-img", images: [expect.anything()] }]);
-      dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
-      const imgOnlyRes = await sendChat("idem-img-only", {
-        message: "",
-        attachments: [
+        [
+          "idem-img-only",
+          "",
           {
             type: "image",
             mimeType: "image/png",
@@ -245,14 +245,15 @@ describe("gateway server chat", () => {
             content: `data:image/png;base64,${pngB64}`,
           },
         ],
-      });
-      expect(imgOnlyRes.ok).toBe(true);
-      expect(typeof imgOnlyRes.payload?.runId).toBe("string");
-      await waitForAgentRunDrained("idem-img-only");
-      expect(inlineDispatches).toEqual([
-        { runId: "idem-img", images: [expect.anything()] },
-        { runId: "idem-img-only", images: [expect.anything()] },
-      ]);
+      ] as const) {
+        dispatchInboundMessageMock.mockImplementationOnce(captureInlineDispatch);
+        const response = await sendChat(runId, { message, attachments: [attachment] });
+        expect(response.ok).toBe(true);
+        expect(typeof response.payload?.runId).toBe("string");
+        await waitForAgentRunDrained(runId);
+        expectedDispatches.push({ runId, images: [expect.anything()] });
+        expect(inlineDispatches).toEqual(expectedDispatches);
+      }
 
       await useStore({ main: sessionEntry("sess-main") });
 
@@ -264,11 +265,7 @@ describe("gateway server chat", () => {
         })),
       );
 
-      const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(defaultRes.ok).toBe(true);
-      const defaultMsgs = defaultRes.payload?.messages ?? [];
+      const defaultMsgs = (await readHistory())?.messages ?? [];
       expect(defaultMsgs.length).toBe(200);
       expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m1");
     } finally {
@@ -286,11 +283,7 @@ describe("gateway server chat", () => {
 
   test("chat.send accepts the backing session id returned by chat.history", async () => {
     await withMainSessionStore(async () => {
-      const historyRes = await rpcReq<{ sessionId?: string }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-      expect(historyRes.ok).toBe(true);
-      const sessionId = historyRes.payload?.sessionId;
+      const sessionId = (await readHistory())?.sessionId;
       expect(sessionId).toBe("sess-main");
 
       const runId = "idem-chat-send-history-session-id";
@@ -336,12 +329,7 @@ describe("gateway server chat", () => {
         ],
       );
 
-      const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-      });
-
-      expect(history.ok).toBe(true);
-      expect(collectHistoryTextValues(history.payload?.messages ?? [])).toEqual([
+      expect(collectHistoryTextValues((await readHistory())?.messages ?? [])).toEqual([
         "kept question",
         "kept answer",
         "Reset",
@@ -425,12 +413,7 @@ describe("gateway server chat", () => {
       messages: [
         createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
         createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
-        {
-          role: "assistant",
-          text: "real text field reply",
-          content: "ANNOUNCE_SKIP",
-          timestamp: 3,
-        },
+        textFieldReply("ANNOUNCE_SKIP", 3),
         createGatewayHistoryText("assistant", "real reply", 4),
       ],
       expected: [
@@ -446,12 +429,7 @@ describe("gateway server chat", () => {
         createGatewayHistoryText("user", "hello", 1),
         createGatewayHistoryText("assistant", "NO_REPLY", 2),
         createGatewayHistoryText("assistant", "real reply", 3),
-        {
-          role: "assistant",
-          text: "real text field reply",
-          content: "NO_REPLY",
-          timestamp: 4,
-        },
+        textFieldReply("NO_REPLY", 4),
         createGatewayHistoryText("user", "NO_REPLY", 5),
         {
           role: "assistant",

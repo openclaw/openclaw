@@ -39,23 +39,13 @@ const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-sessi
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
-type GatewayModelFixture = {
-  id: string;
-  name: string;
-  input: Array<"text" | "image">;
-};
-
-const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
-  id: "deepseek-v4-pro",
-  name: "DeepSeek V4 Pro",
-  input: ["text"],
-};
-
-const VISION_AGENT_MODEL: GatewayModelFixture = {
-  id: "gemma4:31b",
-  name: "Gemma 4 31B",
-  input: ["text", "image"],
-};
+const modelFixture = (id: string, name: string, input: Array<"text" | "image">) => ({
+  id,
+  name,
+  input,
+});
+const TEXT_ONLY_AGENT_MODEL = modelFixture("deepseek-v4-pro", "DeepSeek V4 Pro", ["text"]);
+const VISION_AGENT_MODEL = modelFixture("gemma4:31b", "Gemma 4 31B", ["text", "image"]);
 
 async function setTestSessionStore(
   entries: Record<string, Record<string, unknown>>,
@@ -71,6 +61,13 @@ const sessionTarget = (sessionId: string, sessionKey: string) => ({
   sessionKey,
   storePath: gatewaySuite.sessionStorePath,
 });
+const agentRequest = (idempotencyKey: string, fields: Record<string, unknown>) =>
+  rpcReq(gatewaySuite.ws, "agent", { message: "hi", idempotencyKey, ...fields });
+async function acceptedAgent(idempotencyKey: string, fields: Record<string, unknown>) {
+  const response = await agentRequest(idempotencyKey, fields);
+  expect(response.ok, JSON.stringify(response)).toBe(true);
+  return waitForAgentCommandCall(idempotencyKey);
+}
 async function setVisionModel(models = [VISION_AGENT_MODEL]) {
   testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
   await setGatewayModelCatalogForTest(models);
@@ -82,7 +79,9 @@ async function setExplicitOwnership() {
   clearConfigCache();
 }
 
-async function setGatewayModelCatalogForTest(models: GatewayModelFixture[]): Promise<void> {
+async function setGatewayModelCatalogForTest(
+  models: ReturnType<typeof modelFixture>[],
+): Promise<void> {
   testState.sessionStorePath = gatewaySuite.sessionStorePath;
   await resetPreparedModelCatalogStateForTest();
   const [
@@ -141,20 +140,15 @@ async function runAgentImageRequest(params: {
   sessionKey?: string;
   agentId?: string;
   attachment?: ReturnType<typeof baseImageAttachment>;
-  failureMessage: string;
 }) {
   await setTestSessionStore({ main: sessionEntry(params.sessionId) }, params.agentId);
 
-  const res = await rpcReq(gatewaySuite.ws, "agent", {
+  return acceptedAgent(params.idempotencyKey, {
     message: "what is in the image?",
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey ?? "main",
     attachments: [params.attachment ?? baseImageAttachment()],
-    idempotencyKey: params.idempotencyKey,
   });
-  expect(res.ok, `${params.failureMessage}: ${JSON.stringify(res)}`).toBe(true);
-
-  return await waitForAgentCommandCall(params.idempotencyKey);
 }
 
 const defaultRegistry = createRegistry([]);
@@ -183,15 +177,10 @@ describe("gateway server agent", () => {
       admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
       return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
     });
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
+    const call = await acceptedAgent("idem-agent-owned-global", {
       sessionKey: "global",
       sourceReplyDeliveryMode: "message_tool_only",
-      idempotencyKey: "idem-agent-owned-global",
     });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-
-    const call = await waitForAgentCommandCall("idem-agent-owned-global");
     expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "ops" });
     expect(call).toMatchObject({
       agentId: "ops",
@@ -204,11 +193,7 @@ describe("gateway server agent", () => {
   test("agent rejects an ownerless bare key before session preparation", async () => {
     await setExplicitOwnership();
 
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
-      sessionKey: "global",
-      idempotencyKey: "idem-agent-ownerless-global",
-    });
+    const res = await agentRequest("idem-agent-ownerless-global", { sessionKey: "global" });
 
     expect(res.ok).toBe(false);
     expect(res.error).toMatchObject({
@@ -245,15 +230,12 @@ describe("gateway server agent", () => {
           payloads: [],
           meta: { durationMs: 0, terminalReply: { disposition: "empty" } },
         }));
-        const response = await rpcReq(gatewaySuite.ws, "agent", {
+        const command = await acceptedAgent(runId, {
           message: "keep the admitted identity",
           sessionKey,
-          idempotencyKey: runId,
           ...(kind === "requested" ? { sessionId: "requested-session" } : {}),
           ...(kind === "internal" ? { sessionEffects: "internal" } : {}),
         });
-        expect(response.ok, JSON.stringify(response)).toBe(true);
-        const command = await waitForAgentCommandCall(runId);
         await execution.waitForCompletion(runId);
         const boundSessionId = vi
           .mocked(sessionLifecycle.beginSessionEffect)
@@ -293,12 +275,11 @@ describe("gateway server agent", () => {
       baseImageAttachment(),
       { ...offloadedImageAttachment(), fileName: "large-b.png" },
     ];
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
+    const res = await agentRequest(runId, {
       message: "inspect media",
       groupId: "group-sessionless-media",
       groupChannel: "discord",
       attachments,
-      idempotencyKey: runId,
     });
     expect(res.ok, JSON.stringify(res)).toBe(true);
     const outcome = await rpcReq(gatewaySuite.ws, "agent.wait", { runId, timeoutMs: 2_000 });
@@ -334,15 +315,12 @@ describe("gateway server agent", () => {
       const inboundBefore = await listInboundMedia();
       const runId = `prompt-suppressed-media-${outcome}`;
       try {
-        const res = await rpcReq(gatewaySuite.ws, "agent", {
+        const call = await acceptedAgent(runId, {
           message: `${outcome} after admission`,
           sessionKey: "main",
           suppressPromptPersistence: true,
           attachments: [offloadedImageAttachment()],
-          idempotencyKey: runId,
         });
-        expect(res.ok, JSON.stringify(res)).toBe(true);
-        const call = await waitForAgentCommandCall(runId);
         if (outcome === "abort") {
           const abortRes = await rpcReq(gatewaySuite.ws, "chat.abort", {
             sessionKey: call.sessionKey,
@@ -373,11 +351,9 @@ describe("gateway server agent", () => {
 
   test("agent rejects unknown reply channel", async () => {
     const inboundBefore = await listInboundMedia();
-    const res = await rpcReq(gatewaySuite.ws, "agent", {
-      message: "hi",
+    const res = await agentRequest("idem-agent-reply-unknown", {
       replyChannel: "unknown-channel",
       attachments: [offloadedImageAttachment()],
-      idempotencyKey: "idem-agent-reply-unknown",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("unknown channel");
@@ -393,7 +369,6 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-offloaded-media",
       sessionId: "sess-main-offloaded-media",
       attachment: offloadedImageAttachment(),
-      failureMessage: "agent RPC failed before forwarding offloaded media facts",
     });
 
     const media = call.media as
@@ -436,7 +411,6 @@ describe("gateway server agent", () => {
       sessionKey: "agent:vision:main",
       idempotencyKey: "idem-agent-vision-first-image",
       sessionId: "sess-vision-fresh-image",
-      failureMessage: "agent RPC should accept image using per-agent vision model",
     });
 
     expect(call.sessionKey).toBe("agent:vision:main");
@@ -454,13 +428,11 @@ describe("gateway server agent", () => {
       await setVisionModel();
       await setTestSessionStore({ main: sessionEntry("sess-main-missing-provider") });
       const inboundBefore = await listInboundMedia();
-      const res = await rpcReq(gatewaySuite.ws, "agent", {
-        message: "hi",
+      const res = await agentRequest("idem-agent-missing-provider", {
         sessionKey: "main",
         deliver: true,
         bestEffortDeliver: false,
         attachments: [offloadedImageAttachment()],
-        idempotencyKey: "idem-agent-missing-provider",
       });
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("INVALID_REQUEST");

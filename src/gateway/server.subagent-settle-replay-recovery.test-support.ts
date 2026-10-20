@@ -88,6 +88,12 @@ export async function runPublicSettleRecoveryCase(
   const settleRequest =
     "Review the child result, finish verification, and land the requested change.";
   const visibleFinal = reply === "visible final" || channelRequester;
+  const missingReply = {
+    delivered: false,
+    path: "direct",
+    reason: "visible_reply_missing",
+    error: "completion agent did not produce a visible reply",
+  };
   const requesterOrigin = {
     sessionKey: requesterSessionKey,
     messageProvider: "telegram",
@@ -131,6 +137,9 @@ export async function runPublicSettleRecoveryCase(
       gatewayRuntime: kernel.gatewayInstanceRuntime.recovery,
     });
   const transcript = () => loadTranscriptEventsSync(scope);
+  const append = (message: Parameters<typeof appendTranscriptMessage>[1]["message"]) =>
+    appendTranscriptMessage(scope, { cwd: process.env.OPENCLAW_STATE_DIR!, message });
+  const readWake = () => loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
   const assertNoReplay = async () => {
     const replay = wake(sibling);
     expect(await replay.result).toBe(false);
@@ -174,13 +183,10 @@ export async function runPublicSettleRecoveryCase(
     }));
   signal.addEventListener("abort", release, { once: true });
   if (reply === "unconsumed revoked cohort") {
-    await appendTranscriptMessage(scope, {
-      cwd: process.env.OPENCLAW_STATE_DIR!,
-      message: {
-        role: "user",
-        content: humanWork,
-        provenance: { kind: "external_user" },
-      },
+    await append({
+      role: "user",
+      content: humanWork,
+      provenance: { kind: "external_user" },
     });
   }
   agentCommandMock.mockImplementationOnce(async (input) => {
@@ -190,23 +196,17 @@ export async function runPublicSettleRecoveryCase(
       await command.userTurnTranscriptRecorder!.persistApproved();
     }
     await markCommandExecutionStarted(command);
-    await appendTranscriptMessage(scope, {
-      cwd: process.env.OPENCLAW_STATE_DIR!,
-      message: {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "verify-work", name: "exec", arguments: {} }],
-        stopReason: "toolUse",
-      },
+    await append({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "verify-work", name: "exec", arguments: {} }],
+      stopReason: "toolUse",
     });
-    await appendTranscriptMessage(scope, {
-      cwd: process.env.OPENCLAW_STATE_DIR!,
-      message: {
-        role: "toolResult",
-        toolCallId: "verify-work",
-        toolName: "exec",
-        content: [{ type: "text", text: "Changes verified; the requested landing remains." }],
-        isError: false,
-      },
+    await append({
+      role: "toolResult",
+      toolCallId: "verify-work",
+      toolName: "exec",
+      content: [{ type: "text", text: "Changes verified; the requested landing remains." }],
+      isError: false,
     });
     command.abortSignal!.addEventListener("abort", () => interruptedRelease.resolve(), {
       once: true,
@@ -286,31 +286,20 @@ export async function runPublicSettleRecoveryCase(
         resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
       },
     );
-  const original = (
-    channelRequester
-      ? dispatchOriginal()
-      : inProcessDispatch.withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile: client.authenticatedUserProfile,
-            scopes: ["operator.write"],
-            operatorRunAuthority: originalSource!.authority,
-          },
-          dispatchOriginal,
-        )
-  ).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
+  const original = channelRequester
+    ? dispatchOriginal()
+    : inProcessDispatch.withOperatorToolGatewayAuthority(
+        {
+          authenticatedUserProfile: client.authenticatedUserProfile,
+          scopes: ["operator.write"],
+          operatorRunAuthority: originalSource!.authority,
+        },
+        dispatchOriginal,
+      );
+  void original.catch(() => {});
   let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
   try {
-    await Promise.race([
-      working.promise,
-      original.then((result) => {
-        if ("error" in result) {
-          throw result.error;
-        }
-      }),
-    ]);
+    await Promise.race([working.promise, original]);
     const priorDedupe = kernel.gatewayRequestContext.dedupe;
     expect(priorDedupe.get(`agent:${runId}`)?.payload).toMatchObject({ status: "accepted" });
     await harness.server.close({
@@ -318,7 +307,7 @@ export async function runPublicSettleRecoveryCase(
       restartExpectedMs: 0,
       drainTimeoutMs: 0,
     });
-    await original;
+    await original.catch(() => {});
     const interruptedEntry = loadSessionEntryReadOnly(scope);
     expect(interruptedEntry).toMatchObject({
       status: "interrupted",
@@ -463,9 +452,9 @@ export async function runPublicSettleRecoveryCase(
     const completedReplay = wake(sibling);
     expect(await completedReplay.result).toBe(visibleFinal);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    const persisted = loadSubagentRegistryFromSqlite().get(child.runId);
+    const pendingWake = readWake();
     if (visibleFinal) {
-      expect(persisted?.requesterSettleWake).toBeUndefined();
+      expect(pendingWake).toBeUndefined();
       expect(completedReplay.completeBatch).toHaveBeenCalledOnce();
       expect(completedReplay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
         delivered: true,
@@ -473,22 +462,17 @@ export async function runPublicSettleRecoveryCase(
       });
     } else {
       expect(completedReplay.completeBatch).not.toHaveBeenCalled();
-      expect(persisted?.requesterSettleWake).toMatchObject({
+      expect(pendingWake).toMatchObject({
         status: "pending",
         attemptCount: 1,
         batchRunIds,
-        lastError: "completion agent did not produce a visible reply",
+        lastError: missingReply.error,
       });
-      expect(persisted?.requesterSettleWake?.nextAttemptAt).toBeGreaterThanOrEqual(
-        reconciliationAt + 30_000,
-      );
-      expect(persisted?.requesterSettleWake?.nextAttemptAt).toBeLessThanOrEqual(
-        Date.now() + 30_000,
-      );
+      const nextAttemptAt = pendingWake?.nextAttemptAt;
+      expect(nextAttemptAt).toBeGreaterThanOrEqual(reconciliationAt + 30_000);
+      expect(nextAttemptAt).toBeLessThanOrEqual(Date.now() + 30_000);
       vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(
-        expectDefined(persisted?.requesterSettleWake?.nextAttemptAt, "Public retry deadline") - 1,
-      );
+      vi.setSystemTime(expectDefined(nextAttemptAt, "Public retry deadline") - 1);
       await assertNoReplay();
       expect(
         loadSessionEntryReadOnly(scope)?.restartRecoveryTerminalDeliveryEvidence?.find(
@@ -503,10 +487,7 @@ export async function runPublicSettleRecoveryCase(
       const retryRunIds: string[] = [];
       let terminalRetry: ReturnType<typeof wake> | undefined;
       for (const attempt of [2, 3]) {
-        const retryAt = expectDefined(
-          loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake?.nextAttemptAt,
-          "Public retry deadline",
-        );
+        const retryAt = expectDefined(readWake()?.nextAttemptAt, "Public retry deadline");
         vi.setSystemTime(retryAt);
         agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
@@ -525,7 +506,7 @@ export async function runPublicSettleRecoveryCase(
         const retry = wake(sibling);
         expect(await retry.result).toBe(false);
         expect(agentCommandMock).toHaveBeenCalledTimes(attempt + 1);
-        const next = loadSubagentRegistryFromSqlite().get(child.runId)?.requesterSettleWake;
+        const next = readWake();
         if (attempt === 2) {
           expect(retry.completeBatch).not.toHaveBeenCalled();
           expect(next).toMatchObject({
@@ -540,20 +521,14 @@ export async function runPublicSettleRecoveryCase(
       }
       expect(terminalRetry?.completeBatch).toHaveBeenCalledOnce();
       expect(terminalRetry?.completeBatch.mock.calls[0]?.[2]).toEqual({
-        delivered: false,
-        path: "direct",
+        ...missingReply,
         disposition: "retryable",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
         phases: [
           {
+            ...missingReply,
             phase: "direct-primary",
-            delivered: false,
-            path: "direct",
             deliveredAt: undefined,
             enqueuedAt: undefined,
-            reason: "visible_reply_missing",
-            error: "completion agent did not produce a visible reply",
           },
         ],
       });
