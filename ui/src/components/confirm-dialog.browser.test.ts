@@ -1,5 +1,6 @@
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
@@ -130,16 +131,13 @@ describe("promise dialog native focus and dismissal", () => {
 
   it("keeps a pending input operation visible through native cancellation and preserves its text after rejection", async () => {
     const trigger = opener();
-    let settle!: (message: string | null) => void;
+    const pending = createDeferred<string | null>();
     const result = showInputDialog({
       title: "Rename synthetic session",
       defaultValue: "Synthetic session",
       requireChange: true,
       signal: owner(),
-      submit: () =>
-        new Promise((resolve) => {
-          settle = resolve;
-        }),
+      submit: () => pending.promise,
     });
     const { dialog, modal } = await getRenderedModalDialog(document.body);
     const input = modal.querySelector<HTMLInputElement>('input[name="value"]')!;
@@ -152,7 +150,7 @@ describe("promise dialog native focus and dismissal", () => {
     expect(input.disabled).toBe(true);
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     expect(dialog.open).toBe(true);
-    settle("This name is already in use");
+    pending.resolve("This name is already in use");
     await Promise.resolve();
     flush();
     await Promise.resolve();

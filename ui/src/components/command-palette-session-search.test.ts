@@ -4,12 +4,10 @@ import type { SessionsSearchResult } from "../../../packages/gateway-protocol/sr
 import type { ApplicationContext } from "../app/context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
-  createContext,
-  createGateway,
   createSessionResult,
-  enterQuery,
   findPaletteOption,
-  mountPalette,
+  mountSearch,
+  searchPalette,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
@@ -91,11 +89,8 @@ describe("CommandPalette session search", () => {
       }
       return searchResult;
     });
-    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
-    const { palette } = await mountPalette(createContext(gateway, list));
-    await enterQuery(palette, query);
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
+    await searchPalette(palette, query);
     expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);
     expect(request).toHaveBeenCalledWith("sessions.search", {
       query,
@@ -178,11 +173,8 @@ describe("CommandPalette session search", () => {
           : [],
       };
     });
-    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
-    const { palette } = await mountPalette(createContext(gateway, list));
-    await enterQuery(palette, "uncommonneedle");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
+    await searchPalette(palette, "uncommonneedle");
 
     expect(palette.textContent).toContain("Older planning discussion");
     expect(palette.textContent).toContain("uncommonneedle is only in this older conversation");
