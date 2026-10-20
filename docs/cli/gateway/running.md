@@ -148,3 +148,31 @@ openclaw gateway auth-token --show
 The command resolves `gateway.auth.token`, `OPENCLAW_GATEWAY_TOKEN`, and configured SecretRefs, then prints only the token. It requires an interactive terminal and refuses redirected or piped output so the credential does not silently enter command logs. Treat the terminal output as a secret.
 
 If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. Generic `openclaw config get` output remains redacted, including `--json`.
+
+## Recover an unverifiable state lock
+
+Gateways that share a state directory must share one owner. A Gateway in another
+container or PID namespace cannot verify that the recorded process has exited.
+It therefore keeps the lock even after its heartbeat stops. Heartbeat age alone
+never authorizes takeover.
+
+If startup reports an unverifiable owner, inspect the recorded holder:
+
+```bash
+openclaw gateway recover-lock
+```
+
+The output includes the holder PID, host/PID namespace, heartbeat age, and an exact
+`openclaw gateway recover-lock --confirm <fingerprint>` command. First stop the
+holder through its original service manager or container. Then run the displayed
+command with the same state directory/profile as the failed startup, and start the
+Gateway again. Recovery explicitly removes the inspected lock records and Gateway
+owner lease. It refuses a locally verified live holder, a renewed heartbeat, or
+any record replaced or changed since inspection. If it refuses because something
+changed, inspect again; do not delete the lock files manually.
+
+A process that exited in the same verifiable PID namespace still recovers
+automatically. The explicit command is needed for crashed owners whose death
+cannot be verified from the new process, including containers with separate PID
+namespaces. `openclaw gateway recover-lock --json` exposes the inspection and
+confirmation command for operator tooling.
