@@ -343,11 +343,13 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     store = makeStore({}),
     reason = "rate_limit",
     modelId,
+    retryAfterMs,
     mockLock = true,
   }: {
     store?: AuthProfileStore;
     reason?: "auth" | "rate_limit" | "no_error_details" | "unknown";
     modelId?: string;
+    retryAfterMs?: number;
     mockLock?: boolean;
   } = {}) {
     storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(store);
@@ -355,7 +357,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
       mockLockedUpdateForStore(store);
     }
     await atTime(testNow, () =>
-      markAuthProfileFailure({ store, profileId: codexId, reason, modelId }),
+      markAuthProfileFailure({ store, profileId: codexId, reason, modelId, retryAfterMs }),
     );
     return store;
   }
@@ -620,6 +622,15 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   });
 
   const available = whamResponse(false, whamWindow(45, 9_000));
+  it("preserves Retry-After when WHAM reports available quota", async () => {
+    mockWhamResponse(200, available);
+    const store = await markCodexFailureAt({ retryAfterMs: 60_000 });
+    expect(store.usageStats?.[codexId]).toMatchObject({
+      cooldownReason: "rate_limit",
+      cooldownUntil: testNow + 60_000,
+    });
+  });
+
   it.each([
     ["fresh burst", available, 15_000, "fresh"],
     ["active burst", available, 6 * 3_600_000, "cooldown"],
