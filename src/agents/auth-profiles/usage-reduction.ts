@@ -127,6 +127,7 @@ export type AuthProfileFailureReduction = {
   observedAt: number;
   reason: AuthProfileFailureReason;
   modelId?: string;
+  retryAfterMs?: number;
   whamResult: WhamCooldownProbeResult | null;
   probeEligible: boolean;
 };
@@ -145,7 +146,7 @@ export function reduceAuthProfileFailure(
   if (!profile || profile.setup?.replacement) {
     return undefined;
   }
-  const { expectedProfile, reason, modelId, whamResult } = input;
+  const { expectedProfile, reason, modelId, retryAfterMs, whamResult } = input;
   const currentWhamResult =
     whamResult &&
     input.probeEligible &&
@@ -165,7 +166,7 @@ export function reduceAuthProfileFailure(
     currentWhamResult?.available && previousStats?.blockedReason === "subscription_limit"
       ? reconcileWhamBlock(previousStats, currentWhamResult, now)
       : (previousStats ?? {});
-  const computed = computeNextProfileUsageStats({ existing, now, reason, modelId });
+  const computed = computeNextProfileUsageStats({ existing, now, reason, modelId, retryAfterMs });
   return currentWhamResult
     ? applyWhamCooldownResult({ existing, computed, now, whamResult: currentWhamResult })
     : computed;

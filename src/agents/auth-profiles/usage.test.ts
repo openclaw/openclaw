@@ -153,6 +153,30 @@ async function markFailureAt(store: AuthProfileStore, reason: FailureReason, tim
 }
 
 describe("failure retry windows (#23516)", () => {
+  it.each([
+    [2_000, 2_000],
+    [1_600_000, 1_600_000],
+    [172_800_000, 86_400_000],
+    [undefined, 30_000],
+    [0, 30_000],
+    [Infinity, 30_000],
+  ])("bounds a new rate-limit cooldown using Retry-After %s", async (retryAfterMs, expected) => {
+    const store = makeStore(undefined);
+    await atTime(testNow, () =>
+      markAuthProfileFailure({ store, profileId: anthropicId, reason: "rate_limit", retryAfterMs }),
+    );
+    expect(store.usageStats?.[anthropicId]?.cooldownUntil).toBe(testNow + expected);
+    await atTime(testNow + 1_000, () =>
+      markAuthProfileFailure({
+        store,
+        profileId: anthropicId,
+        reason: "rate_limit",
+        retryAfterMs: 86_400_000,
+      }),
+    );
+    expect(store.usageStats?.[anthropicId]?.cooldownUntil).toBe(testNow + expected);
+  });
+
   it("exponentially backs off rate limits without a provider reset up to 24 hours", async () => {
     const store = makeStore(undefined);
     let now = testNow;
