@@ -9,6 +9,7 @@ import { normalizeMeetUrlForReuse } from "./google-meet-urls.js";
 export function meetAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
   return createMeetingBrowserAudioCaptureSource({
     ...params,
+    webAudioPlaybackGlobal: "__openclawMeetPlayback",
     ownershipSource: `
       const expectedUrl = ${JSON.stringify(normalizeMeetUrlForReuse(params.meetingUrl))};
       const currentUrl = new URL(location.href);
@@ -44,6 +45,21 @@ export function meetStatusScript(params: {
     ]
       .filter(Boolean)
       .join(" ");
+  if (!readOnly && allowMicrophone && captionSessionId && !window.__openclawMeetPlayback?.early) {
+    const inCall = buttons().some((button) => /leave call/i.test(buttonLabel(button)));
+    // Custom input bridges can adopt active calls without browser capture.
+    // Managed capture checks early observation itself before it collects audio.
+    if (!inCall) {
+      const reloadKey = "__openclawMeetPlaybackReload";
+      if (${JSON.stringify(params.autoJoin)} && sessionStorage.getItem(reloadKey) !== captionSessionId) {
+        sessionStorage.setItem(reloadKey, captionSessionId);
+        setTimeout(() => location.reload(), 0);
+        return JSON.stringify({ inCall: false, micMuted: true, url: location.href, notes: ["Reloading pre-join Meet once to observe native WebAudio playback."] });
+      }
+      return JSON.stringify({ inCall, manualAction: manualActionFor("meet-playback-observer-required", "Rejoin this Meet after native WebAudio observation is available."), url: location.href, notes: [] });
+    }
+  }
+  if (!readOnly && window.__openclawMeetPlayback?.early) sessionStorage.removeItem("__openclawMeetPlaybackReload");
   const buttonLabels = buttons().map(buttonLabel).filter(Boolean);
   const notes = [];
   let audioInputRouted;

@@ -22,7 +22,10 @@ it.each([true, false])("requires current Meet capture ownership (%s)", async (ow
   const result = runInNewContext(`(${source})()`, {
     URL,
     location: { href: MEETING_URL },
-    window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
+    window: {
+      __openclawMeetAudioSession: owns ? "session-1" : "session-2",
+      __openclawMeetPlayback: { early: true },
+    },
     document: { querySelectorAll: () => [pageNode("Leave call")] },
     AudioContext: function AudioContext() {
       throw new Error("capture admitted");
@@ -84,6 +87,7 @@ async function runAudioStatus(label: string, inputAvailable = true) {
     `(${meetStatusScript({
       allowMicrophone: true,
       autoJoin: false,
+      captionSessionId: "session-1",
       captureCaptions: false,
       guestName: "OpenClaw Agent",
     })})()`,
@@ -154,4 +158,10 @@ it("parses input-route health and retries until both routes are ready", () => {
   expect(adapter.shouldRetryJoinStatus?.(pending)).toBe(true);
   expect(ready({ ...pending, audioOutputRouted: true, manualAction: undefined })).toBe(true);
   expect(ready(pending)).toBe(false);
+});
+
+it("keeps adopted calls available to custom input bridges without early observation", async () => {
+  const { health } = await runAudioStatus("BlackHole 2ch");
+  expect(health.inCall).toBe(true);
+  expect(health.manualAction).toBeUndefined();
 });
