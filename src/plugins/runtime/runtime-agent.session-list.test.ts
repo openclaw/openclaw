@@ -41,17 +41,15 @@ it("lists exact selected keys without losing full entry fields", async () => {
         }),
       }),
     );
-    expect(
-      list({ sessionKeys: ["agent:main:selected", "agent:main:missing", "agent:main:alpha"] }),
-    ).toEqual(expected);
     expect(list({ sessionKeys: [] })).toEqual([]);
     const assertions: Array<() => void> = [];
     for (const readOnly of [true, false]) {
       const selected = list({
         readOnly,
-        sessionKeys: ["agent:main:selected", "agent:main:alpha"],
+        sessionKeys: ["agent:main:selected", "agent:main:missing", "agent:main:alpha"],
         captureSource: (assertCurrent) => assertions.push(assertCurrent),
       });
+      expect(selected).toEqual(expected);
       expect(selected).toEqual(
         list({ readOnly }).filter(({ sessionKey }) =>
           ["agent:main:selected", "agent:main:alpha"].includes(sessionKey),
@@ -63,10 +61,8 @@ it("lists exact selected keys without losing full entry fields", async () => {
         includeParticipants: false,
       });
       expect(metadata[0]?.entry).toMatchObject({ sessionId: "selected", category: "Team" });
-      expect([metadata[0]?.entry.participants, metadata[0]?.entry.participantCount]).toEqual([
-        undefined,
-        undefined,
-      ]);
+      expect(metadata[0]?.entry.participants).toBeUndefined();
+      expect(metadata[0]?.entry.participantCount).toBeUndefined();
     }
     expect(assertions).toHaveLength(2);
     assertions.forEach((assertCurrent) => expect(assertCurrent).not.toThrow());

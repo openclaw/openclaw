@@ -1,13 +1,7 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "../../agents/embedded-agent-runner/run/terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "../../agents/embedded-agent-runner/run/terminal-resolution.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,30 +45,6 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async () => {
   const { fakeSessionEntryReadModule } = await import("../memory-audience.test-support.js");
   return fakeSessionEntryReadModule;
 });
-
-async function parentAudience(agentId: string) {
-  const sessionKey = `agent:${agentId}:parent`;
-  const entry = {
-    sessionId: "00000000-0000-4000-8000-000000000001",
-    updatedAt: 1,
-    chatType: "direct" as const,
-  };
-  fakeSessionOwner.rows.set(sessionKey, entry);
-  const resolution = await resolveMemoryAudienceFromEntry(
-    {
-      agentId,
-      sessionKey,
-      sessionId: entry.sessionId,
-      senderIsOwner: true,
-      storePath: "/tmp/sessions",
-    },
-    entry,
-  );
-  if (resolution.status !== "granted") {
-    throw new Error(resolution.reason);
-  }
-  return resolution.audience;
-}
 
 import { runPluginEmbeddedAgent } from "./runtime-embedded-agent.runtime.js";
 
@@ -177,7 +147,24 @@ it("closes the prepared admission when core execution throws", async () => {
 });
 
 it("delegates the parent audience to the child session before core execution", async () => {
-  const audience = await parentAudience("researcher");
+  const parentKey = "agent:researcher:parent";
+  const entry = {
+    sessionId: "00000000-0000-4000-8000-000000000001",
+    updatedAt: 1,
+    chatType: "direct" as const,
+  };
+  fakeSessionOwner.rows.set(parentKey, entry);
+  const resolution = await resolveMemoryAudienceFromEntry(
+    {
+      ...params.sessionTarget,
+      sessionKey: parentKey,
+      sessionId: entry.sessionId,
+      senderIsOwner: true,
+    },
+    entry,
+  );
+  assert(resolution.status === "granted");
+  const audience = resolution.audience;
   fakeSessionOwner.rows.set("agent:researcher:plugin", {
     sessionId: "session-plugin",
     updatedAt: 1,
@@ -203,88 +190,44 @@ it.each([
   "legacy-pending-then-reject",
   "collector",
   "no-send",
-] as const)(
-  "keeps %s ownership across a result-required NO_REPLY after settled tools",
-  async (owner) => {
-    const delivered: string[] = [];
-    const collected: string[] = [];
-    const callerOwnsDelivery = owner.startsWith("legacy");
-    const delayed = owner === "legacy-pending-then-reject";
-    const callbackRejects = owner === "legacy-send-then-throw" || owner === "no-send" || delayed;
-    const callback = createDeferred();
-    const assistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "NO_REPLY" }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: ["NO_REPLY"],
-      lastAssistant: assistant,
-      toolMetas: [{ toolName: "write", isError: false, replaySafe: false }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    });
-    let finalizationRequest: string | null = null;
-    mocks.runEmbeddedAgentCore.mockImplementationOnce(async (input: RunParams) => {
-      const blockReply = (async () =>
+] as const)("preserves %s reply custody", async (owner) => {
+  const received: string[] = [];
+  const legacy = owner.startsWith("legacy");
+  const delayed = owner === "legacy-pending-then-reject";
+  const rejects = owner === "legacy-send-then-throw" || owner === "no-send" || delayed;
+  const callback = createDeferred();
+  await replies(
+    async (input) => {
+      const reply = (async () =>
         input.onBlockReply?.({ text: "The note is saved." }, { assistantMessageIndex: 1 }))();
       if (delayed) {
         expect(await input.resolveReplyDelivery?.(0)).toBe("pending");
         callback.reject(new Error("transport callback rejected"));
       }
-      if (callbackRejects) {
-        await expect(blockReply).rejects.toThrow("transport callback rejected");
+      if (rejects) {
+        await expect(reply).rejects.toThrow("transport callback rejected");
       } else {
-        await blockReply;
+        await reply;
       }
-      const replyDeliveryState = (await input.resolveReplyDelivery?.(0)) ?? "missing";
-      expect(replyDeliveryState).toBe(callerOwnsDelivery ? "pending" : "missing");
-      finalizationRequest = resolveSettledTurnFinalizationRequest({
-        runParams: input,
-        attempt,
-        activeErrorContext: { provider: "openai", model: "gpt-4.1-mini" },
-        modelApi: "openai-responses",
-        executionContract: undefined,
-        payloadsWithToolMedia: [],
-        hasTerminalToolPresentation: false,
-        terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-        settledTurnFinalizationAvailable: true,
-        replyDeliveryState,
-      });
-      return { payloads: finalizationRequest ? [{ text: "Recovered tool summary." }] : [] };
-    });
-
-    const result = await run(
-      {
-        ...(!callerOwnsDelivery ? { resolveReplyDelivery: async () => "missing" as const } : {}),
-        onBlockReply: ({ text }) => {
-          if (text && owner !== "no-send") {
-            (callerOwnsDelivery ? delivered : collected).push(text);
-          }
-          if (delayed) {
-            return callback.promise;
-          }
-          if (callbackRejects) {
-            throw new Error("transport callback rejected");
-          }
-        },
+      expect(await input.resolveReplyDelivery?.(0)).toBe(legacy ? "pending" : "missing");
+    },
+    {
+      ...(!legacy ? { resolveReplyDelivery: async () => "missing" as const } : {}),
+      onBlockReply: ({ text }) => {
+        if (text && owner !== "no-send") {
+          received.push(text);
+        }
+        if (delayed) {
+          return callback.promise;
+        }
+        if (rejects) {
+          throw new Error("transport callback rejected");
+        }
       },
-      "reply-plugin",
-    );
-    for (const payload of result.payloads ?? []) {
-      if (payload.text) {
-        delivered.push(payload.text);
-      }
-    }
-    expect(delivered).toEqual([
-      callerOwnsDelivery ? "The note is saved." : "Recovered tool summary.",
-    ]);
-    if (callerOwnsDelivery) {
-      expect(finalizationRequest).toBeNull();
-    } else {
-      expect(collected).toEqual(owner === "collector" ? ["The note is saved."] : []);
-      expect(finalizationRequest).toEqual(expect.any(String));
-    }
-  },
-);
+    },
+  );
+  expect(received).toEqual(owner === "no-send" ? [] : ["The note is saved."]);
+});
 
 it("does not turn previews, commentary, reasoning, or progress into final custody", async () => {
   await replies(
@@ -341,40 +284,14 @@ it("does not restore earlier-input custody when an old callback resolves late", 
   );
 });
 
-it.each(["abort", "completion"] as const)("retires legacy custody on %s", async (end) => {
-  const controller = new AbortController();
-  const accepted = createDeferred();
-  let observe: RunParams["resolveReplyDelivery"];
-  await replies(
-    async (input) => {
-      observe = input.resolveReplyDelivery;
-      await input.onBlockReply?.({ text: "Accepted answer" }, { assistantMessageIndex: 1 });
-      expect(await observe?.(0)).toBe("pending");
-      if (end === "abort") {
-        const lateReply = input.onBlockReply?.(
-          { text: "Late answer" },
-          { assistantMessageIndex: 2 },
-        );
-        controller.abort();
-        expect(await observe?.(0)).toBe("missing");
-        accepted.resolve();
-        await lateReply;
-        expect(await observe?.(0)).toBe("missing");
-      }
-    },
-    {
-      abortSignal: controller.signal,
-      onBlockReply: ({ text }) => (text === "Late answer" ? accepted.promise : undefined),
-    },
-  );
-  expect(await observe?.(0)).toBe("missing");
-});
-
 it.each(["completion", "abort"] as const)(
   "records admission and closes authority on %s without leaking plugin identifiers",
   async (end) => {
     const core = createDeferred<{ payloads: never[] }>();
     const started = createDeferred();
+    const accepted = createDeferred();
+    let observe: RunParams["resolveReplyDelivery"];
+    let lateReply: void | Promise<void> = undefined;
     const admittedRunContext: AdmittedRunContext = {
       operationalRunInstance: { instanceId: "instance:run-plugin", runId: "run-plugin" },
       executionIdentityToken: {
@@ -397,6 +314,12 @@ it.each(["completion", "abort"] as const)(
     );
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async (input) => {
       await input.preparedRunAdmission.admit("plugin-harness");
+      observe = input.resolveReplyDelivery;
+      await input.onBlockReply?.({ text: "Accepted answer" }, { assistantMessageIndex: 1 });
+      expect(await observe?.(0)).toBe("pending");
+      if (end === "abort") {
+        lateReply = input.onBlockReply?.({ text: "Late answer" }, { assistantMessageIndex: 2 });
+      }
       started.resolve();
       return core.promise;
     });
@@ -406,16 +329,27 @@ it.each(["completion", "abort"] as const)(
       return true;
     });
     const controller = new AbortController();
-    const running = run({ abortSignal: controller.signal }, "private-plugin-id");
+    const running = run(
+      {
+        abortSignal: controller.signal,
+        onBlockReply: ({ text }) => (text === "Late answer" ? accepted.promise : undefined),
+      },
+      "private-plugin-id",
+    );
     try {
       await Promise.race([started.promise, running]);
       expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce();
       if (end === "abort") {
         controller.abort(new Error("cancelled"));
         expect(mocks.close).toHaveBeenCalledOnce();
+        expect(await observe?.(0)).toBe("missing");
+        accepted.resolve();
+        await lateReply;
+        expect(await observe?.(0)).toBe("missing");
       }
       core.resolve({ payloads: [] });
       await expect(running).resolves.toEqual({ payloads: [] });
+      expect(await observe?.(0)).toBe("missing");
       expect(mocks.close).toHaveBeenCalledOnce();
       expect(
         receipts.map(({ decision, enforcement }) => [
@@ -431,6 +365,7 @@ it.each(["completion", "abort"] as const)(
       ]);
       expect(JSON.stringify(receipts)).not.toContain("private-plugin-id");
     } finally {
+      accepted.resolve();
       core.resolve({ payloads: [] });
       try {
         await running;

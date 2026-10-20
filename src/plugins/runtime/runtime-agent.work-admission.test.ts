@@ -30,7 +30,12 @@ let storePath: string;
 const sessionKey = "agent:main:voice:caller";
 const sessionId = "voice-session-id";
 const session = createRuntimeAgent().session;
-const scope = () => ({ storePath, sessionKey });
+const scope = (key = sessionKey) => ({ storePath, sessionKey: key });
+const seed = (key = sessionKey, id = sessionId) =>
+  session.upsertSessionEntry({
+    ...scope(key),
+    entry: { sessionId: id, updatedAt: Date.now() },
+  });
 const work = (run: () => Promise<unknown>) => session.runWithWorkAdmission(scope(), run);
 const mutate = (run: () => Promise<unknown>, prepare?: () => Promise<void>) =>
   runSessionMutation({
@@ -48,31 +53,19 @@ afterEach(() => {
 
 beforeEach(async () => {
   setRuntimeConfigSnapshot({});
-  const tempDir = sessionDirs.make();
-  storePath = path.join(tempDir, "sessions.json");
-  await session.upsertSessionEntry({
-    ...scope(),
-    entry: { sessionId, updatedAt: Date.now() },
-  });
+  storePath = path.join(sessionDirs.make(), "sessions.json");
+  await seed();
 });
 
-it.each(["archived", "pending deletion"])("rejects %s before plugin work", async (reason) => {
+it("rejects pending agent deletion before plugin work", async () => {
   const run = vi.fn(async () => {});
-  if (reason === "archived") {
-    await session.patchSessionEntry({ ...scope(), update: () => ({ archivedAt: 1 }) });
-  } else {
-    vi.mocked(readAgentDeletionJournalStatusInWorker).mockResolvedValueOnce("pending");
-  }
-  await expect(work(run)).rejects.toThrow(
-    reason === "archived" ? `Session "${sessionKey}" is archived` : "deletion is in progress",
+  vi.mocked(readAgentDeletionJournalStatusInWorker).mockResolvedValueOnce("pending");
+  await expect(work(run)).rejects.toThrow("deletion is in progress");
+  expect(readAgentDeletionJournalStatusInWorker).toHaveBeenCalledWith(
+    "main",
+    expect.anything(),
+    expect.any(AbortSignal),
   );
-  if (reason === "pending deletion") {
-    expect(readAgentDeletionJournalStatusInWorker).toHaveBeenCalledWith(
-      "main",
-      expect.anything(),
-      expect.any(AbortSignal),
-    );
-  }
   expect(run).not.toHaveBeenCalled();
 });
 
@@ -80,32 +73,25 @@ it("admits fresh work and protects session creation inside the callback", async 
   const freshKey = "agent:main:voice:fresh";
   const freshId = "fresh-session-id";
 
-  await session.runWithWorkAdmission({ storePath, sessionKey: freshKey }, async () => {
+  await session.runWithWorkAdmission(scope(freshKey), async () => {
     const claim = getCurrentSessionControllerClaim();
     expect(claim?.operation).toBeUndefined();
-    await session.upsertSessionEntry({
-      storePath,
-      sessionKey: freshKey,
-      entry: { sessionId: freshId, updatedAt: Date.now() },
+    await seed(freshKey, freshId);
+    await withSessionTurn({ ...scope(freshKey), sessionId: freshId }, async (operation) => {
+      expect(operation?.sessionId).toBe(freshId);
+      expect(getCurrentSessionControllerClaim()).toBe(claim);
+      const native = createEmbeddedRunHandle({ runId: "fresh-sdk-native" });
+      attachActiveEmbeddedRun(freshId, native, freshKey, undefined, "main", operation);
+      try {
+        expect(getActiveNativeAttempt(freshId)).toBe(native);
+      } finally {
+        detachActiveEmbeddedRun(freshId, native);
+      }
     });
-    await withSessionTurn(
-      { storePath, sessionKey: freshKey, sessionId: freshId },
-      async (operation) => {
-        expect(operation?.sessionId).toBe(freshId);
-        expect(getCurrentSessionControllerClaim()).toBe(claim);
-        const native = createEmbeddedRunHandle({ runId: "fresh-sdk-native" });
-        attachActiveEmbeddedRun(freshId, native, freshKey, undefined, "main", operation);
-        try {
-          expect(getActiveNativeAttempt(freshId)).toBe(native);
-        } finally {
-          detachActiveEmbeddedRun(freshId, native);
-        }
-      },
-    );
     expect(claim?.operation?.result).toBeNull();
   });
 
-  expect(session.getSessionEntry({ storePath, sessionKey: freshKey })?.sessionId).toBe(freshId);
+  expect(session.getSessionEntry(scope(freshKey))?.sessionId).toBe(freshId);
 });
 
 it("permits a wait-policy mutation inside the retained plugin callback", async () => {

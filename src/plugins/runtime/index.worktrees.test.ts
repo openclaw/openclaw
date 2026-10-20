@@ -26,6 +26,7 @@ vi.mock("../../agents/worktrees/service.js", () => ({
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const owner = { ownerKind: "workboard" as const, ownerId: "card-1" };
 const createParams = { ...owner, repoRoot: "/repo", name: "plugin-owned" };
+const request = { ...createParams, path: "/checkout" };
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("plugin-worktree-owner-"));
@@ -49,14 +50,7 @@ afterEach(() => {
 it.each(["create", "release", "removeIfLossless"] as const)(
   "refuses %s before domain effects when another process owns the state",
   async (operation) => {
-    const worktrees = createPluginRuntime().worktrees;
-    const operations = {
-      create: () => worktrees.create(createParams),
-      release: () => worktrees.release({ path: "/checkout" }),
-      removeIfLossless: () => worktrees.removeIfLossless({ ...owner, path: "/checkout" }),
-    };
-    const pending = operations[operation]();
-    await expect(pending).rejects.toMatchObject({
+    await expect(createPluginRuntime().worktrees[operation](request)).rejects.toMatchObject({
       code: "OWNER_UNAVAILABLE",
       message: expect.stringContaining("No local mutation was attempted"),
     });
