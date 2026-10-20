@@ -5,7 +5,10 @@ import type { ModelsAuthSetApiKeyResult } from "../packages/gateway-protocol/src
 import type { ModelsListResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "./helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it(
@@ -34,9 +37,11 @@ it(
           response.end(JSON.stringify({ data: modelIds.map((id) => ({ id, name: id })) }));
         }),
     });
+    let instance: OpenClawTestInstance | undefined;
+    let connected: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     await runQaGatewayFixture(
       async () => {
-        const instance = await createOpenClawTestInstance({
+        instance = await createOpenClawTestInstance({
           name: "models-api-key-discovery",
           signal,
           config: {
@@ -76,78 +81,69 @@ it(
             SGLANG_API_KEY: undefined,
           },
         });
-        await runQaGatewayFixture(
-          async () => {
-            await instance.startGateway();
-            const client = await connectGatewayClient({
-              url: instance.url,
-              token: instance.gatewayToken,
-              scopes: ["operator.admin", "operator.read", "operator.write"],
+        await instance.startGateway();
+        const client = (connected = await connectGatewayClient({
+          url: instance.url,
+          token: instance.gatewayToken,
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        }));
+        for (const provider of providers) {
+          const providerRequests = () =>
+            requests.filter(({ url }) => url === `/${provider}/v1/models`);
+          const saved = await client.request<ModelsAuthSetApiKeyResult>("models.authSetApiKey", {
+            provider,
+            apiKey,
+            agentId: "main",
+          });
+          expect(saved.profileId).toBe(`${provider}:manual`);
+          const persisted = JSON.parse(await readFile(instance.configPath, "utf8"));
+          expect(persisted).toMatchObject({
+            models: { providers: { [provider]: { apiKey: saved.profileId } } },
+          });
+          await client.request("models.list", { agentId: "main", view: "all" });
+
+          await expect
+            .poll(providerRequests, {
+              timeout: 15_000,
+              message: `${provider} must request its model catalog`,
+            })
+            .toContainEqual({
+              url: `/${provider}/v1/models`,
+              authorization: `Bearer ${apiKey}`,
             });
-            await runQaGatewayFixture(
-              async () => {
-                for (const provider of providers) {
-                  const saved = await client.request<ModelsAuthSetApiKeyResult>(
-                    "models.authSetApiKey",
-                    { provider, apiKey, agentId: "main" },
-                  );
-                  expect(saved.profileId).toBe(`${provider}:manual`);
-                  const persisted = JSON.parse(await readFile(instance.configPath, "utf8"));
-                  expect(persisted).toMatchObject({
-                    models: { providers: { [provider]: { apiKey: saved.profileId } } },
-                  });
-                  await client.request("models.list", { agentId: "main", view: "all" });
-
-                  await expect
-                    .poll(
-                      () => requests.filter((request) => request.url === `/${provider}/v1/models`),
-                      { timeout: 15_000, message: `${provider} must request its model catalog` },
-                    )
-                    .toContainEqual({
-                      url: `/${provider}/v1/models`,
-                      authorization: `Bearer ${apiKey}`,
-                    });
-                  expect(
-                    requests
-                      .filter((request) => request.url === `/${provider}/v1/models`)
-                      .map((request) => request.authorization),
-                  ).not.toContain(`Bearer ${saved.profileId}`);
-
-                  await expect
-                    .poll(
-                      async () => {
-                        const catalog = await client.request<ModelsListResult>("models.list", {
-                          agentId: "main",
-                          view: "all",
-                        });
-                        return catalog.models
-                          .filter((model) => model.provider === provider)
-                          .map((model) => model.id)
-                          .toSorted();
-                      },
-                      { timeout: 15_000, message: `${provider} must publish discovered models` },
-                    )
-                    .toEqual(modelIds);
-                }
-              },
-              () => disconnectGatewayClient(client),
-            );
-          },
-          () => instance.cleanup(),
-        ).catch((error: unknown) => {
-          throw new Error(
-            `API-key discovery failed: ${JSON.stringify(requests)}\n${instance.logs()}`,
-            {
-              cause: error,
-            },
+          expect(providerRequests().map(({ authorization }) => authorization)).not.toContain(
+            `Bearer ${saved.profileId}`,
           );
-        });
+
+          await expect
+            .poll(
+              async () => {
+                const catalog = await client.request<ModelsListResult>("models.list", {
+                  agentId: "main",
+                  view: "all",
+                });
+                return catalog.models
+                  .filter((model) => model.provider === provider)
+                  .map((model) => model.id)
+                  .toSorted();
+              },
+              { timeout: 15_000, message: `${provider} must publish discovered models` },
+            )
+            .toEqual(modelIds);
+        }
       },
+      () => connected && disconnectGatewayClient(connected),
+      () => instance?.cleanup(),
       () => {
         endpoint.listener.closeAllConnections();
         return endpoint.releaseListener();
       },
       () => endpoint.claim.release(),
-    );
+    ).catch((error: unknown) => {
+      throw new Error(
+        `API-key discovery failed: ${JSON.stringify(requests)}\n${instance?.logs() ?? ""}`,
+        { cause: error },
+      );
+    });
   },
 );

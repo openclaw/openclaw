@@ -33,14 +33,12 @@ function freshnessFixture() {
   );
   writeFileSync(
     path.join(dir, "lint-docs.cjs"),
-    [
-      'const fs = require("node:fs");',
-      'for (const file of ["docs/page.md", "notes.txt"].filter(fs.existsSync)) {',
-      '  console.error(`${file}: ${fs.readFileSync(file, "utf8")}`);',
-      "}",
-      "process.exit(1);",
-      "",
-    ].join("\n"),
+    `const fs = require("node:fs");
+for (const file of ["docs/page.md", "notes.txt"].filter(fs.existsSync)) {
+  console.error(\`\${file}: \${fs.readFileSync(file, "utf8")}\`);
+}
+process.exit(1);
+`,
   );
   // The protocol stand-in fails on any working-tree bytes it would import.
   writeFileSync(
@@ -83,11 +81,9 @@ describe("pre-commit freshness checks", () => {
     stage(
       dir,
       "lint-docs.cjs",
-      [
-        'require("node:fs").writeFileSync("checker-args.json", JSON.stringify(process.argv.slice(2)));',
-        'console.error("package-script checker ran");',
-        `process.exit(${exitCode});`,
-      ].join("\n"),
+      `require("node:fs").writeFileSync("checker-args.json", JSON.stringify(process.argv.slice(2)));
+console.error("package-script checker ran");
+process.exit(${exitCode});`,
     );
     stage(dir, "docs/page with spaces.md", "# Updated page\n");
 

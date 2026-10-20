@@ -4,6 +4,7 @@ import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
+import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 
 export const restartEnv = {
@@ -24,11 +25,7 @@ export function restartProviderServer(
 ) {
   return createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      await handle(request, response, asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8"))));
+      await handle(request, response, asRecord(JSON.parse(await readRequestText(request))));
     })().catch((error: unknown) => {
       failed.reject(error);
       response.destroy(error instanceof Error ? error : undefined);
@@ -80,39 +77,32 @@ export function writeRestartToolCall(
 }
 
 export function writeRestartTitle(response: ServerResponse, text: string) {
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(
-    JSON.stringify({
-      id: "resp_title",
-      object: "response",
-      status: "completed",
-      output: [
-        {
-          type: "message",
-          id: "msg_title",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text, annotations: [] }],
-        },
-      ],
-      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-    }),
-  );
+  respondJson(response, {
+    id: "resp_title",
+    object: "response",
+    status: "completed",
+    output: [
+      {
+        type: "message",
+        id: "msg_title",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      },
+    ],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+  });
 }
 
 export function readRestartSession(agentDir: string, sessionKey: string) {
-  const row = readRestartRow(
-    path.join(agentDir, "openclaw-agent.sqlite"),
-    "SELECT entry_json FROM session_nodes WHERE session_key = ?",
-    sessionKey,
-  );
-  return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
-}
-
-function readRestartRow(databasePath: string, sql: string, key: string) {
-  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
   try {
-    return database.prepare(sql).get(key);
+    const row = database
+      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey);
+    return typeof row?.entry_json === "string" ? asRecord(JSON.parse(row.entry_json)) : undefined;
   } finally {
     database.close();
   }
@@ -123,20 +113,21 @@ export function restartModelConfig(
   workspace: string,
   subagents?: { runTimeoutSeconds: number },
 ): Pick<OpenClawConfig, "models" | "agents"> {
+  const { modelRef, providerId, config } = model;
   return {
     models: {
       mode: "replace",
       providers: {
-        [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+        [providerId]: { ...config, request: { allowPrivateNetwork: true } },
       },
     },
     agents: {
       defaults: {
         workspace,
-        model: { primary: model.modelRef },
-        modelPolicy: { allow: [model.modelRef] },
+        model: { primary: modelRef },
+        modelPolicy: { allow: [modelRef] },
         models: {
-          [model.modelRef]: {
+          [modelRef]: {
             agentRuntime: { id: "openclaw" },
             params: { transport: "sse", openaiWsWarmup: false },
           },
