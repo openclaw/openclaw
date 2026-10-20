@@ -6,11 +6,12 @@ import { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-ru
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import type { sessionsCommand } from "./sessions.js";
+import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknown> }>(() => ({
   loadConfig: () => ({
@@ -33,9 +34,8 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => sessionsConfigState.loadConfig(),
 }));
 
-export function mockSessionsConfig() {
-  // Compatibility entry point: importing this module already installs the hoisted mock.
-}
+// The base sessions suite still calls this; importing the module installs the mock.
+export function mockSessionsConfig() {}
 
 export function setMockSessionsConfig(loader: () => Record<string, unknown>) {
   sessionsConfigState.loadConfig = loader;
@@ -46,27 +46,20 @@ export function resetMockSessionsConfig() {
 }
 
 export function makeRuntime(params?: { throwOnError?: boolean }) {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  return {
-    runtime: {
-      log: (msg: unknown) => logs.push(String(msg)),
-      error: (msg: unknown) => {
-        errors.push(String(msg));
-        if (params?.throwOnError) {
-          throw new Error(String(msg));
-        }
-      },
-      exit: (code: number) => {
-        throw new Error(`exit ${code}`);
-      },
-    } satisfies RuntimeEnv,
-    logs,
-    errors,
+  const captured = createCapturingTestRuntime();
+  const recordError = captured.runtime.error;
+  captured.runtime.error = (msg) => {
+    recordError(msg);
+    if (params?.throwOnError) {
+      throw new Error(String(msg));
+    }
   };
+  captured.runtime.exit = (code) => {
+    throw new Error(`exit ${code}`);
+  };
+  return captured;
 }
 
-/** Seeds an isolated SQLite-backed session store and returns its legacy target path. */
 export async function writeStore(
   data: Record<string, SessionEntry>,
   prefix = "sessions",
@@ -90,15 +83,10 @@ export function cleanupStore(store: string): void {
   fs.rmSync(path.dirname(store), { recursive: true, force: true });
 }
 
-type SessionListOptions = { active?: string; limit?: string | number };
-
 export async function runSessionsJson<T>(
-  run: (
-    opts: SessionListOptions & { json?: boolean; store?: string },
-    runtime: RuntimeEnv,
-  ) => Promise<void>,
+  run: typeof sessionsCommand,
   store: string,
-  options?: SessionListOptions,
+  options?: Pick<Parameters<typeof sessionsCommand>[0], "active" | "limit">,
 ): Promise<T> {
   const { runtime, logs } = makeRuntime();
   try {

@@ -1,4 +1,5 @@
 import { mockNativeModuleExports } from "../../test/helpers/native-module-mock.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 
 const extension = import.meta.url.endsWith(".ts") ? "ts" : "js";
 const mock = (module: string, exports: Record<string, unknown>) =>
@@ -16,8 +17,7 @@ const beforeStore = Object.fromEntries(
 );
 let serviceCalls = 0;
 
-// Keep the actual command, grid, and label-summary owners. Only fixture the
-// service and unrelated metadata boundaries; no large database is needed.
+// Exercise the real grid and label summary without allocating a 150k-row database.
 mock("../config/config", {
   getRuntimeConfig: () => ({}),
   loadConfig: () => ({}),
@@ -37,28 +37,8 @@ mock("../config/sessions", {
       appliedSummaries: [],
       previewResults: [
         {
-          summary: {
-            agentId: "main",
-            storePath,
-            mode: "warn",
-            dryRun: true,
-            beforeCount: count,
-            afterCount: count,
-            missing: 0,
-            dmScopeRetired: 0,
-            modelRunPruned: 0,
-            pruned: 0,
-            capped: 0,
-            diskBudget: null,
-            wouldMutate: false,
-          },
+          summary: cleanupSummary({ storePath, beforeCount: count, afterCount: count }),
           beforeStore,
-          missingKeys: new Set(),
-          modelRunPrunedKeys: new Set(),
-          archivedKeys: new Set(),
-          staleKeys: new Set(),
-          cappedKeys: new Set(),
-          dmScopeRetiredKeys: new Set(),
         },
       ],
     };
@@ -74,9 +54,7 @@ mock("../config/sessions/session-sqlite-target", {
   resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }),
 });
 mock("./sessions-display-model", {
-  resolveSessionDisplayModelRef: (_cfg: unknown, row: { model: string }) => ({
-    model: row.model,
-  }),
+  resolveSessionDisplayModelRef: (_cfg: unknown, row: { model: string }) => ({ model: row.model }),
 });
 
 const { sessionsCleanupCommand } = await import("./sessions-cleanup.js");
@@ -89,15 +67,9 @@ await sessionsCleanupCommand(
   {
     log: (value: unknown) => {
       const line = String(value);
-      if (line.includes("Action") && line.includes("Flags")) {
-        gridPrinted = true;
-      }
-      if (line === "Summary by Label:") {
-        summaryPrinted = true;
-      }
-      if (/^label-\d+ +1 kept, 0 pruned$/u.test(line)) {
-        labelRows += 1;
-      }
+      gridPrinted ||= line.includes("Action") && line.includes("Flags");
+      summaryPrinted ||= line === "Summary by Label:";
+      labelRows += Number(/^label-\d+ +1 kept, 0 pruned$/u.test(line));
       if (line.startsWith("Total:")) {
         total = line;
       }

@@ -25,14 +25,8 @@ afterEach(() => {
 });
 
 it("loads one plugin metadata snapshot and enriches only the selected sessions", async () => {
-  const config = {
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.5" },
-        models: { "openai/gpt-5.5": {} },
-      },
-    },
-  };
+  const model = "openai/gpt-5.5";
+  const config = { agents: { defaults: { model: { primary: model }, models: { [model]: {} } } } };
   setMockSessionsConfig(() => config);
   resolvePluginMetadataSnapshotMock.mockReturnValue({
     configFingerprint: "sessions-plugin-metadata-test",
@@ -49,7 +43,7 @@ it("loads one plugin metadata snapshot and enriches only the selected sessions",
         sessionId: `fixture-session-${index}`,
         updatedAt: Date.now() - index * 1_000,
         modelProvider: "fixture-cli",
-        model: "openai/gpt-5.5",
+        model,
       } satisfies SessionEntry,
     ]),
   );
@@ -57,11 +51,9 @@ it("loads one plugin metadata snapshot and enriches only the selected sessions",
   const readAcpMetadata = vi.spyOn(sessionMeta, "readAcpSessionMetaForEntries");
   const resolveRuntime = vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata");
 
-  const payload = await runSessionsJson<{
-    count: number;
-    totalCount: number;
-    sessions: Array<{ model: string; modelProvider: string }>;
-  }>(sessionsCommand, store, { limit: 1 });
+  const payload = await runSessionsJson<{ sessions: SessionEntry[] }>(sessionsCommand, store, {
+    limit: 1,
+  });
 
   expect(payload).toMatchObject({
     count: 1,
