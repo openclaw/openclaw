@@ -3,31 +3,16 @@ import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "openclaw/plugin-sdk/memory-co
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as systemEvents from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 
-let previousConfig: ReturnType<typeof getRuntimeConfigSnapshot>;
-
-beforeEach(() => {
-  previousConfig = getRuntimeConfigSnapshot();
-  resetSystemEventsForTest();
-});
+beforeEach(resetSystemEventsForTest);
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetSystemEventsForTest();
-  if (previousConfig) {
-    setRuntimeConfigSnapshot(previousConfig);
-  } else {
-    clearRuntimeConfigSnapshot();
-  }
 });
 
 function createHook(enabled = true) {
@@ -40,7 +25,6 @@ function createHook(enabled = true) {
       },
     },
   };
-  setRuntimeConfigSnapshot(config);
   const on = vi.fn<OpenClawPluginApi["on"]>();
   const runtime = createPluginRuntimeMock();
   runtime.config.current = () => config;

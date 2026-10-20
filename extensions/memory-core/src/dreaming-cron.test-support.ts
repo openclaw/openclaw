@@ -1,32 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { CronServiceLike } from "./dreaming-cron.js";
 
-type CronSchedule = { kind: "cron"; expr: string; tz?: string };
-type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | { kind: "agentTurn"; message: string; lightContext?: boolean };
-export type CronAddInput = {
-  declarationKey: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  schedule: CronSchedule;
-  sessionTarget: "main" | "isolated";
-  wakeMode: "now";
-  payload: CronPayload;
-  delivery?: { mode: "none" };
+type ManagedInput = Parameters<CronServiceLike["add"]>[0];
+type ListedJob = Awaited<ReturnType<CronServiceLike["list"]>>[number];
+export type CronAddInput = Omit<ManagedInput, "payload"> & {
+  payload: ManagedInput["payload"] | { kind: "systemEvent"; text: string };
 };
 export type CronPatch = Partial<CronAddInput>;
-export type CronJobLike = {
-  id: string;
-  declarationKey?: string;
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  schedule?: { kind?: string; expr?: string; tz?: string };
-  sessionTarget?: string;
-  wakeMode?: string;
-  payload?: { kind?: string; text?: string; message?: string; lightContext?: boolean };
-  delivery?: { mode?: string };
+export type CronJobLike = Omit<ListedJob, "payload"> & {
+  payload?: ListedJob["payload"] & { text?: string };
   createdAtMs?: number;
 };
 export type CronHarnessOptions = {

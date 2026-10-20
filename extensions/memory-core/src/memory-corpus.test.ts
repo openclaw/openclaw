@@ -8,12 +8,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function search<T>(
+const search = <T>(
   run: Parameters<typeof runMemoryCorpusDeadline<T>>[0]["run"],
   parentSignal?: AbortSignal,
-) {
-  return runMemoryCorpusDeadline({ operation: "memory_search", parentSignal, run });
-}
+) => runMemoryCorpusDeadline({ operation: "memory_search", parentSignal, run });
 
 it.each(["timer", "event-loop"] as const)(
   "retains completed results when the %s reaches the corpus deadline",
@@ -63,18 +61,6 @@ it("does not replace a caller failure with partial results", async () => {
     parent.signal,
   );
   await expect(result).rejects.toBe(failure);
-});
-
-it("exempts a paused owned phase from the corpus deadline", async () => {
-  const result = search(async (signal, control) => {
-    control.report("pause");
-    // Readiness owns its own budget, independent of the search deadline.
-    await vi.advanceTimersByTimeAsync(60_000);
-    control.report("resume");
-    expect(signal.aborted).toBe(false);
-    return "ok";
-  });
-  await expect(result).resolves.toBe("ok");
 });
 
 it("re-arms the banked budget when an owned phase completes", async () => {

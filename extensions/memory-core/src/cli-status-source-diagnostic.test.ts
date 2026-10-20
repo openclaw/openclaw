@@ -9,19 +9,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn());
-const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
-  vi.fn(async ({ config }: { config: unknown }) => ({ resolvedConfig: config, diagnostics: [] })),
-);
 
 // mock-isolation: exercise CLI diagnostics without opening a native SQLite memory manager.
 vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfig(),
-}));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),
-  resolveCommandSecretRefsViaGateway,
 }));
 
 import { defaultRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
@@ -45,12 +38,7 @@ async function run(args: string[], results: MemorySearchResult[] = []) {
       status: () => ({
         backend: "builtin",
         provider: "none",
-        requestedProvider: "none",
-        model: "none",
         sources: ["memory"],
-        files: 0,
-        chunks: 0,
-        dirty: false,
       }),
       close: vi.fn(async () => {}),
     },
