@@ -3,6 +3,7 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 
 function isCorrelationId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 1024;
@@ -164,11 +165,7 @@ type QaToolActivity = {
 function activityInput(input: unknown) {
   let value = isRecord(input) && typeof input.arguments === "string" ? input.arguments : input;
   if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
+    value = safeParseQaJson(value);
   }
   return isRecord(value) ? value : undefined;
 }
@@ -187,12 +184,7 @@ function nativeCodeModeCellId(result: Record<string, unknown>) {
   let text = content;
   if (text.startsWith("[")) {
     // The Codex transcript adapter preserves response arrays as JSON text.
-    let output: unknown;
-    try {
-      output = JSON.parse(text);
-    } catch {
-      return undefined;
-    }
+    const output = safeParseQaJson(text);
     const header = Array.isArray(output) ? output[0] : undefined;
     const headerText = isRecord(header) && header.type === "input_text" ? header.text : undefined;
     if (typeof headerText !== "string") {

@@ -28,7 +28,7 @@ export function createChannelPlugin({
 
 export function createChannelDeadlineFixture(step: string, synchronous: boolean) {
   const expire = () => {
-    vi.setSystemTime(Date.now() + 1000);
+    vi.advanceTimersByTime(1000);
     return {};
   };
   const overrun = async () => {
@@ -80,7 +80,7 @@ export function createQueuedSummaryFixture() {
   const plugin = createChannelPlugin({ id: "beta" });
   plugin.status = {
     get buildChannelSummary() {
-      void Promise.resolve().then(() => vi.setSystemTime(Date.now() + 1000));
+      void Promise.resolve().then(() => vi.advanceTimersByTime(1000));
       return summary;
     },
   };

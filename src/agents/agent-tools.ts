@@ -6,7 +6,6 @@ import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -34,7 +33,7 @@ import {
 } from "./agent-tools.ring-zero-context.js";
 import { resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { waitForExecScope } from "./bash-process-registry.js";
+import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import {
@@ -174,21 +173,7 @@ function* assembleOpenClawCodingTools(
     sessionId: options?.sessionId,
     agentId: executionAgentId,
   });
-  if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
-    const supervisor = getProcessSupervisor();
-    // Sandbox runtimes retain their configured lifetime; host commands still
-    // need tree cleanup, including elevated commands from sandboxed sessions.
-    const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
-    options.registerRunCleanup(async () => {
-      // Transport closure can precede backend finalization. Join both owners
-      // before their local artifacts or the invocation state can be released.
-      const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
-      const failed = settled.find((result) => result.status === "rejected");
-      if (failed) {
-        throw failed.reason;
-      }
-    });
-  }
+  registerOneShotExecScopeCleanup(options, scopeKey);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const sessionPermissionPolicy = options?.sessionPermissionPolicy;
@@ -326,6 +311,7 @@ function* assembleOpenClawCodingTools(
       sandboxed: Boolean(sandbox),
       runId: options?.runId,
       cronSelfRemoveOnlyJobId,
+      automationReadOnly: options?.forceRestartSafeTools === true,
     });
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
@@ -433,6 +419,8 @@ function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
+            forceRestartSafeTools: options?.forceRestartSafeTools,
+            cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             questionInputMode: capabilityProfile.conversation.questionInputMode,

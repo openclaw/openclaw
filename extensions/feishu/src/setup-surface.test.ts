@@ -138,7 +138,6 @@ describe("feishu setup wizard", () => {
     beginAppRegistrationMock.mockResolvedValueOnce({
       deviceCode: "device-code",
       qrUrl: "https://accounts.larksuite.com/qr",
-      userCode: "user-code",
       interval: 1,
       expireIn: 10,
     });
@@ -239,7 +238,6 @@ describe("feishu setup wizard", () => {
     });
     expect(probeFeishuMock).toHaveBeenCalledWith({
       accountId: "main-bot",
-      selectionSource: "explicit-default",
       enabled: true,
       configured: true,
       name: undefined,

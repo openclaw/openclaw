@@ -30,9 +30,7 @@ type SlashHandlerMatch =
   | { kind: "none" }
   | {
       kind: "single";
-      source: SlashHandlerMatchSource;
       handler: SlashHandler;
-      accountIds: string[];
     }
   | {
       kind: "ambiguous";
@@ -101,9 +99,7 @@ function resolveSlashHandler(
     }
     return {
       kind: "single",
-      source,
       handler: match.handler,
-      accountIds: [match.accountId],
     };
   }
 

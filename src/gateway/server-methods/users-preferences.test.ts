@@ -118,12 +118,17 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
     });
     mergeProfiles(source, target);
     const context = captureOpenClawStateWorkerContext();
-    const readWriterObservation = () =>
+    const recordUnrelatedProvenance = () =>
       executeOpenClawStateWorker(context, {
-        type: "deviceAuth.read",
-        input: { deviceId: "preference-reader-test", role: "operator", readOnly: false },
+        type: "agentProvenance.record",
+        input: {
+          agentId: "preference-reader-test",
+          createdVia: "operator",
+          creatorAgentId: null,
+          createdAtMs: 1,
+        },
       });
-    await readWriterObservation();
+    await recordUnrelatedProvenance();
     const replyReady = createDeferredCore();
     let publish: (() => void) | undefined;
     let selected: { worker: Worker; id: number } | undefined;
@@ -140,9 +145,9 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
         const command: unknown = deserialize(request.input);
         if (
           isRecord(command) &&
-          command.type === "deviceAuth.read" &&
+          command.type === "agentProvenance.record" &&
           isRecord(command.input) &&
-          command.input.deviceId === "preference-reader-test"
+          command.input.agentId === "preference-reader-test"
         ) {
           selected = { worker: this, id: request.id };
         }
@@ -161,7 +166,7 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
       }
       return originalEmit.call(this, event, reply);
     });
-    const pendingWriter = readWriterObservation();
+    const pendingWriter = recordUnrelatedProvenance();
     try {
       await withinTest(replyReady.promise, signal);
       expect(

@@ -296,6 +296,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     ? () => {}
     : installModelPromptProjection({
         session: activeSession,
+        carrier: input.appendOnlyRuntimeContext ? input.runtimeContextMessage : undefined,
         transcriptPrompt: input.transcriptPrompt,
         modelPrompt: input.modelPrompt,
         prependContext: input.prependContext,

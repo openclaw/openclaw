@@ -41,12 +41,19 @@ describe("toStreamingMarkdownParts", () => {
     let source = "";
     try {
       for (let index = 0; index < 40; index++) {
-        source += `Stable paragraph ${index} has **formatted** text.\n\n`;
+        const paragraph = `Stable paragraph ${index} has **formatted** text.\n\n`;
+        source += paragraph;
+        const previousCalls = sanitizedInputLengths.length;
         const fragment = htmlFragment(
           toStreamingMarkdownParts(source, {}, "stable-render-budget").join(""),
         );
         expect(fragment.querySelectorAll("p")).toHaveLength(index + 1);
         expect(fragment.querySelectorAll("strong")).toHaveLength(index + 1);
+        const deltaChars = sanitizedInputLengths
+          .slice(previousCalls)
+          .reduce((total, length) => total + length, 0);
+        expect(deltaChars).toBeGreaterThan(0);
+        expect(deltaChars).toBeLessThan(paragraph.length * 2);
       }
       expect(sanitizedInputLengths.length).toBeGreaterThan(0);
       const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);

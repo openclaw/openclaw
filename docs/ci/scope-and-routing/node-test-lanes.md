@@ -32,6 +32,17 @@ hourly run owns that measurement; no validation dispatch or rerun is needed.
 The Docker-opt-in `node-worker-container-wire` proof remains separate, as do
 the ACP cancellation and ordinary local-session compatibility proofs.
 
+Repo E2Es that boot a real Gateway or built CLI through the shared test-instance
+helper hide the same import edges: the graph reaches only the helper. Policy
+watches in `scripts/lib/ci-policy-test-watch.mts` select the background-process
+restart, session-end shutdown, hook concurrency, and built-CLI runtime recovery
+suites when their production owners change (startup exec recovery, restart
+intent, the session controller, shutdown drain, command-queue capacity, hook
+dispatch, and CLI respawn). Each selection adds one existing E2E file (about
+20–150 test seconds) to the changed-owner rows; no new job or runner is added.
+Hourly main does not run the E2E config; the complete set runs in the daily
+scheduled Gateway E2E shards and Full Release Validation.
+
 The slowest Node test families are split or balanced so each job stays small without over-reserving runners:
 
 - Hourly main and ordinary manual/release validation retain complete plugin and channel contract jobs with their existing weighted process selections and runner fallbacks. PRs select exact contract tests through the changed-owner Node plan; frozen historical manual targets keep their separate jobs.

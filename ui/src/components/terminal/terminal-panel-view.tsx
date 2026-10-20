@@ -4,80 +4,16 @@ import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
-import type { DockLayout } from "../dock-layout.ts";
 import { PanelTabStrip } from "../panel-tab-strip-solid.tsx";
 import { Icon } from "../solid/icon.tsx";
-import type { PanelEmptyStateElement, PanelEmptyStateProps } from "../solid/panel-empty-state.tsx";
-import "../solid/panel-empty-state.tsx";
+import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../tooltip.ts";
-import {
-  terminalPanelTabIcon,
-  terminalPanelHostedTabs,
-  type TerminalPanelTab,
-} from "./terminal-panel-tabs.tsx";
-import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
-import type { createTerminalSessionPicker } from "./terminal-session-picker.ts";
+import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
+import type { TerminalPanelOwner } from "./terminal-panel.ts";
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-panel-empty-state": HTMLAttributes<PanelEmptyStateElement> & {
-        "prop:heading": PanelEmptyStateProps["heading"];
-        "prop:description": PanelEmptyStateProps["description"];
-      };
-    }
-  }
-}
-
-type TerminalSessionPickerState = ReturnType<typeof createTerminalSessionPicker>;
-
-export type TerminalPanelViewState = {
-  open: boolean;
-  embedded: boolean;
-  fullscreen: boolean;
-  hosted: boolean;
-  mode: string;
-  style: string | undefined;
-  dockLayout: DockLayout<"bottom" | "right" | "main">;
-  tabs: TerminalPanelTab[];
-  activeId: string | null;
-  booting: boolean;
-  connected: boolean;
-  connecting: boolean;
-  error: { text: string; retry?: () => void } | null;
-  dockDisabled: boolean;
-  picker: TerminalSessionPickerState;
-  upload: TerminalPanelUpload;
-  fileInputRef: (element: HTMLInputElement) => void;
-  viewportRef: (element: HTMLDivElement) => void;
-  onSelect: (id: string) => void;
-  onClose: (id: string) => Promise<void>;
-  onNew: () => void;
-  onDock: (dock: "bottom" | "right" | "main") => void;
-  onOpenFullscreen: () => void;
-  onHide: () => void;
-};
-
-function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
-  return (
-    <button
-      ref={(element) => props.state.triggerRef(element)}
-      class={props.state.hosted ? "rail-header__action" : "rail-header__action tp-icon"}
-      type="button"
-      title={props.state.hosted ? undefined : t("terminal.sessions")}
-      aria-label={t("terminal.sessions")}
-      aria-expanded={props.state.open() ? "true" : "false"}
-      aria-haspopup="dialog"
-      aria-controls={props.state.hosted ? undefined : props.dialogId}
-      onClick={() => props.state.onToggle()}
-      onFocusOut={(event) => props.state.onFocusOut(event)}
-    >
-      <Icon name="server" />
-    </button>
-  );
-}
+export type TerminalPanelViewState = TerminalPanelOwner["viewState"];
 
 /** Header actions stay owned by the panel while its parent hosts their DOM. */
 export function TerminalPanelHostedActions(props: {
@@ -137,18 +73,7 @@ export function TerminalPanelHostedActions(props: {
   );
 }
 
-function Loading(props: { compact?: boolean; overlay?: boolean; label: string }) {
-  return (
-    <PanelLoadingSkeleton
-      variant="terminal"
-      label={props.label}
-      compact={Boolean(props.compact)}
-      overlay={Boolean(props.overlay)}
-    />
-  );
-}
-
-function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: string }) {
+function SessionMenu(props: { state: TerminalPanelViewState["picker"]; dialogId: string }) {
   return (
     <Show when={props.state.open()}>
       <div
@@ -180,7 +105,13 @@ function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: strin
         </div>
         <Show
           when={!props.state.loading()}
-          fallback={<Loading compact label={t("terminal.loadingSessions")} />}
+          fallback={
+            <PanelLoadingSkeleton
+              variant="terminal"
+              compact
+              label={t("terminal.loadingSessions")}
+            />
+          }
         >
           <Show
             when={props.state.sessions().length > 0}
@@ -213,23 +144,6 @@ function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: strin
   );
 }
 
-function ActionButton(props: {
-  label: string;
-  icon: Parameters<typeof Icon>[0]["name"];
-  class?: string;
-  disabled?: boolean;
-  newTab?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <PanelIconButton
-      {...props}
-      class={props.class ?? "rail-header__action tp-icon"}
-      icon={<Icon name={props.icon} />}
-    />
-  );
-}
-
 function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
   const destinations = () =>
     [
@@ -244,10 +158,10 @@ function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
   return (
     <div class="rail-header__actions tp-actions">
       <Show when={props.state.upload.uploadsEnabled()}>
-        <ActionButton
+        <PanelIconButton
           class="rail-header__action tp-icon tp-upload"
           label={t("terminal.addFiles")}
-          icon="paperclip"
+          icon={<Icon name="paperclip" />}
           disabled={
             !props.state.connected ||
             props.state.upload.hasPendingBatch() ||
@@ -258,15 +172,31 @@ function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
       </Show>
       <Show when={!props.state.fullscreen}>
         <div class="tp-session-picker">
-          <SessionPickerTrigger state={props.state.picker} dialogId={props.dialogId} />
+          <button
+            ref={(element) => props.state.picker.triggerRef(element)}
+            class={
+              props.state.picker.hosted ? "rail-header__action" : "rail-header__action tp-icon"
+            }
+            type="button"
+            title={props.state.picker.hosted ? undefined : t("terminal.sessions")}
+            aria-label={t("terminal.sessions")}
+            aria-expanded={props.state.picker.open() ? "true" : "false"}
+            aria-haspopup="dialog"
+            aria-controls={props.state.picker.hosted ? undefined : props.dialogId}
+            onClick={() => props.state.picker.onToggle()}
+            onFocusOut={(event) => props.state.picker.onFocusOut(event)}
+          >
+            <Icon name="server" />
+          </button>
           <SessionMenu state={props.state.picker} dialogId={props.dialogId} />
         </div>
         <Show
           when={!props.state.embedded}
           fallback={
-            <ActionButton
+            <PanelIconButton
+              class="rail-header__action tp-icon"
               label={t("terminal.dockBottom")}
-              icon="panelBottomOpen"
+              icon={<Icon name="panelBottomOpen" />}
               disabled={props.state.dockDisabled}
               onClick={() => props.state.onDock("bottom")}
             />
@@ -276,9 +206,10 @@ function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
             <For each={destinations()} keyed={(destination) => destination.dock}>
               {(destination) => (
                 <openclaw-tooltip prop:content={destination().label}>
-                  <ActionButton
+                  <PanelIconButton
+                    class="rail-header__action tp-icon"
                     label={destination().label}
-                    icon={destination().icon}
+                    icon={<Icon name={destination().icon} />}
                     disabled={props.state.dockDisabled}
                     onClick={() => props.state.onDock(destination().dock)}
                   />
@@ -286,14 +217,19 @@ function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
               )}
             </For>
           </span>
-          <ActionButton
+          <PanelIconButton
             class="rail-header__action tp-icon tp-open-fullscreen"
             label={t("terminal.openWindow")}
-            icon="maximize"
+            icon={<Icon name="maximize" />}
             newTab
             onClick={props.state.onOpenFullscreen}
           />
-          <ActionButton label={t("terminal.hide")} icon="x" onClick={props.state.onHide} />
+          <PanelIconButton
+            class="rail-header__action tp-icon"
+            label={t("terminal.hide")}
+            icon={<Icon name="x" />}
+            onClick={props.state.onHide}
+          />
         </Show>
       </Show>
     </div>
@@ -477,16 +413,14 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
           onDrop={(event: DragEvent) => props.view().upload.handleDrop(event)}
         >
           <Show when={props.view().connecting}>
-            <Loading overlay label={t("terminal.connecting")} />
+            <PanelLoadingSkeleton variant="terminal" overlay label={t("terminal.connecting")} />
           </Show>
           <Show when={!props.view().activeId && !props.view().connecting && !props.view().error}>
-            {/* Defer the nested bridge mount until this parent's insertion is complete. */}
-            <openclaw-panel-empty-state
-              prop:heading={t("chat.sidePanel.terminal")}
-              prop:description={t("chat.sidePanel.terminalEmpty")}
-            >
-              <Icon name="terminal" />
-            </openclaw-panel-empty-state>
+            <PanelEmptyState
+              heading={t("chat.sidePanel.terminal")}
+              description={t("chat.sidePanel.terminalEmpty")}
+              icon={<Icon name="terminal" />}
+            />
           </Show>
           <Show when={props.view().upload.uploadsEnabled()}>
             <input

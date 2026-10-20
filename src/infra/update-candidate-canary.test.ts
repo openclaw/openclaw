@@ -713,10 +713,18 @@ describe("update candidate canary", () => {
       expect(result).toMatchObject({ status: "error", phase: failure });
       if (failure === "readiness") {
         expect(canaryOutcomeStep(result.steps)).toMatchObject({
-          exitCode: 1,
-          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+          exitCode: null,
+          termination: "timeout",
+          failureFacts: [
+            {
+              check: "startupz",
+              code: "candidate-startup-failed",
+              message: "readiness timeout",
+            },
+          ],
         });
         expect(canaryOutcomeStep(result.steps)?.advisory).toBeUndefined();
+        expect(canaryOutcomeStep(result.steps)?.stderrTail).toContain("stalled");
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);

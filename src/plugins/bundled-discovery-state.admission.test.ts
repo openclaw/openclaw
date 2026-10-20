@@ -1,17 +1,13 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
   readBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
-import {
-  createPluginCache,
-  isPluginCacheFactInvalidatedError,
-  PluginCacheFactInvalidatedError,
-  withPluginCache,
-} from "./plugin-cache.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 const reads = vi.hoisted(() => ({
@@ -107,11 +103,8 @@ it.each(readers)(
     });
     await withPluginCache(createPluginCache(), async () => {
       const result = Promise.resolve().then(async () => await read());
-      await expect(result).rejects.toBeInstanceOf(PluginCacheFactInvalidatedError);
-      await result.catch((error: unknown) =>
-        expect(error instanceof Error && error.cause).toBe(cause),
-      );
-      await expect(result.catch(isPluginCacheFactInvalidatedError)).resolves.toBe(true);
+      await expect(result).rejects.toBe(cause);
+      await expect(result.catch(isStateDatabaseReadAdmissionInvalidatedError)).resolves.toBe(true);
     });
     const failure = new Error("Synthetic metadata read failure");
     reject.mockImplementation(() => {

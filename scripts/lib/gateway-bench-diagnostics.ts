@@ -1,5 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import {
+  constants,
   createHistogram,
   monitorEventLoopDelay,
   performance,
@@ -17,6 +18,7 @@ const CHANNELS = [
   "openclaw.git.operation",
   "openclaw.gateway.rpc",
 ] as const;
+const sources = CHANNELS.map((name) => [name, channel(name)] as const);
 const METRICS = [
   "elapsedMs",
   "durationMs",
@@ -154,8 +156,7 @@ export function startGatewayBenchDiagnostics() {
     // Offset by one because histograms accept only positive integers; zero stays zero.
     metric.histogram.record(Math.round(Math.min(value, MAX_DURATION_MS) * HISTOGRAM_SCALE) + 1);
   };
-  const subscriptions = CHANNELS.map((name) => {
-    const source = channel(name);
+  const subscriptions = sources.map(([name, source]) => {
     const listener = (message: unknown) => {
       // Node forwards subscriber throws to uncaughtException. Keep capture failures local.
       try {
@@ -215,10 +216,24 @@ export function startGatewayBenchDiagnostics() {
     return () => source.unsubscribe(listener);
   });
   const gc: Record<string, Metric> = {};
-  const collectGc = (entries: readonly { startTime: number; duration: number }[]) => {
+  const collectGc = (
+    entries: readonly { startTime: number; duration: number; detail?: unknown }[],
+  ) => {
     for (const entry of entries) {
       if (entry.startTime >= startedAt) {
         add(gc, "durationMs", entry.duration);
+        const kind = isRecord(entry.detail) ? entry.detail.kind : undefined;
+        const name =
+          kind === constants.NODE_PERFORMANCE_GC_MAJOR
+            ? "major"
+            : kind === constants.NODE_PERFORMANCE_GC_MINOR
+              ? "minor"
+              : kind === constants.NODE_PERFORMANCE_GC_INCREMENTAL
+                ? "incremental"
+                : kind === constants.NODE_PERFORMANCE_GC_WEAKCB
+                  ? "weakCallback"
+                  : "unknown";
+        add(gc, `${name}DurationMs`, entry.duration);
       }
     }
   };

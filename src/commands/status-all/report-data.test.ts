@@ -332,8 +332,6 @@ describe("statusAllCommand report data", () => {
     const lines = await runStatusAllReport({
       overview: {
         ...scan,
-        coldStart: false,
-        hasConfiguredChannels: true,
         skipColdStartNetworkChecks: false,
         gatewaySnapshot: baseStatusGatewaySnapshot,
         runtimeDegradation: null,

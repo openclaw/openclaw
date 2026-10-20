@@ -15,7 +15,7 @@ import {
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import {
-  createSubagentSweeperChildLookup,
+  mockSubagentSweeperChildLookup,
   createSubagentSweeperRun,
 } from "./subagent-registry-sweeper.test-support.js";
 
@@ -40,6 +40,7 @@ it("bounds durable kill reconciliation when an accepted live source never settle
     sessionLifecycleRevision: "session-revision",
   };
   const runs = new Map([[entry.runId, entry]]);
+  const childLookup = mockSubagentSweeperChildLookup(runs);
   const target = captureSessionTarget({
     storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
       agentId: "main",
@@ -78,7 +79,7 @@ it("bounds durable kill reconciliation when an accepted live source never settle
     runId: entry.runId,
     entry,
     runs,
-    getRunsForChildSession: createSubagentSweeperChildLookup(runs),
+    getRunsForChildSession: childLookup,
     completeSubagentRunWithRecovery,
     retireSupersededRun: vi.fn(),
     retireObligations: vi.fn(async () => {}),
@@ -88,6 +89,7 @@ it("bounds durable kill reconciliation when an accepted live source never settle
     releaseSessionControllerClaim(claim);
     retireSessionControllerInput(source);
     await Promise.all([source.settlement.promise, reconciliation]);
+    childLookup.mockRestore();
   });
 
   await cancelled;

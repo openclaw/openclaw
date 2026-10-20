@@ -47,6 +47,19 @@ export const GATEWAY_CLIENT_MODES = {
   TEST: "test",
 } as const;
 
+export function isNativeAppUiClient(client?: {
+  id?: string | null;
+  mode?: string | null;
+}): boolean {
+  return (
+    client?.mode === GATEWAY_CLIENT_MODES.UI &&
+    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
+      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
+  );
+}
+
 export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
 
 export type GatewayClientInfo = {
@@ -76,7 +89,9 @@ export const GATEWAY_CLIENT_CAPS = {
   APPROVALS: "approvals",
   CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
   EXEC_APPROVALS: "exec-approvals",
+  HEALTH_SUMMARY: "health-summary",
   HELLO_HEALTH_ON_DEMAND: "hello-health-on-demand",
+  HELLO_PRESENCE_SELF: "hello-presence-self",
   INLINE_WIDGETS: "inline-widgets",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",
   MODEL_SELECTION_POLICY: "model-selection-policy",

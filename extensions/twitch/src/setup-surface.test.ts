@@ -1,10 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../api.js";
-import { checkTwitchAccessControl } from "./access-control.js";
 import { getAccountConfig } from "./config.js";
-import { setTwitchRuntime } from "./runtime.js";
+import { checkTwitchMessageThroughMonitor } from "./monitor-access.test-support.js";
 import {
   configureWithEnvToken,
   promptRefreshTokenSetup,
@@ -305,7 +303,6 @@ describe("setup surface helpers", () => {
   ] as const)(
     "applies %s through real ingress",
     async (_name, accountId, allowFrom, policies, isMod, expectedAllowFrom, allowed) => {
-      setTwitchRuntime(createPluginRuntimeMock());
       const initialAccount: TwitchAccountConfig = {
         ...mockAccount,
         enabled: true,
@@ -325,10 +322,9 @@ describe("setup surface helpers", () => {
       expect(account.allowFrom).toEqual(expectedAllowFrom);
       expect(groupAccess.currentPolicy({ cfg, accountId })).toBe(policies.at(-1));
       expect(groupAccess.updatePrompt?.({ cfg, accountId })).toBe(true);
-      const result = await checkTwitchAccessControl({
+      const result = await checkTwitchMessageThroughMonitor({
         account,
         accountId,
-        botUsername: mockAccount.username,
         message: {
           id: "policy-transition-message",
           userId: "123456",

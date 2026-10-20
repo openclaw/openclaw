@@ -86,6 +86,7 @@ describe("UrbitSSEClient real transport ownership", () => {
   it.each([
     { action: "subscribe", status: 200 },
     { action: "ack", status: 503 },
+    { action: "delete", status: 503 },
   ])("closes the unread $action response with status $status", async ({ action, status }) => {
     let observedAction: string | undefined;
     const closed = Promise.withResolvers<void>();
@@ -102,10 +103,18 @@ describe("UrbitSSEClient real transport ownership", () => {
     if (action === "subscribe") {
       client.isConnected = true;
       await client.subscribe({ app: "chat", path: "/inbox" });
-    } else {
+    } else if (action === "ack") {
       await expect(client.processEvent('id: 20\ndata: {"json":{"ok":true}}')).rejects.toThrow(
         "Ack failed with status 503",
       );
+    } else {
+      const error = vi.fn();
+      client.logger = { error };
+      await client.close();
+      expect(error).toHaveBeenCalledWith(
+        "Error closing channel: UrbitHttpError: Channel close failed: 503",
+      );
+      expect(client.aborted).toBe(true);
     }
     expect(observedAction).toBe(action);
     await expect(closed.promise).resolves.toBeUndefined();
@@ -189,6 +198,8 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
   const logs: string[] = [];
   let unauthorizedRequests = 0;
   let streamRequests = 0;
+  let channelExists = false;
+  const actions: Array<{ action: string }> = [];
   const retryScheduled = Promise.withResolvers<void>();
   const onReconnect = vi.fn();
   const server = createServer((request, response) => {
@@ -207,7 +218,16 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
       }
       return;
     }
-    response.writeHead(204).end();
+    if (request.method !== "PUT") {
+      response.writeHead(405).end();
+      return;
+    }
+    readBody(request, (body) => {
+      const received = JSON.parse(body) as Array<{ action: string }>;
+      actions.push(...received);
+      channelExists = !received.some((action) => action.action === "delete");
+      response.writeHead(204).end();
+    });
   });
   const baseUrl = await listen(server);
   const client = createClient(baseUrl, {
@@ -227,6 +247,8 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
     requests,
     logs,
     onReconnect,
+    actions,
+    channelExists: () => channelExists,
     unauthorizedRequests: () => unauthorizedRequests,
     async pendingReconnect(signal: AbortSignal) {
       await withinTest(retryScheduled.promise, signal);
@@ -264,14 +286,21 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
   it("settles a real pending reconnect when the public client closes", async ({ signal }) => {
     const proof = await startReconnectFixture();
     try {
+      await proof.client.subscribe({ app: "chat", path: "/inbox" });
       await proof.client.connect();
       const { reconnect } = await proof.pendingReconnect(signal);
+      expect(proof.channelExists()).toBe(true);
+      const actionsBeforeClose = proof.actions.length;
       await proof.client.close();
       const requestsAfterClose = proof.requests.length;
       await withinTest(reconnect, signal);
       expect(proof.onReconnect).not.toHaveBeenCalled();
       expect(proof.requests).toHaveLength(requestsAfterClose);
-      expect(proof.requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(true);
+      expect(proof.channelExists()).toBe(false);
+      expect(proof.actions.slice(actionsBeforeClose)).toEqual([{ action: "delete" }]);
+      expect(proof.requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(
+        false,
+      );
     } finally {
       await proof.client.close();
     }

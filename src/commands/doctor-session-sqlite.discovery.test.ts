@@ -448,7 +448,37 @@ it("recover settles identical repeated archives across retained manifests and na
     }
   }));
 
-it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchable history", () =>
+it.each([false, true])("imports renamed primary history (archived: %s)", (archived) =>
+  withOpenClawTestState({ label: "doctor-renamed-history" }, async (state) => {
+    const { sessions, run, search } = discoveryState(state);
+    const source = path.join(sessions, "renamed.jsonl");
+    const bytes = transcript("original-id", "renamedhistoryneedle");
+    fs.writeFileSync(source, bytes);
+    const retained = archived ? await retainSources(state, [source]) : undefined;
+    const report = await run("import");
+    expect(report.totals.importedEntries).toBe(1);
+    expect(issues(report)).toEqual([
+      expect.objectContaining({
+        code: "transcript_filename_mismatch",
+        message: expect.stringContaining("original-id"),
+      }),
+    ]);
+    expect(search("renamedhistoryneedle")).toEqual([
+      expect.objectContaining({ sessionId: "original-id" }),
+    ]);
+    const moves = readManifest(report.migrationRun!.manifestPath)!.targets.flatMap(
+      (target) => target.completedMoves,
+    );
+    const archive = moves.find((move) => move.sourcePath === source)!.archivePath;
+    expect(fs.readFileSync(archive, "utf8")).toBe(bytes);
+    if (retained) {
+      expectBytes(retained);
+    }
+    expect((await run("import")).totals.importedEntries).toBe(0);
+  }),
+);
+
+it("keeps diagnostic, deleted, and ambiguous inputs out of searchable history", () =>
   withOpenClawTestState({ label: "doctor-discovery-negative" }, async (state) => {
     const { sessions, store, run, search } = discoveryState(state);
     fs.writeFileSync(store, "{}");
@@ -464,13 +494,9 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
         }) + "\n",
       ],
       ["deleted.jsonl.deleted.2026-07-01T00-00-00.000Z", transcript("deleted", "deletedneedle")],
-      ["mismatch.jsonl", transcript("different", "mismatchneedle")],
       ["malformed.jsonl", '{"type":"session","id":"malformed","version":3}\ninvalid\n'],
       [`${duplicate}.jsonl`, transcript(duplicate, "ambiguousneedle")],
-      [
-        `2026-06-15T00-00-00-000Z_${duplicate}.jsonl`,
-        transcript(duplicate, "secondambiguousneedle"),
-      ],
+      ["renamed-copy.jsonl", transcript(duplicate, "secondambiguousneedle")],
     ]);
     for (const [name, bytes] of files) {
       fs.writeFileSync(path.join(sessions, name), bytes);
@@ -486,18 +512,20 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
     const archived = await retainSources(state, archivedSources);
     const report = await run("import");
     expect(report.totals.importedEntries).toBe(1);
-    expect(report.targets[0]!.issues.map((issue) => issue.code)).toEqual(
-      Array(4).fill("historical_transcript_deferred"),
-    );
+    expect(report.targets[0]!.issues.map((issue) => issue.code).toSorted()).toEqual([
+      ...Array(3).fill("historical_transcript_deferred"),
+      "transcript_filename_mismatch",
+    ]);
     expect(report.targets[0]!.issues).toContainEqual({
       code: "historical_transcript_deferred",
-      message: `${archivedId}: multiple primary files claim this identity; originals retained without importing`,
+      message: expect.stringContaining(
+        `${archivedId}: multiple primary files claim this identity; originals retained without importing:`,
+      ),
     });
     expect(search("eligibleprimaryneedle")).toHaveLength(1);
     for (const query of [
       "diagnosticneedle",
       "deletedneedle",
-      "mismatchneedle",
       "ambiguousneedle",
       "secondambiguousneedle",
       "distinctoriginalneedle",

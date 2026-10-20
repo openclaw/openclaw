@@ -8,6 +8,7 @@ import type { DesktopAudio } from "./desktop-audio.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import type { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
+import type { HostDesktopRuntimeConfig } from "./host-desktop-setup.ts";
 
 export type DesktopPanelInputs = {
   client: GatewayBrowserClient | null;
@@ -29,6 +30,8 @@ export type DesktopPanelInputs = {
   onFocusTargetChange:
     | ((target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>) => void)
     | null;
+  /** Host-owned config authority for Host Desktop setup; null hides the enable action. */
+  runtimeConfig: HostDesktopRuntimeConfig | null;
   /** Browser tests replace the transport without opening a real RFB socket. */
   desktopClientFactory: () => Pick<DesktopClient, "connect">;
 };

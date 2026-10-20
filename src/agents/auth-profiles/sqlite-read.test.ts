@@ -114,11 +114,11 @@ describe("prepared auth profile row reads", () => {
           try {
             return await operation({
               execute: vi.fn().mockImplementation(async () => {
-                sendAuthProfileUpdateValue(sender, rows);
+                sendAuthProfileUpdateValue(sender, { [databasePath]: rows });
                 admission.port.postMessage(
                   {
                     stage: "prepare",
-                    facts: { kind: "auth-store-read", port: receiver },
+                    facts: { kind: "auth-sources-read", port: receiver },
                     decision: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
                   },
                   [receiver],

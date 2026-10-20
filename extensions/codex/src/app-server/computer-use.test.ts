@@ -356,10 +356,7 @@ describe("Codex Computer Use setup", () => {
       managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockResolvedValue(
         managedMarketplacePath,
       );
-      managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockResolvedValue({
-        status: "already_current",
-        changed: false,
-      });
+      managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockResolvedValue(undefined);
       const request = provisionsWrapper
         ? createBundledMarketplaceComputerUseRequest(managedMarketplacePath)
         : createComputerUseRequest({ installed: false });

@@ -1,12 +1,15 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { MessageChannel } from "node:worker_threads";
 import {
   parseRemoteModelCatalogBundle as parseV1,
   parseRemoteModelCatalogBundleV2 as parseV2,
 } from "@openclaw/model-catalog-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -88,6 +91,58 @@ afterEach(async () => {
 });
 
 describe("remote model catalog refresh", () => {
+  it("bounds a native stalled body after headers without overwriting the stored catalog", async ({
+    signal,
+  }) => {
+    const previous = storedCatalog();
+    await storeCatalog(previous);
+    const nativeFetch = globalThis.fetch;
+    const headersReady = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    await withServer(
+      (_request, response) => {
+        response.once("close", closed.resolve);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.write('{"schemaVersion":');
+      },
+      async (baseUrl) => {
+        mockFetch(async (...args) => {
+          try {
+            const response = await nativeFetch(...args);
+            headersReady.resolve();
+            return response;
+          } catch (error) {
+            headersReady.reject(error);
+            throw error;
+          }
+        });
+        const controller = new AbortController();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const outcome = refreshCatalog({
+          config: { models: { catalogRefresh: { url: `${baseUrl}/catalog.json` } } },
+          databaseOptions,
+          force: true,
+          signal: controller.signal,
+        });
+        try {
+          await withinTest(headersReady.promise, signal);
+          await setImmediate();
+          await vi.advanceTimersByTimeAsync(15_000);
+          expect(await withinTest(outcome, signal)).toMatchObject({
+            status: "error",
+            error: expect.stringMatching(/abort|timed out/i),
+          });
+          await withinTest(closed.promise, signal);
+          expect(readCatalog(databaseOptions)?.bundle_json).toBe(previous.bundle_json);
+        } finally {
+          controller.abort();
+          vi.useRealTimers();
+          await outcome;
+        }
+      },
+    );
+  });
+
   it("lets the caller release a contended writer while persistence waits", async () => {
     const database = openOpenClawStateDatabase(databaseOptions);
     database.db.exec("PRAGMA busy_timeout=0");

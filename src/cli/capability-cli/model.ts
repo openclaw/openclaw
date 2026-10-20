@@ -361,9 +361,7 @@ async function runModelAuthStatus(agent: string) {
     { json: true, agent },
     {
       log: (...args) => captured.push(args.join(" ")),
-      error: (message) => {
-        throw message instanceof Error ? message : new Error(String(message));
-      },
+      error: defaultRuntime.error,
       exit: (code) => {
         throw new Error(`exit ${code}`);
       },

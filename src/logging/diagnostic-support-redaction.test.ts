@@ -48,6 +48,24 @@ describe("diagnostic support redaction", () => {
     "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
 
   it.each([
+    "schema migration required",
+    "database schema newer than candidate",
+    "plugin load failed",
+    "port in use",
+    "readiness timeout",
+    "startup crash with signal SIGTERM",
+    "native module missing",
+    "native module ABI mismatch",
+    "startup ran out of memory",
+  ])("admits only the exact startup template %s", (message) => {
+    const context = { env: {}, stateDir: tempDir };
+    expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);
+    expect(redactPublicSupportDiagnosticLine(`${message} private-tenant`, context)).toBe(
+      "[redacted-diagnostic]",
+    );
+  });
+
+  it.each([
     `'/synthetic/private owner/state.sqlite' private suffix`,
     `'/synthetic/o'brien/customer.sqlite' private suffix`,
     `"/synthetic/private "quoted" owner/state.sqlite" private suffix`,
@@ -150,6 +168,10 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["attempt state write refused", " for private-tenant at /private/example/state.sqlite"],
+    ["sentinel transaction refused", " on private-host.example"],
+    ["sentinel transaction unavailable", " for token=synthetic-private-token"],
+    ["pipe closed", " for private-host.example token=synthetic-private-token"],
     ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
     ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
     [
@@ -163,7 +185,7 @@ describe("diagnostic support redaction", () => {
       "SQLite snapshot hash mismatch",
       ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,
     ],
-  ])("keeps the fixed concurrent-write cause %s without its path", (cause, suffix) => {
+  ])("keeps the fixed failure cause %s without private context", (cause, suffix) => {
     expect(
       redactPublicSupportDiagnosticLine(`Warning: private-host.example\n${cause}${suffix}`, {
         env: {},

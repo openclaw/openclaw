@@ -1,3 +1,4 @@
+import type { SessionApprovalEvent } from "../../../../packages/gateway-protocol/src/index.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -51,6 +52,7 @@ type ChatHistoryPaneRequests = {
   historyVersion: number;
   branchVersion: number;
   subscriptionGeneration: number;
+  pendingApprovalReplay?: { generation: number; events: Map<string, SessionApprovalEvent> };
   subscriptionReady?: Promise<boolean>;
   subscriptionError?: string;
   subscriptionRetry?: AbortController;

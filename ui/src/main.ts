@@ -11,12 +11,6 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 import kbdStyles from "./components/kbd.css?inline";
 
-type ViteImportMeta = ImportMeta & {
-  readonly env?: {
-    readonly PROD?: boolean;
-  };
-};
-
 if (!unsupportedControlUiBrowser) {
   const themeColors: HTMLMetaElement[] = [];
   for (const id of ["openclaw-theme-color-light", "openclaw-theme-color-dark"]) {
@@ -46,7 +40,7 @@ if (!unsupportedControlUiBrowser) {
   if (root instanceof HTMLElement) {
     mountOpenClawApp(root);
   }
-  const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
+  const isProd = import.meta.env.PROD;
   const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 
   // Share the exact keyboard-hint rules with shadow roots without making renderers

@@ -159,6 +159,82 @@ function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
   });
 }
 
+test.each([
+  { label: "explicit background", args: { background: true } },
+  { label: "elapsed yield window", args: { yieldMs: 10 } },
+  { label: "disabled timeout", args: { background: true, timeoutSeconds: 0 } },
+])("provides a usable structured follow-up route after $label", async ({ label, args }) => {
+  const directory = await fs.realpath(
+    await fs.mkdtemp(path.join(state.workspaceDir, "exec-followup-")),
+  );
+  const releasePath = path.join(directory, "release");
+  const scopeKey = `agent:main:followup-${label}`;
+  const exec = createExecTool({
+    config,
+    ...fullGatewayExec,
+    allowBackground: true,
+    notifyOnExit: false,
+    timeoutSec: 5,
+    scopeKey,
+  });
+  const processTool = createProcessTool({ scopeKey });
+  // A parent-owned file releases the child only after the background result is observed.
+  const command = nodeCommand(
+    `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+     const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("FOLLOWUP_COMPLETE"); } };
+     const watcher = fs.watch(${JSON.stringify(directory)}, finish); finish();`,
+  );
+  try {
+    const requestedAt = Date.now();
+    const started = await exec.execute("followup-start", { command, ...args });
+    expect(started.details.status).toBe("running");
+    if (started.details.status !== "running") {
+      throw new Error("Expected a background process handle");
+    }
+    const deadlineAtMs = started.details.deadlineAtMs;
+    if (args.timeoutSeconds === 0) {
+      expect(deadlineAtMs).toBeUndefined();
+      expect(started.details.followUp).not.toContain("Automatic stop will be requested");
+    } else {
+      if (deadlineAtMs === undefined) {
+        throw new Error("Expected the actual process timeout deadline");
+      }
+      expect(deadlineAtMs).toBeGreaterThanOrEqual(requestedAt + 4_999);
+      expect(deadlineAtMs).toBeLessThanOrEqual(Date.now() + 5_001);
+      expect(started.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(new Date(deadlineAtMs).toISOString()),
+      });
+    }
+    expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
+    const followUp = started.details.followUp;
+    expect(followUp).toContain("poll");
+    if (!followUp) {
+      throw new Error("Expected a structured follow-up route");
+    }
+    expect(started.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining(followUp),
+    });
+
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(scopeKey);
+    const completed = await processTool.execute("followup-poll", {
+      action: "poll",
+      sessionId: started.details.sessionId,
+    });
+    expect(completed.details).toMatchObject({
+      status: "completed",
+      sessionId: started.details.sessionId,
+      aggregated: "FOLLOWUP_COMPLETE",
+    });
+  } finally {
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(scopeKey);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("does not advertise detached continuation when process is unavailable", async () => {
   const exec = createExecTool({
     ...fullGatewayExec,

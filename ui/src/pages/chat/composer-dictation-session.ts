@@ -28,7 +28,7 @@ type DictationSessionResult = {
 
 type ComposerDictationSessionCallbacks = {
   onError: (message: string, preservesText: boolean) => void;
-  onLevel: (level: number) => void;
+  onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
   onReady: () => void;
   onSilence?: () => void;
@@ -112,8 +112,10 @@ export class ComposerDictationSession {
     if (this.context.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
       throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
     }
-    this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
-    this.inputMeter.start(media, this.context);
+    if (this.callbacks.onLevel) {
+      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
+      this.inputMeter.start(media, this.context);
+    }
     this.inputPump.start(media, this.context, (samples) => this.appendAudio(samples));
     this.callbacks.onReady();
 

@@ -12,6 +12,8 @@ import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 
+const USAGE_NOTIFICATION_INTERVAL_MS = 500;
+
 /** A committed auth change remains successful even if its best-effort UI notification fails. */
 export function broadcastChatMetadataChanged(
   context: Pick<GatewayRequestContext, "broadcast" | "logGateway">,
@@ -163,13 +165,38 @@ export async function createGatewayChatMetadataLifecycle(params: {
       context = next;
       let selectionConfig = next.getCommittedRuntimeConfig?.() ?? params.getConfig();
       const unregister = await registerRefreshListeners();
-      sessionCostUsageNotifications.onUpdated = (publication) => {
+      const pendingUsage = new Map<string, SessionCostUsagePublication>();
+      let usageTimer: ReturnType<typeof setTimeout> | undefined;
+      const broadcastUsage = (publication: SessionCostUsagePublication) => {
         broadcastChatMetadataChanged(next, {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
           commandsChanged: false,
         });
+      };
+      const flushUsage = () => {
+        clearTimeout(usageTimer);
+        usageTimer = undefined;
+        for (const publication of pendingUsage.values()) {
+          broadcastUsage(publication);
+        }
+        pendingUsage.clear();
+      };
+      sessionCostUsageNotifications.onUpdated = (publication) => {
+        if (publication.usageRefreshFailed) {
+          // Clients retain the last successful commit separately from the latest failure.
+          const pending = pendingUsage.get(publication.agentId);
+          if (pending) {
+            pendingUsage.delete(publication.agentId);
+            broadcastUsage(pending);
+          }
+          broadcastUsage(publication);
+          return;
+        }
+        pendingUsage.set(publication.agentId, publication);
+        // Worker batches settle on different ticks. Keep one bounded window, never a debounce.
+        usageTimer ??= setTimeout(flushUsage, USAGE_NOTIFICATION_INTERVAL_MS).unref();
       };
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
         if (change.kind === "config" && change.context === next && context === next) {
@@ -191,6 +218,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
       publishSidecars({
         stop: async () => {
           sessionCostUsageNotifications.onUpdated = () => {};
+          clearTimeout(usageTimer);
+          pendingUsage.clear();
           unregisterRolePolicy();
           unregister();
           await runtime.stop();

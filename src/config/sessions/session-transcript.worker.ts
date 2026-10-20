@@ -507,6 +507,27 @@ serveOwnedWorkerTasks(
           snapshot: readPendingInputHistoryInWorker(request),
         };
       }
+      if (request.kind === "conversation-bindings") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { selectConversationBindingFacts } =
+          await import("./conversation-binding-facts.worker.js");
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => selectConversationBindingFacts(database, request.conversationRefs),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return {
+          kind: "conversation-bindings",
+          snapshot: read.found
+            ? read.value
+            : {
+                catalogues: [],
+                associations: [],
+                windows: [],
+                nodes: [],
+              },
+        };
+      }
       if (request.kind === "conversation-rows") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");

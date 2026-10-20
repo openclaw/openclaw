@@ -60,7 +60,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -119,10 +119,7 @@ async function maybeDeleteAgentThroughGateway(params: {
   }
 }
 
-export async function agentsDeleteCommand(
-  opts: AgentsDeleteOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
   const failAgentsDelete = (message: string): void => {
     if (opts.json) {
       writeRuntimeJson(runtime, formatCliJsonFailure(message));

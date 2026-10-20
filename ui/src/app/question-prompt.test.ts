@@ -171,14 +171,25 @@ describe("question event parsing", () => {
   it("preserves question and option display normalization for canonical Gateway records", () => {
     const state = createState();
     const question = requestedPayload().questions[0]!;
-    requestQuestion(state, {
-      questions: [
-        { ...question, question: "  Which format?  ", options: [{ label: "  Compact  " }] },
+    const media = {
+      presentation: "form",
+      resource: { viewId: "form-view", selection: "explicit" },
+      options: [
+        {
+          label: "  Compact  ",
+          thumbnail: "https://example.test/compact.png",
+          resourceUri: "https://example.test/compact",
+          preview: { type: "resource_link", uri: "https://example.test/compact", name: "Compact" },
+        },
       ],
+    };
+    requestQuestion(state, {
+      questions: [{ ...question, ...media, question: "  Which format?  " }],
     });
     expect(state.prompts.get("question-1")?.questions[0]).toMatchObject({
+      ...media,
       question: "Which format?",
-      options: [{ label: "Compact" }],
+      options: [{ ...media.options[0], label: "Compact" }],
     });
   });
 

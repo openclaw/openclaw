@@ -53,7 +53,7 @@ function CatalogList(
                 <Show when={entry().summary}>
                   <p>{entry().summary}</p>
                 </Show>
-                <span class="claws-catalog__meta">{t("clawsCatalog.publisher")}</span>
+                <span class="claws-catalog__meta">{`@${entry().ownerHandle}`}</span>
               </div>
               <button
                 type="button"

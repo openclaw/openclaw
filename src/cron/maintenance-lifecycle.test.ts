@@ -13,9 +13,14 @@ import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 const mocks = vi.hoisted(() => ({
   history: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({ nextSweepAtMs: null })),
   historyChanged: undefined as ((databasePath: string) => void) | undefined,
-  registry: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({
-    nextSweepAtMs: null,
-  })),
+  registry: vi.fn(
+    async (): Promise<{
+      nextSweepAtMs: number | null;
+      pruned?: number;
+      skippedStores?: number;
+      skippedReason?: string;
+    }> => ({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 }),
+  ),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -54,7 +59,9 @@ let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.history.mockReset().mockResolvedValue({ nextSweepAtMs: null });
-  mocks.registry.mockReset().mockResolvedValue({ nextSweepAtMs: null });
+  mocks.registry
+    .mockReset()
+    .mockResolvedValue({ nextSweepAtMs: null, pruned: 0, skippedStores: 0 });
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
   scheduler = createTestGatewayScheduler(clock.clock);
@@ -100,7 +107,15 @@ it.each([
         await clock.advanceBy(60_000);
         expect(mocks.history).toHaveBeenCalledOnce();
         expect(mocks.registry).toHaveBeenCalledOnce();
-        expect(mocks.info).not.toHaveBeenCalled();
+        expect(mocks.info).toHaveBeenCalledExactlyOnceWith(
+          "Session registry maintenance completed",
+          {
+            lastSuccessAtMs: 5_000,
+            nextSweepAtMs: null,
+            pruned: 0,
+            skippedStores: 0,
+          },
+        );
       } finally {
         preparation.resolve();
         await tick;
@@ -166,6 +181,43 @@ it("retains a committed cron wake received while the previous registry read is i
   await sweep;
   await clock.advanceTo(65_000);
   expect(mocks.registry).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the last completed sweep visible when missing cron facts defer the next pass", async () => {
+  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  await clock.advanceBy(5_000);
+  mocks.registry.mockResolvedValueOnce({
+    nextSweepAtMs: 125_000,
+    skippedReason: "synthetic unreadable cron store",
+  });
+  sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+  await clock.advanceTo(65_000);
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Session registry maintenance skipped", {
+    reason: "synthetic unreadable cron store",
+    retryAtMs: 125_000,
+    lastSuccessAtMs: 5_000,
+  });
+  expect(mocks.info).toHaveBeenCalledOnce();
+  await clock.advanceTo(125_000);
+  expect(mocks.info).toHaveBeenLastCalledWith("Session registry maintenance completed", {
+    lastSuccessAtMs: 125_000,
+    nextSweepAtMs: null,
+    pruned: 0,
+    skippedStores: 0,
+  });
+});
+
+it("does not mistake an unknown failure with the snapshot error text for an expected deferral", async () => {
+  const failure = new Error("Agent database deletion snapshot changed during consumption.");
+  mocks.registry.mockRejectedValueOnce(failure);
+  startCronMaintenance(scheduler, () => "/synthetic/cron/jobs.json");
+  await clock.advanceBy(5_000);
+  expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", { error: failure });
+  expect(mocks.info).not.toHaveBeenCalled();
+  expect(scheduler.nextWakeAtMs).toBe(65_000);
+  await clock.advanceTo(65_000);
+  expect(mocks.registry).toHaveBeenCalledTimes(2);
+  expect(mocks.info).toHaveBeenCalledOnce();
 });
 
 describe("Cron maintenance admission diagnostics", () => {

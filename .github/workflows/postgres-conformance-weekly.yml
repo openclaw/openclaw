@@ -1,0 +1,47 @@
+name: PostgreSQL Weekly Qualification
+
+on:
+  schedule:
+    - cron: "43 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-conformance-weekly
+  cancel-in-progress: false
+
+jobs:
+  postgres-conformance:
+    if: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' }}
+    name: PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    # Allow 2× the measured 24m25s maximum in run 39393830074.
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        version: [pg16, pg18]
+        shard: [1/3, 2/3, 3/3]
+        include:
+          - version: pg16
+            image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+          - version: pg18
+            image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Run PostgreSQL conformance
+        uses: ./.github/actions/postgres-conformance
+        with:
+          image: ${{ matrix.image }}
+          shard: ${{ matrix.shard }}

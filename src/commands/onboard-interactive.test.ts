@@ -3,6 +3,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import * as configModule from "../config/config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -128,9 +129,9 @@ describe("runConversationalOnboarding", () => {
       }),
     );
     const fingerprintPluginRuntimeArtifact = fixture.fingerprintPluginRuntimeArtifact;
-    const deps = {
-      readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-    };
+    vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(
+      mocks.readConfigFileSnapshot,
+    );
     let artifactCurrent = true;
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push({
@@ -164,7 +165,7 @@ describe("runConversationalOnboarding", () => {
     >("../system-agent/system-agent.js");
     mocks.runSystemAgent.mockImplementation((opts, runtime) =>
       runSystemAgent(
-        { ...opts, deps, input: terminal, output: terminal, runInteractiveTui: launchConversation },
+        { ...opts, input: terminal, output: terminal, runInteractiveTui: launchConversation },
         runtime,
       ),
     );
@@ -173,7 +174,7 @@ describe("runConversationalOnboarding", () => {
       registry,
       launchConversation,
       currentConfig: () => config,
-      resolveCurrentRoute: () => resolveSystemAgentVerifiedInferenceRoute(fixture.binding, deps),
+      resolveCurrentRoute: () => resolveSystemAgentVerifiedInferenceRoute(fixture.binding),
       invalidate: (
         kind:
           | "configured route"

@@ -72,19 +72,6 @@ const changedConfig: OpenClawConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
 };
 
-function configSnapshot(config: OpenClawConfig) {
-  return {
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash: "h",
-    config,
-    runtimeConfig: config,
-    sourceConfig: config,
-    issues: [],
-  };
-}
-
 let sharedFixture: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>;
 let configFixture: Awaited<ReturnType<typeof createInferenceConfigFixture>>;
 
@@ -93,14 +80,11 @@ beforeAll(async () => {
   inferenceMocks.sharedVerifiedInference = sharedFixture.binding;
 });
 
-function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}, revalidate = false) {
+function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}) {
   const fixture = sharedFixture;
   return {
-    verifiedInference: revalidate ? { ...fixture.binding } : fixture.binding,
-    deps: {
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
-      ...deps,
-    },
+    verifiedInference: fixture.binding,
+    deps,
   };
 }
 
@@ -221,7 +205,7 @@ describe("runSystemAgent", () => {
         }
         return configFixture.read();
       });
-    const verified = { verifiedInference: fixture.binding, deps: { readConfigFileSnapshot } };
+    const verified = { verifiedInference: fixture.binding, deps: {} };
     const run = runner(runtime, verified);
 
     await expect(
@@ -278,20 +262,21 @@ describe("runSystemAgent", () => {
 
   it("does not print a reply-only plan after its inference owner drifts", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    let currentConfig: OpenClawConfig = verifiedConfig;
-    const verified = createVerifiedRunOptions(
-      {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-      },
-      true,
+    const snapshot = configFixture.snapshot;
+    const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
     );
-    const run = runner(runtime, verified);
+    const run = runner(runtime, {
+      verifiedInference: fixture.binding,
+      deps: {},
+    });
 
     await expect(
       run({
         message: "explain the current setup",
         planWithAssistant: async () => {
-          currentConfig = changedConfig;
+          await configFixture.write(changedConfig);
           return { reply: "stale reply" };
         },
       }),

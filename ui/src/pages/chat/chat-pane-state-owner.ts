@@ -10,7 +10,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createQuestionPromptState, listQuestionPrompts } from "../../app/question-prompt.ts";
+import { createQuestionPromptState } from "../../app/question-prompt.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
@@ -50,9 +50,9 @@ import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { publishChatRunState } from "./chat-state-render.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
@@ -60,7 +60,7 @@ import type {
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
@@ -75,7 +75,6 @@ export type ChatPaneInputChanges = {
   inputRegion?: boolean;
   draft?: boolean;
   focusComposer?: boolean;
-  routeResolutionPending?: boolean;
 };
 
 /** Synchronous pane facts and domain resources; Solid owns publication and commits. */
@@ -93,38 +92,23 @@ export abstract class ChatPaneStateOwner {
   historySentinel: HTMLElement | null = null;
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
-  protected readonly registerHeaderElement = (element: HTMLElement) => {
-    this.headerElement = element;
-    return () => {
-      if (this.headerElement === element) {
-        this.headerElement = null;
-      }
+  private registerPaneElement(
+    key: "headerElement" | "historySentinel" | "transcriptAnnouncement" | "composerShell",
+  ) {
+    return (element: HTMLElement) => {
+      this[key] = element;
+      return () => {
+        if (this[key] === element) {
+          this[key] = null;
+        }
+      };
     };
-  };
-  protected readonly registerHistorySentinel = (element: HTMLElement) => {
-    this.historySentinel = element;
-    return () => {
-      if (this.historySentinel === element) {
-        this.historySentinel = null;
-      }
-    };
-  };
-  protected readonly registerTranscriptAnnouncement = (element: HTMLElement) => {
-    this.transcriptAnnouncement = element;
-    return () => {
-      if (this.transcriptAnnouncement === element) {
-        this.transcriptAnnouncement = null;
-      }
-    };
-  };
-  protected readonly registerComposerShell = (element: HTMLElement) => {
-    this.composerShell = element;
-    return () => {
-      if (this.composerShell === element) {
-        this.composerShell = null;
-      }
-    };
-  };
+  }
+  protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
+  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
+  protected readonly registerTranscriptAnnouncement =
+    this.registerPaneElement("transcriptAnnouncement");
+  protected readonly registerComposerShell = this.registerPaneElement("composerShell");
 
   abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
   abstract afterRender(focusComposerChanged: boolean): void;
@@ -141,7 +125,7 @@ export abstract class ChatPaneStateOwner {
     }
     if (state.chatStreamRenderFrame != null) {
       // Publish before the browser suspends animation frames; the hidden view stays parked.
-      publishChatRunState(state);
+      chatRunPresentation(state).publish();
     }
     const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
@@ -212,7 +196,6 @@ export abstract class ChatPaneStateOwner {
   sessionKey = "";
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
-  routeResolutionPending = false;
   agentId?: string = undefined;
   inputRegion: ChatInputRegion = "page";
   compact = false;
@@ -417,10 +400,7 @@ export abstract class ChatPaneStateOwner {
   }
 
   readonly questionPromptState = createQuestionPromptState();
-  protected get questionPrompts() {
-    return listQuestionPrompts(this.questionPromptState);
-  }
-  protected state: ChatPageHost | undefined;
+  state: ChatPageHost | undefined;
 
   protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
     const state = this.state;

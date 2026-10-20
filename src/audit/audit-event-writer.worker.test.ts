@@ -13,6 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import { listAuditEvents, recordAuditEventInDatabase } from "./audit-event-store.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
 import { input, messageEvent, decisionReceipt } from "./audit-event-writer.test-support.js";
@@ -52,6 +53,72 @@ afterEach(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit writer shared worker", () => {
+  it("records a warm run start and finish with one worker request", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-run-pair-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
+    const recorder = createAgentEventAuditRecorder({ writer, getConfig: () => ({}) });
+    await writer.ready;
+    expect(writer.record({ ...input(), sourceId: "warm-seed", runId: "warm-seed" })).toBe(true);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
+    let requests = 0;
+    const stopObserving = onInternalDiagnosticEvent(
+      (event) => {
+        if (
+          event.type === "worker.request" &&
+          event.phase === "queued" &&
+          event.requestClass === "audit.writer.process"
+        ) {
+          requests += 1;
+        }
+      },
+      { include: ["worker.request"] },
+    );
+    const event = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "run-pair-session",
+      runId: "paired-run",
+      lifecycleGeneration: "paired-gateway",
+      stream: "lifecycle",
+      seq: 1,
+      ts: Date.now(),
+      data: { phase: "start" },
+    };
+    try {
+      recorder.record(event);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const duringTurn = (await listAuditEvents({ database, limit: 10 })).events;
+      recorder.record({ ...event, seq: 2, data: { phase: "end" } });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const events = (await listAuditEvents({ database, limit: 10 })).events.filter(
+        ({ runId }) => runId === event.runId,
+      );
+      expect(events.map(({ action }) => action).toSorted()).toEqual([
+        "agent.run.finished",
+        "agent.run.started",
+      ]);
+      expect(requests, "warm audit worker request count").toBe(1);
+      expect(duringTurn).toHaveLength(1);
+      expect(errors).toEqual([]);
+    } finally {
+      await recorder.stop();
+      stopObserving();
+    }
+  });
+
   it.each(["cold", "existing shared actor", "worker death after committed prefix"] as const)(
     "flushes the %s audit FIFO without host SQLite",
     async (mode) => {
@@ -145,12 +212,21 @@ describe("audit writer shared worker", () => {
           }),
         ).toBe(true);
         recorder.recordMessage(messageEvent("message.outbound.queued"));
+        const start = input();
+        expect(
+          writer.recordRun(start, {
+            ...start,
+            sourceId: "paired-finish",
+            sourceSequence: 2,
+            action: "agent.run.finished",
+            status: "succeeded",
+          }),
+        ).toBe(true);
         recorder.recordMessage({
           ...messageEvent("message.outbound.finished"),
           runId: receipt.runId,
           executionIdentityToken: token,
         });
-        expect(writer.record(input())).toBe(true);
       } finally {
         clearSink();
         try {
@@ -167,7 +243,7 @@ describe("audit writer shared worker", () => {
       const replayed = mode === "worker death after committed prefix";
       const owner = openOpenClawStateDatabase(database).db;
       expect(owner.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
-        count: 2,
+        count: 3,
       });
       expect(
         owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_execution_bindings").get(),
@@ -175,10 +251,15 @@ describe("audit writer shared worker", () => {
       expect(errors).toHaveLength(replayed ? 1 : 0);
       expect(processRequests).toBe(replayed ? 2 : 1);
       expect(
-        owner.prepare("SELECT run_id FROM audit_events WHERE kind = 'agent_run'").get(),
-      ).toEqual({
-        run_id: "run-1",
-      });
+        owner
+          .prepare(
+            "SELECT run_id, action FROM audit_events WHERE kind = 'agent_run' ORDER BY sequence",
+          )
+          .all(),
+      ).toEqual([
+        { run_id: "run-1", action: "agent.run.started" },
+        { run_id: "run-1", action: "agent.run.finished" },
+      ]);
       expect(
         owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get(),
       ).toEqual({

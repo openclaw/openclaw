@@ -22,7 +22,6 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     chatRunStartup: null,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
     connected: true,

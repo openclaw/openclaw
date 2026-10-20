@@ -4,6 +4,7 @@ import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProvider } from "../../plugins/types.js";
+import { isGatewayWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -85,6 +86,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   // losing recovery pass attach or sync after the winner advances the placement.
   const guardedReconcileInFlight = new Map<string, Promise<void>>();
   let stopping = false;
+  const isReconciliationPaused = () => stopping || isGatewayWorkAdmissionClosed();
   let maintenanceInFlight: Promise<void> | undefined;
 
   const trackOperation = <T>(operation: Promise<T>) => {
@@ -267,10 +269,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     signal?: AbortSignal,
     retainProviderSettlement?: (settled: Promise<void>) => void,
   ) => {
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return;
     }
     await withLock(environmentId, async () => {
+      if (isReconciliationPaused()) {
+        return;
+      }
       await store.ready();
       const current = store.get(environmentId);
       if (!current || ["destroyed", "failed", "orphaned"].includes(current.state)) {
@@ -288,7 +293,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcileEnvironment = async (environmentId: string) => {
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return;
     }
     const guard = reconcileEnvironmentGuard;
@@ -339,7 +344,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       throw error;
     }
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return;
     }
     if (environmentId === undefined) {
@@ -357,7 +362,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           ),
     );
     await runTasksWithConcurrency({ tasks, limit: 8 });
-    if (stopping || environmentId !== undefined) {
+    if (isReconciliationPaused() || environmentId !== undefined) {
       return;
     }
     // The resident inventory includes terminal rows and receives every committed store write.
@@ -369,7 +374,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcileOnce = (environmentId?: string) => {
-    if (stopping) {
+    if (isReconciliationPaused()) {
       return Promise.resolve();
     }
     if (environmentId !== undefined) {

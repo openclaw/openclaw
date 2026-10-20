@@ -94,7 +94,7 @@ function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, i
       return { subscribed: true };
     }
     if (method === "sessions.groups.list") {
-      return { names: [], sectionOrder: [] };
+      return { groups: [], sectionOrder: [] };
     }
     if (method === "sessions.list") {
       if (!Value.Check(SessionsListParamsSchema, params)) {
@@ -179,6 +179,27 @@ describe("sidebar people workload", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+  });
+
+  it("defers person activity links while Online is hidden and shows current people when opened", async () => {
+    const { gateway, sessions } = createWorkloadGateway(async () => summary());
+    await sessions.refresh({ agentId: "main", limit: 1 });
+    const link = vi.spyOn(personActivity, "personActivityLink");
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS);
+    sidebar.connected = true;
+    await settle(sidebar);
+    expect(link).not.toHaveBeenCalled();
+
+    await selectSidebarView(sidebar, "online");
+    expect(person(sidebar, "ada").getAttribute("href")).toBe("/activity/ada");
+    expect(link).toHaveBeenCalled();
+    await selectSidebarView(sidebar, "sessions");
+    link.mockClear();
+    gateway.publishEvent("presence", { presence: [profile("ada", "Ada renamed", NOW)] });
+    await settle(sidebar);
+    expect(link).not.toHaveBeenCalled();
+    await selectSidebarView(sidebar, "online");
+    expect(person(sidebar, "Ada renamed").getAttribute("href")).toBe("/activity/ada");
   });
 
   it("prepares one activity link per updated person while keeping navigation current", async () => {

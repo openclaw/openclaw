@@ -19,28 +19,21 @@ import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helper
 import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
-import type { UsageProps, UsageRouteData } from "./types.ts";
 import { createUsageDetails } from "./usage-details.ts";
+import type {
+  UsageDetailPresentation,
+  UsageDisplayState,
+  UsageFilterState,
+  UsageRouteData,
+  UsageSessionEntry,
+} from "./usage-state-types.ts";
 
 type UsagePresentation = {
   display: Pick<
-    UsageProps["display"],
+    UsageDisplayState,
     "chartMode" | "dailyChartMode" | "contextExpanded" | "headerPinned"
   >;
-  detail: Pick<
-    UsageProps["detail"],
-    | "timeSeriesMode"
-    | "timeSeriesBreakdownMode"
-    | "timeSeriesCursorStart"
-    | "timeSeriesCursorEnd"
-    | "sessionLogsExpanded"
-    | "logFilters"
-  >;
-};
-type UsageOwnerView = Omit<UsageProps, "display" | "detail"> & {
-  result: SessionsUsageResult | null;
-  display: Omit<UsageProps["display"], keyof UsagePresentation["display"]>;
-  detail: Omit<UsageProps["detail"], keyof UsagePresentation["detail"]>;
+  detail: UsageDetailPresentation;
 };
 
 export function createUsagePage(context: ApplicationContext) {
@@ -54,7 +47,7 @@ export function createUsagePage(context: ApplicationContext) {
   } | null = null;
   let usageError: string | null = null;
   let sessionLoadedAtMs: number | null = null;
-  let filters: Omit<UsageProps["filters"], "selectedSessions"> = {
+  let filters: Omit<UsageFilterState, "selectedSessions"> = {
     ...createDefaultUsageDateRange(),
     scope: "family",
     creatorKey: null,
@@ -65,7 +58,7 @@ export function createUsagePage(context: ApplicationContext) {
     timeZone: "local",
   };
   // Sorting and recent selection belong to the next request, before Solid commits.
-  let display: UsageOwnerView["display"] = {
+  let display: Omit<UsageDisplayState, keyof UsagePresentation["display"]> = {
     sessionSort: "recent",
     sessionSortDir: "desc",
     recentSessions: [],
@@ -89,7 +82,7 @@ export function createUsagePage(context: ApplicationContext) {
   });
   let usageSelectedSessions: string[] = [];
   let usageOffset = 0;
-  let selectedSession: UsageProps["data"]["selectedSession"] = null;
+  let selectedSession: UsageSessionEntry | null = null;
   let usageAgentId: string | null = null;
   const timers: { dateDebounceTimer: number | null; queryDebounceTimer: number | null } = {
     dateDebounceTimer: null,
@@ -523,7 +516,7 @@ export function createUsagePage(context: ApplicationContext) {
     refreshOverview();
   }
 
-  function read(): UsageOwnerView {
+  function read() {
     const timeSeries = details.timeSeries.data;
     return {
       result: usageResult(),
@@ -541,10 +534,11 @@ export function createUsagePage(context: ApplicationContext) {
         costDaily: usageCalendarSummary()?.daily ?? [],
         cacheRefresh: usageCacheIncomplete()
           ? usageRefreshFailed()
-            ? "failed"
-            : "retrying"
-          : "complete",
+            ? ("failed" as const)
+            : ("retrying" as const)
+          : ("complete" as const),
         providerUsage: providerUsage.summary?.providers ?? [],
+        // The gateway never converged the refresh; the empty list is not an answer.
         providerUsageStalled: providerUsage.incomplete && refreshPolicy.incompleteUsageExhausted,
         providerUsageUnavailable: providerUsage.unavailable,
       },
@@ -565,16 +559,18 @@ export function createUsagePage(context: ApplicationContext) {
       },
       callbacks: {
         filters: {
-          onDatesChange: (dates) => {
+          onDatesChange: (dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) => {
             setFilters(dates);
             scheduleUsageLoad();
           },
-          onScopeChange: (scope) => {
+          onScopeChange: (
+            scope: Partial<Pick<UsageFilterState, "scope" | "creatorKey" | "timeZone">>,
+          ) => {
             setFilters(scope);
             clearSelectionsAndDetails();
             void refreshPolicy.request("manual");
           },
-          onRefresh: () => {
+          onRefresh: (): void | Promise<void> => {
             for (const receipt of usagePublication().failures) {
               acknowledgedUsageFailures.add(receipt);
             }
@@ -585,7 +581,7 @@ export function createUsagePage(context: ApplicationContext) {
               draft.display.headerPinned = !draft.display.headerPinned;
             });
           },
-          onSelectHour: (hour, shiftKey) => {
+          onSelectHour: (hour: number, shiftKey: boolean) => {
             setFilters({
               selectedHours: toggleUsageRangeSelection(
                 filters.selectedHours,
@@ -597,7 +593,7 @@ export function createUsagePage(context: ApplicationContext) {
             });
             refreshOverview();
           },
-          onQueryDraftChange: (query) => {
+          onQueryDraftChange: (query: string) => {
             setFilters({ queryDraft: query });
             clearDebounce("queryDebounceTimer");
             timers.queryDebounceTimer = window.setTimeout(() => {
@@ -611,7 +607,7 @@ export function createUsagePage(context: ApplicationContext) {
             setFilters({ queryDraft: "", query: "" });
             refreshOverview();
           },
-          onSelectDay: (day, shiftKey, orderedDays) => {
+          onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => {
             setFilters({
               selectedDays: toggleUsageRangeSelection(
                 filters.selectedDays,
@@ -646,14 +642,14 @@ export function createUsagePage(context: ApplicationContext) {
           onExportJson: () => {
             void usageExportRequest.run("json");
           },
-          onExportCsv: (format) => {
+          onExportCsv: (format: "sessions-csv" | "daily-csv") => {
             void usageExportRequest.run(format);
           },
-          onPageChange: (offset) => {
+          onPageChange: (offset: number) => {
             usageOffset = offset;
             void loadUsage();
           },
-          onChange: (next) => {
+          onChange: (next: Partial<UsageDisplayState>) => {
             const { sessionSort, sessionSortDir, sessionsTab, recentSessions, ...local } = next;
             display = {
               sessionSort: sessionSort ?? display.sessionSort,
@@ -685,23 +681,25 @@ export function createUsagePage(context: ApplicationContext) {
               draft.detail.sessionLogsExpanded = !draft.detail.sessionLogsExpanded;
             });
           },
-          onLogFiltersChange: (next) => {
+          onLogFiltersChange: (next: Partial<UsageDetailPresentation["logFilters"]>) => {
             setPresentation((draft) => {
               Object.assign(draft.detail.logFilters, next);
             });
           },
           onSelectSession: selectSession,
-          onTimeSeriesModeChange: (mode) => {
+          onTimeSeriesModeChange: (mode: UsageDetailPresentation["timeSeriesMode"]) => {
             setPresentation((draft) => {
               draft.detail.timeSeriesMode = mode;
             });
           },
-          onTimeSeriesBreakdownChange: (mode) => {
+          onTimeSeriesBreakdownChange: (
+            mode: UsageDetailPresentation["timeSeriesBreakdownMode"],
+          ) => {
             setPresentation((draft) => {
               draft.detail.timeSeriesBreakdownMode = mode;
             });
           },
-          onTimeSeriesCursorRangeChange: (start, end) => {
+          onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => {
             if (details.timeSeries.data === timeSeries) {
               setPresentation((draft) => {
                 draft.detail.timeSeriesCursorStart = start;
@@ -730,7 +728,7 @@ export function createUsagePage(context: ApplicationContext) {
   });
 
   return {
-    read(): UsageProps {
+    read() {
       const state = projection.read();
       return {
         ...state,

@@ -700,6 +700,7 @@ export async function runReplyAgent(
         await cleanupReplyAgentRun({
           blockReplyPipeline,
           clearRestartRecoveryDeliveryClaim,
+          releaseSourceAdmission: turn.releaseSourceAdmission,
           isHeartbeat,
           providedReplyOperation: callerOwnedReplyOperation,
           queueKey,

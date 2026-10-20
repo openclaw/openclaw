@@ -6,7 +6,7 @@ import type {
   SettingsSidebarFallbackProps,
   SettingsSidebarLoader,
 } from "../components/settings-sidebar-lazy.tsx";
-import { resolveGatewayStatus } from "../lib/gateway-status.ts";
+import { isGatewayConnectionAttemptPending, resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -252,6 +252,7 @@ export function readShellView(host: ShellViewHost) {
       ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
       : 0,
     onRetry: callbacks.retryGateway,
+    retryPending: isGatewayConnectionAttemptPending(gatewaySnapshot),
   };
   const mobileGatewayStatus =
     mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;
@@ -338,6 +339,5 @@ export function readShellView(host: ShellViewHost) {
     connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
-    navigationSnapshot,
   };
 }

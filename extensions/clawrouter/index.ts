@@ -1,12 +1,15 @@
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
   ProviderThinkingProfile,
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
   ProviderToolSchemaDiagnostic,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
@@ -22,6 +25,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
@@ -31,14 +35,139 @@ import {
   normalizeClawRouterReasoningEfforts,
   normalizeClawRouterRootUrl,
   normalizeClawRouterResolvedModel,
+  prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
-import { wrapClawRouterProviderStream } from "./stream.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
+
+const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
+const ATTRIBUTION_VALUE_MAX_LENGTH = 256;
+const REQUEST_ID_MAX_LENGTH = 128;
+const CLIENT_HEADER = "X-ClawRouter-Client";
+const AGENT_HEADER = "X-ClawRouter-Agent-Id";
+const SESSION_HEADER = "X-ClawRouter-Session-Id";
+const REQUEST_ID_HEADER = "X-Request-ID";
+const ID_HASH_LENGTH = 16;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._~:/+@=-]+$/u;
+const REQUEST_ID_UNSAFE_CHARACTER_PATTERN = /[^A-Za-z0-9._~:/+@=-]/gu;
+const ATTRIBUTION_PRINTABLE_ASCII_PATTERN = /^[\x20-\x7E]+$/u;
+const ATTRIBUTION_NON_PRINTABLE_ASCII_PATTERN = /[^\x20-\x7E]/gu;
+const ATTRIBUTION_ENCODED_SUFFIX_PATTERN = /~[a-f0-9]{16}$/u;
+const REQUEST_ID_SUFFIX_PATTERN = /:model:\d+$/u;
+const REQUEST_ID_ENCODED_SUFFIX_PATTERN = /~[a-f0-9]{16}(?::model:\d+)?$/u;
+
+type BoundedIdPolicy = {
+  encodedSuffixPattern: RegExp;
+  maxLength: number;
+  safePattern: RegExp;
+  unsafeCharacterPattern: RegExp;
+  preservedSuffixPattern?: RegExp;
+};
+
+const ATTRIBUTION_ID_POLICY: BoundedIdPolicy = {
+  encodedSuffixPattern: ATTRIBUTION_ENCODED_SUFFIX_PATTERN,
+  maxLength: ATTRIBUTION_VALUE_MAX_LENGTH,
+  safePattern: ATTRIBUTION_PRINTABLE_ASCII_PATTERN,
+  unsafeCharacterPattern: ATTRIBUTION_NON_PRINTABLE_ASCII_PATTERN,
+};
+const REQUEST_ID_POLICY: BoundedIdPolicy = {
+  encodedSuffixPattern: REQUEST_ID_ENCODED_SUFFIX_PATTERN,
+  maxLength: REQUEST_ID_MAX_LENGTH,
+  safePattern: REQUEST_ID_PATTERN,
+  unsafeCharacterPattern: REQUEST_ID_UNSAFE_CHARACTER_PATTERN,
+  preservedSuffixPattern: REQUEST_ID_SUFFIX_PATTERN,
+};
+
+function normalizeHeaderId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized || containsAsciiControlCharacter(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): string | undefined {
+  const normalized = normalizeHeaderId(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized.length <= policy.maxLength &&
+    policy.safePattern.test(normalized) &&
+    !policy.encodedSuffixPattern.test(normalized)
+  ) {
+    return normalized;
+  }
+  // Hash UTF-16 code units losslessly: UTF-8 string hashing replaces lone
+  // surrogates with U+FFFD. The reserved encoded suffix keeps a rewritten ID
+  // from aliasing an otherwise safe input that already looks encoded.
+  const hash = createHash("sha256")
+    .update(Buffer.from(normalized, "utf16le"))
+    .digest("hex")
+    .slice(0, ID_HASH_LENGTH);
+  const preservedSuffix = policy.preservedSuffixPattern?.exec(normalized)?.[0] ?? "";
+  const rawPrefix = preservedSuffix ? normalized.slice(0, -preservedSuffix.length) : normalized;
+  const safePrefix = rawPrefix.replace(policy.unsafeCharacterPattern, "_");
+  const hashSuffix = `~${hash}`;
+  const boundedSuffix = `${hashSuffix}${preservedSuffix}`;
+  const suffix = boundedSuffix.length < policy.maxLength ? boundedSuffix : hashSuffix;
+  return `${safePrefix.slice(0, policy.maxLength - suffix.length)}${suffix}`;
+}
+
+function findHeader(headers: Record<string, string>, target: string): string | undefined {
+  const normalizedTarget = target.toLowerCase();
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === normalizedTarget)?.[1];
+}
+
+function setHeaderDefault(
+  headers: Record<string, string>,
+  name: string,
+  value: string | undefined,
+): void {
+  if (value !== undefined && findHeader(headers, name) === undefined) {
+    headers[name] = value;
+  }
+}
+
+function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const underlying = ctx.streamFn;
+  if (!underlying) {
+    return undefined;
+  }
+  return (model, context, options) => {
+    const apiKey = options?.apiKey?.trim();
+    const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
+    const preparedModel = prepareClawRouterRequestModel(model);
+    const hasExplicitRequestId =
+      findHeader(options?.headers ?? {}, REQUEST_ID_HEADER) !== undefined;
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(preparedModel.headers ?? {})) {
+      if (name.toLowerCase() !== "authorization" || !dispatchKey) {
+        headers[name] = value;
+      }
+    }
+    setHeaderDefault(headers, CLIENT_HEADER, "openclaw");
+    setHeaderDefault(headers, AGENT_HEADER, sanitizeBoundedId(ctx.agentId, ATTRIBUTION_ID_POLICY));
+    setHeaderDefault(
+      headers,
+      SESSION_HEADER,
+      sanitizeBoundedId(options?.sessionId, ATTRIBUTION_ID_POLICY),
+    );
+    setHeaderDefault(
+      headers,
+      REQUEST_ID_HEADER,
+      sanitizeBoundedId(hasExplicitRequestId ? undefined : options?.requestId, REQUEST_ID_POLICY),
+    );
+    if (dispatchKey) {
+      headers.Authorization = `Bearer ${dispatchKey}`;
+    }
+    return underlying({ ...preparedModel, headers }, context, options);
+  };
+}
 
 // JSON Schema allows `type` to be an array; a union containing "object" still
 // admits objects, so it needs `properties` for Perplexity too.
@@ -200,38 +329,6 @@ function configuredBaseUrl(
   return config?.models?.providers?.[PROVIDER_ID]?.baseUrl;
 }
 
-function dynamicModelScope(ctx: ProviderResolveDynamicModelContext): string {
-  return JSON.stringify([
-    ctx.agentDir ?? "",
-    ctx.workspaceDir ?? "",
-    ctx.authProfileId ?? "",
-    normalizeClawRouterRootUrl(ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config)),
-  ]);
-}
-
-function buildRuntimeModels(
-  providerConfig: Awaited<ReturnType<typeof buildClawRouterProviderConfig>>,
-): Map<string, ProviderRuntimeModel> {
-  const models = new Map<string, ProviderRuntimeModel>();
-  for (const model of providerConfig.models) {
-    const api = model.api ?? providerConfig.api;
-    const baseUrl = model.baseUrl ?? providerConfig.baseUrl;
-    if (!api || !baseUrl) {
-      continue;
-    }
-    models.set(model.id, {
-      ...model,
-      api,
-      baseUrl,
-      provider: PROVIDER_ID,
-      input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-      ),
-    });
-  }
-  return models;
-}
-
 function resolveToolFamily(modelId: string) {
   const normalized = modelId.toLowerCase();
   if (normalized.startsWith("deepseek/")) {
@@ -351,8 +448,6 @@ export default defineSingleProviderPluginEntry({
     );
   },
   provider() {
-    const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
-
     return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
@@ -399,28 +494,9 @@ export default defineSingleProviderPluginEntry({
           };
         },
       },
-      resolveDynamicModel: (ctx) => dynamicModels.get(dynamicModelScope(ctx))?.get(ctx.modelId),
-      // Match by agentDir/workspaceDir/baseUrl; the context carries no auth
-      // profile id, so any profile scope for the same deployment counts.
-      preferRuntimeResolvedModel: (ctx) => {
-        const agentDir = ctx.agentDir ?? "";
-        const workspaceDir = ctx.workspaceDir ?? "";
-        const rootUrl = normalizeClawRouterRootUrl(configuredBaseUrl(ctx.config));
-        for (const [scope, models] of dynamicModels) {
-          const [scopeAgentDir, scopeWorkspaceDir, , scopeRootUrl] = JSON.parse(scope) as string[];
-          if (
-            scopeAgentDir === agentDir &&
-            scopeWorkspaceDir === workspaceDir &&
-            scopeRootUrl === rootUrl &&
-            models.has(ctx.modelId)
-          ) {
-            return true;
-          }
-        }
-        return false;
-      },
+      // Live catalog routing also applies to explicitly configured model rows.
+      preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
-        const scope = dynamicModelScope(ctx);
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         const apiKey = (
@@ -433,17 +509,26 @@ export default defineSingleProviderPluginEntry({
           })
         )?.apiKey;
         if (!apiKey) {
-          // Rebuilds publish atomically so catalog errors keep the prior snapshot.
-          // Missing credentials are the sole fail-closed clearing path.
-          dynamicModels.delete(scope);
-          return;
+          return undefined;
         }
         const providerConfig = await buildClawRouterProviderConfig({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
         });
-        dynamicModels.set(scope, buildRuntimeModels(providerConfig));
+        const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
+        if (!model) {
+          return undefined;
+        }
+        return {
+          ...model,
+          api: model.api ?? providerConfig.api,
+          baseUrl: model.baseUrl ?? providerConfig.baseUrl,
+          provider: PROVIDER_ID,
+          input: model.input.filter(
+            (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+          ),
+        };
       },
       normalizeConfig: ({ providerConfig }) => {
         const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);

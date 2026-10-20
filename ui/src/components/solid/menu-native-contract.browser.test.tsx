@@ -11,12 +11,20 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import { createMenuControls, Menu } from "./menu.tsx";
+import { menuContent, mountControls, tabFocus, update } from "./menu-contract.test-support.tsx";
+import { Menu } from "./menu.tsx";
 import "../resizable-divider.ts";
 import "../../styles/base.css";
 import "../../styles/layout.css";
 
 const cleanups: (() => void)[] = [];
+const nextFrame = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+function clickLink(link: HTMLAnchorElement, options: MouseEventInit = {}) {
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
+}
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 afterEach(async () => {
   cleanup();
@@ -28,117 +36,59 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-it("keeps submenu icons and details in the visible trigger", async () => {
-  let icon!: HTMLSpanElement;
-  let details!: HTMLSpanElement;
-  render(() => (
-    <Menu
-      id="people"
-      label="People"
-      items={[
-        {
-          id: "view",
-          label: "View",
-          icon: <span ref={(node) => (icon = node)}>Eye</span>,
-          details: <span ref={(node) => (details = node)}>V</span>,
-          children: [{ id: "reasoning", label: "Reasoning" }],
-        },
-      ]}
-    />
-  ));
-  flush();
-  await openMenu();
-  const view = item("View");
-  expect(view.contains(icon)).toBe(true);
-  expect(view.contains(details)).toBe(true);
-  await userEvent.click(view);
-  await phase(surface("people-view"), "open");
-  expect(view.contains(icon)).toBe(true);
-  expect(view.contains(details)).toBe(true);
-});
-
-it("routes arrow navigation from an embedded button through the menu", async () => {
-  const activate = vi.fn();
-  mountMenu(() => {
-    const controls = createMenuControls();
-    return {
-      controls,
-      items: [
-        { id: "disabled", label: "Unavailable", disabled: true },
-        { id: "first", label: "First" },
-        { id: "last", label: "Last" },
-      ],
-      children: (
-        <button
-          ref={controls.ref()}
-          type="button"
-          data-form-control=""
-          autofocus
-          onClick={activate}
-        >
-          About choices
-        </button>
-      ),
-    };
-  });
-  await openMenu();
-  const info = surface().querySelector<HTMLButtonElement>("[data-form-control]")!;
-  expect(document.activeElement).toBe(info);
-  await userEvent.keyboard("{Enter}");
-  expect(activate).toHaveBeenCalledOnce();
-  expect(surface().matches(":popover-open")).toBe(true);
-  await userEvent.keyboard("{ArrowDown}");
-  await expect.poll(() => document.activeElement).toBe(item("First"));
-  info.focus();
-  await userEvent.keyboard("{ArrowUp}");
-  await expect.poll(() => document.activeElement).toBe(item("Last"));
-});
-
-it("keeps native embedded controls in the menu keyboard flow", async () => {
+it.each([true, false])("keeps embedded controls native (autofocus=%s)", async (autofocus) => {
   const activate = vi.fn();
   const navigate = vi.fn((event: MouseEvent) => event.preventDefault());
   const select = vi.fn();
-  mountMenu(() => {
-    const controls = createMenuControls();
-    return {
-      controls,
-      onSelect: select,
-      items: [
-        { id: "first", label: "First" },
-        { id: "last", label: "Last" },
-        {
-          kind: "content",
-          id: "header-actions",
-          content: (
-            <>
-              <button ref={controls.ref()} type="button" onClick={activate}>
-                Clear
-              </button>
-              <a ref={controls.ref()} href="#help" onClick={navigate}>
-                Help
-              </a>
-            </>
-          ),
-        },
-      ],
-    };
-  });
+  mountControls((controls) => ({
+    onSelect: select,
+    items: [
+      ...(autofocus ? [{ id: "disabled", label: "Unavailable", disabled: true }] : []),
+      { id: "first", label: "First" },
+      { id: "last", label: "Last" },
+      ...(!autofocus
+        ? [
+            menuContent(
+              "header-actions",
+              <>
+                <button ref={controls.ref()} type="button" onClick={activate}>
+                  Clear
+                </button>
+                <a ref={controls.ref()} href="#help" onClick={navigate}>
+                  Help
+                </a>
+              </>,
+            ),
+          ]
+        : []),
+    ],
+    children: autofocus ? (
+      <button ref={controls.ref()} type="button" data-form-control="" autofocus onClick={activate}>
+        About choices
+      </button>
+    ) : undefined,
+  }));
   await openMenu();
-  expect(document.activeElement).toBe(item("First"));
-  await userEvent.tab();
   const button = surface().querySelector<HTMLButtonElement>("button:not([role])")!;
-  expect(document.activeElement).toBe(button);
+  expect(document.activeElement).toBe(autofocus ? button : item("First"));
+  if (!autofocus) {
+    await tabFocus(button);
+  }
   await userEvent.keyboard("{Enter}");
   expect(activate).toHaveBeenCalledOnce();
   expect(select).not.toHaveBeenCalled();
   expect(surface().matches(":popover-open")).toBe(true);
-  await userEvent.tab();
-  expect(document.activeElement).toBe(surface().querySelector("a"));
-  await userEvent.keyboard("{Enter}");
-  expect(navigate).toHaveBeenCalledOnce();
-  expect(select).not.toHaveBeenCalled();
-  await userEvent.tab({ shift: true });
-  expect(document.activeElement).toBe(button);
+  if (autofocus) {
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.poll(() => document.activeElement).toBe(item("First"));
+    button.focus();
+  } else {
+    await tabFocus(surface().querySelector("a"));
+    await userEvent.keyboard("{Enter}");
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(select).not.toHaveBeenCalled();
+    await tabFocus(button, true);
+  }
   await userEvent.keyboard("{ArrowUp}");
   await expect.poll(() => document.activeElement).toBe(item("Last"));
 });
@@ -179,15 +129,15 @@ it.each([false, true])("preserves native link intent (routing=%s)", async (routi
     { altKey: true },
     { button: 1 },
   ]) {
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
+    clickLink(link, options);
   }
   for (const target of ["_blank", "named-window"]) {
     link.target = target;
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    clickLink(link);
   }
   link.target = "";
   link.download = "settings.txt";
-  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  clickLink(link);
   link.removeAttribute("download");
   expect(prevented).toEqual(Array.from({ length: 8 }, () => false));
   const canceledClick = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -236,58 +186,45 @@ it("forwards link navigation from nested menus and closes the root", async () =>
   await phase(surface(), "hidden");
 });
 
-it.each([false, true])(
-  "rolls rejected controlled visibility back to accepted state (initial=%s)",
-  async (initial) => {
-    const [open, setOpen] = createSignal(initial);
-    let vetoShow = true;
-    let vetoHide = true;
-    const received: boolean[] = [];
-    mountMenu({
-      get open() {
-        return open();
-      },
-      onBeforeShow: (event) => {
-        if (vetoShow) {
-          event.preventDefault();
-        }
-      },
-      onBeforeHide: (event) => {
-        if (vetoHide) {
-          event.preventDefault();
-        }
-      },
-      onOpenChange: (accepted) => {
-        received.push(accepted);
-        setOpen(accepted);
-      },
-    });
-    if (!initial) {
-      setOpen(true);
-      flush();
-    }
-    expect(untrack(open)).toBe(false);
-    expect(surface().matches(":popover-open")).toBe(false);
-    expect(received).toEqual([false]);
-    vetoShow = false;
-    setOpen(true);
-    flush();
-    await phase(surface(), "open");
-    expect(received).toEqual([false, true]);
-    setOpen(false);
-    flush();
-    expect(untrack(open)).toBe(true);
-    expect(surface().matches(":popover-open")).toBe(true);
-    expect(received).toEqual([false, true, true]);
-    vetoHide = false;
-    setOpen(false);
-    flush();
-    await phase(surface(), "hidden");
-    expect(received).toEqual([false, true, true, false]);
-  },
-);
+it.each([false, true])("rolls rejected visibility back (initial=%s)", async (initial) => {
+  const [open, setOpen] = createSignal(initial);
+  let vetoShow = true;
+  let vetoHide = true;
+  const received: boolean[] = [];
+  mountMenu({
+    get open() {
+      return open();
+    },
+    onBeforeShow: (event) => vetoShow && event.preventDefault(),
+    onBeforeHide: (event) => vetoHide && event.preventDefault(),
+    onOpenChange: (accepted) => {
+      received.push(accepted);
+      setOpen(accepted);
+    },
+  });
+  if (!initial) {
+    update(() => setOpen(true));
+  }
+  expect(untrack(open)).toBe(false);
+  expect(surface().matches(":popover-open")).toBe(false);
+  expect(received).toEqual([false]);
+  vetoShow = false;
+  update(() => setOpen(true));
+  await phase(surface(), "open");
+  expect(received).toEqual([false, true]);
+  update(() => setOpen(false));
+  expect(untrack(open)).toBe(true);
+  expect(surface().matches(":popover-open")).toBe(true);
+  expect(received).toEqual([false, true, true]);
+  vetoHide = false;
+  update(() => setOpen(false));
+  await phase(surface(), "hidden");
+  expect(received).toEqual([false, true, true, false]);
+});
 
-it("updates accessible labels without splitting mounted DOM and machine identity", async () => {
+it("retains submenu content and identity across label updates", async () => {
+  let icon!: HTMLSpanElement;
+  let details!: HTMLSpanElement;
   const [id, setId] = createSignal("people");
   const [label, setLabel] = createSignal("People actions");
   const [childLabel, setChildLabel] = createSignal("Assign to");
@@ -303,8 +240,8 @@ it("updates accessible labels without splitting mounted DOM and machine identity
         {
           id: "assign",
           label: childLabel(),
-          icon: <span data-testid="assign-icon">Icon</span>,
-          details: <span data-testid="assign-shortcut">A</span>,
+          icon: <span ref={(node) => (icon = node)}>Icon</span>,
+          details: <span ref={(node) => (details = node)}>A</span>,
           children: [{ id: "ada", label: "Ada Rivera" }],
         },
       ];
@@ -313,15 +250,15 @@ it("updates accessible labels without splitting mounted DOM and machine identity
   const root = surface();
   const button = trigger();
   await openMenu();
+  const assignment = trigger("people-assign");
+  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   await openMenu("people-assign");
+  expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   const child = surface("people-assign");
-  expect(trigger("people-assign").querySelector('[data-testid="assign-icon"]')).not.toBeNull();
-  expect(trigger("people-assign").querySelector('[data-testid="assign-shortcut"]')).not.toBeNull();
   expect(item("Ada Rivera", "people-assign").getAttribute("value")).toBe("ada");
   setId("replacement-id");
   setLabel("Updated actions");
-  setChildLabel("Updated assignment");
-  flush();
+  update(() => setChildLabel("Updated assignment"));
   expect(surface()).toBe(root);
   expect(trigger()).toBe(button);
   expect(button.getAttribute("aria-controls")).toBe(root.id);
@@ -335,7 +272,7 @@ it("updates accessible labels without splitting mounted DOM and machine identity
   expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
 });
 
-it("preserves live root placement and RTL submenu geometry across open frames", async () => {
+it("updates root placement and RTL submenu geometry", async () => {
   await page.viewport(1280, 800);
   const [placement, setPlacement] = createSignal<"bottom-start" | "top-end">("bottom-start");
   const [direction, setDirection] = createSignal<"ltr" | "rtl">("ltr");
@@ -351,22 +288,16 @@ it("preserves live root placement and RTL submenu geometry across open frames", 
   await openMenu();
   const button = trigger().getBoundingClientRect();
   expect(surface().getBoundingClientRect().top).toBeGreaterThanOrEqual(button.bottom);
-  setPlacement("top-end");
-  flush();
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  update(() => setPlacement("top-end"));
+  await nextFrame();
   expect(surface().dataset.placement).toBe("top-end");
   expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(button.top);
   await openMenu("people-assign");
   expect(surface("people-assign").getBoundingClientRect().left).toBeGreaterThanOrEqual(
     trigger("people-assign").getBoundingClientRect().right,
   );
-  setDirection("rtl");
-  flush();
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  update(() => setDirection("rtl"));
+  await nextFrame();
   expect(surface("people-assign").dataset.placement).toBe("left-start");
   expect(surface("people-assign").getBoundingClientRect().right).toBeLessThanOrEqual(
     trigger("people-assign").getBoundingClientRect().left,
@@ -415,7 +346,7 @@ it("paints the actual menu above the shell sidebar resizer", async () => {
   expect(menu.contains(hit)).toBe(true);
 });
 
-it("keeps descendant-only native overlap leased through closing and releases after settlement", async () => {
+it("leases descendant native overlap until exit settles", async () => {
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage() {} } } });
   await page.viewport(1280, 800);
   let bounds = new DOMRect(1000, 100, 100, 100);
@@ -455,77 +386,9 @@ it("keeps descendant-only native overlap leased through closing and releases aft
       child.getAnimations().forEach((animation) => animation.finish());
     }
   });
-  const closeTrace: {
-    id: string;
-    operation: "animations" | "hide-before" | "hide-after";
-    phase: string | undefined;
-    nativeOpen: boolean;
-    animations?: number;
-  }[] = [];
-  const recordClose = (entry: (typeof closeTrace)[number]) => {
-    if (closeTrace.length < 32) {
-      closeTrace.push(entry);
-    }
-  };
-  for (const menu of branch) {
-    const getAnimations = menu.getAnimations.bind(menu);
-    const hidePopover = menu.hidePopover.bind(menu);
-    const animationSpy = vi.spyOn(menu, "getAnimations").mockImplementation(function (
-      this: HTMLElement,
-      ...args: Parameters<HTMLElement["getAnimations"]>
-    ) {
-      const animations = getAnimations(...args);
-      recordClose({
-        id: this.id,
-        operation: "animations",
-        phase: this.dataset.phase,
-        nativeOpen: this.matches(":popover-open"),
-        animations: animations.length,
-      });
-      return animations;
-    });
-    const hideSpy = vi.spyOn(menu, "hidePopover").mockImplementation(function (
-      this: HTMLElement,
-      ...args: Parameters<HTMLElement["hidePopover"]>
-    ) {
-      recordClose({
-        id: this.id,
-        operation: "hide-before",
-        phase: this.dataset.phase,
-        nativeOpen: this.matches(":popover-open"),
-      });
-      const result = hidePopover(...args);
-      recordClose({
-        id: this.id,
-        operation: "hide-after",
-        phase: this.dataset.phase,
-        nativeOpen: this.matches(":popover-open"),
-      });
-      return result;
-    });
-    cleanups.push(
-      () => animationSpy.mockRestore(),
-      () => hideSpy.mockRestore(),
-    );
-  }
   expect(view.handle.close()).toBe(true);
   const closing = branch.flatMap((menu) => {
     const animations = menu.getAnimations();
-    if (animations.length === 0) {
-      const style = getComputedStyle(menu);
-      console.error("Menu exit animation missing", {
-        closeTrace,
-        id: menu.id,
-        phase: menu.dataset.phase,
-        nativeOpen: menu.matches(":popover-open"),
-        opacity: style.opacity,
-        scale: style.scale,
-        display: style.display,
-        transitionDuration: style.transitionDuration,
-        transitionProperty: style.transitionProperty,
-        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-      });
-    }
     expect(animations.length).toBeGreaterThan(0);
     return animations;
   });
@@ -533,9 +396,7 @@ it("keeps descendant-only native overlap leased through closing and releases aft
     animation.pause();
     cleanups.push(() => animation.cancel());
   }
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  await nextFrame();
   expect(child.dataset.phase).toBe("closing");
   expect(child.matches(":popover-open")).toBe(true);
   expect(states).toEqual([false, true]);

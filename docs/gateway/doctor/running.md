@@ -24,6 +24,13 @@ refuses to complete repair, but snapshot contention alone does not call for a
 database restore. Integrity failures retain backup-restore guidance for the
 affected database.
 
+If state storage is not writable, Doctor reports the database or sidecar path
+that blocked preparation and gives ownership, permission, writable-mount, and
+immutable-file recovery guidance. It checks effective access rather than treating
+a different file owner or unsupported `chmod` as a storage failure. Doctor does
+not change ownership or clear immutable flags. Fix the reported access problem
+and rerun Doctor; use `openclaw doctor --lint` for read-only diagnostics meanwhile.
+
 When the System agent runs Doctor, it uses a separate process from the same
 OpenClaw installation. Bulk diagnostic checks can then run without blocking the
 Gateway's event loop. This uses the existing `--non-interactive` behavior,

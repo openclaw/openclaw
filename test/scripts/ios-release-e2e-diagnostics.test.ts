@@ -14,10 +14,28 @@ import {
   collectGatewayProcessDiagnostics,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
+  summarizeIOSBuildTiming,
 } from "../../scripts/lib/ios-release-e2e-diagnostics.js";
 
 beforeEach(() => {
   execFile.mockReset();
+});
+
+test("retains build task timings without exporting script names or raw build output", () => {
+  expect(
+    summarizeIOSBuildTiming(`
+PRIVATE-TOKEN /private/source/path
+Build Timing Summary
+SwiftCompile (280 tasks) | 123.45 seconds
+PhaseScriptExecution (1 task) | 0.007 seconds
+PRIVATE-TOKEN (1 task) | 99 seconds
+CodeSign (2 tasks) | 0.12 seconds
+`),
+  ).toEqual([
+    { task: "SwiftCompile", tasks: 280, seconds: 123.45 },
+    { task: "PhaseScriptExecution", tasks: 1, seconds: 0.007 },
+    { task: "CodeSign", tasks: 2, seconds: 0.12 },
+  ]);
 });
 
 test("projects only numeric worker and lane totals", () => {

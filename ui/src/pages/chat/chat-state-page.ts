@@ -1,3 +1,4 @@
+import { getObserver } from "@solidjs/signals";
 import {
   dispatchCommandClientPresentation,
   type CommandClientPresentationAction,
@@ -15,11 +16,11 @@ import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
-import { projectChatErrors } from "./chat-error-projection.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
@@ -28,11 +29,12 @@ import {
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
-import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
+import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
-import { projectChatRun } from "./chat-run-projection.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import {
   moveQueuedChatMessage,
   resumeStoredChatOutboxes,
@@ -42,7 +44,6 @@ import {
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
@@ -158,7 +159,6 @@ export function createPageState(
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,
-    chatThinkingLevel: null,
     chatReplyTarget: null,
     senderAgentAvatars: undefined,
     chatAvatarUrl: null,
@@ -192,8 +192,6 @@ export function createPageState(
     chatReadingHistory: false,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
-    sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
-    sidebarFocusVersion: 0,
     imageLightbox: null,
   } satisfies Partial<ChatPageHost>;
   const state = Object.assign(errors, presentedFields, {
@@ -206,6 +204,7 @@ export function createPageState(
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
+    reconcileApprovalTerminals: context.overlays?.reconcileApprovalTerminals,
     assistantIdentityRequestVersion: 0,
     userName: identity.name,
     userAvatar: identity.avatar,
@@ -235,7 +234,6 @@ export function createPageState(
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
     modelAuthStatusRequestVersion: 0,
-    modelAuthStatusError: null,
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsArchivedFilter: "active",
@@ -482,8 +480,6 @@ export function createPageState(
     if (!normalizedPanelId) {
       return;
     }
-    state.sidebarFocusPanelId = normalizedPanelId;
-    state.sidebarFocusVersion += 1;
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
@@ -572,11 +568,95 @@ export function createPageState(
     invalidateImageLightbox(state);
   };
   projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  {
+    let value = state.chatQueue;
+    const queue = projectSource(state, {
+      read: () => value,
+      subscribe: subscribeChatOutboxQueue,
+      equality: "revision",
+    });
+    Object.defineProperty(state, "chatQueue", {
+      configurable: true,
+      enumerable: true,
+      get: () => (getObserver() ? queue.read() : value),
+      set: (next: typeof value) => {
+        value = next;
+      },
+    });
+  }
+  {
+    const source = chatRunPresentation(state);
+    const projection = projectOwner(source, (owner) => owner.values);
+    for (const key of source.fields) {
+      const descriptor = Object.getOwnPropertyDescriptor(state, key)!;
+      Object.defineProperty(state, key, {
+        ...descriptor,
+        get() {
+          if (getObserver()) {
+            projection.read();
+          }
+          return Reflect.get(source.values, key);
+        },
+      });
+    }
+  }
+  {
+    const errorProjection = projectSource(state, {
+      read: (owner) => owner.readErrors(),
+      subscribe: (owner, notify) => owner.subscribeErrors(notify),
+      equality: (previous, next) =>
+        previous.lastError === next.lastError && previous.chatError === next.chatError,
+    });
+    for (const key of ["lastError", "chatError"] as const) {
+      Object.defineProperty(state, key, {
+        ...Object.getOwnPropertyDescriptor(state, key),
+        get: () => (getObserver() ? errorProjection.read()[key] : state.readErrors()[key]),
+      });
+    }
+  }
+  {
+    let onChange: (() => void) | undefined;
+    const presentation = projectSource(state, {
+      read: (owner) =>
+        chatSessionPresentationKey(
+          owner,
+          context.sessions.state,
+          selectedChatSessionRow(owner),
+          context.overlays?.snapshot?.approvalQueue,
+        ),
+      subscribe: (_owner, notify) => {
+        onChange = notify;
+        const stop = context.sessions.subscribe(notify);
+        return () => {
+          onChange = undefined;
+          stop();
+        };
+      },
+      equality: Object.is,
+    });
+    for (const key of ["sessionsResult", "sessionsResultAgentId"] as const) {
+      let value = state[key];
+      Object.defineProperty(state, key, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          if (getObserver()) {
+            presentation.revision();
+          }
+          return value;
+        },
+        set(next: typeof value) {
+          if (Object.is(value, next)) {
+            return;
+          }
+          value = next;
+          onChange?.();
+        },
+      });
+    }
+  }
   return projectChatFields(
-    projectChatSessionPresentation(
-      projectChatErrors(projectChatRun(projectChatOutboxQueue(state))),
-      context,
-    ),
+    state,
     // SAFETY: This literal owns every enumerable key passed to the projection.
     Object.keys(presentedFields) as (keyof typeof presentedFields)[],
   );

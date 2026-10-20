@@ -9,6 +9,10 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.kernel.js").then(
+      (m) => m.sandboxPersistentExecReadOperations,
+    ),
   worktrees: async () => {
     const [
       { worktreeReadOperations },
@@ -35,8 +39,6 @@ const loaders = {
     import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionReadOperations),
-  deviceIdentity: () =>
-    import("../infra/device-identity.read.worker.js").then((m) => m.deviceIdentityReadOperations),
   stateBootstrap: () =>
     import("./state-bootstrap-read.worker.js").then((m) => m.stateBootstrapReadOperations),
   machineState: () =>

@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { RunExit, SpawnInput } from "../../../process/supervisor/types.js";
-import { createReplyOperation, type ReplyOperation } from "../../../sessions/session-controller.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
 import { createExecTool } from "../../bash-tools.exec-run.js";
+import { createRunExit } from "../../bash-tools.exec-runtime.test-support.js";
 import * as codeModeState from "../../code-mode-state.js";
 import { applyCodeModeCatalog } from "../../code-mode.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../../code-mode.test-support.js";
@@ -48,20 +49,11 @@ vi.mock("../../bash-tools.exec-host-gateway.js", () => ({
 }));
 
 registerAgentSessionLoopTestLifecycle();
-let replyOperation: ReplyOperation;
-beforeEach(() => {
-  replyOperation = createReplyOperation({
-    sessionId: "session-output-schema",
-    sessionKey: "agent:main:main",
-    resetTriggered: false,
-  });
-});
 afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   await resetCodeModeTestState();
   resetProcessRegistryForTests();
-  replyOperation.complete();
 });
 
 it.each(["direct", "cell", "nested", "detached"] as const)(
@@ -95,6 +87,12 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
       applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, shell] });
     }
     const { session } = await createTestSession({ customTools: nested ? h.tools : [shell] });
+    const replyOperation = createReplyOperation({
+      sessionId: "session-output-schema",
+      sessionKey: "agent:main:main",
+      resetTriggered: false,
+    });
+    onTestFinished(() => replyOperation.complete());
     const prepared = prepareCatalogExecutor({ activeSession: session, replyOperation });
     const finalRequested = createDeferredCore();
     let requests = 0;
@@ -107,38 +105,28 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
           ? {}
           : { awaitResults: true }),
     };
+    const toolCall = {
+      type: "toolCall" as const,
+      id: "start-command",
+      name: "exec",
+      arguments: nested
+        ? {
+            code: `return await exec(${JSON.stringify(command)});`,
+            awaitResults: mode !== "nested",
+            title: "Collect required verification",
+          }
+        : command,
+    };
     streamMocks.streamSimple.mockImplementation((model, context) => {
-      requests++;
-      if (requests === 1) {
-        return createAssistantResultStream(
-          createAssistant(
-            model,
-            [
-              {
-                type: "toolCall",
-                id: "start-command",
-                name: "exec",
-                arguments: nested
-                  ? {
-                      code: `return await exec(${JSON.stringify(command)});`,
-                      awaitResults: mode !== "nested",
-                      title: "Collect required verification",
-                    }
-                  : command,
-              },
-            ],
-            "toolUse",
-          ),
-        );
-      }
-      finalRequested.resolve();
-      if (required) {
-        expect(JSON.stringify(context.messages)).toContain("REQUIRED_RESULT");
+      const first = ++requests === 1;
+      if (!first) {
+        finalRequested.resolve();
+        if (required) {
+          expect(JSON.stringify(context.messages)).toContain("REQUIRED_RESULT");
+        }
       }
       return createAssistantResultStream(
-        createAssistant(model, [
-          { type: "text", text: required ? "Result collected." : "Server started." },
-        ]),
+        createAssistant(model, first ? [toolCall] : "Done.", first ? "toolUse" : "stop"),
       );
     });
     const running = session.prompt("Run verification and report its result.").then(() => {
@@ -146,30 +134,18 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
     });
     const finish = () => {
       processOwner.output?.("REQUIRED_RESULT");
-      completed.resolve({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "REQUIRED_RESULT",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      completed.resolve(createRunExit({ stdout: "REQUIRED_RESULT" }));
     };
     try {
-      await spawned.promise;
-      if (nested && required) {
-        await parked.promise;
-      }
-      if (!required) {
-        await finalRequested.promise;
-      }
+      const pending = nested ? parked : spawned;
+      await (required ? pending : finalRequested).promise;
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(requests).toBe(required ? 1 : 2);
-      expect(finished).toBe(!required);
-      expect(codeModeState.activeRuns.size).toBe(0);
+      expect({ requests, finished, activeRuns: codeModeState.activeRuns.size }).toEqual({
+        requests: required ? 1 : 2,
+        finished: !required,
+        activeRuns: 0,
+      });
       vi.useRealTimers();
       finish();
       await running;

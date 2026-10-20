@@ -608,3 +608,34 @@ export function listDescendantRunsForRequesterFromRuns(
 ): SubagentRunRecord[] {
   return buildSubagentRunReadIndexFromRuns({ runs }).listDescendantRunsForRequester(rootSessionKey);
 }
+
+export function resolveSwarmWaitOwnerSessionKeys(
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>,
+  requesterSessionKey: string,
+  requesterAgentId?: string,
+): string[] {
+  const ownerSessionKeys: string[] = [];
+  const visited: Array<{ childSessionKey: string; childAgentId?: string }> = [];
+  let currentSessionKey = requesterSessionKey.trim();
+  let currentAgentId = requesterAgentId;
+  while (
+    currentSessionKey &&
+    !visited.some((entry) =>
+      matchesSubagentChildSessionOwner(entry, currentSessionKey, currentAgentId),
+    )
+  ) {
+    visited.push({ childSessionKey: currentSessionKey, childAgentId: currentAgentId });
+    ownerSessionKeys.push(currentSessionKey);
+    const latestOwner = latestSubagentRun(
+      getRunsForChildSession(currentSessionKey, currentAgentId),
+    );
+    currentSessionKey =
+      latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
+    currentAgentId =
+      parseAgentSessionKey(currentSessionKey)?.agentId ?? latestOwner?.requesterAgentId;
+  }
+  return ownerSessionKeys;
+}

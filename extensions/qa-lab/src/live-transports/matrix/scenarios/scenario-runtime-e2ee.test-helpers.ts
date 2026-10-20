@@ -16,7 +16,7 @@ export function createMatrixQaE2eeTestContext(
     roomId: "!room:matrix-qa.test",
     sutAccessToken: "sut-test-token",
     sutUserId: "@sut:matrix-qa.test",
-    syncState: {},
+    syncStreams: {},
     timeoutMs: 1_000,
     topology: { defaultRoomId: "!room:matrix-qa.test", defaultRoomKey: "main", rooms: [] },
     ...overrides,

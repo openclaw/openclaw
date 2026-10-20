@@ -5,6 +5,10 @@ import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import {
+  getProviderCatalogDiscoveryBudget,
+  withProviderCatalogDiscoveryBudget,
+} from "../plugins/provider-catalog-expiry.js";
+import {
   isUpstreamProviderCatalogModel,
   readLiveModelCatalogId,
   readLiveModelCatalogStringField,
@@ -151,44 +155,58 @@ async function readLiveModelCatalogJson(
 export async function getCachedUpstreamProviderCatalog(
   params: GetCachedUpstreamProviderCatalogParams,
 ): Promise<UpstreamProviderCatalog | undefined> {
-  const body = await getCachedLiveCatalogValue({
-    // Provider ids intentionally stay out of this key: sibling providers share
-    // one upstream document and must not download it once per provider.
-    keyParts: ["upstream-provider-catalog", params.endpoint],
-    ttlMs: params.ttlMs ?? 300_000,
-    signal: params.signal,
-    load: async (signal) => {
-      const timeoutMs = params.timeoutMs ?? 15_000;
-      const { response, release } = await (params.fetchGuard ?? fetchWithSsrFGuard)({
-        url: params.endpoint,
-        init: { headers: { Accept: "application/json" } },
-        signal,
-        timeoutMs,
-        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
-        requireHttps: true,
-        auditContext: "upstream-provider-catalog-discovery",
-      });
-      try {
-        if (!response.ok) {
-          await cancelUnreadResponseBody(response);
-          throw new LiveModelCatalogHttpError("upstream-provider-catalog", response.status);
-        }
-        const catalog = asOptionalRecord(
-          await readLiveModelCatalogJson(response, {
-            label: "upstream-provider-catalog",
+  const body = await withProviderCatalogDiscoveryBudget(
+    params.timeoutMs === 0
+      ? null
+      : (params.timeoutMs ?? getProviderCatalogDiscoveryBudget()?.timeoutMs ?? 15_000),
+    () =>
+      getCachedLiveCatalogValue({
+        // Provider ids intentionally stay out of this key: sibling providers share
+        // one upstream document and must not download it once per provider.
+        keyParts: ["upstream-provider-catalog", params.endpoint],
+        ttlMs: params.ttlMs ?? 300_000,
+        signal: params.signal,
+        load: async (signal) => {
+          const budget = getProviderCatalogDiscoveryBudget();
+          const remainingMs = budget
+            ? budget.deadlineMs - performance.now()
+            : (params.timeoutMs ?? 15_000);
+          // Zero disables this feed's own timer, but not an enclosing acquisition.
+          const timeoutMs = remainingMs === Infinity ? 0 : Math.floor(remainingMs);
+          if (timeoutMs <= 0 && remainingMs !== Infinity) {
+            throw new Error("Upstream provider catalog acquisition deadline exceeded");
+          }
+          const { response, release } = await (params.fetchGuard ?? fetchWithSsrFGuard)({
+            url: params.endpoint,
+            init: { headers: { Accept: "application/json" } },
+            signal,
             timeoutMs,
-            maxBytes: UPSTREAM_PROVIDER_CATALOG_BODY_MAX_BYTES,
-          }),
-        );
-        if (!catalog) {
-          throw new Error("Upstream provider catalog response must be an object");
-        }
-        return catalog;
-      } finally {
-        await release();
-      }
-    },
-  });
+            policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
+            requireHttps: true,
+            auditContext: "upstream-provider-catalog-discovery",
+          });
+          try {
+            if (!response.ok) {
+              await cancelUnreadResponseBody(response);
+              throw new LiveModelCatalogHttpError("upstream-provider-catalog", response.status);
+            }
+            const catalog = asOptionalRecord(
+              await readLiveModelCatalogJson(response, {
+                label: "upstream-provider-catalog",
+                timeoutMs,
+                maxBytes: UPSTREAM_PROVIDER_CATALOG_BODY_MAX_BYTES,
+              }),
+            );
+            if (!catalog) {
+              throw new Error("Upstream provider catalog response must be an object");
+            }
+            return catalog;
+          } finally {
+            await release();
+          }
+        },
+      }),
+  );
 
   const provider = asOptionalRecord(body[params.providerId]);
   const models = asOptionalRecord(provider?.models);
@@ -307,7 +325,11 @@ export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
-  const timeoutMs = params.timeoutMs ?? 5_000;
+  const budget = getProviderCatalogDiscoveryBudget();
+  const timeoutMs = Math.min(
+    params.timeoutMs ?? budget?.timeoutMs ?? 5_000,
+    budget ? budget.deadlineMs - performance.now() : Infinity,
+  );
   const startedAt = performance.now();
   const rows: unknown[] = [];
   const seenPageUrls = new Set<string>();
@@ -370,18 +392,22 @@ export function liveModelCatalogAuthCacheKey(
 export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
-  return await getCachedLiveCatalogValue({
-    keyParts: params.cacheKeyParts ?? [
-      params.providerId,
-      "model-rows",
-      params.endpoint,
-      liveModelCatalogAuthCacheKey(params),
-    ],
-    ttlMs: params.ttlMs,
-    signal: params.signal,
-    load: async (signal) => await fetchLiveProviderModelRows({ ...params, signal }),
-    shouldCache: params.shouldCacheRows,
-  });
+  return await withProviderCatalogDiscoveryBudget(
+    params.timeoutMs ?? getProviderCatalogDiscoveryBudget()?.timeoutMs ?? 5_000,
+    () =>
+      getCachedLiveCatalogValue({
+        keyParts: params.cacheKeyParts ?? [
+          params.providerId,
+          "model-rows",
+          params.endpoint,
+          liveModelCatalogAuthCacheKey(params),
+        ],
+        ttlMs: params.ttlMs,
+        signal: params.signal,
+        load: async (signal) => await fetchLiveProviderModelRows({ ...params, signal }),
+        shouldCache: params.shouldCacheRows,
+      }),
+  );
 }
 
 export async function fetchLiveProviderModelIds(

@@ -96,13 +96,11 @@ it("reports latency tails, preserves zero, and bounds outliers without changing 
     histogramCount: 6,
     clampedCount: 1,
     p50: expect.closeTo(2, 1),
+    p95: expect.closeTo(3_600_000, -5),
+    p99: expect.closeTo(3_600_000, -5),
   });
-  expect(metrics.runMs).toHaveProperty("p95", expect.closeTo(3_600_000, -5));
-  expect(metrics.runMs).toHaveProperty("p99", expect.closeTo(3_600_000, -5));
   expect(metrics.queueMs).toMatchObject({ p50: 0, p95: 0, p99: 0, clampedCount: 0 });
   expect(metrics.pendingBytes).toEqual({ count: 6, total: 72, max: 12 });
-  expect(metrics).not.toHaveProperty("transferMs");
-  expect(metrics).not.toHaveProperty("preparationMs");
-  expect(metrics).not.toHaveProperty("hostWaitMs");
+  expect(Object.keys(metrics).toSorted()).toEqual(["pendingBytes", "queueMs", "runMs"]);
   expect(result.collectionErrors).toBe(0);
 });

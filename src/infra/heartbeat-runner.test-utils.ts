@@ -34,7 +34,6 @@ import {
 } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 const sandboxDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-suite-");
 
@@ -49,7 +48,7 @@ type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastThreadId?: string | number;
 };
 
-type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
+type HeartbeatReplyFn = typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
 export type HeartbeatReplySpy = ReturnType<typeof vi.fn<HeartbeatReplyFn>>;
 
 function createHeartbeatReplySpy(): HeartbeatReplySpy {

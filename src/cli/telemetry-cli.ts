@@ -26,7 +26,7 @@ async function showTelemetry(options: { json?: boolean }): Promise<void> {
       ? null
       : {
           method: telemetry.enabled ? "POST" : "GET",
-          userAgent: buildTelemetryUserAgent("gateway"),
+          userAgent: buildTelemetryUserAgent(),
           ...(telemetry.enabled
             ? { payload: await buildTelemetryPayload(config, { surface: "gateway" }) }
             : {}),

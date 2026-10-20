@@ -54,13 +54,12 @@ export function ChannelsView(props: ChannelsProps) {
   const available = createMemo(() =>
     channelOrder().filter((key) => !channelSnapshotEntryIsActive(snapshot(), key)),
   );
-  const showingStaleSnapshot = createMemo(() =>
+  const showingStaleSnapshot = () =>
     Boolean(
       props.channels.channelsLoading &&
       props.channels.channelsSnapshot &&
       props.channels.channelsLastSuccess,
-    ),
-  );
+    );
   const partialWarnings = createMemo(
     () =>
       props.channels.channelsSnapshot?.warnings
@@ -332,11 +331,9 @@ function WizardStepBody(props: {
   wizard: Extract<ChannelWizardState, { phase: "step" }>;
   controls: ChannelsProps;
 }) {
-  const informational = createMemo(() =>
-    ["note", "progress", "action"].includes(props.wizard.step.type),
-  );
-  const message = createMemo(() => props.wizard.step.message?.trim() ?? "");
-  const gatewayOwned = createMemo(() => props.wizard.step.executor === "gateway");
+  const informational = () => ["note", "progress", "action"].includes(props.wizard.step.type);
+  const message = () => props.wizard.step.message?.trim() ?? "";
+  const gatewayOwned = () => props.wizard.step.executor === "gateway";
   const outputClass = () => [
     gatewayOwned() ? "channels-wizard__message" : "channels-wizard__output",
     !gatewayOwned() &&
@@ -402,7 +399,7 @@ function WizardStepBody(props: {
 }
 
 function renderWhatsAppLinking(props: ChannelsProps) {
-  const connected = createMemo(() => props.channels.whatsappLoginConnected === true);
+  const connected = () => props.channels.whatsappLoginConnected === true;
   return (
     <>
       <div class="channels-wizard__message" role="status">
@@ -478,10 +475,10 @@ function renderDoneBody(channels: readonly string[], props: ChannelsProps) {
 }
 
 function ChannelWizard(props: ChannelsProps): JSX.Element {
-  const activeWizard = createMemo(() => {
+  const activeWizard = () => {
     const wizard = props.wizardHost.state();
     return wizard.phase === "idle" ? undefined : wizard;
-  });
+  };
   return (
     <Show when={activeWizard()}>
       {(wizard) => <WizardDialog wizard={wizard()} controls={props} />}
@@ -498,9 +495,9 @@ function WizardDialog(props: {
       ? resolveChannelLabel(props.controls, props.wizard.channel)
       : t("channels.setup.genericTitle"),
   );
-  const step = createMemo(() => (props.wizard.phase === "step" ? props.wizard : undefined));
-  const error = createMemo(() => (props.wizard.phase === "error" ? props.wizard : undefined));
-  const done = createMemo(() => (props.wizard.phase === "done" ? props.wizard : undefined));
+  const step = () => (props.wizard.phase === "step" ? props.wizard : undefined);
+  const error = () => (props.wizard.phase === "error" ? props.wizard : undefined);
+  const done = () => (props.wizard.phase === "done" ? props.wizard : undefined);
   return (
     <openclaw-modal-dialog
       label={t("channels.setup.dialogLabel", { channel: label() })}

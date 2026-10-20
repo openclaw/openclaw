@@ -27,7 +27,13 @@ import type { PluginHookReplyDispatchContext } from "../plugins/types.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
+import {
+  bindHeartbeatReply,
+  bindHeartbeatSend,
+  bindHeartbeatReadiness,
+  observeHeartbeatClock,
+} from "./heartbeat-runner.boundary-test-support.js";
+import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   heartbeatTestConfig,
@@ -54,7 +60,8 @@ type Fixture = {
   sessionKey: string;
   now: number;
   previousUpdatedAt: number;
-  run: (deps?: Partial<HeartbeatDeps>, reason?: string) => ReturnType<typeof runHeartbeatOnce>;
+  clock: ReturnType<typeof observeHeartbeatClock>;
+  run: (reason?: string) => ReturnType<typeof runHeartbeatOnce>;
 };
 
 async function withHeartbeat<T>(
@@ -96,18 +103,13 @@ async function withHeartbeat<T>(
         lastThreadId: options.threadId,
       });
       const send = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
-      const run: Fixture["run"] = (deps, reason) =>
+      bindHeartbeatReply(replySpy);
+      bindHeartbeatSend(channel, send);
+      const clock = observeHeartbeatClock();
+      const run: Fixture["run"] = (reason) =>
         runHeartbeatOnce({
           cfg,
           reason,
-          deps: {
-            [channel]: send,
-            getReplyFromConfig: replySpy,
-            nowMs: () => (options.previousActivity ? now : 0),
-            webAuthExists: async () => true,
-            hasActiveWebListener: () => true,
-            ...deps,
-          },
         });
       return await test({
         cfg,
@@ -117,6 +119,7 @@ async function withHeartbeat<T>(
         sessionKey,
         now,
         previousUpdatedAt,
+        clock,
         run,
       });
     },
@@ -192,7 +195,7 @@ describe("heartbeat acknowledgements", () => {
         }
         return payload;
       });
-      const outcome = await run({}, exec ? "exec-event" : undefined);
+      const outcome = await run(exec ? "exec-event" : undefined);
       expect(outcome.status, JSON.stringify({ outcome, event: getLastHeartbeatEvent() })).toBe(
         "ran",
       );
@@ -238,18 +241,15 @@ describe("heartbeat acknowledgements", () => {
           }
           try {
             replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-            const deps =
-              failure === "readiness"
-                ? {
-                    webAuthExists: async () => {
-                      if (replySpy.mock.calls.length > 0) {
-                        throw new Error("readiness unavailable");
-                      }
-                      return true;
-                    },
-                  }
-                : undefined;
-            expect((await run(deps)).status).toBe("ran");
+            if (failure === "readiness") {
+              bindHeartbeatReadiness("whatsapp", async () => {
+                if (replySpy.mock.calls.length > 0) {
+                  throw new Error("readiness unavailable");
+                }
+                return { ok: true, reason: "ok" };
+              });
+            }
+            expect((await run()).status).toBe("ran");
             expect(send).toHaveBeenCalledTimes(failure === "delivery" ? 1 : 0);
             expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token", silent: true });
           } finally {
@@ -299,9 +299,11 @@ describe("heartbeat acknowledgements", () => {
   it("skips the model when WhatsApp is not linked", async () => {
     await withHeartbeat(async ({ send, replySpy, run }) => {
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
-      expect(
-        await run({ webAuthExists: async () => false, hasActiveWebListener: () => false }),
-      ).toMatchObject({ status: "skipped", reason: "channel-not-ready" });
+      bindHeartbeatReadiness("whatsapp", async () => ({
+        ok: false,
+        reason: "whatsapp-not-linked",
+      }));
+      expect(await run()).toMatchObject({ status: "skipped", reason: "channel-not-ready" });
       expect(getLastHeartbeatEvent()).toMatchObject({ reason: "whatsapp-not-linked" });
       expect(replySpy).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
@@ -516,7 +518,7 @@ describe("heartbeat pending-final delivery ownership", () => {
     "settles an isolated $name without clearing the base user's pending final",
     async ({ payload, visibleText }) => {
       await withHeartbeat(
-        async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run }) => {
+        async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run, clock }) => {
           const unrelatedFinal = {
             kind: "replayable" as const,
             text: "User final awaiting confirmation",
@@ -534,7 +536,8 @@ describe("heartbeat pending-final delivery ownership", () => {
             );
             return prepareFinal(storePath, executionKey, payload);
           });
-          expect((await run()).status).toBe("ran");
+          const { result, startedAt } = await clock.run(() => run());
+          expect(result.status).toBe("ran");
           expect(send).toHaveBeenCalledTimes(visibleText ? 1 : 0);
           if (visibleText) {
             expect(send.mock.calls[0]?.[1]).toBe(visibleText);
@@ -543,7 +546,7 @@ describe("heartbeat pending-final delivery ownership", () => {
           expect(readEntry(storePath, executionKey)?.pendingFinalDelivery).toBeUndefined();
           const baseEntry = readEntry(storePath, sessionKey);
           expect(baseEntry?.lastHeartbeatText).toBe(visibleText);
-          expect(baseEntry?.lastHeartbeatSentAt).toBe(visibleText ? now : undefined);
+          expect(baseEntry?.lastHeartbeatSentAt).toBe(visibleText ? startedAt : undefined);
           expect(baseEntry).toMatchObject({
             updatedAt: previousUpdatedAt,
             pendingFinalDelivery: unrelatedFinal,
@@ -556,7 +559,7 @@ describe("heartbeat pending-final delivery ownership", () => {
 
   it("preserves an unowned duplicate final even when its timestamp matches the run", async () => {
     await withHeartbeat(
-      async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run }) => {
+      async ({ storePath, replySpy, sessionKey, send, now, previousUpdatedAt, run, clock }) => {
         const body = "Recurring heartbeat status line.";
         const pendingFinalDelivery = {
           kind: "replayable" as const,
@@ -571,12 +574,15 @@ describe("heartbeat pending-final delivery ownership", () => {
           { preserveActivity: true },
         );
         replySpy.mockImplementation(async () => {
+          pendingFinalDelivery.createdAt = clock.current();
           await patchSessionEntryCore({ storePath, sessionKey }, () => ({ pendingFinalDelivery }), {
             preserveActivity: true,
           });
           return { text: body };
         });
-        expect((await run()).status).toBe("ran");
+        const { result, startedAt } = await clock.run(() => run());
+        expect(result.status).toBe("ran");
+        expect(pendingFinalDelivery.createdAt).toBe(startedAt);
         expect(send).not.toHaveBeenCalled();
         expect(readEntry(storePath, sessionKey)).toMatchObject({
           pendingFinalDelivery,
@@ -827,12 +833,9 @@ describe("heartbeat inbound hook boundary", () => {
           }),
         );
         const sendTelegram = vi.fn().mockResolvedValue({ messageId: "unexpected-monitor-send" });
-        await expect(
-          runHeartbeatOnce({
-            cfg,
-            deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
-          }),
-        ).resolves.toMatchObject({ status: "ran" });
+        bindHeartbeatReply(replySpy);
+        bindHeartbeatSend("telegram", sendTelegram);
+        await expect(runHeartbeatOnce({ cfg })).resolves.toMatchObject({ status: "ran" });
         expect(handler).not.toHaveBeenCalled();
         expect(replySpy).toHaveBeenCalledOnce();
         expect(sendTelegram).not.toHaveBeenCalled();
@@ -907,14 +910,9 @@ it.each([
         return { text: reply };
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: target });
-      await runHeartbeatOnce({
-        cfg,
-        deps: {
-          telegram: sendTelegram,
-          nowMs: () => 0,
-          getReplyFromConfig: replySpy,
-        },
-      });
+      bindHeartbeatReply(replySpy);
+      bindHeartbeatSend("telegram", sendTelegram);
+      await runHeartbeatOnce({ cfg });
       if (expected === undefined) {
         expect(sendTelegram).not.toHaveBeenCalled();
       } else {

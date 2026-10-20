@@ -209,7 +209,6 @@ export function createResolvedFeishuLifecycleAccount(
 ): ResolvedFeishuAccount {
   return {
     accountId: params.accountId,
-    selectionSource: "config",
     enabled: true,
     configured: true,
     appId: params.appId,

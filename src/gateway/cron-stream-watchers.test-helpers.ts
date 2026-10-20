@@ -88,9 +88,7 @@ export function fakeSupervisor() {
     return run;
   });
   const supervisor = {
-    acquireScopeCleanup: vi.fn(() => {
-      throw new Error("Cron stream fixture does not own a cleanup scope");
-    }),
+    acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
     spawn,
     cancel: vi.fn(),
     cancelScope: vi.fn(),

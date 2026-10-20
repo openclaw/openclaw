@@ -536,6 +536,7 @@ describe("chat sidebar region", () => {
       desktopRefreshOnPresentation: false,
       desktopAvailable: false,
       desktopSource: null,
+      desktopRuntimeConfig: null,
       desktopFocusHref: "",
       onDesktopFocusTargetChange: vi.fn(),
       dashboard: null,

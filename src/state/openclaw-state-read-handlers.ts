@@ -99,10 +99,7 @@ import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import { readStateStream } from "./openclaw-state-read-stream.js";
-import type {
-  OpenClawStateReadRequest,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
@@ -131,7 +128,7 @@ export function readOpenClawStateDatabaseCommand(
       }
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
-): OpenClawStateReadResult {
+) {
   if (command.type === "claws.inventory") {
     return readClawStateCommandInDatabase(db, command);
   }
@@ -383,16 +380,16 @@ export function readOpenClawStateDatabaseCommand(
       row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
     };
   }
-  if (
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
-  ) {
+  if (command.type === "githubPublication.knownPullRequestUrls") {
     return {
       type: command.type,
-      urls:
-        command.type === "githubPublication.knownPullRequestUrls"
-          ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
-          : readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+      urls: readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+    };
+  }
+  if (command.type === "githubRepository.knownPullRequestUrls") {
+    return {
+      type: command.type,
+      urls: readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
     };
   }
   if (
@@ -445,6 +442,9 @@ export function readOpenClawStateDatabaseCommand(
     return readUserModelAccountCommand(db, command);
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
+    if (command.owners.length === 0 || !tableExists(db, "session_repository_workspaces")) {
+      return { type: command.type, workspaces: [] };
+    }
     return {
       type: command.type,
       workspaces: runSqliteReadSnapshotSync(db, () =>

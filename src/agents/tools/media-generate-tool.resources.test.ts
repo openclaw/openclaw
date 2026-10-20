@@ -538,7 +538,7 @@ describe.each(["image", "music", "video"] as const)(
             vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
             const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
             const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});
-            vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({
+            const wake = vi.spyOn(lifecycle, "wakeTaskCompletion").mockResolvedValue({
               status: "delivered",
             });
             const save = mediaStore.saveMediaBuffer;
@@ -637,11 +637,11 @@ describe.each(["image", "music", "video"] as const)(
             expect(connection.disposals).toBe(1);
             expect(fixture.connections[1]!.database.isOpen).toBe(true);
             if (phase === "rollback") {
-              expect(failed).toHaveBeenCalledWith(
+              expect(failed).toHaveBeenCalledOnce();
+              expect(wake).toHaveBeenCalledWith(
                 expect.objectContaining({
-                  error: expect.objectContaining({
-                    message: "synthetic first media persistence failure",
-                  }),
+                  status: "error",
+                  result: expect.stringContaining("synthetic first media persistence failure"),
                 }),
               );
               expect(completed).not.toHaveBeenCalled();

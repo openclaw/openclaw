@@ -1,9 +1,36 @@
 import { vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+
+const activePreparedFixtures: ReturnType<typeof createReplyOperation>[] = [];
+
+export function activatePreparedRun(sessionKey = "session-key") {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId: "active-session",
+    resetTriggered: false,
+  });
+  operation.setPhase("running");
+  activePreparedFixtures.push(operation);
+  return operation;
+}
+
+export async function cleanupPreparedReplyFixtures() {
+  for (const operation of activePreparedFixtures.splice(0)) {
+    operation.complete();
+    await operation.ownerSettlement;
+  }
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+}
 
 export function createInboundBody<T extends string>(body: T) {
   return { Body: body, RawBody: body, CommandBody: body };
