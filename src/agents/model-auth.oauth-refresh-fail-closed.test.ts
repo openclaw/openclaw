@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import * as providerRuntime from "../plugins/provider-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -9,6 +9,7 @@ import {
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { createOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const { resolveProfile } = vi.hoisted(() => ({ resolveProfile: vi.fn() }));
 vi.mock("./auth-profiles.js", async (importActual) => ({
@@ -32,18 +33,14 @@ it.each([
   async ({ provider, fallback }) => {
     const profileId = `${provider}:oauth-refresh`;
     const syntheticId = `${provider}:synthetic`;
-    const failure = new OAuthRefreshFailureError({
-      provider,
-      profileId,
-      message: "Refresh failed",
-    });
-    const defer =
-      fallback === "synthetic"
-        ? vi
-            .spyOn(providerRuntime, "shouldDeferProviderSyntheticProfileAuthWithPlugin")
-            .mockImplementation(({ context }) => context.resolvedApiKey === "synthetic-defer")
-        : undefined;
+    const failure = new OAuthRefreshFailureError({ provider, profileId, message: "expired" });
+    const profiles: AuthProfileStore["profiles"] = { [profileId]: oauth({ provider, expires: 1 }) };
     if (fallback === "synthetic") {
+      profiles[syntheticId] = createApiKeyCredential(provider, "synthetic-defer");
+      const defer = vi
+        .spyOn(providerRuntime, "shouldDeferProviderSyntheticProfileAuthWithPlugin")
+        .mockImplementation(({ context }) => context.resolvedApiKey === "synthetic-defer");
+      onTestFinished(() => defer.mockRestore());
       resolveProfile.mockImplementation(async ({ profileId: requested }) => {
         if (requested === syntheticId) {
           return { apiKey: "synthetic-defer", provider, profileId: syntheticId };
@@ -53,39 +50,26 @@ it.each([
     } else {
       resolveProfile.mockRejectedValueOnce(failure);
     }
-    try {
-      await withEnvAsync(
-        fallback === "env" ? { OPENAI_API_KEY: "fallback-must-not-be-used" } : {},
-        async () => {
-          await expect(
-            resolveAuth({
-              provider,
-              ...(fallback === "synthetic" ? { profileId: syntheticId } : {}),
-              cfg: { plugins: { enabled: false }, auth: { order: { [provider]: [profileId] } } },
-              store: authStore({
-                [profileId]: oauth({ provider, expires: 1 }),
-                ...(fallback === "synthetic"
-                  ? { [syntheticId]: createApiKeyCredential(provider, "synthetic-defer") }
-                  : {}),
-              }),
-            }),
-          ).rejects.toBe(failure);
-        },
-      );
-      expectProfile(profileId);
-    } finally {
-      defer?.mockRestore();
-    }
+    const request = {
+      provider,
+      profileId: fallback === "synthetic" ? syntheticId : undefined,
+      cfg: { plugins: { enabled: false }, auth: { order: { [provider]: [profileId] } } },
+      store: authStore(profiles),
+    };
+    await withEnvAsync(
+      fallback === "env" ? { OPENAI_API_KEY: "fallback-must-not-be-used" } : {},
+      async () => {
+        await expect(resolveAuth(request)).rejects.toBe(failure);
+      },
+    );
+    expectProfile(profileId);
   },
 );
 
 it("does not allow a locked OAuth profile to resolve as another profile", async () => {
   const profileId = "openai:default";
-  resolveProfile.mockResolvedValueOnce({
-    apiKey: "alternate-token",
-    provider: "openai",
-    profileId: "openai:alternate",
-  });
+  const alt = { apiKey: "alternate-token", provider: "openai", profileId: "openai:alternate" };
+  resolveProfile.mockResolvedValueOnce(alt);
   await expect(
     resolveAuth({
       provider: "openai",
@@ -102,21 +86,16 @@ it("does not allow a locked OAuth profile to resolve as another profile", async 
 
 it("routes a pending fence to the settlement-aware profile resolver", async () => {
   const profileId = "openai:pending-refresh";
-  const fence = createOAuthRefreshFence({
-    profileId,
-    credential: oauth({ expires: 1, accountId: "acct-a" }),
-  });
-  resolveProfile.mockResolvedValueOnce({
-    apiKey: "settled-access",
-    provider: "openai",
-    profileId,
-    credential: {
-      ...fence,
-      access: "settled-access",
-      refresh: "settled-refresh",
-      expires: Date.now() + 60_000,
-    },
-  });
+  const expired = oauth({ expires: 1, accountId: "acct-a" });
+  const fence = createOAuthRefreshFence({ profileId, credential: expired });
+  const credential = {
+    ...fence,
+    access: "settled-access",
+    refresh: "settled-refresh",
+    expires: Date.now() + 60_000,
+  };
+  const settled = { apiKey: "settled-access", provider: "openai", profileId, credential };
+  resolveProfile.mockResolvedValueOnce(settled);
   await expect(
     resolveAuth({
       provider: "openai",
