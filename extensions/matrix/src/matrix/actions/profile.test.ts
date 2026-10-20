@@ -25,19 +25,6 @@ describe("matrix profile actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     withClientMock.mockImplementation(async (_opts, run) => run(actionClient));
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("avatar"),
-      contentType: "image/png",
-      fileName: "avatar.png",
-    });
-    syncMatrixOwnProfileMock.mockResolvedValue({
-      skipped: false,
-      displayNameUpdated: true,
-      avatarUpdated: true,
-      resolvedAvatarUrl: "mxc://example/avatar",
-      convertedAvatarFromHttp: true,
-      uploadedAvatarSource: "http",
-    });
   });
 
   it("trims profile fields and persists through the action client wrapper", async () => {

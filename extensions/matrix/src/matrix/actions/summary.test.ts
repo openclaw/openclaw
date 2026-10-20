@@ -50,11 +50,9 @@ describe("summarizeMatrixRawEvent", () => {
       unsigned: {
         "m.relations": {
           "m.replace": {
-            event_id: "$edit",
             sender,
             unsigned,
             type: "m.room.message",
-            origin_server_ts: 456,
             content: {
               "m.new_content": { msgtype: "m.text", body: "forged text" },
               "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
