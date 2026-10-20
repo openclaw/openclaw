@@ -186,13 +186,13 @@ describe("generic link hovercards", () => {
     expect(request).not.toHaveBeenCalled();
     provider.claimedReaders = [
       {
-        pluginId: "forge",
+        ...provider.readers[0]!,
         id: "commits",
         label: "Commits",
         linkReader: {
-          hosts: ["github.com"],
+          ...provider.readers[0]!.linkReader,
           pathPattern: "^/openclaw/openclaw$",
-          detailMethod: "forge.detail",
+          previewMethod: undefined,
         },
       },
     ];

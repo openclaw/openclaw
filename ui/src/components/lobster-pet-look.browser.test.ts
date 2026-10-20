@@ -4,13 +4,10 @@ import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobs
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 const container = document.createElement("div");
-const lookFor = (id: string) =>
-  canonicalLobsterLook(
-    expectDefined(
-      LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
-      id,
-    ),
-  );
+const lookFor = (id: string) => {
+  const palette = LOBSTER_PET_PALETTES.find((entry) => entry.id === id);
+  return canonicalLobsterLook(expectDefined(palette, id));
+};
 const query = <T extends Element>(selector: string, root: ParentNode = container) =>
   expectDefined(root.querySelector<T>(selector), selector);
 const matrixValues = ({ a, b, c, d, e, f }: DOMMatrix) => [a, b, c, d, e, f];
@@ -25,9 +22,7 @@ afterEach(() => {
 
 function sampleOutline(path: SVGPathElement, steps: number): DOMPoint[] {
   const length = path.getTotalLength();
-  return Array.from({ length: steps + 1 }, (_, step) =>
-    path.getPointAtLength((step / steps) * length),
-  );
+  return Array.from({ length: steps + 1 }, (_, i) => path.getPointAtLength((i / steps) * length));
 }
 
 it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () => {
@@ -43,10 +38,8 @@ it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () =
   for (const point of sashOutline) {
     expect(dome.isPointInFill(point) || distanceToShell(point) < 0.65).toBe(true);
   }
-  expect(
-    sashOutline.filter((point) => point.x < 44 && point.y > 80 && distanceToShell(point) < 0.65)
-      .length,
-  ).toBeGreaterThanOrEqual(3);
+  const tips = sashOutline.filter((p) => p.x < 44 && p.y > 80 && distanceToShell(p) < 0.65);
+  expect(tips.length).toBeGreaterThanOrEqual(3);
 
   const radius = Number(highlight.getAttribute("stroke-width")) / 2;
   for (const point of sampleOutline(highlight, 64)) {

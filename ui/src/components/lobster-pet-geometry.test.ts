@@ -9,6 +9,7 @@ async function frame(element: LobsterPetElement, pending?: "render" | "mutations
   }
   vi.advanceTimersToNextFrame();
   await element.updateComplete;
+  return element.hasAttribute("data-scene-ready");
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -59,13 +60,11 @@ it("observes the current composer after a retained pet reconnects", async () => 
   await Promise.resolve();
   element.composerElements = () => elements;
   elements.composer.prepend(element);
-  await frame(element, "render");
-  expect(element.hasAttribute("data-scene-ready")).toBe(true);
+  expect(await frame(element, "render")).toBe(true);
 
   elements.composer.getBoundingClientRect().width = 0;
   elements.footer.append(document.createElement("span"));
-  await frame(element, "mutations");
-  expect(element.hasAttribute("data-scene-ready")).toBe(false);
+  expect(await frame(element, "mutations")).toBe(false);
 });
 
 it("batches composer geometry reads before paint and retires detached work", async () => {
@@ -89,9 +88,9 @@ it("batches composer geometry reads before paint and retires detached work", asy
     await vi.advanceTimersByTimeAsync(0);
   }
   expect(readStyle).not.toHaveBeenCalled();
-  await frame(element);
+  const ready = await frame(element);
   expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
-  expect(element.hasAttribute("data-scene-ready")).toBe(false);
+  expect(ready).toBe(false);
   expect(readPopupBox).not.toHaveBeenCalled();
   readStyle.mockClear();
   const retiredChoice = popup.firstElementChild!;
@@ -106,7 +105,7 @@ it("batches composer geometry reads before paint and retires detached work", asy
   expect(readStyle).not.toHaveBeenCalled();
   composer.getBoundingClientRect().width = 720;
   composer.prepend(element);
-  await frame(element, "render");
+  const reconnected = await frame(element, "render");
   expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
-  expect(element.hasAttribute("data-scene-ready")).toBe(true);
+  expect(reconnected).toBe(true);
 });

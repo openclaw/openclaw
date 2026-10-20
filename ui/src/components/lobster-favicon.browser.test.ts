@@ -25,7 +25,8 @@ afterEach(() => {
   expect([...document.body.children]).toEqual(bodyBefore);
 });
 
-async function artwork(id: string) {
+type PixelSample = [number, number, number] | [number, number, number, number, number, number];
+async function artwork(id: string, ...samples: PixelSample[]) {
   recordLobsterVisit(id);
   const image = expectDefined(await loadUnlockedLobsterFavicon(id), id + " artwork");
   const canvas = document.createElement("canvas");
@@ -33,22 +34,13 @@ async function artwork(id: string) {
   canvas.height = image.naturalHeight;
   const context = expectDefined(canvas.getContext("2d"), "artwork pixels");
   context.drawImage(image, 0, 0);
-  return {
-    image,
-    // The source-space samples are inside the artwork's four-unit safety margin.
-    pixel: (x: number, y: number) => [...context.getImageData(x + 4, y + 4, 1, 1).data],
-    pixels: context.getImageData(0, 0, canvas.width, canvas.height).data,
-  };
-}
-
-type PixelSample = [number, number, number] | [number, number, number, number, number, number];
-async function checkPixels(id: string, ...samples: PixelSample[]) {
-  const result = await artwork(id);
+  // Source coordinates exclude the artwork's four-unit safety margin.
+  const pixel = (x: number, y: number) => [...context.getImageData(x + 4, y + 4, 1, 1).data];
   for (const [x, y, ...rgba] of samples) {
-    const pixel = result.pixel(x, y);
-    expect(rgba.length === 1 ? [pixel[3]] : pixel).toEqual(rgba);
+    const actual = pixel(x, y);
+    expect(rgba.length === 1 ? [actual[3]] : actual).toEqual(rgba);
   }
-  return result;
+  return { image, pixel, pixels: context.getImageData(0, 0, canvas.width, canvas.height).data };
 }
 
 it("exports identity presets independently of favicon unlocks", async () => {
@@ -70,17 +62,17 @@ it("rejects locked or unknown picks and rereads unlocks after decoding", async (
 });
 
 it("bakes palette variables, CSS overrides and checker pattern into readable pixels", async () => {
-  await checkPixels("crimson", [60, 60, 255, 79, 64, 255]);
-  await checkPixels("split", [80, 60, 70, 83, 107, 255]);
-  await checkPixels("chimera", [10, 50, 74, 125, 252, 255], [110, 50, 244, 184, 64, 255]);
-  await checkPixels("notexture", [52, 56, 17, 17, 17, 255], [60, 56, 255, 0, 220, 255]);
+  await artwork("crimson", [60, 60, 255, 79, 64, 255]);
+  await artwork("split", [80, 60, 70, 83, 107, 255]);
+  await artwork("chimera", [10, 50, 74, 125, 252, 255], [110, 50, 244, 184, 64, 255]);
+  await artwork("notexture", [52, 56, 17, 17, 17, 255], [60, 56, 255, 0, 220, 255]);
 });
 
 it("preserves replacement geometry and overflowing balloon string instead of recoloring a dome", async () => {
-  await checkPixels("pixel", [20, 70, 0], [25, 70, 216, 76, 62, 255]);
-  await checkPixels("flatpack", [60, 78, 0], [60, 90, 255]);
-  const balloon = await checkPixels("balloon", [85, 70, 0]);
-  await checkPixels("retro", [108, 25, 255]);
+  await artwork("pixel", [20, 70, 0], [25, 70, 216, 76, 62, 255]);
+  await artwork("flatpack", [60, 78, 0], [60, 90, 255]);
+  const balloon = await artwork("balloon", [85, 70, 0]);
+  await artwork("retro", [108, 25, 255]);
   expect(balloon.image.naturalHeight).toBeGreaterThan(113);
   const stringPixels = [58, 59, 60, 61, 62, 63, 64, 65].map((x) => balloon.pixel(x, 107)[3]);
   expect(stringPixels.some((alpha) => alpha !== undefined && alpha > 0)).toBe(true);
@@ -109,9 +101,9 @@ it("keeps CSS currentColor, translucency, and text without a live SVG tree", asy
 it("bakes current theme colors instead of retaining external CSS variables", async () => {
   const root = document.documentElement;
   root.style.setProperty("--accent", "rgb(12, 34, 56)");
-  const first = await checkPixels("mood", [60, 60, 12, 34, 56, 255]);
+  const first = await artwork("mood", [60, 60, 12, 34, 56, 255]);
   root.style.setProperty("--accent", "rgb(98, 76, 54)");
-  await checkPixels("mood", [60, 60, 98, 76, 54, 255]);
+  await artwork("mood", [60, 60, 98, 76, 54, 255]);
   expect(first.pixel(60, 60)).toEqual([12, 34, 56, 255]);
 });
 

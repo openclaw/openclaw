@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type {
   ControlUiLinkReaderDocument,
@@ -96,11 +97,10 @@ export function open(panel: Panel, url = itemUrl(1), trigger?: HTMLElement, newT
 }
 
 export function button(panel: Panel, label: string) {
-  const result = panel.querySelector<HTMLButtonElement>('button[aria-label="' + label + '"]');
-  if (!result) {
-    throw new Error("Missing button: " + label);
-  }
-  return result;
+  return expectDefined(
+    panel.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+    "Missing button: " + label,
+  );
 }
 
 export async function expectTitle(panel: Panel, title: string) {
