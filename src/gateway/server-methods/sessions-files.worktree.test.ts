@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { retainSessionActorEntryFacts } from "../../config/sessions/session-actor-replica.js";
 import { readRetainedSessionEntryFacts } from "../../config/sessions/session-entry-read-facts.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
@@ -101,10 +103,31 @@ function seedReplicaPressure(env: NodeJS.ProcessEnv) {
       { sessionKeys: [key], projection: "exact", snapshotFields: ["skillsSnapshot"] },
     );
   return async () => {
-    await read([key]);
+    const selected = await read([key]);
     expect(retained()?.entries[0]?.entry.sessionId).toBe("worktree-session");
-    await read(siblingKeys.slice(0, 64));
-    await read(siblingKeys.slice(64));
+    const first = await read(siblingKeys.slice(0, 64));
+    // A legitimate metadata publication can refresh the target between worker reads.
+    await sessions.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: key },
+      { ...selected.entries[0]!.entry, label: "Updated while reading files" },
+    );
+    const second = await read(siblingKeys.slice(64));
+    const identity = second.databaseIdentity;
+    assert(identity);
+    // Install the committed sibling rows together so eviction cannot depend on read timing.
+    retainSessionActorEntryFacts(
+      {
+        kind: "file",
+        physicalIdentity: identity.identity,
+        nativeLocation: database.path,
+        birthtime: identity.birthtime,
+      },
+      [...first.entries, ...second.entries].map(({ sessionKey, entry }) => ({
+        sessionKey,
+        facts: { entry, snapshots: "full" },
+      })),
+      identity.incarnation,
+    );
     expect(retained()).toBeUndefined();
   };
 }

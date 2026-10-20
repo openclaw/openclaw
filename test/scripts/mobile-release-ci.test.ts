@@ -385,13 +385,19 @@ describe("mobile release CI tools", () => {
       const screenshots =
         state === "collected" ? `${collected}/screenshots` : `${source}/fastlane/screenshots/en-US`;
       const results = state === "collected" ? collected : `${source}/build/SnapshotTestResults`;
+      const resources = state === "collected" ? collected : `${source}/build`;
       return {
         name: `iOS screenshot diagnostics (${state})`,
         workflow: ".github/workflows/ios-store-release.yml",
         selections: [
           {
             prefix: "ios-release-screenshot-diagnostics-",
-            expected: [`${screenshots}/01-chat.png`, `${results}/capture-attempts.json`],
+            expected: [
+              `${screenshots}/01-chat.png`,
+              `${results}/capture-attempts.json`,
+              `${resources}/screenshot-diagnostics.json`,
+              "ios-resource-timeline.jsonl",
+            ],
             excluded: [
               `${screenshots}/capture.log`,
               `${screenshots}/nested/private.png`,
@@ -401,6 +407,9 @@ describe("mobile release CI tools", () => {
               `${source}/build/SnapshotLogs/xcodebuild.log`,
               `${source}/build/release-signing/AuthKey.p8`,
               `${source}/fastlane/.env`,
+              `${resources}/private-diagnostics.json`,
+              `${resources}/nested/screenshot-diagnostics.json`,
+              "private-resource-timeline.jsonl",
             ],
           },
         ],

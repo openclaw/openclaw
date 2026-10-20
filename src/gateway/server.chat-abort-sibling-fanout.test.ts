@@ -7,7 +7,10 @@ import type { AgentCommandOpts } from "../agents/command/types.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
+import {
+  registerSubagentRun,
+  withSubagentKillOwner,
+} from "../agents/subagents/registry/subagent-registry.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
@@ -139,6 +142,12 @@ for (const [suffix, name] of [
       });
     };
 
+    const cancellationInspected = createDeferred();
+    // Hold the child's kill owner: an aborted parent no longer delays confirmation,
+    // which can legitimately retire a non-collecting child before this inspection.
+    const cancellationOwner = replaceParent
+      ? withSubagentKillOwner(firstRunId, () => cancellationInspected.promise)
+      : undefined;
     await runQaGatewayFixture(
       async () => {
         if (!fault && !replaceParent) {
@@ -168,13 +177,9 @@ for (const [suffix, name] of [
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
           await command.onExecutionStarted?.();
-          if (!replaceParent) {
-            command.abortSignal!.addEventListener("abort", () => parentFinish.resolve(), {
-              once: true,
-            });
-          }
-          // Keep the replaced parent unsettled through the durable cancellation
-          // assertion; final confirmation may retire a non-collecting child's row.
+          command.abortSignal!.addEventListener("abort", () => parentFinish.resolve(), {
+            once: true,
+          });
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();
@@ -416,6 +421,8 @@ for (const [suffix, name] of [
       },
       async () => {
         // Cleanup is unconditional, including the expected pre-fix fanout assertion failure.
+        cancellationInspected.resolve();
+        await cancellationOwner;
         for (const lease of leases) {
           lease.release();
         }

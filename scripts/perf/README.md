@@ -824,7 +824,9 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
 `--stress-tools` enables Code Mode in the synthetic configuration. Each outer
 `exec` calls the real `read` and shell `exec` tools; the shell runs `pwd` in the
 fixture's first registered linked worktree and its exit code and output must
-match. The provider continuation must contain the fixture text, the successful
+match. The outer call uses `awaitResults: true` so required tool waits stay owned
+until completion, including when host load exceeds the inline wait budget.
+The provider continuation must contain the fixture text, the successful
 code result, and the original reasoning signature. The default remains a direct
 `read` call. In memory-soak mode, stress tools also enables one normal isolated
 cron agent job every thirty seconds, with delivery disabled. Setup forces and

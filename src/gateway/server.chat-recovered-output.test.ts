@@ -5,11 +5,14 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import {
+  replayChatDisplay,
+  type ChatDisplayFrame,
+} from "../../test/helpers/gateway/chat-display-replay.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { replayChatDisplay, type ChatDisplayFrame } from "./chat-display-replay.test-support.js";
 import {
   closeProvider,
   listenProvider,

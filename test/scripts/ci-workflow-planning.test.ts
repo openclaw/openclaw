@@ -138,7 +138,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(job.strategy.matrix.shard).toEqual(
       readCiWorkflow().jobs["postgres-conformance"].strategy.matrix.shard,
     );
-    expect(job["timeout-minutes"]).toBe(30);
+    expect(job["timeout-minutes"]).toBe(50);
     expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
     expect(job.strategy.matrix.include.map((row: { image: string }) => row.image)).toEqual([
       "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",

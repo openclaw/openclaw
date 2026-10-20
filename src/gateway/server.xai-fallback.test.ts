@@ -4,13 +4,16 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import {
+  replayChatDisplay,
+  type ChatDisplayFrame,
+} from "../../test/helpers/gateway/chat-display-replay.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { replayChatDisplay, type ChatDisplayFrame } from "./chat-display-replay.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

@@ -1,12 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
-import { readSessionChangedEvent } from "../../ui/src/lib/sessions/reconcile.ts";
-import { handleChatGatewayEvent } from "../../ui/src/pages/chat/chat-gateway.ts";
+import type { ChatEvent } from "../../../packages/gateway-protocol/src/index.js";
+import { readSessionChangedEvent } from "../../../ui/src/lib/sessions/reconcile.ts";
+import { handleChatGatewayEvent } from "../../../ui/src/pages/chat/chat-gateway.ts";
 import {
   activeHistory,
   createState,
-} from "../../ui/src/pages/chat/chat-history.inflight.test-support.ts";
-import { applySessionMessagePayload } from "../../ui/src/pages/chat/session-message-apply.ts";
+} from "../../../ui/src/pages/chat/chat-history.inflight.test-support.ts";
+import { applySessionMessagePayload } from "../../../ui/src/pages/chat/session-message-apply.ts";
 
 export type ChatDisplayFrame =
   | { event: "chat"; payload: ChatEvent }
