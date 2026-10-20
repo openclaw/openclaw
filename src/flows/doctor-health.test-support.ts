@@ -102,7 +102,7 @@ const mocks = vi.hoisted(() => {
       select: vi.fn(),
     },
     "../commands/doctor-update.js": {
-      maybeOfferUpdateBeforeDoctor: async () => false,
+      maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
     },
     "../commands/doctor-ui.js": { maybeRepairUiProtocolFreshness: async () => undefined },
     "../commands/doctor-install.js": { noteSourceInstallIssues: () => undefined },

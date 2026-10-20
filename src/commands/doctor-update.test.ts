@@ -45,7 +45,7 @@ function gitResult(code = 0, stdout = "/repo/source\n", stderr = "") {
 }
 
 async function expectSkipped(overrides: Parameters<typeof offer>[0] = {}) {
-  await expect(offer(overrides)).resolves.toBe(false);
+  await expect(offer(overrides)).resolves.toEqual({ updated: false });
   expect(mocks.confirm).not.toHaveBeenCalled();
   expect(mocks.updateCommand).not.toHaveBeenCalled();
 }
@@ -114,11 +114,15 @@ it.each([undefined, "still-starting"] as const)(
     mocks.updateCommand.mockImplementation(async ({ onResult }) => {
       expect(mocks.outro).not.toHaveBeenCalled();
       await withUpdateInProgressEnv(process.cwd(), async () => {
-        await expect(offer()).resolves.toBe(false);
+        await expect(offer()).resolves.toEqual({ updated: false });
       });
       onResult?.(reason ? { ...result("skipped"), reason } : result("ok"));
     });
-    await expect(offer()).resolves.toBe(true);
+    await expect(offer()).resolves.toEqual({
+      updated: true,
+      handled: true,
+      ...(reason ? { reason } : {}),
+    });
     expect(mocks.confirm).toHaveBeenCalledOnce();
     expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
       sourceUpdate: { root: "/repo/source" },
@@ -136,7 +140,7 @@ it.each([undefined, "still-starting"] as const)(
 
 it("leaves a declined update with Doctor", async () => {
   mocks.confirm.mockResolvedValue(false);
-  await expect(offer()).resolves.toBe(false);
+  await expect(offer()).resolves.toEqual({ updated: false });
   expect(mocks.confirm).toHaveBeenCalledWith({
     message: "Update OpenClaw from git before running doctor?",
     initialValue: true,

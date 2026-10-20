@@ -171,6 +171,8 @@ it("writes a detached schtasks relaunch helper", () => {
   expect(seenCommandArg.endsWith('"')).toBe(true);
   expect(seenCommandArg).toContain("&");
   expect(result).toMatchObject({ ok: true, method: "schtasks" });
+  expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
+  expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
   expect(spawnCall).toStrictEqual([
     cmdExePath,
     ["/d", "/s", "/c", seenCommandArg],

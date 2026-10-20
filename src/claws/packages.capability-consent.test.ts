@@ -6,6 +6,7 @@ import {
 } from "../plugins/capability-summary.js";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import type { installManagedPlugin } from "../plugins/management-mutations.js";
+import type { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { installClawPackages } from "./packages.boundary.test-support.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { projectClawPluginCapabilityReviews } from "./plugin-capability-review.js";
@@ -42,9 +43,10 @@ const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromCla
 const baseDeps = {
   probePlugin,
   inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
-  preflightPlugin: vi.fn(async () => ({
+  preflightPlugin: vi.fn(async (params: Parameters<typeof preflightPluginInstall>[0]) => ({
     ok: true as const,
     action: "install" as const,
+    request: { rawSpec: params.rawSpec, installKind: "plugin" as const },
   })),
   acquirePackageLease: vi.fn(async () => ({
     identity: {

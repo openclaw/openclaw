@@ -31,18 +31,21 @@ describe("execFileUtf8Tail", () => {
       ),
     ).resolves.toEqual({
       code: 0,
+      stderr: "",
       stdout: testCase.expected,
       truncated: true,
     });
   });
 
-  it("returns failed command status after draining stderr", async () => {
+  it("keeps a bounded stderr tail for failed commands", async () => {
     const result = await execFileUtf8Tail(
       process.execPath,
       ["-e", "process.stderr.write('😀' + 'x'.repeat(64 * 1024)); process.exitCode = 1"],
       { maxBytes: 1024 },
     );
     expect(result.code).toBe(1);
+    expect(result.stderr).toBe("x".repeat(64 * 1024));
+    expect(result.stderr).not.toContain("�");
     expect(result.truncated).toBe(false);
   });
 
@@ -62,5 +65,6 @@ describe("execFileUtf8Tail", () => {
     const command = `openclaw-missing-${process.pid}-${Date.now()}`;
     const result = await execFileUtf8Tail(command, [], { maxBytes: 1024 });
     expect(result).toMatchObject({ code: 1, stdout: "", truncated: false });
+    expect(result.stderr).toMatch(/ENOENT|not found/i);
   });
 });

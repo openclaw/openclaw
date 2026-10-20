@@ -166,6 +166,7 @@ it.each([
         code: "step-refused",
         message: expect.stringContaining("Failed reading legacy TUI last-session state"),
       });
+      expect(failure.stepReceipts).toEqual(receipts);
     }
     expect(receipts.map((receipt) => receipt.id)).toEqual(plan.steps.map((step) => step.id));
     expect(receiptById(receipts, "exec-approvals")).toMatchObject({
@@ -223,6 +224,7 @@ migrateLegacyState: () => { throw new Error("unapproved migration ran"); },
   expect(receiptById(emitted, blocked?.id)).toEqual(blocked);
   const error = new DoctorStateMigrationRefusalError(result.stepReceipts);
   expect(error.message).toContain("Resolve the reported migration failure before retrying");
+  expect(receiptById(error.stepReceipts, blocked?.id)).toEqual(blocked);
 });
 
 it.each([

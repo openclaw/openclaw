@@ -64,7 +64,7 @@ export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 const AGENT_MODEL_PATTERN = /^(?:openclaw[:/]|agent:)(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i;
 
 class UnknownGatewayAgentError extends Error {
-  constructor(agentId: string) {
+  constructor(readonly agentId: string) {
     super(`Unknown agent '${agentId}'.`);
     this.name = "UnknownGatewayAgentError";
   }

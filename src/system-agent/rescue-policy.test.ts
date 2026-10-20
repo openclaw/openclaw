@@ -21,34 +21,24 @@ describe("resolveSystemAgentRescuePolicy", () => {
     const decision = decide({
       agents: { defaults: { sandbox: { mode: "all" } } },
     });
-    expect(decision).toEqual({
-      allowed: false,
-      message:
-        "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
-    });
+    expect(decision).toMatchObject({ allowed: false, reason: "sandbox-active" });
   });
 
   it("keeps auto rescue closed outside YOLO host posture", () => {
     const decision = decide({
       tools: { exec: { security: "allowlist", ask: "always" } },
     });
-    expect(decision).toEqual({
-      allowed: false,
-      message: "OpenClaw rescue requires YOLO host posture with sandboxing off.",
-    });
+    expect(decision).toMatchObject({ allowed: false, reason: "disabled" });
   });
 
   it("requires owner identity and direct messages by default", () => {
     const notOwnerDecision = decide({}, { senderIsOwner: false });
-    expect(notOwnerDecision).toEqual({
-      allowed: false,
-      message: "OpenClaw rescue only accepts commands from an OpenClaw owner.",
-    });
+    expect(notOwnerDecision).toMatchObject({ allowed: false, reason: "not-owner" });
 
     const notDirectMessageDecision = decide({}, { isDirectMessage: false });
-    expect(notDirectMessageDecision).toEqual({
+    expect(notDirectMessageDecision).toMatchObject({
       allowed: false,
-      message: "OpenClaw rescue is restricted to owner DMs by default.",
+      reason: "not-direct-message",
     });
   });
 });

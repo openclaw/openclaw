@@ -488,6 +488,7 @@ export function recordSkillUsed(params: {
     name: params.match.skillName,
     source: params.match.skillSource,
     activation: params.match.activation,
+    ...(params.match.skillFile ? { skillFile: params.match.skillFile } : {}),
   });
   const trace = params.ctx?.trace
     ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace))

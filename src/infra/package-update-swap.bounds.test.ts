@@ -160,7 +160,7 @@ describe("package verification bounds", () => {
       );
       await fs.truncate(launcher, 1024 * 1024 + 1);
       await expect(createPackageIntegrityReader().launcher(launcher)).rejects.toMatchObject({
-        message: "Package rollback verification byte limit exceeded",
+        resource: "byte",
       });
       await expect(createPackageIntegrityReader().launcher(packageRoot)).rejects.not.toBeInstanceOf(
         PackageIntegrityLimitError,

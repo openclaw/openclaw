@@ -8,6 +8,7 @@ type PreMutationStepResult = {
 };
 
 export class UpdatePreMutationError<Reason extends string = string> extends Error {
+  readonly origin?: "candidate-admission";
   readonly nextAction?: string;
   readonly recoverySteps?: readonly UpdateRecoveryStep[];
   readonly failureFacts: UpdateFailureFact[];
@@ -24,11 +25,13 @@ export class UpdatePreMutationError<Reason extends string = string> extends Erro
       failureFacts?: readonly UpdateFailureFact[];
       stepResult?: PreMutationStepResult;
       recoverySteps?: readonly UpdateRecoveryStep[];
+      origin?: "candidate-admission";
       nextAction?: string;
     },
   ) {
     super(message, options);
     this.name = "UpdatePreMutationError";
+    this.origin = options?.origin;
     this.nextAction = options?.nextAction;
     this.recoverySteps = options?.recoverySteps;
     // Completed attempts are diagnostics, never recovery authority or enumerable error output.

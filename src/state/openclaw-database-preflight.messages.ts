@@ -15,7 +15,7 @@ import type { StateSchemaPublicationBlocker } from "./openclaw-state-schema-publ
 /** Fatal refusal when persisted schemas were written by a newer build. */
 export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
   constructor(
-    incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
+    readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
     options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},
   ) {
     const operation = options.operation ?? "gateway-startup";

@@ -26,7 +26,7 @@ describe("beginMacOSSystemCaWarmupOnce", () => {
       createWorker,
     });
 
-    worker.emit("message", { ok: true });
+    worker.emit("message", { ok: true, certificateCount: 42 });
     await warmup;
 
     expect(createWorker).toHaveBeenCalledOnce();
@@ -63,7 +63,7 @@ describe("beginMacOSSystemCaWarmupOnce", () => {
     expect(worker.unref).toHaveBeenCalledOnce();
     expect(worker.terminate).toHaveBeenCalledOnce();
 
-    worker.emit("message", { ok: true });
+    worker.emit("message", { ok: true, certificateCount: 42 });
     worker.emit("exit", 0);
     expect(log.warn).toHaveBeenCalledOnce();
   });
@@ -139,7 +139,7 @@ describe("beginMacOSSystemCaWarmupOnce", () => {
     expect(concurrent).toBe(first);
     expect(createWorker).toHaveBeenCalledOnce();
 
-    worker.emit("message", { ok: true });
+    worker.emit("message", { ok: true, certificateCount: 42 });
     await first;
 
     expect(beginMacOSSystemCaWarmupOnce(options)).toBe(first);

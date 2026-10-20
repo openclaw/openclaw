@@ -39,7 +39,7 @@ describe("package-only recovery admission", () => {
         assertUpdateRecoveryAdmission(explicitPath ? { ...f.options, path: f.file } : f.options),
       ).rejects.toMatchObject({
         name: "UpdateRecoveryRequiredError",
-        message: `Update ${f.run.runId} has unfinished recovery; reconcile it before starting another update.`,
+        record: { runId: f.run.runId },
       });
       expect(changed).toBe(true);
       expect(fs.readFileSync(f.file).equals(before)).toBe(true);

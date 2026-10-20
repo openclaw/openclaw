@@ -215,6 +215,7 @@ export function applyUpdateCandidateAdmission(params: {
   if (verdict?.verdict === "refuse") {
     const reason = verdict.reasons[0]!;
     throw new UpdatePreMutationError(reason.code, reason.message, {
+      origin: "candidate-admission",
       nextAction: reason.nextAction,
       failureFacts: verdict.reasons.map((entry) => ({
         check: "candidate-admission",

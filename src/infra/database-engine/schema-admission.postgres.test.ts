@@ -64,7 +64,7 @@ function fixture(
       try {
         const db = connections[0];
         if (db) {
-          db.exec(`DROP SCHEMA "${getPostgresPhysicalFacts(db)!.namespace}" CASCADE`);
+          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
         }
       } finally {
         connections.forEach((item) => item.close());

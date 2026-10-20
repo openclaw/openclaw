@@ -34,6 +34,8 @@ export type NodeWorkerBundleInstallInput = z.infer<typeof BundleInstallInputSche
 export type NodeWorkerBundleInstallResult = WorkerAdmissionHandshake;
 
 export class NodeWorkerBundleInstallError extends Error {
+  readonly code = NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE;
+
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "NodeWorkerBundleInstallError";

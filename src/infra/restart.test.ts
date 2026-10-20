@@ -182,16 +182,12 @@ it.each([0, 37])("handles launchctl bootstrap status %s", (bootstrapStatus) => {
       expect(triggerOpenClawRestart()).toEqual({
         ok: true,
         method: "launchctl",
+        tried: [
+          `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
+          `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
+          ...(bootstrapStatus === 37 ? [`launchctl kickstart gui/${uid}/ai.openclaw.gateway`] : []),
+        ],
       });
-      expect(
-        spawnSyncMock.mock.calls
-          .filter(([command]) => command === "launchctl")
-          .map(([, args]) => args),
-      ).toEqual([
-        ["kickstart", "-k", `gui/${uid}/ai.openclaw.gateway`],
-        ["bootstrap", `gui/${uid}`, "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist"],
-        ...(bootstrapStatus === 37 ? [["kickstart", `gui/${uid}/ai.openclaw.gateway`]] : []),
-      ]);
     },
   );
 });

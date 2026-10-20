@@ -71,6 +71,7 @@ describe("legacy context-budget config migration", () => {
     expect(repeated.config).toBe(migrated.config);
     expect(repeated).toEqual({
       config: migrated.config,
+      changed: false,
       changes: [],
       warnings: [],
     });
@@ -107,6 +108,7 @@ describe("legacy context-budget config migration", () => {
     expect(migrated.warnings).toHaveLength(3);
     expect(migrateLegacyContextBudgetConfig(migrated.config)).toEqual({
       config: migrated.config,
+      changed: false,
       changes: [],
       warnings: [],
     });

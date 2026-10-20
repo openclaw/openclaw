@@ -91,7 +91,9 @@ it("enforces distinct trusted key material for signature thresholds", () => {
     signedEnvelope({ keys: [first, second] }),
     {
       ok: true,
+      signedByKeyIds: ["first", "second"],
       signatureCount: 2,
+      threshold: 2,
     },
     [first, second],
     { threshold: 2 },

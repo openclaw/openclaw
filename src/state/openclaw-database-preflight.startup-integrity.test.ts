@@ -258,9 +258,14 @@ it("reads a replacement database's committed WAL after loading the old clean sea
 
   await expect(fixture.ready()).rejects.toMatchObject({
     name: "OpenClawDatabaseSchemaPreflightError",
-    message: expect.stringContaining(
-      `state database ${statePath} uses schema ${supportedVersions.state + 1}; this build supports ${supportedVersions.state};`,
-    ),
+    incompatibleDatabases: [
+      expect.objectContaining({
+        kind: "state",
+        path: statePath,
+        foundVersion: supportedVersions.state + 1,
+        supportedVersion: supportedVersions.state,
+      }),
+    ],
   });
 });
 

@@ -649,7 +649,7 @@ describe("retained npm package integrity", () => {
         });
         interceptPackageFileHashes(async () => {
           timedOut = true;
-          throw new PackageIntegrityTimeoutError();
+          throw new PackageIntegrityTimeoutError(40);
         });
       }
       const beforeActivate = vi.fn();

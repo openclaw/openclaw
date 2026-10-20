@@ -28,7 +28,7 @@ export class SessionGroupNotFoundError extends Error {
 }
 
 export class SessionGroupNotEmptyError extends Error {
-  constructor(groups: ReadonlyArray<{ name: string; memberSessions: number }>) {
+  constructor(readonly groups: ReadonlyArray<{ name: string; memberSessions: number }>) {
     super(
       `sessions.groups.put cannot drop groups that still have member sessions: ${groups
         .map((group) => `"${group.name}" (${group.memberSessions})`)

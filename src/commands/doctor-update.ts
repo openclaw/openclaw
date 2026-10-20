@@ -40,11 +40,15 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
   root: string | null;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   outro: (message: string) => void;
-}): Promise<boolean> {
+}): Promise<{
+  updated: boolean;
+  handled?: boolean;
+  reason?: "gateway-readiness-unverified" | "still-starting";
+}> {
   const installOwner = await readInstallOwner(params.root);
   if (installOwner) {
     note(formatInstallOwnerMessage(installOwner), "Update");
-    return false;
+    return { updated: false };
   }
   const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
   const canOfferUpdate =
@@ -54,7 +58,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     params.options.repair !== true &&
     process.stdin.isTTY;
   if (!canOfferUpdate || !params.root) {
-    return false;
+    return { updated: false };
   }
 
   const git = await detectOpenClawGitCheckout(params.root);
@@ -64,14 +68,14 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         "Update through the external supervisor's stop/update/finalize/restart workflow. Continuing Doctor without updating OpenClaw.",
         "Update",
       );
-      return false;
+      return { updated: false };
     }
     const shouldUpdate = await params.confirm({
       message: "Update OpenClaw from git before running doctor?",
       initialValue: true,
     });
     if (!shouldUpdate) {
-      return false;
+      return { updated: false };
     }
     const { updateCommand } = await import("../cli/update-cli/update-command.js");
     let handled = false;
@@ -95,7 +99,11 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           : "Update completed (doctor already ran as part of the update).",
       );
     }
-    return handled;
+    return {
+      updated: true,
+      handled,
+      ...(readinessReason ? { reason: readinessReason } : {}),
+    };
   }
 
   if (git === "not-git") {
@@ -108,5 +116,5 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     );
   }
 
-  return false;
+  return { updated: false };
 }

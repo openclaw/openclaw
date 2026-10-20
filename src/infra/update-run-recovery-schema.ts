@@ -559,7 +559,7 @@ export function inspectUpdateRecovery(raw: string, runId: string): UpdateRecover
   };
 }
 export class UpdateRecoveryRequiredError extends Error {
-  constructor(record: UpdateRecoveryRecord) {
+  constructor(readonly record: UpdateRecoveryRecord) {
     super(
       `Update ${record.runId} has unfinished recovery; reconcile it before starting another update.`,
     );

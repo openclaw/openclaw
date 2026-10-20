@@ -540,6 +540,7 @@ describe("loadConfigForInstall", () => {
     expect(result.config).toBe(snapshotCfg);
     expect(result.pluginMutation).toEqual({
       mode: "blocked",
+      scope: "plugins",
       reason: expect.stringContaining("external or unresolved top-level $include"),
     });
   });
@@ -595,6 +596,7 @@ describe("loadConfigForInstall", () => {
 
     expect(result.hookMutation).toEqual({
       mode: "blocked",
+      scope: "hooks",
       reason: expect.stringContaining("external or unresolved top-level $include"),
     });
     expect(result.pluginMutation).toEqual({ mode: "allowed" });
@@ -639,6 +641,7 @@ describe("loadConfigForInstall", () => {
       });
       expect(result.hookMutation).toEqual({
         mode: "blocked",
+        scope: "config",
         reason: expect.stringContaining("share the same top-level $include target"),
       });
       expect(result.pluginMutation).toEqual(result.hookMutation);
@@ -680,6 +683,7 @@ describe("loadConfigForInstall", () => {
       });
       expect(ambiguousResult.pluginMutation).toEqual({
         mode: "blocked",
+        scope: "plugins",
         reason: expect.stringContaining("nested $include"),
       });
       await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow("nested $include");
@@ -718,6 +722,7 @@ describe("loadConfigForInstall", () => {
 
     expect(result.pluginMutation).toEqual({
       mode: "blocked",
+      scope: "config",
       reason: expect.stringContaining("unsupported $include shape"),
     });
   });

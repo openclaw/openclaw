@@ -50,7 +50,10 @@ export type SessionMutationPreemption = {
 
 /** Reports that a mutation's captured preemption work did not settle within its bound. */
 export class SessionMutationPreemptTimeoutError extends Error {
-  constructor(sessionKey: string, mutationKind: SessionMutationKind) {
+  constructor(
+    readonly sessionKey: string,
+    readonly mutationKind: SessionMutationKind,
+  ) {
     super(`Session ${sessionKey} did not settle before ${mutationKind} preemption timed out`);
     this.name = "SessionMutationPreemptTimeoutError";
   }

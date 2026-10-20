@@ -179,14 +179,14 @@ export function packageLauncherDifferences(
 }
 
 export class PackageIntegrityTimeoutError extends Error {
-  constructor() {
+  constructor(readonly budgetMs: number) {
     super("Package rollback verification timed out");
   }
 }
 
 /** Resource exhaustion is distinct from a filesystem-integrity failure. */
 export class PackageIntegrityLimitError extends Error {
-  constructor(resource: "entry" | "byte") {
+  constructor(readonly resource: "entry" | "byte") {
     super(`Package rollback verification ${resource} limit exceeded`);
   }
 }
@@ -265,7 +265,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           )
           .catch(() => {});
       }
-      throw new PackageIntegrityTimeoutError();
+      throw new PackageIntegrityTimeoutError(budget);
     }
     return value;
   }

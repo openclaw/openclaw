@@ -81,10 +81,12 @@ it("keeps restart discovery off the caller thread and observes changed retained-
         await expect(readiness).resolves.toBeUndefined();
       } else {
         await expect(readiness).rejects.toMatchObject({
-          kind: "newer-schema",
-          message: expect.stringContaining(
-            `agent database for agent retained ${agent.path} uses schema ${supportedVersions.agent + 1}; this build supports ${supportedVersions.agent}`,
-          ),
+          incompatibleDatabases: [
+            {
+              ...versionRow("agent", agent.path, supportedVersions.agent + 1),
+              agentId: "retained",
+            },
+          ],
         });
       }
       expect(callerSql).toEqual([]);

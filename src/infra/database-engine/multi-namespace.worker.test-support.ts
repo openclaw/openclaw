@@ -79,7 +79,7 @@ try {
   port.postMessage({
     event: "ready",
     result: {
-      namespace: getPostgresPhysicalFacts(db)!.namespace,
+      namespace: db.schema,
       storeId: getPostgresPhysicalFacts(db)!.storeId,
       ...db.prepare("SELECT pg_backend_pid() AS pid, current_database() AS database").get(),
     },
@@ -100,7 +100,6 @@ try {
           }
         });
       } else if (command.op === "search") {
-        const namespace = getPostgresPhysicalFacts(db)!.namespace;
         const search = bindStoreSearch(db, schema.search!);
         const k = getNodeSqliteKysely<{
           notes: { id: string; text: string; openclaw_search: unknown };
@@ -113,7 +112,7 @@ try {
           result = executeSqliteQuerySync(
             db,
             k
-              .withSchema(namespace)
+              .withSchema(db.schema)
               .selectFrom("notes")
               .select([
                 "id",
@@ -123,7 +122,7 @@ try {
               .orderBy("id"),
           ).rows;
         } finally {
-          db.exec(`SET search_path TO ${pgSearchName(namespace)}`);
+          db.exec(`SET search_path TO ${pgSearchName(db.schema)}`);
         }
       } else if (command.op === "reopen") {
         db.close();

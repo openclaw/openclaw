@@ -3,9 +3,10 @@ import { runCommandWithTimeout } from "../process/exec.js";
 export { resolveGatewaySystemdServiceName } from "../daemon/constants.js";
 export { readSystemdServiceRuntime } from "../daemon/systemd.js";
 
-type ExecFileTailResult = { stdout: string; code: number; truncated: boolean };
+type ExecFileTailResult = { stdout: string; stderr: string; code: number; truncated: boolean };
 
 const DEFAULT_LOG_SUBPROCESS_TIMEOUT_MS = 10_000;
+const STDERR_MAX_BYTES = 64 * 1024;
 
 export async function execFileUtf8Tail(
   command: string,
@@ -15,18 +16,19 @@ export async function execFileUtf8Tail(
   try {
     const result = await runCommandWithTimeout([command, ...args], {
       baseEnv: options.env,
-      maxOutputBytes: { stdout: options.maxBytes },
-      outputCapture: { stderr: "discard" },
+      maxOutputBytes: { stdout: options.maxBytes, stderr: STDERR_MAX_BYTES },
       timeoutMs: options.timeoutMs ?? DEFAULT_LOG_SUBPROCESS_TIMEOUT_MS,
     });
     return {
       stdout: result.stdout,
+      stderr: result.stderr,
       code: result.code ?? 1,
       truncated: Boolean(result.stdoutTruncatedBytes),
     };
-  } catch {
+  } catch (error) {
     return {
       stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
       code: 1,
       truncated: false,
     };

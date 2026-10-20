@@ -111,11 +111,7 @@ async function fixture(
       try {
         const db = connections[0];
         if (db) {
-          const namespace = readEngineAnchor(anchor)?.[0]?.schema;
-          if (typeof namespace !== "string") {
-            throw new Error("Expected PostgreSQL anchor schema for cleanup");
-          }
-          db.exec(`DROP SCHEMA "${namespace}" CASCADE`);
+          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
         }
       } finally {
         connections.forEach((db) => db.close());

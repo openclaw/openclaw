@@ -61,7 +61,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   constructor(
     url: string,
-    schema: string,
+    readonly schema: string,
     readonly anchor: DatabaseSync,
     readonly storeId: string,
     options?: {

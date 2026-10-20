@@ -1,13 +1,17 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { resolvePluginInstallRequestContext } from "./install-config.js";
+import {
+  resolvePluginInstallRequestContext,
+  type PluginInstallRequestContext,
+} from "./install-config.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 
 type PluginInstallPreflightResult =
-  | { ok: true; action: "install"; installedPath?: string }
+  | { ok: true; action: "install"; request: PluginInstallRequestContext; installedPath?: string }
   | {
       ok: true;
       action: "reuse";
+      request: PluginInstallRequestContext;
       installedId: string;
       installedVersion: string;
       installedPath?: string;
@@ -17,8 +21,10 @@ type PluginInstallPreflightResult =
   | {
       ok: false;
       code: "plugin_version_conflict";
+      request: PluginInstallRequestContext;
       installedPath?: string;
       installedVersion: string;
+      expectedVersion: string;
     }
   | { ok: false; code: "invalid_plugin_spec"; error: string };
 
@@ -85,12 +91,13 @@ export async function preflightPluginInstall(params: {
   const installed = installedEntry?.[1];
   const installedVersion = installed?.resolvedVersion ?? installed?.version;
   if (!installedVersion || !installedId) {
-    return { ok: true, action: "install" };
+    return { ok: true, action: "install", request: resolved.request };
   }
   if (installedVersion === params.expectedVersion) {
     return {
       ok: true,
       action: "reuse",
+      request: resolved.request,
       installedId,
       installedVersion,
       ...(installed?.installPath ? { installedPath: installed.installPath } : {}),
@@ -101,7 +108,9 @@ export async function preflightPluginInstall(params: {
   return {
     ok: false,
     code: "plugin_version_conflict",
+    request: resolved.request,
     ...(installed?.installPath ? { installedPath: installed.installPath } : {}),
     installedVersion,
+    expectedVersion: params.expectedVersion,
   };
 }

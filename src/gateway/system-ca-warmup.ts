@@ -10,8 +10,8 @@ const SYSTEM_CA_WORKER_SOURCE = String.raw`
   const { parentPort } = require("node:worker_threads");
 
   try {
-    getCACertificates("default");
-    parentPort.postMessage({ ok: true });
+    const certificateCount = getCACertificates("default").length;
+    parentPort.postMessage({ ok: true, certificateCount });
   } catch (error) {
     parentPort.postMessage({
       ok: false,
@@ -35,7 +35,7 @@ type SystemCaWarmupOptions = {
   createWorker?: (source: string, options: WorkerOptions) => SystemCaWarmupWorker;
 };
 
-type SystemCaWarmupMessage = { ok: true } | { ok: false; error: string };
+type SystemCaWarmupMessage = { ok: true; certificateCount: number } | { ok: false; error: string };
 
 let macOSSystemCaWarmupPromise: Promise<void> | undefined;
 

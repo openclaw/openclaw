@@ -40,6 +40,6 @@ it("records successful discovered skill reads with the original sandbox provenan
   expect(consumeRunSkillUsage(runId)).toEqual([]);
   await tool.execute("read-guide", { name: "guide" });
   expect(consumeRunSkillUsage(runId)).toEqual([
-    { name: "guide", source: "workspace", activation: "read" },
+    { name: "guide", source: "workspace", activation: "read", skillFile },
   ]);
 });

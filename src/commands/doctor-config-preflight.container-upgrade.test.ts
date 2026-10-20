@@ -6,7 +6,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as terminalNotes from "../../packages/terminal-core/src/note.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
@@ -367,7 +366,6 @@ describe("container image replacement Doctor repair and startup readiness", () =
 
   it("refuses startup and Doctor repair when a core agent schema has conflicting markers", async () => {
     await withContainerState(async (stateDir) => {
-      const notes = vi.spyOn(terminalNotes, "note");
       const databasePath = seedSchema19Agent(stateDir, true);
       const original = fs.readFileSync(databasePath);
       await withAgentDatabaseStartupAdmission(async () => {
@@ -378,22 +376,23 @@ describe("container image replacement Doctor repair and startup readiness", () =
       expect(fs.readFileSync(databasePath)).toEqual(original);
       await expect(repairContainerState()).rejects.toMatchObject({
         name: "DoctorStateMigrationRefusalError",
-        failureFacts: expect.arrayContaining([
+        stepReceipts: expect.arrayContaining([
           expect.objectContaining({
-            check: "media-persistence",
-            code: "step-refused",
-            message: "Skipped agent database migration for [redacted-path]",
+            id: "media-persistence",
+            outcome: "refused",
+            refusal: { code: "step-refused", message: expect.any(String) },
+            warnings: expect.arrayContaining([
+              expect.stringContaining(
+                `${databasePath} metadata schema version 18 does not match 19`,
+              ),
+            ]),
           }),
           expect.objectContaining({
-            check: "transcript-directives",
-            code: "blocked-by-prior-refusal",
+            id: "transcript-directives",
+            refusal: expect.objectContaining({ code: "blocked-by-prior-refusal" }),
           }),
         ]),
       });
-      expect(notes).toHaveBeenCalledWith(
-        expect.stringContaining(`${databasePath} metadata schema version 18 does not match 19`),
-        "Doctor warnings",
-      );
       expect(fs.readFileSync(databasePath)).toEqual(original);
       await withAgentDatabaseStartupAdmission(async () => {
         await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({

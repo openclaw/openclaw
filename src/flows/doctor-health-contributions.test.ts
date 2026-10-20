@@ -2487,7 +2487,7 @@ describe("doctor health contributions", () => {
         contributions.push(createDoctorHealthContribution("doctor:later", "Later repair", later));
         const run = runDoctorHealthContributionList(ctx, contributions);
         if (outcome === "refused") {
-          await expect(run).rejects.toThrow("Owner could not complete the planned repair");
+          await expect(run).rejects.toMatchObject({ stepReceipts: [recorded] });
           expect(later).not.toHaveBeenCalled();
         } else {
           await run;

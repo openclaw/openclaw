@@ -37,7 +37,9 @@ export type ConfigSnapshotForInstallPersist = {
 
 type ConfigMutationSection = "hooks" | "plugins";
 
-export type ConfigMutationPreflight = { mode: "allowed" } | { mode: "blocked"; reason: string };
+export type ConfigMutationPreflight =
+  | { mode: "allowed" }
+  | { mode: "blocked"; scope: "config" | ConfigMutationSection; reason: string };
 
 const CONFIG_MUTATION_ALLOWED = { mode: "allowed" } as const;
 
@@ -81,12 +83,14 @@ function resolveConfigMutationPreflight(params: {
   if (Object.hasOwn(params.parsed, "$include")) {
     return {
       mode: "blocked",
+      scope: "config",
       reason: `Config ${params.section} are stored through an unsupported $include shape at the root; edit the included file directly or move ${params.section} into the root config before installing.`,
     };
   }
   if (!supportsInstallConfigSingleTopLevelIncludeShape(params.parsed[params.section])) {
     return {
       mode: "blocked",
+      scope: params.section,
       reason: `Config ${params.section} are stored through an unsupported $include shape; edit the included file directly or move ${params.section} to a single-file top-level include before installing.`,
     };
   }
@@ -124,12 +128,14 @@ function resolveConfigMutationPreflight(params: {
       if (expectedHash !== hashConfigIncludeRaw(raw)) {
         return {
           mode: "blocked",
+          scope: params.section,
           reason: `Config ${params.section} include changed since the config was read; rerun the install after reloading the config.`,
         };
       }
       if (containsConfigIncludeDirective(parseJsonWithJson5Fallback(raw))) {
         return {
           mode: "blocked",
+          scope: params.section,
           reason: `Config ${params.section} are stored through a nested $include; edit the included file directly or remove the nested $include before installing.`,
         };
       }
@@ -137,12 +143,14 @@ function resolveConfigMutationPreflight(params: {
     } catch {
       return {
         mode: "blocked",
+        scope: params.section,
         reason: `Config ${params.section} include could not be inspected at its snapshot target; rerun the install after repairing or reloading the config.`,
       };
     }
   }
   return {
     mode: "blocked",
+    scope: params.section,
     reason: `Config ${params.section} are stored in an external or unresolved top-level $include; edit the included file directly or move it under the config directory before installing.`,
   };
 }
@@ -182,6 +190,7 @@ export function resolveInstallConfigMutationPreflights(params: {
   if (pluginTarget && hookTarget && path.normalize(pluginTarget) === path.normalize(hookTarget)) {
     const blocked = {
       mode: "blocked",
+      scope: "config",
       reason:
         "Config plugins and hooks share the same top-level $include target; split them into separate include files before installing.",
     } as const;
@@ -209,6 +218,7 @@ export function resolveCombinedPluginAndHookConfigMutationPreflight(params: {
   }
   return {
     mode: "blocked",
+    scope: "config",
     reason:
       "Config plugins and hooks cannot be updated together while either section uses a top-level $include; update them separately.",
   };

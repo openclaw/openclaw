@@ -7,6 +7,7 @@ export type RunSkillUsage = Readonly<{
   name: string;
   source: SkillTelemetrySource;
   activation: "command" | "read";
+  skillFile?: string;
 }>;
 
 const skillUsageByRun = new Map<string, Map<string, RunSkillUsage>>();
@@ -22,6 +23,7 @@ export function recordRunSkillUsage(params: RunSkillUsage & { runId?: string }):
     name: params.name,
     source: params.source,
     activation: params.activation,
+    ...(params.skillFile ? { skillFile: params.skillFile } : {}),
   };
   usage.set(`${record.source}\u0000${record.name}\u0000${record.activation}`, record);
   skillUsageByRun.set(runId, usage);

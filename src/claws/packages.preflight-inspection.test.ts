@@ -61,13 +61,15 @@ const conflict = {
   code: "plugin_version_conflict",
   error: "Installed plugin has a different version.",
   installedVersion: "1.0.0",
+  expectedVersion: pluginPackage.version,
+  request: {} as never,
 } as const;
 type ProbeFixture = Probe | Partial<PluginProbe>;
 function preflight(probe: ProbeFixture, options: PreflightOptions = {}) {
   return preflightClawPackage(pluginPackage, "/tmp/workspace", {
     ...options,
     deps: {
-      preflightPlugin: async () => ({ ok: true, action: "install" }),
+      preflightPlugin: async () => ({ ok: true, action: "install", request: {} as never }),
       probePlugin: withStagedInspection(
         typeof probe === "function" ? probe : async () => pluginProbe(probe),
       ),
@@ -161,6 +163,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
         preflightPlugin: vi.fn(async () => ({
           ok: true as const,
           action: "reuse" as const,
+          request: {} as never,
           installedId: "audit",
           installedVersion: "2.0.1",
           installedIntegrity: integrity,

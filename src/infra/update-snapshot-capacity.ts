@@ -31,11 +31,13 @@ export function formatUpdateSnapshotCapacity(capacity: UpdateSnapshotCapacity): 
 }
 
 export class UpdateSnapshotCapacityError extends Error {
+  readonly reason: UpdateSnapshotCapacity["reason"];
   readonly capacity: UpdateSnapshotCapacity;
 
   constructor(capacity: UpdateSnapshotCapacity) {
     super(formatUpdateSnapshotCapacity(capacity));
     this.name = "UpdateSnapshotCapacityError";
+    this.reason = capacity.reason;
     this.capacity = capacity;
   }
 }

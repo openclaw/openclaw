@@ -7,6 +7,7 @@ const MODEL_CONTEXT_TOKENS_REPLACEMENT = "models.providers.<provider>.models[].c
 
 type ContextBudgetConfigMigration = {
   config: JsonRecord;
+  changed: boolean;
   changes: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
 };
@@ -104,7 +105,7 @@ function migrateProviderContextBudgets(
 /** Doctor preserves provider budgets and reports unrepresentable agent caps before validation. */
 export function migrateLegacyContextBudgetConfig(raw: JsonRecord): ContextBudgetConfigMigration {
   if (!hasLegacyContextBudgetConfig(raw)) {
-    return { config: raw, changes: [], warnings: [] };
+    return { config: raw, changed: false, changes: [], warnings: [] };
   }
   const next = structuredClone(raw);
   const changes: ConfigValidationIssue[] = [];
@@ -118,5 +119,5 @@ export function migrateLegacyContextBudgetConfig(raw: JsonRecord): ContextBudget
       message: `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
     });
   }
-  return { config: next, changes, warnings };
+  return { config: next, changed: true, changes, warnings };
 }
