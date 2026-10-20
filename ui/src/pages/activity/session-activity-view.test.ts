@@ -2,12 +2,10 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { AgentsListResult } from "../../api/types.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -25,12 +23,16 @@ const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof props>>(
 let container: HTMLDivElement;
 const query = <T extends Element = HTMLElement>(selector: string, root: ParentNode = container) =>
   root.querySelector<T>(selector);
-const all = (selector: string, root: ParentNode = container) => [
-  ...root.querySelectorAll(selector),
+const all = <T extends Element = HTMLElement>(selector: string, root: ParentNode = container) => [
+  ...root.querySelectorAll<T>(selector),
 ];
 const text = (selector: string, root: ParentNode = container) => query(selector, root)?.textContent;
 const attr = (selector: string, name: string, root: ParentNode = container) =>
   query(selector, root)?.getAttribute(name);
+const sessionElement = (key: string, root: ParentNode = container) =>
+  query(`[data-activity-session="${key}"]`, root);
+const personProps = (personId: string, input: Parameters<typeof props>[0] = {}) =>
+  props({ filters: { personId, query: "", time: "7d" }, ...input });
 function expectContains(value: string | null | undefined, ...parts: string[]) {
   for (const part of parts) {
     expect(value).toContain(part);
@@ -41,18 +43,6 @@ function show(input: Parameters<typeof props>[0] = {}, target = container) {
 }
 function viewer(id: string, overrides: Partial<PresenceViewer> = {}): PresenceViewer {
   return { id, identity: { type: "profile", id }, watchedSessions: [], ...overrides };
-}
-function agentContext(agents: AgentsListResult["agents"]) {
-  return createContext(
-    createGateway(createTestGatewayClient(vi.fn(async () => ({})))),
-    createSessions("main", []),
-    { defaultId: "main", mainKey: "main", scope: "per-sender", agents },
-  );
-}
-function mountView(input: ReturnType<typeof props>) {
-  return mountDashboards(() => createComponent(renderSessionActivityView, input), {
-    wrapper: createSolidApplicationContextProvider(input.context).wrapper,
-  }).container;
 }
 
 beforeEach(() => {
@@ -73,30 +63,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("shows online identity when interaction age is unknown", () => {
-  const now = Date.now();
-  show({
-    rows: [row("agent:main:work", { id: "person" }, now)],
-    filters: { personId: "person", query: "", time: "7d" },
-    presenceViewers: [
-      viewer("person", {
-        name: "Person",
-        entries: [{ ts: now, lastInputSeconds: 0 }],
-      }),
-    ],
-  });
-  expect(text(".activity-feed__identity .settings-status")?.trim()).toBe("Online");
-});
-
-it("refreshes presence age without replacing the selected person's disclosure", () => {
+it("refreshes unknown, active and idle presence without replacing the person's disclosure", () => {
   const now = Date.UTC(2026, 0, 1, 12);
   vi.spyOn(Date, "now").mockReturnValue(now);
   const person = viewer("person", {
     name: "Person",
-    entries: [{ ts: now, lastActivityAt: now, host: "Test device" }],
+    entries: [{ ts: now, lastInputSeconds: 0, host: "Test device" }],
   });
-  const input = props({
-    filters: { personId: "person", query: "", time: "7d" },
+  const input = personProps("person", {
+    rows: [row("agent:main:work", { id: "person" }, now)],
     presenceViewers: [person],
     presentationRevision: 1,
   });
@@ -104,12 +79,15 @@ it("refreshes presence age without replacing the selected person's disclosure", 
   const identity = query(".activity-feed__identity");
   const details = query<HTMLDetailsElement>(".activity-feed__connection-details")!;
   details.open = true;
-  expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Active");
+  expect(text(".settings-status", identity!)?.trim()).toBe("Online");
+  person.entries = [{ ts: now, lastActivityAt: now, host: "Test device" }];
+  show({ ...input, presentationRevision: 2 });
+  expect(text(".settings-status", identity!)).toContain("Online · Active");
 
   vi.mocked(Date.now).mockReturnValue(now + 120_000);
-  show({ ...input, presentationRevision: 2 });
+  show({ ...input, presentationRevision: 3 });
   expect(query(".activity-feed__identity")).toBe(identity);
-  expect(identity?.querySelector(".settings-status")?.textContent).toContain("Online · Idle");
+  expect(text(".settings-status", identity!)).toContain("Online · Idle");
   expect(query(".activity-feed__connection-details")).toBe(details);
   expect(details.open).toBe(true);
 });
@@ -154,9 +132,9 @@ it.each([
     const pulse = main.querySelector(".activity-pulse")!;
     expect(main.firstElementChild).toBe(pulse);
     expect(text(".activity-pulse__heading", pulse)?.trim()).toBe(label);
-    const bars = pulse.querySelectorAll(".activity-pulse__bars > span");
+    const bars = all(".activity-pulse__bars > span", pulse);
     expect(bars).toHaveLength(count);
-    expect(pulse.querySelectorAll(".activity-pulse__axis > span")).toHaveLength(count);
+    expect(all(".activity-pulse__axis > span", pulse)).toHaveLength(count);
     expect(bars[count - 1]?.getAttribute("data-bucket")).toBe("current");
     const options: Intl.DateTimeFormatOptions = hourly
       ? { hour: "numeric" }
@@ -164,23 +142,21 @@ it.each([
         ? { month: "short" }
         : { month: "short", day: "numeric" };
     const formatter = new Intl.DateTimeFormat(undefined, options);
+    const formatBucket = (index: number) => formatter.format(bucketStart(index));
     expect(bars[count - 1]?.getAttribute("title")).toBe(
-      `${formatter.format(bucketStart(count - 1))} · ${hourly ? "3 sessions" : "1 session"}`,
+      `${formatBucket(count - 1)} · ${hourly ? "3 sessions" : "1 session"}`,
     );
     expect(
-      [...pulse.querySelectorAll(".activity-pulse__axis > span > span")].map(
-        (axis) => axis.textContent,
-      ),
-    ).toEqual(indices.map((index) => formatter.format(bucketStart(index))));
+      all(".activity-pulse__axis > span > span", pulse).map((axis) => axis.textContent),
+    ).toEqual(indices.map(formatBucket));
+    const stats = () => text(".activity-pulse__stats", pulse)?.replace(/\s+/g, " ").trim();
     if (hourly) {
-      expect(text(".activity-pulse__stats", pulse)?.replace(/\s+/g, " ").trim()).toBe(
-        "38 sessions · 12 started · 6 people · 3 running now",
-      );
-      expect(pulse.querySelector(".activity-pulse__running")).not.toBeNull();
-      expect(pulse.querySelectorAll('[data-bucket="current"]')).toHaveLength(1);
-      expect(pulse.querySelectorAll('[data-bucket="past"]')).toHaveLength(24);
-      expect(pulse.querySelector('[data-bucket="future"]')).toBeNull();
-      const peakHour = formatter.format(bucketStart(10));
+      expect(stats()).toBe("38 sessions · 12 started · 6 people · 3 running now");
+      expect(query(".activity-pulse__running", pulse)).not.toBeNull();
+      expect(all('[data-bucket="current"]', pulse)).toHaveLength(1);
+      expect(all('[data-bucket="past"]', pulse)).toHaveLength(24);
+      expect(query('[data-bucket="future"]', pulse)).toBeNull();
+      const peakHour = formatBucket(10);
       expect(attr('[role="img"]', "aria-label", pulse)).toBe(
         `Last 24 hours: 38 sessions; busiest ${peakHour}`,
       );
@@ -189,26 +165,22 @@ it.each([
       expect(bars[24]?.getAttribute("style")).toContain("25%");
       input.result!.peopleIncomplete = true;
       show(input);
-      const peopleStat = pulse.querySelectorAll(".activity-pulse__stats > span")[2]!;
-      const warning =
-        "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.";
-      expect(peopleStat.querySelector("b")?.textContent?.trim()).toBe("6+");
+      const peopleStat = all(".activity-pulse__stats > span", pulse)[2]!;
+      const warningStart = "People and counts describe visible recorded session associations";
+      const warning = `${warningStart}; retained history and this people list may be incomplete.`;
+      expect(text("b", peopleStat)?.trim()).toBe("6+");
       expect(peopleStat.getAttribute("title")).toBe(warning);
       const panel = query(".activity-feed__people-panel")!;
-      const note = panel.querySelector('[role="status"]');
-      expect(note?.textContent).toContain(
-        "People and counts describe visible recorded session associations",
-      );
+      const note = query('[role="status"]', panel);
+      expect(note?.textContent).toContain(warningStart);
       expect(panel.lastElementChild).toBe(note);
-      expect(main.textContent).not.toContain(
-        "People and counts describe visible recorded session associations",
-      );
+      expect(main.textContent).not.toContain(warningStart);
       input.result!.peopleIncomplete = false;
       show(input);
-      expect(panel.querySelector('[role="status"]')).toBeNull();
+      expect(query('[role="status"]', panel)).toBeNull();
     }
     if (time === "all") {
-      const firstPeriod = formatter.format(bucketStart(0));
+      const firstPeriod = formatBucket(0);
       for (const [total, sessions, people, incomplete] of [
         [0, "0 sessions", "0 people", false],
         [1, "1 session", "1 person", false],
@@ -225,19 +197,17 @@ it.each([
           running: 0,
         };
         show(input);
-        expect(text(".activity-pulse__stats", pulse)?.replace(/\s+/g, " ").trim()).toBe(
-          `${sessions} · ${people} · 0 running now`,
-        );
+        expect(stats()).toBe(`${sessions} · ${people} · 0 running now`);
         expect(attr('[role="img"]', "aria-label", pulse)).toBe(
           `All time: ${sessions}; busiest ${firstPeriod}`,
         );
         expect(attr(".activity-pulse__bar", "title", pulse)).toBe(`${firstPeriod} · ${sessions}`);
-        expect(
-          pulse.querySelectorAll(".activity-pulse__stats > span")[1]?.hasAttribute("title"),
-        ).toBe(incomplete);
+        expect(all(".activity-pulse__stats > span", pulse)[1]?.hasAttribute("title")).toBe(
+          incomplete,
+        );
       }
-      expect(pulse.querySelectorAll(".activity-pulse__bars > span")).toHaveLength(12);
-      expect(pulse.querySelector(".activity-pulse__running")).toBeNull();
+      expect(all(".activity-pulse__bars > span", pulse)).toHaveLength(12);
+      expect(query(".activity-pulse__running", pulse)).toBeNull();
       show();
       expect(query(".activity-pulse")).toBeNull();
     }
@@ -270,32 +240,24 @@ it.each(["stale sidebar", "catalog:native:gateway%3Alocal:Thread-1"] as const)(
         )
       : [row(key, { id: "owner" }, Date.now())];
     const input = props({ rows });
-    Object.assign(input.context.agents.state, {
-      agentsList: {
-        defaultId: "main",
-        mainKey: stale ? "main" : "workspace",
-        scope: "per-sender",
-        agents: [],
-      },
-    });
+    input.context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: stale ? "main" : "workspace",
+      scope: "per-sender",
+      agents: [],
+    };
     Object.assign(input.context, {
       basePath: "/control",
       agentSelection: { state: { selectedId: stale ? "other" : "research" } },
-      ...(stale
-        ? {
-            sessions: {
-              state: {
-                agentId: "other",
-                result: {
-                  sessions: rows.map((session) => ({ ...session, displayName: "Old title" })),
-                },
-              },
-            },
-          }
-        : {}),
     });
+    if (stale) {
+      Object.assign(input.context.sessions.state, {
+        agentId: "other",
+        result: { sessions: rows.map((session) => ({ ...session, displayName: "Old title" })) },
+      });
+    }
     show(input);
-    const links = container.querySelectorAll<HTMLAnchorElement>("[data-activity-session]");
+    const links = all<HTMLAnchorElement>("[data-activity-session]");
     expect(links).toHaveLength(rows.length);
     for (const [index, session] of rows.entries()) {
       const link = links[index]!;
@@ -304,15 +266,13 @@ it.each(["stale sidebar", "catalog:native:gateway%3Alocal:Thread-1"] as const)(
         : "/control/chat/research";
       const search = stale
         ? `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(session.key)}`
-        : key.startsWith("catalog:")
-          ? "?catalog=native&host=gateway%3Alocal&thread=Thread-1"
-          : undefined;
-      expect(link.getAttribute("href")).toBe(`${pathname}${stale ? "" : (search ?? "")}`);
+        : "?catalog=native&host=gateway%3Alocal&thread=Thread-1";
+      expect(link.getAttribute("href")).toBe(`${pathname}${stale ? "" : search}`);
       link.click();
-      expect(input.context.navigate).toHaveBeenLastCalledWith(
-        stale ? session.boardFace : "chat",
-        search ? { pathname, search } : { pathname },
-      );
+      expect(input.context.navigate).toHaveBeenLastCalledWith(stale ? session.boardFace : "chat", {
+        pathname,
+        search,
+      });
     }
   },
 );
@@ -332,14 +292,13 @@ it.each([
     });
     const input = props({ rows: [session] });
     const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
+      ...input.context.agents.state.agentsList!,
       scope: globalScope ? "global" : "per-sender",
     } as const;
     const request = vi.fn(async () => {
-      throw new Error("An exact Home or qualified literal open must not discover another session");
+      throw new Error("Exact Home or qualified opens must not discover another session");
     });
-    Object.assign(input.context.agents.state, { agentsList: { ...agentsList, agents: [] } });
+    input.context.agents.state.agentsList = agentsList;
     Object.assign(input.context.gateway.snapshot, {
       phase: "connected",
       client: createTestGatewayClient(request),
@@ -366,8 +325,9 @@ it.each([
         { container: surfaceContainer },
       );
     }
-    const item = surfaceContainer.querySelector<HTMLElement>(
+    const item = query(
       surface === "activity" ? "[data-activity-session]" : ".dashboard-card__main",
+      surfaceContainer,
     )!;
     expect(item.textContent).toContain("Stored session");
     if (surface === "activity") {
@@ -414,48 +374,37 @@ it("renders agent-owned sessions and profile pictures without making agents or c
   vi.spyOn(URL, "createObjectURL").mockImplementation((blob) =>
     "type" in blob && blob.type === "image/png" ? "blob:human" : "blob:agent",
   );
-  const agent = {
-    type: "agent" as const,
-    id: "research",
-    identity: { type: "agent" as const, id: "research" },
-    label: "Research",
-    avatarUrl: "/avatar/research",
-  };
-  const human = {
-    type: "human" as const,
-    id: "person",
-    identity: { type: "profile" as const, id: "person" },
-    label: "Person",
-    avatarUrl: "/api/users/person/avatar",
-  };
+  const actor = (type: "agent" | "human", id: string, label: string, avatarUrl: string) => ({
+    type,
+    id,
+    label,
+    avatarUrl,
+    identity: { type: type === "human" ? ("profile" as const) : type, id },
+  });
+  const agent = actor("agent", "research", "Research", "/avatar/research");
+  const human = actor("human", "person", "Person", "/api/users/person/avatar");
   const channel = {
     ...human,
     identity: { type: "legacy" as const, actorType: "human", source: "channel", id: "person" },
   };
   const unattributedActor = { owner: undefined, createdActor: undefined };
-  const rows = [
-    row("Human session", human, Date.now(), { owner: { actor: human } }),
-    row("Agent session", agent, Date.now() - 1, { owner: { actor: agent }, createdActor: agent }),
-    row("Unattributed session", agent, Date.now() - 2, {
-      ...unattributedActor,
-      agentId: "research",
-    }),
-    row("No avatar session", agent, Date.now() - 3, { ...unattributedActor, agentId: "codex" }),
-    row("Channel session", channel, Date.now() - 4, {
-      owner: { actor: channel },
-      createdActor: channel,
-    }),
-    row("agent:partner:review", { id: "person", label: "Alex Morgan" }, Date.now() - 5, {
-      channel: "discord",
-    }),
-  ];
-  const context = agentContext([
+  const rows = (
+    [
+      ["Human session", human, { owner: { actor: human } }],
+      ["Agent session", agent, { owner: { actor: agent }, createdActor: agent }],
+      ["Unattributed session", agent, { ...unattributedActor, agentId: "research" }],
+      ["No avatar session", agent, { ...unattributedActor, agentId: "codex" }],
+      ["Channel session", channel, { owner: { actor: channel }, createdActor: channel }],
+      ["agent:partner:review", { id: "person", label: "Alex Morgan" }, { channel: "discord" }],
+    ] as const
+  ).map(([key, owner, overrides], index) => row(key, owner, Date.now() - index, overrides));
+  const input = props({ rows });
+  input.context.agents.state.agentsList!.agents = [
     { id: "main" },
     { id: "research", identity: { avatarUrl: "/avatar/research" } },
     { id: "codex" },
     { id: "partner", name: "Research partner", identity: { emoji: "🔬" } },
-  ]);
-  const input = props({ context, rows });
+  ];
   input.result!.people = [
     {
       identity: human.identity,
@@ -464,33 +413,28 @@ it("renders agent-owned sessions and profile pictures without making agents or c
       sessionCount: 1,
     },
   ];
-  const avatarContainer = mountView(input);
-  const avatarSrc = (selector: string) => attr(selector, "src", avatarContainer);
+  show(input);
+  const avatarSrc = (selector: string) => attr(selector, "src");
+  const avatarSession = (key: string) => sessionElement(key)!;
   await waitForSolid(() => {
     expect(avatarSrc('[data-activity-session="Human session"] img')).toBe("blob:human");
     expect(avatarSrc('[data-activity-session="Agent session"] img')).toBe("blob:agent");
     expect(avatarSrc('[data-activity-person="person"] img')).toBe("blob:human");
-    expect(avatarContainer.querySelector('[data-activity-person="research"]')).toBeNull();
-    expect(
-      avatarContainer.querySelector('[data-activity-session="Channel session"] img'),
-    ).toBeNull();
-    expect(
-      avatarSrc('[data-activity-session="Unattributed session"] openclaw-viewer-avatar img'),
-    ).toBe("blob:agent");
-  });
-  const unattributed = avatarContainer.querySelector('[data-activity-session="No avatar session"]');
-  expect(unattributed?.querySelector("img")).toBeNull();
-  expect(unattributed?.querySelector(".viewer-avatar__initials")?.textContent).toBe("C");
-  await vi.waitFor(() => {
-    const session = avatarContainer.querySelector('[data-activity-session="agent:partner:review"]');
-    expectContains(session?.textContent, "Alex Morgan", "Channel: discord");
-    expect(session?.textContent).not.toContain("Agent:");
-    expect(
-      session?.querySelector('[aria-label="Research partner (agent:partner)"]'),
-    ).not.toBeNull();
-    expect(session?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
-      "🔬",
+    expect(query('[data-activity-person="research"]')).toBeNull();
+    expect(query("img", avatarSession("Channel session"))).toBeNull();
+    expect(attr("openclaw-viewer-avatar img", "src", avatarSession("Unattributed session"))).toBe(
+      "blob:agent",
     );
+  });
+  const unattributed = avatarSession("No avatar session");
+  expect(query("img", unattributed)).toBeNull();
+  expect(text(".viewer-avatar__initials", unattributed)).toBe("C");
+  await vi.waitFor(() => {
+    const session = avatarSession("agent:partner:review");
+    expectContains(session.textContent, "Alex Morgan", "Channel: discord");
+    expect(session.textContent).not.toContain("Agent:");
+    expect(query('[aria-label="Research partner (agent:partner)"]', session)).not.toBeNull();
+    expect(attr(".identity-avatar__text", "data-avatar", session)).toBe("🔬");
   });
   expect(fetchAvatar).toHaveBeenCalledTimes(2);
 });
@@ -513,10 +457,7 @@ it("groups matching connection facts while retaining network differences and per
       { ...entry, ip: "203.0.113.8" },
     ],
   });
-  const input = props({
-    filters: { personId: "online", query: "", time: "7d" },
-    presenceViewers: [person],
-  });
+  const input = personProps("online", { presenceViewers: [person] });
   show(input);
   expect(text(".activity-feed__connection-summary")).toBe("Mac · Web app");
   const details = query<HTMLDetailsElement>(".activity-feed__connection-details")!;
@@ -540,13 +481,10 @@ it("groups matching connection facts while retaining network differences and per
 });
 
 it("keeps online identity details and only known watched sessions in recency order", () => {
-  const input = props({
-    filters: { personId: "online", query: "", time: "7d" },
-    rows: [
-      row("agent:main:first", { id: "online" }, 10),
-      row("agent:main:second", { id: "online" }, 20),
-      row("agent:main:unwatched", { id: "online" }, 30),
-    ],
+  const input = personProps("online", {
+    rows: ["first", "second", "unwatched"].map((name, index) =>
+      row(`agent:main:${name}`, { id: "online" }, (index + 1) * 10),
+    ),
     presenceViewers: [
       viewer("online", {
         email: "online@example.test",
@@ -572,12 +510,12 @@ it("keeps online identity details and only known watched sessions in recency ord
   expect(identity?.querySelector("h2")?.textContent).toBe("online@example.test");
   expect(identity?.textContent).toContain("Online");
   expect(
-    [...all(".activity-feed__connection strong")].map((device) => device.textContent?.trim()),
+    all(".activity-feed__connection strong").map((device) => device.textContent?.trim()),
   ).toEqual(["Mac16,6 · Windows", "Alice's phone"]);
   const device = identity?.querySelector(".activity-feed__connection")?.textContent;
   expectContains(device, "203.0.113.7", "Europe/Vienna");
   expect(
-    [...all(".activity-feed__viewing-list [data-activity-session]")].map((session) =>
+    all(".activity-feed__viewing-list [data-activity-session]").map((session) =>
       session.getAttribute("data-activity-session"),
     ),
   ).toEqual(["agent:main:second", "agent:main:first"]);
@@ -585,8 +523,7 @@ it("keeps online identity details and only known watched sessions in recency ord
 
 it("requires exact case when resolving a selected server profile facet", () => {
   const personId = "Offline";
-  const input = props({
-    filters: { personId, query: "", time: "7d" },
+  const input = personProps(personId, {
     rows: [
       row("Visible session", { id: personId, label: "Row actor" }, 10, {
         participants: [{ identity: { type: "profile", id: personId }, label: "Preview actor" }],
@@ -599,13 +536,11 @@ it("requires exact case when resolving a selected server profile facet", () => {
 
   show(input);
   expect(query(".activity-feed__not-found")).not.toBeNull();
-  expect(query("[data-activity-identity]")).toBeNull();
-  expect(query("[data-activity-session]")).toBeNull();
+  expect(query("[data-activity-identity], [data-activity-session]")).toBeNull();
 });
 
 it("never joins raw presence into an online profile Activity page", () => {
-  const input = props({
-    filters: { personId: "online", query: "", time: "7d" },
+  const input = personProps("online", {
     rows: [row("raw-watch", { id: "online" }, 10)],
     presenceViewers: [
       viewer("online", {
@@ -624,7 +559,7 @@ it("never joins raw presence into an online profile Activity page", () => {
   const identity = query("[data-activity-identity]")!;
   expect(text("h2", identity)).toBe("Profile person");
   expect(identity.textContent).not.toContain("Raw device");
-  expect(identity.querySelector(".activity-feed__viewing-list")).toBeNull();
+  expect(query(".activity-feed__viewing-list", identity)).toBeNull();
   expect(all(".activity-feed__people-row .activity-feed__presence-dot")).toHaveLength(1);
 });
 
@@ -675,26 +610,23 @@ it("groups bound automation separately from cron provenance and bypasses groupin
   });
   expect(all("[data-activity-session]")).toHaveLength(3);
   expect(
-    container
-      .querySelector(
-        '[data-activity-session="Scheduled report"] [data-activity-created-via="cron"]',
-      )
-      ?.textContent?.trim(),
+    text('[data-activity-created-via="cron"]', sessionElement("Scheduled report")!)?.trim(),
   ).toContain("Automation");
   expect(query('[data-activity-session="Automation one"] [data-activity-created-via]')).toBeNull();
 
-  show({ rows: [regular, automationOne] });
-  expect(query("[data-activity-automation-group]")).toBeNull();
-  expect(all("[data-activity-session]")).toHaveLength(2);
-
-  for (const filteredProps of [
-    { filters: { personId: null, query: "Automation", time: "7d" as const } },
+  for (const ungrouped of [
+    { rows: [regular, automationOne] },
     {
+      rows: [automationOne, automationTwo],
+      filters: { personId: null, query: "Automation", time: "7d" as const },
+    },
+    {
+      rows: [automationOne, automationTwo],
       filters: { personId: "owner", query: "", time: "7d" as const },
       presenceViewers: [viewer("owner", { name: "Owner" })],
     },
   ]) {
-    show({ rows: [automationOne, automationTwo], ...filteredProps });
+    show(ungrouped);
     expect(query("[data-activity-automation-group]")).toBeNull();
     expect(all("[data-activity-session]")).toHaveLength(2);
   }
@@ -711,33 +643,24 @@ it("shows status and inspector links only for exact active observer membership",
     runId,
     updatedAt: now,
   });
-  const rows = [
-    row("Digest run", owner, now, {
-      activeRunIds: ["fallback-run", "digest run:a/b"],
-      hasActiveRun: true,
-      observerDigest: digest("digest run:a/b"),
+  const rows = (
+    [
+      ["Digest run", 0, ["fallback-run", "digest run:a/b"], "digest run:a/b", true],
+      ["Stale digest", 500, ["current-run"], "ended-run", true],
+      ["Active run fallback", 1_000, ["fallback run:a/b"], undefined, true],
+      ["Inactive run", 2_000, ["inactive-run"], "inactive-run", false],
+    ] as const
+  ).map(([key, age, activeRunIds, runId, active]) =>
+    row(key, owner, now - age, {
+      activeRunIds: [...activeRunIds],
+      ...(active ? { hasActiveRun: true } : { status: "running" as const }),
+      ...(runId ? { observerDigest: digest(runId) } : {}),
     }),
-    row("Stale digest", owner, now - 500, {
-      activeRunIds: ["current-run"],
-      hasActiveRun: true,
-      observerDigest: digest("ended-run"),
-    }),
-    row("Active run fallback", owner, now - 1_000, {
-      activeRunIds: ["fallback run:a/b"],
-      hasActiveRun: true,
-    }),
-    row("Inactive run", owner, now - 2_000, {
-      activeRunIds: ["inactive-run"],
-      status: "running",
-      observerDigest: digest("inactive-run"),
-    }),
-  ];
+  );
   show({ context: input.context, rows });
-  expect(
-    [...container.querySelectorAll<HTMLAnchorElement>(".activity-feed__inspect-run")].map((link) =>
-      link.getAttribute("href"),
-    ),
-  ).toEqual(["/control/activity?view=run&run=digest%20run%3Aa%2Fb"]);
+  expect(all(".activity-feed__inspect-run").map((link) => link.getAttribute("href"))).toEqual([
+    "/control/activity?view=run&run=digest%20run%3Aa%2Fb",
+  ]);
   const active = query('[data-activity-session="Digest run"]')!;
   expect(active.querySelector(".activity-feed__run-dot")).not.toBeNull();
   expect(text(".activity-feed__session-headline", active)?.trim()).toBe(

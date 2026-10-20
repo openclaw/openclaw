@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,27 +9,13 @@ import "../../styles/components.css";
 import "../../styles/settings.css";
 import "../../styles/settings-controls.css";
 import "../../styles/activity.css";
-import {
-  mountSolid,
-  props as activityProps,
-  type SessionActivityTestProps,
-} from "./session-activity-view.test-harness.ts";
+import { mountSolid, props as activityProps } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
-const renderSessionActivityViewSolid = mountSolid<SessionActivityTestProps>(
+const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof activityProps>>(
   renderSessionActivityView,
   (input) => createSolidApplicationContextProvider(input.context).wrapper,
 );
-
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  // Own the root: other browser suites may replace the shared body children.
-  container = document.createElement("div");
-  document.body.append(container);
-});
-
-afterEach(() => container.remove());
 
 it.each([
   { personId: null, width: 900 },
@@ -38,11 +24,11 @@ it.each([
   { personId: "person", width: 390 },
 ])(
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
-  async ({ personId, width }) => {
+  async ({ personId, width }, { onTestFinished }) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => container.remove());
     await page.viewport(width, 700);
-    const props = activityProps({
-      filters: { personId, query: "", time: "7d" },
-    });
+    const props = activityProps({ filters: { personId, query: "", time: "7d" } });
     Object.assign(props.context.gateway.snapshot, { hello: null, client: null, phase: "stopped" });
     Object.assign(props.result!, {
       people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
@@ -59,9 +45,8 @@ it.each([
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const contentSelector = personId ? "[data-activity-identity]" : ".activity-pulse";
     const content = main.querySelector<HTMLElement>(contentSelector)!;
-    expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
-      "32px",
-    );
+    const feedback = container.querySelector(".activity-feed__feedback")!;
+    expect(getComputedStyle(feedback)).toMatchObject({ minHeight: "32px" });
     const top = content.getBoundingClientRect().top;
     expect(content.getBoundingClientRect().height).toBeGreaterThan(0);
 
@@ -78,10 +63,7 @@ it.each([
       renderSessionActivityViewSolid(
         {
           ...props,
-          result: controller.result,
-          error: controller.error,
-          loading: controller.loading,
-          retrying: controller.retrying,
+          ...controller,
           onRetry: () => {
             retryCompletion = controller.load(client, props.filters, "retry");
           },
@@ -100,8 +82,7 @@ it.each([
       await controller.load(client, props.filters, "refresh");
       expect(controller.error).toBe("Refresh failed");
       expectStable();
-      const retryButton = () =>
-        container.querySelector<HTMLButtonElement>(".activity-feed__feedback button");
+      const retryButton = () => feedback.querySelector<HTMLButtonElement>("button");
       expect(retryButton()?.textContent?.trim()).toBe("Retry");
       const pending = createDeferred<NonNullable<typeof props.result>>();
       request.mockReturnValueOnce(pending.promise);
