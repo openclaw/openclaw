@@ -82,7 +82,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   const readiness =
     wake.isAmbientPoll && channel && delivery.to
       ? await resolveHeartbeatChannelPlugin(channel)
-          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId })
+          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
           .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }))
       : undefined;
   if (readiness && !readiness.ok) {
@@ -182,6 +182,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         to,
         ...(delivery.accountId !== undefined ? { accountId: delivery.accountId } : {}),
         ...(delivery.threadId !== undefined ? { threadId: delivery.threadId } : {}),
+        ...(opts.deps ? { deps: opts.deps } : {}),
       };
       typing = createTypingCallbacks({
         start: async () => sendTyping(target),
@@ -285,6 +286,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       dispatchInboundMessageWithRoutedChannelDispatcher({
         cfg,
         ctx: heartbeatContext,
+        replyResolver: opts.deps?.getReplyFromConfig,
         suppressOutboundHooks: true,
         replyOptions: withReplySystemEventContext<InternalGetReplyOptions>(
           {

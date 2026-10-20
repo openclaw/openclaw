@@ -1,3 +1,4 @@
+export type { HeartbeatDeps } from "./heartbeat-runner-execution.js";
 export { resolveHeartbeatAgents } from "./heartbeat-config.js";
 export { resolveConfiguredHeartbeatPrompt } from "./heartbeat-runner-config.js";
 export { runHeartbeatOnce } from "./heartbeat-runner-run.js";

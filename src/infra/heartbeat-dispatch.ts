@@ -336,7 +336,7 @@ async function prepareHeartbeatDispatchReply(
   const checkReady = (onError: (error: unknown) => { ok: false; reason?: string }) =>
     channel
       ? resolveHeartbeatChannelPlugin(channel)
-          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId })
+          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
           .catch(onError)
       : undefined;
   const deliveryRetry = (): HeartbeatRunResult => ({
@@ -628,6 +628,7 @@ export async function deliverHeartbeatDispatch(
         policySessionKey: outboundPolicySessionKey,
       }),
       identity: resolveAgentOutboundIdentity(cfg, agentId),
+      deps: policy.opts.deps,
       signal,
       silent: policy.deliverySilent,
       onDeliveredPayload,

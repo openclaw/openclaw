@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
+import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
@@ -49,10 +50,17 @@ import {
   type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
+import type { OutboundSendDeps } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+
+export type HeartbeatDeps = OutboundSendDeps &
+  ChannelHeartbeatDeps & {
+    getReplyFromConfig?: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
+    nowMs?: () => number;
+  };
 
 function skippedHeartbeatStage<T extends string>(reason: T, startedAt: number) {
   emitHeartbeatEvent({
@@ -74,6 +82,7 @@ export type HeartbeatRunOptions = {
   /** Persisted monitor cadence carried by a coalesced scheduled wake. */
   scheduledEveryMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
+  deps?: HeartbeatDeps;
 };
 
 export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
@@ -108,7 +117,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return { kind: "skipped", reason: "disabled" } as const;
   }
 
-  const startedAt = Date.now();
+  const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   // Cron uses the heartbeat runner as execution transport; heartbeat scheduling windows do not own it.
   if (
     !allowsUnscheduledTarget &&
