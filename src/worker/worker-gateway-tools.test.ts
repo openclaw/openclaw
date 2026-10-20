@@ -6,7 +6,15 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
+import { getToolContractFailureCode } from "../agents/tool-contract-error.js";
+import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  resolveToolSearchConfig,
+} from "../agents/tool-search.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
+import { workerSessionToolErrorResult } from "../gateway/worker-environments/worker-session-tool-result.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 
 function fixture() {
@@ -130,5 +138,46 @@ describe("worker Gateway tool transport", () => {
       },
     });
     await expect(tool!.execute("stale", {})).rejects.toThrow("no longer current");
+  });
+
+  it("preserves remote failures through Tool Search while validating successful results", async () => {
+    const { surface, client, result } = fixture();
+    surface.tools[0]!.definition.outputSchema = {
+      type: "object",
+      properties: { status: { type: "string", const: "sent" } },
+      required: ["status"],
+      additionalProperties: false,
+    };
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: createWorkerGatewayToolProxies(surface, client),
+    });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
+    );
+    const message = "Automation not found: foreign-job";
+    client.invokeGatewayTool.mockResolvedValueOnce({
+      type: "res",
+      id: "denied",
+      ok: true,
+      payload: workerSessionToolErrorResult(new Error(message)),
+    });
+    await expect(runtime.call("sessions_send", {})).resolves.toMatchObject({
+      result: workerSessionToolErrorResult(new Error(message)),
+    });
+    await expect(runtime.callValue("sessions_send", {})).resolves.toEqual(result.details);
+
+    // An error-shaped success is still a contract violation, not an explicit failure.
+    client.invokeGatewayTool.mockResolvedValueOnce({
+      type: "res",
+      id: "malformed-success",
+      ok: true,
+      payload: { content: [], details: { status: "error", error: message } },
+    });
+    const failure = await runtime.callValue("sessions_send", {}).catch((error: unknown) => error);
+    expect(getToolContractFailureCode(failure)).toBe("output_contract");
+    expect(client.invokeGatewayTool).toHaveBeenCalledTimes(3);
   });
 });

@@ -702,17 +702,19 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         }
         choices.push(runtimeId);
       }
-      if (!isCurrent()) {
-        throw new PreparedModelRuntimePublicationSupersededError(
-          "Model catalog changed while selecting runtimes",
-        );
-      }
       return choices.length === 0 && unknown ? undefined : choices;
     },
     authMaterializations: params.preparedRuntimeAuthMaterializations,
     cliRuntimeBindings,
     pluginRegistry: params.pluginRegistry,
     isCurrent,
+    assertCurrent: () => {
+      if (!isCurrent()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "Model catalog changed while selecting runtimes",
+        );
+      }
+    },
     observationConfig: params.observationConfig,
   };
 }

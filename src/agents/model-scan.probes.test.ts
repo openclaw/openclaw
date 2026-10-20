@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
@@ -17,13 +17,15 @@ const fetchImpl = withFetchPreconnect(async () =>
 describe("OpenRouter model probes", () => {
   beforeEach(() => {
     complete.mockReset();
+    vi.stubGlobal("fetch", fetchImpl);
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("preserves tool and image probe requests and reports each result", async () => {
     complete.mockResolvedValueOnce({ content: [{ type: "toolCall" }] });
     complete.mockResolvedValueOnce({ content: [{ type: "text", text: "OK" }] });
 
-    const [result] = await scanOpenRouterModels({ fetchImpl, apiKey: "synthetic-test-key" });
+    const [result] = await scanOpenRouterModels({ apiKey: "synthetic-test-key" });
 
     expect(result?.tool).toEqual({ ok: true, latencyMs: expect.any(Number) });
     expect(result?.image).toEqual({ ok: true, latencyMs: expect.any(Number) });
@@ -84,7 +86,7 @@ describe("OpenRouter model probes", () => {
     complete.mockResolvedValueOnce({ content: [{ type: "text", text: "OK" }] });
     complete.mockRejectedValueOnce(new Error("image rejected"));
 
-    const [result] = await scanOpenRouterModels({ fetchImpl, apiKey: "synthetic-test-key" });
+    const [result] = await scanOpenRouterModels({ apiKey: "synthetic-test-key" });
 
     expect(result?.tool).toEqual({
       ok: false,

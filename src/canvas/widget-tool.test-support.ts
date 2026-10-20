@@ -2,6 +2,7 @@ import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import * as gateway from "../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import type { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
@@ -64,6 +65,7 @@ export function useWidgetHarness() {
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
     stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
   afterEach(async () => {
     vi.useRealTimers();
@@ -73,13 +75,15 @@ export function useWidgetHarness() {
     closeOpenClawStateDatabaseForTest();
     resetPluginRuntimeStateForTest();
     await rm(stateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
   const documentDir = (id: string) => path.join(resolveCanvasDocumentsDir(stateDir), id);
   return {
     get stateDir() {
       return stateDir;
     },
-    createTool: (options: WidgetToolOptions = {}) => createShowWidgetTool({ stateDir, ...options }),
+    createTool: (options: WidgetToolOptions = {}) => createShowWidgetTool(options),
     documentDir,
     documentFile: (id: string, file = "index.html") => path.join(documentDir(id), file),
     expectNoDocument: () => expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow(),
@@ -112,5 +116,6 @@ export function createBoardPutCaller(
     method: string,
     params: Record<string, unknown>,
   ): Promise<T> => (await mock(method, params)) as T;
-  return { mock, callGateway };
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  return { mock };
 }

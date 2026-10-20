@@ -1,3 +1,4 @@
+import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -26,6 +27,9 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { resolveLocalMediaPath } from "../../media/local-media-path.js";
+import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
@@ -37,6 +41,7 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { isPathInside } from "../path-guards.js";
 import { throwIfAborted } from "./abort.js";
 import {
   messageActionRequesterMediaContext,
@@ -48,7 +53,6 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
-import { stageGatewayWorkspaceMedia } from "./message-action-gateway-media.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -540,15 +544,38 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
       channelPlugin?.outbound?.deliveryMode === "gateway");
   if (usesGatewayAction && !dryRun) {
-    const stagedPayload = await stageGatewayWorkspaceMedia({
-      cfg,
-      channel,
-      accountId,
-      payload: sendPayload.payload,
-      mediaUrls: sendPayload.mediaUrls,
-      mediaAccess,
-      workspaceMediaAccess: input.workspaceMediaAccess,
-    });
+    let stagedPayload = sendPayload.payload;
+    const mediaUrls = sendPayload.mediaUrls;
+    const workspaceRoots = input.workspaceMediaAccess?.localRoots ?? [];
+    if (mediaUrls?.length && workspaceRoots.length > 0) {
+      const maxBytes = resolveOutboundMediaMaxBytes({ cfg, channel, accountId });
+      const stagedMediaUrls = await Promise.all(
+        mediaUrls.map(async (mediaUrl) => {
+          const localPath = resolveLocalMediaPath(mediaUrl);
+          if (
+            !localPath ||
+            !workspaceRoots.some((root) =>
+              isPathInside(path.resolve(root), path.resolve(localPath)),
+            )
+          ) {
+            return mediaUrl;
+          }
+          return (await resolveOutboundAttachmentFromUrl(mediaUrl, maxBytes, { mediaAccess })).path;
+        }),
+      );
+      if (!stagedMediaUrls.every((mediaUrl, index) => mediaUrl === mediaUrls[index])) {
+        const stagedAttachments = stagedPayload.attachments?.map((attachment, index) => {
+          const { url: _url, mediaUrl: _mediaUrl, filePath: _filePath, ...metadata } = attachment;
+          return { ...metadata, path: stagedMediaUrls[index] };
+        });
+        stagedPayload = {
+          ...stagedPayload,
+          mediaUrl: stagedMediaUrls[0],
+          mediaUrls: stagedMediaUrls,
+          ...(stagedAttachments ? { attachments: stagedAttachments } : {}),
+        };
+      }
+    }
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, stagedPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);
   }

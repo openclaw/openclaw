@@ -316,15 +316,8 @@ async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void
   );
 }
 
-export function createMSTeamsSetupWizardBase(): Pick<
-  ChannelSetupWizard,
-  | "channel"
-  | "resolveAccountIdForConfigure"
-  | "resolveShouldPromptAccountIds"
-  | "status"
-  | "credentials"
-  | "finalize"
-> {
+export function createMSTeamsSetupWizardBase() {
+  const credentials: ChannelSetupWizard["credentials"] = [];
   return {
     channel,
     resolveAccountIdForConfigure: ({ cfg, accountOverride, defaultAccountId }) =>
@@ -347,7 +340,7 @@ export function createMSTeamsSetupWizardBase(): Pick<
         );
       },
     }),
-    credentials: [],
+    credentials,
     finalize: async ({ cfg, accountId, prompter }) => {
       const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
       const resolved = resolveCredentialsForSetup(cfg, resolvedAccountId);
@@ -381,5 +374,5 @@ export function createMSTeamsSetupWizardBase(): Pick<
 
       return { cfg: next, accountId: resolvedAccountId };
     },
-  };
+  } satisfies ChannelSetupWizard;
 }

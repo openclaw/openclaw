@@ -7893,6 +7893,18 @@ test "$package_manager" = "pnpm@12.1.0"
       workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm"),
       "Verify Plugin SDK API changes",
     );
+    expect(sdkStep.run).toContain(
+      '--summary "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md"',
+    );
+    expect(sdkStep.run).toContain(
+      'cat "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md" >> "$GITHUB_STEP_SUMMARY"',
+    );
+    expect(
+      workflowStep(
+        workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm"),
+        "Upload Plugin SDK API release diff",
+      ).with?.path,
+    ).toContain("plugin-sdk-api-release-diff.md");
     const sdkCommandBlock = (sdkStep.run ?? "").match(
       /\(\n\s+cd "\$tooling_dir"\n\s+pnpm install --frozen-lockfile --ignore-scripts --filter openclaw\n\s+pnpm run plugin-sdk:api:diff -- "\$\{diff_args\[@\]\}"\n\s*\)/u,
     )?.[0];

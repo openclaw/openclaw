@@ -535,6 +535,20 @@ export function writeSessionEntry(
           : readStagedSessionTranscriptUpdatedAt(database, normalizedEntry.sessionId),
       });
       const queries = getSessionEntryWriteQueries(database.db);
+      const withLegacySources = "legacy_acp_migration_json" in legacySources;
+      // The child key consumes the node's RETURNING row, including on first creation.
+      // Snapshot removals retain the ordered delete/upsert path.
+      const writeNodeWithSnapshots =
+        nodeChanged &&
+        persisted.snapshotsChanged &&
+        !persisted.snapshotsRemoved &&
+        persisted.snapshots.length > 0
+          ? queries.postgres?.nodeWithSnapshots
+          : undefined;
+      const writeNodeWithWindow =
+        nodeChanged && !persisted.snapshotsChanged && window.changed
+          ? queries.postgres?.nodeWithWindow
+          : undefined;
       const changed =
         nodeChanged || persisted.snapshotsChanged || window.changed || conversation !== null;
       const writeGeneration = changed
@@ -546,17 +560,25 @@ export function writeSessionEntry(
                 updatedAt,
               );
             }
-            if (nodeChanged) {
-              const writeNode =
-                "legacy_acp_migration_json" in legacySources
-                  ? queries.nodeWithLegacySources
-                  : queries.node;
+            if (writeNodeWithSnapshots) {
+              writeNodeWithSnapshots(
+                { node: sessionNode, snapshots: persisted.snapshots },
+                withLegacySources,
+              );
+            } else if (writeNodeWithWindow) {
+              writeNodeWithWindow(
+                { node: sessionNode, window: window.row },
+                withLegacySources,
+                retainWindowOwner,
+              );
+            } else if (nodeChanged) {
+              const writeNode = withLegacySources ? queries.nodeWithLegacySources : queries.node;
               writeNode(sessionNode);
             }
-            if (persisted.snapshotsChanged) {
+            if (persisted.snapshotsChanged && !writeNodeWithSnapshots) {
               writeSessionEntrySnapshots(database, sessionKey, persisted.snapshots, persisted);
             }
-            if (window.changed) {
+            if (window.changed && !writeNodeWithWindow) {
               const writeWindow = retainWindowOwner ? queries.retainWindow : queries.claimWindow;
               writeWindow(window.row);
             }

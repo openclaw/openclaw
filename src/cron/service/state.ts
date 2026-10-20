@@ -99,6 +99,7 @@ export type CronSystemEventEnqueueResult =
   | {
       accepted?: boolean;
       remove?: () => boolean | void;
+      adopted?: Promise<boolean>;
     };
 
 /** Notifications queued by cron mutations until their state is durable. */

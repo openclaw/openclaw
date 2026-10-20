@@ -141,7 +141,9 @@ or merged PRs reject this operation; publisher credentials remain on the Gateway
 
 Use `github_publish` with `action: "upload_evidence"` to upload inspected image or
 video proof from the current conversation's sandbox workspace to its existing
-shared GitHub.com PR. Read the PR with `edit`, then supply its `requestId` and
+shared GitHub.com PR. This action is offered only in active sandboxed sessions
+that can verify file provenance. Read the PR with `edit`, then supply its
+`requestId` and
 `expectedHeadCommit`, plus `evidence` containing a workspace-relative `path`, the
 inspected lowercase `sha256`, and `sizeBytes`. Inspect and redact the media before
 uploading. PNG, JPEG, GIF, WebP, MP4, MOV and WebM files up to 10 MB are supported;
