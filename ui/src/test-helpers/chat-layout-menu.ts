@@ -68,15 +68,11 @@ export async function openChatLayoutMenu(
   const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
   const menu = trigger.locator("..");
   if (!(await menu.evaluate(isChatLayoutMenuOpen))) {
-    const element = await menu.elementHandle();
+    await using element = await menu.elementHandle();
     if (!element) {
       throw new Error("Expected a chat Layout menu");
     }
-    try {
-      await Promise.all([element.evaluate(waitForMenuShow), trigger.click()]);
-    } finally {
-      await element.dispose();
-    }
+    await Promise.all([element.evaluate(waitForMenuShow), trigger.click()]);
   } else {
     await menu.evaluate(waitForMenuShow);
   }
@@ -99,13 +95,9 @@ export async function closeChatLayoutMenu(
   if (await menu.evaluate(isChatLayoutMenuOpen)) {
     await trigger.click();
   }
-  const element = await menu.elementHandle();
+  await using element = await menu.elementHandle();
   if (element) {
-    try {
-      await waitForMenuClose(element);
-    } finally {
-      await element.dispose();
-    }
+    await waitForMenuClose(element);
   }
 }
 
@@ -130,15 +122,11 @@ export async function selectChatLayoutAction(
   const action = menu
     .getByRole("menuitem", { name, exact: true })
     .or(menu.getByRole("menuitemcheckbox", { name, exact: true }));
-  const element = await menu.elementHandle();
+  await using element = await menu.elementHandle();
   if (!element) {
     throw new Error("Expected a chat Layout menu");
   }
-  try {
-    await action.click();
-    // The overlay closes before actions can change the retained header.
-    await waitForMenuClose(element);
-  } finally {
-    await element.dispose();
-  }
+  await action.click();
+  // The overlay closes before actions can change the retained header.
+  await waitForMenuClose(element);
 }
