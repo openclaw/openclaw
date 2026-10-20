@@ -1,33 +1,20 @@
 import { expect, it } from "vitest";
-import { testWorkerLaunchInput } from "../node-host/node-worker-supervisor.test-support.js";
 import {
-  NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE as failureType,
-  nodeWorkerPlanHash,
-  parseNodeWorkerConnectionFailureMessage,
-  parseNodeWorkerEnvironmentStopInput,
-  parseNodeWorkerLaunchInput,
-  parseNodeWorkerLookupInput,
-  NODE_WORKER_STATUS_WAIT_MAX_MS,
-  parseNodeWorkerSupervisorReceipt,
-  type NodeWorkerSupervisorIdentity,
-} from "./node-supervisor-protocol.js";
-
-const identity: NodeWorkerSupervisorIdentity = {
-  launchId: "launch-1",
-  planHash: "a".repeat(64),
-  environmentId: "environment-1",
-  sessionId: "session-1",
-  ownerEpoch: 3,
-  placementGeneration: 4,
-  runId: "run-1",
-};
+  testWorkerLaunchInput,
+  testNodeWorkerLaunchIdentity,
+} from "../node-host/node-worker-supervisor.test-support.js";
+import * as protocol from "./node-supervisor-protocol.js";
 
 const launchInput = () => testWorkerLaunchInput("/tmp/worker", "turn-1");
-const parseLaunch = (input: unknown) => parseNodeWorkerLaunchInput(JSON.stringify(input));
-const parseLookup = (input: unknown) => parseNodeWorkerLookupInput(JSON.stringify(input));
-const parseStop = (input: unknown) => parseNodeWorkerEnvironmentStopInput(JSON.stringify(input));
+const identity = testNodeWorkerLaunchIdentity(launchInput());
+const parseLaunch = (input: unknown) => protocol.parseNodeWorkerLaunchInput(JSON.stringify(input));
+const parseLookup = (input: unknown) => protocol.parseNodeWorkerLookupInput(JSON.stringify(input));
+const parseStop = (input: unknown) =>
+  protocol.parseNodeWorkerEnvironmentStopInput(JSON.stringify(input));
+const failureType = protocol.NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE;
+const maxWait = protocol.NODE_WORKER_STATUS_WAIT_MAX_MS;
 const parseFailure = (cause: string | null) =>
-  parseNodeWorkerConnectionFailureMessage({ type: failureType, cause });
+  protocol.parseNodeWorkerConnectionFailureMessage({ type: failureType, cause });
 function withAuthoring(base: ReturnType<typeof launchInput>, skillAuthoring: unknown) {
   return {
     ...base,
@@ -44,15 +31,15 @@ it.each([
   ["", "paramsJSON required"],
   ["{", "paramsJSON malformed JSON"],
 ] as const)("rejects invalid lookup framing %j", (raw, message) => {
-  expect(() => parseNodeWorkerLookupInput(raw)).toThrow(`INVALID_REQUEST: ${message}`);
+  expect(() => protocol.parseNodeWorkerLookupInput(raw)).toThrow(`INVALID_REQUEST: ${message}`);
 });
 
 it("accepts only bounded optional status waits", () => {
-  for (const waitMs of [undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS]) {
+  for (const waitMs of [undefined, 1, maxWait]) {
     const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };
     expect(parseLookup(input)).toEqual(input);
   }
-  for (const waitMs of [0, -1, 1.5, "100", null, NODE_WORKER_STATUS_WAIT_MAX_MS + 1]) {
+  for (const waitMs of [0, -1, 1.5, "100", null, maxWait + 1]) {
     expect(() => parseLookup({ launchId: identity.launchId, waitMs })).toThrow("INVALID_REQUEST");
   }
 });
@@ -64,11 +51,11 @@ it("preserves published authoring and negotiated idle retention in launch identi
     const legacy = parseLaunch(input);
     expect(legacy).toEqual(input);
     if (multipleProfiles !== undefined) {
-      expect(nodeWorkerPlanHash(legacy)).not.toBe(nodeWorkerPlanHash(base));
+      expect(protocol.nodeWorkerPlanHash(legacy)).not.toBe(protocol.nodeWorkerPlanHash(base));
     }
     const retained = parseLaunch({ ...input, idleRetention: true });
     expect(retained).toEqual({ ...input, idleRetention: true });
-    expect(nodeWorkerPlanHash(retained)).not.toBe(nodeWorkerPlanHash(legacy));
+    expect(protocol.nodeWorkerPlanHash(retained)).not.toBe(protocol.nodeWorkerPlanHash(legacy));
     expect(() => parseLaunch({ ...input, idleRetention: false })).toThrow("INVALID_REQUEST");
   }
 });
@@ -115,17 +102,16 @@ it("accepts only bounded worker connection diagnostics", () => {
 });
 
 it("round-trips only closed receipts with bounded output or single-line failure diagnostics", () => {
-  const resultJson = JSON.stringify({ status: "completed", transcriptNextSeq: 2 });
   for (const fields of [
     { state: "pending" },
     { state: "running" },
-    { state: "completed", resultJson },
+    { state: "completed", resultJson: "{}" },
     { state: "failed", errorText: "worker exited before completion" },
     { state: "interrupted", errorText: "node host stopped" },
     { state: "cancelled", errorText: "node worker launch cancelled" },
   ]) {
     const receipt = { ...identity, ...fields };
-    expect(parseNodeWorkerSupervisorReceipt(receipt)).toEqual(receipt);
+    expect(protocol.parseNodeWorkerSupervisorReceipt(receipt)).toEqual(receipt);
   }
   for (const receipt of [
     "{",
@@ -141,6 +127,6 @@ it("round-trips only closed receipts with bounded output or single-line failure 
       { state: "failed", errorText: "x".repeat(4 * 1024 + 1) },
     ].map((fields) => Object.assign({}, identity, fields)),
   ]) {
-    expect(parseNodeWorkerSupervisorReceipt(receipt)).toBeNull();
+    expect(protocol.parseNodeWorkerSupervisorReceipt(receipt)).toBeNull();
   }
 });

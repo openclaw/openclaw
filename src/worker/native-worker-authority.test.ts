@@ -67,9 +67,7 @@ function fixture(native = true, steps: Step[] = ["ready"]) {
   vi.spyOn(connection, "state", "get").mockImplementation(() => state);
   vi.spyOn(connection, "onStateChange").mockImplementation((listener) => {
     listeners.add(listener);
-    return () => {
-      listeners.delete(listener);
-    };
+    return () => void listeners.delete(listener);
   });
   vi.spyOn(connections, "createWorkerConnection").mockReturnValue(connection);
   const emit = (step: Step) => {
@@ -79,9 +77,7 @@ function fixture(native = true, steps: Step[] = ["ready"]) {
         : step === "stopped"
           ? { kind: step }
           : { kind: step[0], attempt: step[1] };
-    for (const listener of listeners) {
-      listener(state);
-    }
+    listeners.forEach((listener) => listener(state));
   };
   const hello: WorkerHelloOk = {
     type: "worker-hello-ok",

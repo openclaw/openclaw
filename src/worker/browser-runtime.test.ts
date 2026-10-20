@@ -8,16 +8,13 @@ vi.mock("../plugin-sdk/facade-loader.js", () => ({
   loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadRuntime,
 }));
 
-import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
+import { createWorkerBrowserToolRuntime as createRuntime } from "./browser-runtime.js";
 
-const options = {
-  descriptor: { cdpUrl: "http://127.0.0.1:9222", launcherPath: "/worker-browser" },
-  sessionKey: "agent:worker-agent:worker:session-1",
-  stateDir: "/tmp/worker-state",
-  workspaceDir: "/tmp/workspace",
-};
+const descriptor = { cdpUrl: "http://127.0.0.1:9222", launcherPath: "/worker-browser" };
+const options = { descriptor, sessionKey: "session", stateDir: "/state", workspaceDir: "/work" };
 const dispose = vi.fn().mockResolvedValue(undefined);
 const attach = vi.fn();
+const attachedRuntime = { createAttachedBrowserToolRuntime: attach };
 
 function completeLaunch(error: Error | null) {
   mocks.execFile.mockImplementation(
@@ -31,7 +28,7 @@ function completeLaunch(error: Error | null) {
 beforeEach(() => {
   vi.clearAllMocks();
   attach.mockResolvedValue({ tool: { name: "browser" }, dispose });
-  mocks.loadRuntime.mockReturnValue({ createAttachedBrowserToolRuntime: attach });
+  mocks.loadRuntime.mockReturnValue(attachedRuntime);
   completeLaunch(null);
 });
 
@@ -41,7 +38,7 @@ it.each([
 ])(
   "launches the provider executable with fixed args $launcherArgs without a shell",
   async ({ launcherArgs }) => {
-    const runtime = await createWorkerBrowserToolRuntime({
+    const runtime = await createRuntime({
       ...options,
       descriptor: { ...options.descriptor, ...(launcherArgs ? { launcherArgs } : {}) },
     });
@@ -73,10 +70,7 @@ it.each([
 );
 
 it("uses the build-composed Browser runtime without filesystem discovery", async () => {
-  await createWorkerBrowserToolRuntime({
-    ...options,
-    runtime: { createAttachedBrowserToolRuntime: attach },
-  });
+  await createRuntime({ ...options, runtime: attachedRuntime });
 
   expect(attach).toHaveBeenCalledOnce();
   expect(mocks.loadRuntime).not.toHaveBeenCalled();
@@ -84,7 +78,7 @@ it("uses the build-composed Browser runtime without filesystem discovery", async
 
 it("surfaces launcher failure without loading another browser route", async () => {
   completeLaunch(new Error("launcher timed out"));
-  await createWorkerBrowserToolRuntime(options);
+  await createRuntime(options);
 
   await expect(attach.mock.calls[0]?.[0].ensureAttachTarget()).rejects.toThrow(
     "Worker Browser launcher failed: launcher timed out",

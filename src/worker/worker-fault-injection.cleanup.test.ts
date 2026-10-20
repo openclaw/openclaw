@@ -54,6 +54,12 @@ it("joins owned agent resources before removal without closing sibling databases
       resourceClosed = true;
     });
     unregisterSibling = register(siblingRoot, siblingRevoke, async () => {});
+    const databases = [harness.database, siblingAgent, siblingState];
+    const snapshot = () => [
+      resourceClosed,
+      existsSync(root),
+      ...databases.map(({ db }) => db.isOpen),
+    ];
 
     closing = harness.close();
     // A missing drain settles close first, so the regression fails without a timer.
@@ -66,21 +72,13 @@ it("joins owned agent resources before removal without closing sibling databases
     ]);
     expect(first).toBe("draining");
     expect(revoke).toHaveBeenCalledOnce();
-    expect(resourceClosed).toBe(false);
-    expect(existsSync(root)).toBe(true);
-    expect(harness.database.db.isOpen).toBe(true);
+    expect(snapshot()).toEqual([false, true, true, true, true]);
     expect(siblingRevoke).not.toHaveBeenCalled();
-    expect(siblingAgent.db.isOpen).toBe(true);
-    expect(siblingState.db.isOpen).toBe(true);
 
     release.resolve();
     await closing;
-    expect(resourceClosed).toBe(true);
-    expect(existsSync(root)).toBe(false);
-    expect(harness.database.db.isOpen).toBe(false);
+    expect(snapshot()).toEqual([true, false, false, true, true]);
     expect(siblingRevoke).not.toHaveBeenCalled();
-    expect(siblingAgent.db.isOpen).toBe(true);
-    expect(siblingState.db.isOpen).toBe(true);
     expect(existsSync(siblingRoot)).toBe(true);
   } finally {
     release.resolve();
