@@ -78,20 +78,22 @@ try {
   const startupEntries = cacheEntries();
   assert.ok(startupEntries > 0, "retained child must persist startup bytecode before close");
 
-  const result = await worker.run(source, {
-    mode: "operation",
-    command: {
-      type: "agentRetirement.sessionStoreBlocker",
-      input: prepareAgentSessionStoreDeletionSafety({}, "main", process.env),
+  assert.deepEqual(
+    await worker.run(source, {
+      mode: "operation",
+      command: {
+        type: "agentRetirement.sessionStoreBlocker",
+        input: prepareAgentSessionStoreDeletionSafety({}, "main", process.env),
+      },
+      source: "snapshot",
+      expectedIdentity: readDatabasePathIdentitySync(source).key,
+      env: process.env,
+    }),
+    {
+      operation: "agentRetirement.sessionStoreBlocker",
+      value: { blocker: undefined },
     },
-    source: "snapshot",
-    expectedIdentity: readDatabasePathIdentitySync(source).key,
-    env: process.env,
-  });
-  assert.deepEqual(result, {
-    operation: "agentRetirement.sessionStoreBlocker",
-    value: { blocker: undefined },
-  });
+  );
   assert.ok(
     cacheEntries() > startupEntries,
     "retained child must persist later operation bytecode before close",
@@ -109,19 +111,17 @@ try {
   assert.deepEqual(fs.readFileSync(prepared.location), before);
   {
     using snapshot = new DatabaseSync(prepared.location, { readOnly: true });
+    const rows = snapshot.prepare("SELECT data FROM padding").all().map(Object.entries);
+    const schema = snapshot.prepare("SELECT sql FROM sqlite_schema WHERE name = 'padding'").get();
+    assert.deepEqual(rows, [[["data", new Uint8Array(0)]]]);
     assert.deepEqual(
-      snapshot
-        .prepare("SELECT data FROM padding")
-        .all()
-        .map((row) => Object.entries(row)),
-      [[["data", new Uint8Array(0)]]],
+      [
+        schema?.sql,
+        snapshot.prepare("PRAGMA user_version").get()?.user_version,
+        snapshot.prepare("PRAGMA integrity_check").get()?.integrity_check,
+      ],
+      ["CREATE TABLE padding (data BLOB)", 0, "ok"],
     );
-    assert.equal(
-      snapshot.prepare("SELECT sql FROM sqlite_schema WHERE name = 'padding'").get()?.sql,
-      "CREATE TABLE padding (data BLOB)",
-    );
-    assert.equal(snapshot.prepare("PRAGMA user_version").get()?.user_version, 0);
-    assert.equal(snapshot.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
   }
 } finally {
   assert.equal(await prepared.cleanupAsync(), true);
@@ -135,12 +135,6 @@ const observed = fs
   .map((name): unknown => JSON.parse(fs.readFileSync(path.join(probes, name), "utf8")));
 assert.ok(observed.length > 0, "real read-only children must execute");
 for (const child of observed) {
-  assert.ok(child && typeof child === "object" && "directory" in child && "disable" in child);
-  assert.equal(child.disable, null);
-  assert.equal(
-    child.directory,
-    activeDirectory,
-    "readonly parent/child native directory must match exactly",
-  );
+  assert.deepEqual(child, { directory: activeDirectory, disable: null });
 }
 process.stdout.write("readonly-cache:verified");

@@ -8,6 +8,8 @@ import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const fullChecks = ["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"];
+const sourceFiles = ["source.sqlite", "source.sqlite-shm", "source.sqlite-wal"];
 
 function fixture(autoVacuum = 0) {
   const directory = fs.realpathSync(directories.make("sqlite-snapshot-integrity-"));
@@ -65,64 +67,30 @@ function familyBytes(sourcePath: string) {
 }
 
 it.each([
-  { acquisition: "artifacts", autoVacuum: 0, checks: 1 },
-  { acquisition: "native", autoVacuum: 0, checks: 1 },
-  { acquisition: "worker", autoVacuum: 0, checks: 1 },
-  { acquisition: "artifacts", autoVacuum: 2, checks: 1 },
-  { acquisition: "artifacts", autoVacuum: 1, checks: 2 },
+  ["artifacts", 0, "none", 1],
+  ["native", 0, "none", 1],
+  ["worker", 0, "none", 1],
+  ["artifacts", 2, "none", 1],
+  ["artifacts", 1, "none", 2],
+  ["worker", 0, "vacuum", 2],
+  ["artifacts", 0, "transform", 2],
+  ["artifacts", 0, "validator", 2],
 ] as const)(
-  "uses $checks full checks for $acquisition WAL capture with auto_vacuum=$autoVacuum",
-  async ({ acquisition, autoVacuum, checks }) => {
+  "%s WAL capture, auto_vacuum=%i, operation=%s uses %i full checks",
+  async (acquisition, autoVacuum, operation, checks) => {
     const { directory, sourcePath, targetPath, sqlite, source, options } = fixture(autoVacuum);
     using _ = source;
     expect(fs.statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
     const before = familyBytes(sourcePath);
-    const observed = observeVerification(sqlite);
-
-    const result = await createVerifiedSqliteSnapshot({
-      ...options,
-      sourceAcquisition:
-        acquisition === "worker"
-          ? undefined
-          : { ...options.sourceAcquisition, preserveSourceArtifacts: acquisition === "artifacts" },
-    });
-
-    expect(observed.finish()).toEqual([
-      ...(checks === 2 ? ["PRAGMA integrity_check;", "PRAGMA foreign_key_check;"] : []),
-      "PRAGMA user_version",
-      "PRAGMA integrity_check;",
-      "PRAGMA foreign_key_check;",
-      ...(acquisition === "worker" ? ["PRAGMA user_version"] : []),
-    ]);
-    expect(result).toMatchObject({ path: targetPath, userVersion: 7 });
-    using snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
-    expect(snapshot.prepare("SELECT rowid, value FROM records ORDER BY rowid").all()).toEqual([
-      { rowid: 71, value: "alpha" },
-      { rowid: 81, value: "beta" },
-    ]);
-    expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
-    if (acquisition !== "native") {
-      expect(familyBytes(sourcePath)).toEqual(before);
-    }
-    expect(fs.readdirSync(directory).toSorted()).toEqual([
-      "snapshot.sqlite",
-      "source.sqlite",
-      "source.sqlite-shm",
-      "source.sqlite-wal",
-    ]);
-  },
-);
-
-it.each(["vacuum", "transform", "validator"] as const)(
-  "keeps both checks before and after %s work",
-  async (operation) => {
-    const { sqlite, source, sourcePath, targetPath, options } = fixture();
-    using _ = source;
     const labels: string[] = [];
     const observed = observeVerification(sqlite);
     const result = await createVerifiedSqliteSnapshot({
       ...options,
-      ...(operation === "vacuum" ? { preserveRowIds: false, sourceAcquisition: undefined } : {}),
+      preserveRowIds: operation !== "vacuum",
+      sourceAcquisition:
+        acquisition === "worker"
+          ? undefined
+          : { ...options.sourceAcquisition, preserveSourceArtifacts: acquisition === "artifacts" },
       ...(operation === "transform"
         ? { transform: (db: DatabaseSync) => db.exec("PRAGMA user_version = 8;") }
         : {}),
@@ -135,13 +103,27 @@ it.each(["vacuum", "transform", "validator"] as const)(
         : {}),
     });
     expect(observed.finish()).toEqual([
-      "PRAGMA integrity_check;",
-      "PRAGMA foreign_key_check;",
+      ...(checks === 2 ? fullChecks : []),
       "PRAGMA user_version",
-      "PRAGMA integrity_check;",
-      "PRAGMA foreign_key_check;",
+      ...fullChecks,
+      ...(acquisition === "worker" && operation === "none" ? ["PRAGMA user_version"] : []),
     ]);
-    expect(result.userVersion).toBe(operation === "transform" ? 8 : 7);
+    expect(result).toMatchObject({
+      path: targetPath,
+      userVersion: operation === "transform" ? 8 : 7,
+    });
+    if (operation === "none") {
+      using snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      expect(snapshot.prepare("SELECT rowid, value FROM records ORDER BY rowid").all()).toEqual([
+        { rowid: 71, value: "alpha" },
+        { rowid: 81, value: "beta" },
+      ]);
+      expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+      if (acquisition !== "native") {
+        expect(familyBytes(sourcePath)).toEqual(before);
+      }
+      expect(fs.readdirSync(directory).toSorted()).toEqual(["snapshot.sqlite", ...sourceFiles]);
+    }
     if (operation === "validator") {
       expect(labels).toEqual([sourcePath, targetPath]);
     }
@@ -159,9 +141,15 @@ function corruptIndex(source: DatabaseSync) {
   source.exec(`PRAGMA schema_version = ${version + 1};`);
 }
 
-it.each(["index", "foreign-key", "catalog"] as const)(
-  "refuses private WAL %s corruption without publishing or changing source artifacts",
-  async (corruption) => {
+it.each([
+  { corruption: "index", callback: undefined },
+  { corruption: "foreign-key", callback: undefined },
+  { corruption: "catalog", callback: undefined },
+  { corruption: "index", callback: "transform" },
+  { corruption: "index", callback: "validate" },
+] as const)(
+  "refuses private WAL $corruption corruption before $callback, preserving source artifacts",
+  async ({ corruption, callback }) => {
     const { directory, sourcePath, targetPath, source, options } = fixture();
     using _ = source;
     if (corruption === "index") {
@@ -175,31 +163,23 @@ it.each(["index", "foreign-key", "catalog"] as const)(
       );
     }
     const before = familyBytes(sourcePath);
-    await expect(createVerifiedSqliteSnapshot(options)).rejects.toThrow(
-      /integrity_check failed|foreign_key_check failed|malformed database schema/iu,
+    const invoked = vi.fn();
+    await expect(
+      createVerifiedSqliteSnapshot({
+        ...options,
+        ...(callback ? { [callback]: invoked } : {}),
+      }),
+    ).rejects.toThrow(
+      callback
+        ? /integrity_check failed/iu
+        : /integrity_check failed|foreign_key_check failed|malformed database schema/iu,
     );
+    if (callback) {
+      expect(invoked).not.toHaveBeenCalled();
+    }
     expect(familyBytes(sourcePath)).toEqual(before);
     expect(fs.existsSync(targetPath)).toBe(false);
-    expect(fs.readdirSync(directory).toSorted()).toEqual([
-      "source.sqlite",
-      "source.sqlite-shm",
-      "source.sqlite-wal",
-    ]);
-  },
-);
-
-it.each(["transform", "validate"] as const)(
-  "rejects corrupt input before invoking the %s callback",
-  async (callback) => {
-    const { source, targetPath, options } = fixture();
-    using _ = source;
-    corruptIndex(source);
-    const invoked = vi.fn();
-    await expect(createVerifiedSqliteSnapshot({ ...options, [callback]: invoked })).rejects.toThrow(
-      /integrity_check failed/iu,
-    );
-    expect(invoked).not.toHaveBeenCalled();
-    expect(fs.existsSync(targetPath)).toBe(false);
+    expect(fs.readdirSync(directory).toSorted()).toEqual(sourceFiles);
   },
 );
 

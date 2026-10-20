@@ -4,10 +4,10 @@ import { afterEach, expect, it } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
-import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync as withSchemaSnapshot } from "./sqlite-pinned-read-snapshot.js";
 import { createSqliteTableContractReader } from "./sqlite-schema-contract.js";
 import {
-  collectSqliteSchemaIssues,
+  collectSqliteSchemaIssues as schemaIssues,
   sqliteSchemaFixture,
 } from "./sqlite-schema-contract.test-support.js";
 
@@ -27,23 +27,21 @@ it.each(["top-level", "nested"] as const)(
       const readTable = createSqliteTableContractReader(reader);
       let changed = false;
       const inspect = () =>
-        collectSqliteSchemaIssues(reader, schema, {}, (name) => {
+        schemaIssues(reader, schema, {}, (name) => {
           if (!changed) {
             changed = true;
-            const remainingTable = name === "a" ? "z" : "a";
-            writer.exec(`ALTER TABLE ${remainingTable} ADD COLUMN later TEXT`);
+            writer.exec(`ALTER TABLE ${name === "a" ? "z" : "a"} ADD COLUMN later TEXT`);
           }
           return readTable(name);
         });
-      const issues =
-        scope === "nested" ? runSqliteSchemaReadSnapshotSync(reader, inspect) : inspect();
+      const issues = scope === "nested" ? withSchemaSnapshot(reader, inspect) : inspect();
       const schemaReads = () =>
         observation.queries.filter((sql) => /^PRAGMA schema_version\b/iu.test(sql));
       expect(changed).toBe(true);
       expect(issues).toEqual([]);
       expect(schemaReads()).toHaveLength(1);
       expect(reader.isTransaction).toBe(false);
-      expect(collectSqliteSchemaIssues(reader, schema)).not.toEqual([]);
+      expect(schemaIssues(reader, schema)).not.toEqual([]);
       expect(schemaReads()).toHaveLength(2);
       expect(reader.isTransaction).toBe(false);
     } finally {
@@ -62,26 +60,17 @@ it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
       action === constants.SQLITE_TRANSACTION || action === constants.SQLITE_SAVEPOINT
         ? constants.SQLITE_DENY
         : constants.SQLITE_OK;
-    try {
-      database.setAuthorizer(denyTransactionControl);
-      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
-      expect(database.isTransaction).toBe(false);
-      database.setAuthorizer(null);
-
-      database.exec("BEGIN");
-      database.exec("INSERT INTO records VALUES (1)");
-      database.setAuthorizer(denyTransactionControl);
-      expect(collectSqliteSchemaIssues(database, schema)).toEqual([]);
-      expect(database.isTransaction).toBe(true);
-      database.setAuthorizer(null);
-      database.exec("ROLLBACK");
-      expect(database.prepare("SELECT * FROM records").all()).toEqual([]);
-    } finally {
-      database.setAuthorizer(null);
-      if (database.isTransaction) {
-        database.exec("ROLLBACK");
+    for (const nested of [false, true]) {
+      if (nested) {
+        database.exec("BEGIN; INSERT INTO records VALUES (1)");
       }
+      database.setAuthorizer(denyTransactionControl);
+      expect(schemaIssues(database, schema)).toEqual([]);
+      expect(database.isTransaction).toBe(nested);
+      database.setAuthorizer(null);
     }
+    database.exec("ROLLBACK");
+    expect(database.prepare("SELECT * FROM records").all()).toEqual([]);
   },
 );
 
@@ -96,19 +85,19 @@ it.each(["inspection callback", "exclusive writer"] as const)(
     reader.exec("PRAGMA busy_timeout=0");
     enableNodeSqliteKyselyStatementCache(reader);
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      expect(collectSqliteSchemaIssues(reader, schema)).toEqual([]);
+      expect(schemaIssues(reader, schema)).toEqual([]);
     }
     if (failureAt === "inspection callback") {
       const failure = new Error("inspection failed");
       expect(() =>
-        collectSqliteSchemaIssues(reader, schema, {}, () => {
+        schemaIssues(reader, schema, {}, () => {
           // DELETE mode proves a real read lock exists, not just an autocommit flag.
           expect(() => writer.exec("INSERT INTO records VALUES (1)")).toThrow(/locked/iu);
           throw failure;
         }),
       ).toThrow(failure);
       writer.exec("ALTER TABLE records ADD COLUMN later TEXT");
-      expect(collectSqliteSchemaIssues(reader, schema)).toEqual([
+      expect(schemaIssues(reader, schema)).toEqual([
         {
           code: "unexpected-column",
           objectName: "records.later",
@@ -118,9 +107,9 @@ it.each(["inspection callback", "exclusive writer"] as const)(
       expect(reader.isTransaction).toBe(false);
     } else {
       writer.exec("BEGIN EXCLUSIVE");
-      expect(() => collectSqliteSchemaIssues(reader, schema)).toThrow(/locked/iu);
+      expect(() => schemaIssues(reader, schema)).toThrow(/locked/iu);
       writer.exec("ROLLBACK");
-      expect(collectSqliteSchemaIssues(reader, schema)).toEqual([]);
+      expect(schemaIssues(reader, schema)).toEqual([]);
     }
   },
 );

@@ -15,18 +15,22 @@ import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.j
 
 describe("connection-local SQLite schema admission", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
+  function watch(schema?: string, filename?: string) {
+    const database = openDatabase(schema, true, filename);
+    const mutation = vi.fn();
+    registerSqliteSchemaMutationListener(database, mutation);
+    return [database, mutation] as const;
+  }
 
   it.each([false, true])(
     "keeps TEMP trigger admission local without hiding subsequent main DDL: %s",
     (mainDdl) => {
       const filename = path.join(tempDirs.make("openclaw-schema-temp-trigger-"), "state.sqlite");
-      const writer = openDatabase(undefined, true, filename);
+      const [writer, localMutation] = watch(undefined, filename);
       const sibling = openDatabase("", true, filename);
       const before = getAdmittedSqliteSchemaFacts(sibling)?.admissionId;
       expect(before).toEqual(expect.any(String));
       const revision = getSqliteDatabaseSchemaRevision(sibling)!;
-      const localMutation = vi.fn();
-      registerSqliteSchemaMutationListener(writer, localMutation);
       writer.exec(`CREATE TEMP TRIGGER IF NOT EXISTS local_observer AFTER INSERT ON original BEGIN
         SELECT CASE WHEN NEW.id > 0 THEN 'END; CREATE TABLE quoted(id)' ELSE 'kept' END;
         /* END; */ SELECT 1;
@@ -55,9 +59,7 @@ describe("connection-local SQLite schema admission", () => {
     "DROP TABLE session_nodes",
     "DROP TABLE main.session_nodes",
   ])("revokes admission for ordinary DDL: %s", (sql) => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
+    const [database, schemaMutation] = watch("CREATE TABLE session_nodes (id INTEGER)");
     database.exec(sql);
     expect(schemaMutation).toHaveBeenCalledWith(undefined);
   });
@@ -69,7 +71,7 @@ describe("connection-local SQLite schema admission", () => {
     "DROP /* cleanup */ TABLE `temp`.[original]; -- done",
   ])("expires local TEMP facts while preserving MAIN admission: %s", (sql) => {
     const filename = path.join(tempDirs.make("openclaw-schema-temp-"), "state.sqlite");
-    const database = openDatabase("CREATE TABLE original(id)", true, filename);
+    const [database, schemaMutation] = watch("CREATE TABLE original(id)", filename);
     const sibling = openDatabase("", true, filename);
     database.exec("CREATE TEMP TABLE original(id)");
     const readRevision = () =>
@@ -82,8 +84,7 @@ describe("connection-local SQLite schema admission", () => {
     const nativeRevision = readSqliteNativeMutationRevision(database);
     expect(nativeRevision).toBeDefined();
     const siblingFacts = getAdmittedSqliteSchemaFacts(sibling);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
+    schemaMutation.mockClear();
     runSqliteReadOperationSync(database, () => {
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -101,9 +102,7 @@ describe("connection-local SQLite schema admission", () => {
   });
 
   it("expires rolled-back TEMP facts without revoking MAIN admission", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
+    const [database, schemaMutation] = watch();
     database.exec("BEGIN");
     database.exec("CREATE TEMP TABLE scratch(id)");
     const temporary = runSqliteReadOperationSync(database, () =>
@@ -116,9 +115,7 @@ describe("connection-local SQLite schema admission", () => {
   });
 
   it("does not suppress reentrant MAIN DDL inside a TEMP table statement", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
+    const [database, schemaMutation] = watch();
     database.function("create_main_table", () => {
       database.exec("CREATE TABLE callback_table(id)");
       return 1;

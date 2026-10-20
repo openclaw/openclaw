@@ -8,7 +8,7 @@ import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture(mode = 0o600) {
+function fixture(permissions = 0o600) {
   const root = fs.realpathSync(dirs.make("sqlite-rollback-recovery-"));
   const file = path.join(root, "operation.sqlite");
   {
@@ -17,30 +17,35 @@ function fixture(mode = 0o600) {
       "CREATE TABLE receipt (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT; INSERT INTO receipt VALUES (7, 'committed');",
     );
   }
-  fs.chmodSync(file, mode);
+  fs.chmodSync(file, permissions);
   const identity = fs.statSync(file, { bigint: true });
   const directory = fs.statSync(root, { bigint: true });
   const assertIdentity = () => {
     const current = fs.lstatSync(file, { bigint: true });
     const parent = fs.lstatSync(root, { bigint: true });
-    if (
-      !current.isFile() ||
-      current.dev !== identity.dev ||
-      current.ino !== identity.ino ||
-      !parent.isDirectory() ||
-      parent.dev !== directory.dev ||
-      parent.ino !== directory.ino
-    ) {
-      throw new Error("fixture identity changed");
-    }
+    expect([current.isFile(), parent.isDirectory()]).toEqual([true, true]);
+    expect([current, parent]).toMatchObject([
+      { dev: identity.dev, ino: identity.ino },
+      { dev: directory.dev, ino: directory.ino },
+    ]);
   };
   const assertFileSafe = (_file: string, stat: fs.BigIntStats) => {
-    if (stat.uid !== identity.uid || (stat.mode & BigInt(mode === 0o600 ? 0o077 : 0o022)) !== 0n) {
-      throw new Error("fixture file permissions changed");
-    }
+    expect([stat.uid, stat.mode & BigInt(permissions === 0o600 ? 0o077 : 0o022)]).toEqual([
+      identity.uid,
+      0n,
+    ]);
   };
   const read = (connection: DatabaseSync) =>
     connection.prepare("SELECT id, value FROM receipt").get();
+  const inspect = () => {
+    using reader = new DatabaseSync(file, { readOnly: true });
+    return {
+      record: read(reader),
+      pressure: reader
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'openclaw_hot_journal_pressure'")
+        .get(),
+    };
+  };
   const prepare = () =>
     prepareSqliteRollbackRecovery({
       path: file,
@@ -55,20 +60,15 @@ function fixture(mode = 0o600) {
       .toSorted()
       .map((name) => {
         const absolute = path.join(root, name);
-        const {
-          dev,
-          ino,
-          mode: fileMode,
-          mtimeNs: mtime,
-        } = fs.lstatSync(absolute, { bigint: true });
-        return { name, dev, ino, mode: fileMode, mtime, content: fs.readFileSync(absolute) };
+        const { dev, ino, mode, mtimeNs: mtime } = fs.lstatSync(absolute, { bigint: true });
+        return { name, dev, ino, mode, mtime, content: fs.readFileSync(absolute) };
       });
   const crash = () =>
     createHotSqliteRollbackJournal({
       path: file,
       mutationSql: "UPDATE receipt SET value = 'uncommitted'",
     });
-  return { file, root, read, prepare, files, crash };
+  return { file, root, inspect, prepare, files, crash };
 }
 
 describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery", () => {
@@ -78,10 +78,7 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
       const f = fixture(mode);
       f.crash();
       const before = f.files();
-      {
-        using reader = new DatabaseSync(f.file, { readOnly: true });
-        expect(() => f.read(reader)).toThrow(expect.objectContaining({ errcode: 776 }));
-      }
+      expect(f.inspect).toThrow(expect.objectContaining({ errcode: 776 }));
       const admission = await f.prepare();
       expect(admission.record).toEqual({ id: 7, value: "committed" });
       expect(f.files()).toEqual(before);
@@ -97,15 +94,7 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
       const timestamp = fs.statSync(f.file);
       fs.utimesSync(f.file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
       admission.admit(() => {});
-      {
-        using recovered = new DatabaseSync(f.file, { readOnly: true });
-        expect(f.read(recovered)).toEqual({ id: 7, value: "committed" });
-        expect(
-          recovered
-            .prepare("SELECT name FROM sqlite_schema WHERE name = 'openclaw_hot_journal_pressure'")
-            .get(),
-        ).toBeUndefined();
-      }
+      expect(f.inspect()).toEqual({ record: { id: 7, value: "committed" }, pressure: undefined });
       expect(fs.existsSync(`${f.file}-journal`)).toBe(false);
       expect(fs.statSync(f.file).mode & 0o777).toBe(mode);
       expect(fs.readdirSync(f.root)).toEqual(["operation.sqlite"]);

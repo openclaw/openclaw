@@ -30,16 +30,17 @@ const store = {
 const state = { lastGood: { fixture: "fixture:default" } };
 {
   using database = new (requireNodeSqlite().DatabaseSync)(source);
-  database.exec(`
-    CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT);
-    CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT);
-  `);
-  database
-    .prepare("INSERT INTO auth_profile_store VALUES (?, ?)")
-    .run("primary", JSON.stringify(store));
-  database
-    .prepare("INSERT INTO auth_profile_state VALUES (?, ?)")
-    .run("primary", JSON.stringify(state));
+  for (const [table, raw] of [
+    ["store", store],
+    ["state", state],
+  ] as const) {
+    database.exec(
+      `CREATE TABLE auth_profile_${table} (${table}_key TEXT PRIMARY KEY, ${table}_json TEXT)`,
+    );
+    database
+      .prepare(`INSERT INTO auth_profile_${table} VALUES (?, ?)`)
+      .run("primary", JSON.stringify(raw));
+  }
 }
 const expected = {
   store: { status: "readable", raw: store },
@@ -53,7 +54,6 @@ const readOptions = {
   env: { ...process.env },
 } as const;
 
-// The lifecycle starts before either request, as it does at Gateway startup.
 const scope = createSqliteReadOnlyWorkerScope();
 const broker = transport === "broker" ? createSpawnBrokerHost() : undefined;
 const callerContext = new AsyncLocalStorage<object>();
@@ -62,9 +62,7 @@ const read = () =>
 const children: ChildProcess[] = [];
 const observe = (message: unknown) => {
   if (
-    message &&
-    typeof message === "object" &&
-    "process" in message &&
+    isRecord(message) &&
     message.process instanceof ChildProcess &&
     message.process.spawnargs.includes(SQLITE_READONLY_CHILD_ARG)
   ) {
@@ -84,15 +82,12 @@ if (broker) {
 
 async function completedRead(label: string) {
   const caller = { label, prompt: Buffer.alloc(1024 * 1024, label) };
-  const references = [
-    { label: `${label} context`, reference: new WeakRef<object>(caller) },
-    { label: `${label} prompt`, reference: new WeakRef<object>(caller.prompt) },
-  ];
+  const references = [new WeakRef<object>(caller), new WeakRef<object>(caller.prompt)];
   await callerContext.run(caller, async () => {
     const result = await read();
     assert.deepEqual(result, expected);
     assert.equal(callerContext.getStore(), caller, "Request context must survive its own read");
-    references.push({ label: `${label} result`, reference: new WeakRef(result) });
+    references.push(new WeakRef(result));
   });
   return references;
 }
@@ -125,10 +120,11 @@ try {
     gc();
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
-  const retained = [...first, ...second]
-    .filter(({ reference }) => reference.deref())
-    .map(({ label }) => label);
-  assert.deepEqual(retained, [], "The live SQLite worker retained completed caller state");
+  assert.deepEqual(
+    [...first, ...second].map((ref) => ref.deref()),
+    [undefined, undefined, undefined, undefined, undefined, undefined],
+    "The live SQLite worker retained completed caller state",
+  );
   assert.equal(worker.exitCode, null, "Collection must happen before worker retirement");
   assert.deepEqual(await read(), expected);
   assert.equal(children.length, 1, "The collected callers must leave the same worker reusable");

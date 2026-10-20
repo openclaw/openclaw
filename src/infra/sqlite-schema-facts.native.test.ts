@@ -12,7 +12,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { SqliteDatabaseAdmissionRegistry } from "./sqlite-database-admission-record.js";
 import {
-  captureSqliteDatabaseAdmissions,
+  captureSqliteDatabaseAdmissions as captureAdmissions,
   createSqliteDatabaseAdmissionCursor,
   installSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
@@ -20,23 +20,23 @@ import {
   getSqliteDatabaseSchemaRevision,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
-  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseScopedWriteToken as scopedWriteToken,
   revokeSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,
 } from "./sqlite-database-admission.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
-import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync as withSchemaSnapshot } from "./sqlite-pinned-read-snapshot.js";
 import { readSqliteTextEncoding, schemaAdmission } from "./sqlite-schema-admission.js";
 import {
   admitSqliteSchema,
-  getAdmittedSqliteSchemaFacts,
+  getAdmittedSqliteSchemaFacts as admittedSchema,
   getSqliteReadOperationRevision,
   installSqliteTempTrackingSchema,
   registerSqliteSchemaMutationListener,
-  runSqliteReadOperationSync,
+  runSqliteReadOperationSync as withReadOperation,
 } from "./sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync as withTransaction } from "./sqlite-transaction.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 describe("native SQLite schema snapshots and callbacks", () => {
@@ -76,14 +76,12 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it("does not retain the default encoding before the first schema object exists", () => {
     const filename = path.join(tempDirs.make("sqlite-empty-encoding-"), "agent.sqlite");
     const database = openDatabase("", true, filename);
-    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
+    expect(admittedSchema(database)?.textEncoding).toBe("UTF-8");
     database.exec("PRAGMA encoding = 'UTF-16le'; CREATE TABLE original(id)");
-    expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-16le");
+    expect(admittedSchema(database)?.textEncoding).toBe("UTF-16le");
     expect(readSqliteTextEncoding(database)).toBe("UTF-16le");
     database.close();
-    expect(getAdmittedSqliteSchemaFacts(openDatabase("", true, filename))?.textEncoding).toBe(
-      "UTF-16le",
-    );
+    expect(admittedSchema(openDatabase("", true, filename))?.textEncoding).toBe("UTF-16le");
   });
 
   it("observes a sibling commit while a new reader adopts retained schema facts", async () => {
@@ -125,13 +123,13 @@ describe("native SQLite schema snapshots and callbacks", () => {
 
     // Admitting the sibling earlier would warm the writer discovery this case exercises.
     const sibling = openDatabase("", true, filename);
-    const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
+    const before = scopedWriteToken(sibling, "session");
     expect(before).toBeTypeOf("string");
     expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([]);
 
     writer.exec("INSERT INTO proof VALUES (2)");
     expect(sibling.prepare("SELECT value FROM proof").all()).toEqual([{ value: 2 }]);
-    const committed = readSqliteDatabaseScopedWriteToken(sibling, "session");
+    const committed = scopedWriteToken(sibling, "session");
     expect(committed).toBeTypeOf("string");
     expect(committed).not.toBe(before);
   });
@@ -140,14 +138,14 @@ describe("native SQLite schema snapshots and callbacks", () => {
     "settles %s writes while an unrelated read cursor remains open",
     (outcome) => {
       const [writer, sibling] = openPair(`PRAGMA journal_mode=WAL; ${rowsSchema}`);
-      const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
+      const before = scopedWriteToken(sibling, "session");
       expect(before).toBeTypeOf("string");
       const rows = writer.prepare("SELECT id FROM original").iterate();
       try {
         expect(rows.next().done).toBe(false);
         if (outcome === "callback failure") {
           expect(() =>
-            runSqliteImmediateTransactionSync(writer, () => {
+            withTransaction(writer, () => {
               writer.exec("INSERT INTO original VALUES (3)");
               throw new Error("synthetic transaction conflict");
             }),
@@ -168,7 +166,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
             ? [{ id: 1 }, { id: 2 }]
             : [{ id: 1 }, { id: 2 }, { id: 3 }],
         );
-        const settled = readSqliteDatabaseScopedWriteToken(sibling, "session");
+        const settled = scopedWriteToken(sibling, "session");
         expect(settled).toBeTypeOf("string");
         expect(settled).not.toBe(before);
       } finally {
@@ -188,7 +186,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       expect(() => sibling.exec("BEGIN IMMEDIATE")).toThrow(/locked/iu);
       write.return?.();
       sibling.exec("BEGIN IMMEDIATE; ROLLBACK");
-      expect(readSqliteDatabaseScopedWriteToken(sibling, "session")).toBeTypeOf("string");
+      expect(scopedWriteToken(sibling, "session")).toBeTypeOf("string");
       expect(sibling.prepare("SELECT id FROM original ORDER BY id").all()).toEqual([
         { id: 1 },
         { id: 2 },
@@ -213,29 +211,27 @@ describe("native SQLite schema snapshots and callbacks", () => {
       true,
       path.join(root, "second.sqlite"),
     );
-    readSqliteDatabaseScopedWriteToken(second, "existing");
+    const existingToken = scopedWriteToken(second, "existing");
     const cursor = createSqliteDatabaseAdmissionCursor();
-    const before = captureSqliteDatabaseAdmissions(cursor);
+    const before = captureAdmissions(cursor);
     const firstSnapshot = before.find((record) => record.location === first.location())!;
     const secondSnapshot = before.find((record) => record.location === second.location())!;
     const key = { name: "publication-value", read: (value: unknown) => value };
 
     const inherited = getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY);
     installSqliteDatabaseAdmissions([]);
-    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(captureAdmissions(cursor)).toEqual([]);
     expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
 
     installSqliteDatabaseAdmissions(structuredClone(before));
-    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(captureAdmissions(cursor)).toEqual([]);
     expect(getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY)).toBe(inherited);
-    expect(
-      captureSqliteDatabaseAdmissions().find(
-        (record) => record.identity === firstSnapshot.identity,
-      ),
-    ).toBe(firstSnapshot);
+    expect(captureAdmissions().find((record) => record.identity === firstSnapshot.identity)).toBe(
+      firstSnapshot,
+    );
 
     publishSqliteDatabaseAdmission(second, key, 42);
-    const changed = captureSqliteDatabaseAdmissions(cursor);
+    const changed = captureAdmissions(cursor);
     expect(changed).toHaveLength(1);
     expect(changed[0]!.identity).toBe(secondSnapshot.identity);
     expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
@@ -244,19 +240,28 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(changed[0]!.references.size).toBe(0);
     expect(getSqliteDatabaseAdmission(second, key)).toBe(42);
     expect(secondSnapshot.facts.has(key.name)).toBe(false);
-    expect(
-      captureSqliteDatabaseAdmissions().find(
-        (record) => record.identity === firstSnapshot.identity,
-      ),
-    ).toBe(firstSnapshot);
-    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(captureAdmissions().find((record) => record.identity === firstSnapshot.identity)).toBe(
+      firstSnapshot,
+    );
+    expect(captureAdmissions(cursor)).toEqual([]);
 
-    readSqliteDatabaseScopedWriteToken(second, "new");
-    const [scopes] = captureSqliteDatabaseAdmissions(cursor);
+    scopedWriteToken(second, "new");
+    const [scopes] = captureAdmissions(cursor);
     expect([...scopes!.writeScopes.keys()]).toEqual(['["key","new"]']);
     expect(scopes!.facts.size).toBe(0);
     expect(scopes!.references.size).toBe(0);
-    const fresh = captureSqliteDatabaseAdmissions(createSqliteDatabaseAdmissionCursor()).find(
+    // Scope maps are lazy: discovery and receiver installation must not mutate the old capture.
+    expect([...structuredClone(secondSnapshot).writeScopes.keys()]).toEqual(['["key","existing"]']);
+    expect(scopedWriteToken(second, "existing")).toBe(existingToken);
+    const receiver = new SqliteDatabaseAdmissionRegistry();
+    receiver.install([secondSnapshot]);
+    receiver.install([scopes!]);
+    expect([...secondSnapshot.writeScopes.keys()]).toEqual(['["key","existing"]']);
+    expect([...receiver.capture()[0]!.writeScopes.keys()].toSorted()).toEqual([
+      '["key","existing"]',
+      '["key","new"]',
+    ]);
+    const fresh = captureAdmissions(createSqliteDatabaseAdmissionCursor()).find(
       (record) => record.identity === secondSnapshot.identity,
     )!;
     expect(fresh.writeScopes.size).toBe(2);
@@ -267,44 +272,13 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
     installSqliteDatabaseAdmissions(changed);
     expect(getSqliteDatabaseAdmission(second, key)).toBeUndefined();
-    expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+    expect(captureAdmissions(cursor)).toEqual([]);
     const secondLocation = second.location()!;
     second.close();
     retireSqliteDatabaseAdmissionForPath(secondLocation);
-    expect(
-      captureSqliteDatabaseAdmissions().some(
-        (record) => record.identity === secondSnapshot.identity,
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps unread captured scopes immutable through discovery and local install", () => {
-    const location = path.join(tempDirs.make("sqlite-scope-snapshots-"), "proof.sqlite");
-    const database = openDatabase("CREATE TABLE proof(value)", true, location);
-    const firstToken = readSqliteDatabaseScopedWriteToken(database, "first");
-    const [before] = captureSqliteDatabaseAdmissions(undefined, { location });
-    const cursor = createSqliteDatabaseAdmissionCursor();
-    captureSqliteDatabaseAdmissions(cursor, { location });
-
-    readSqliteDatabaseScopedWriteToken(database, "second");
-    const [delta] = captureSqliteDatabaseAdmissions(cursor, { location });
-    expect([...delta!.writeScopes.keys()]).toEqual(['["key","second"]']);
-    // The old snapshot has not read its scope map, including through structured clone.
-    const cloned = structuredClone(before!);
-    expect([...cloned.writeScopes.keys()]).toEqual(['["key","first"]']);
-    expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(firstToken);
-
-    const receiver = new SqliteDatabaseAdmissionRegistry();
-    receiver.install([before!]);
-    receiver.install([delta!]);
-    expect([...before!.writeScopes.keys()]).toEqual(['["key","first"]']);
-    const received = receiver.capture()[0]!;
-    expect([...received.writeScopes.keys()].toSorted()).toEqual([
-      '["key","first"]',
-      '["key","second"]',
-    ]);
-    // Restore the process owner's bootstrap after the isolated registry publication.
-    captureSqliteDatabaseAdmissions();
+    expect(captureAdmissions().some((record) => record.identity === secondSnapshot.identity)).toBe(
+      false,
+    );
   });
 
   it("reclaims another isolate's retired metadata at the next publication", () => {
@@ -315,10 +289,10 @@ describe("native SQLite schema snapshots and callbacks", () => {
       true,
       path.join(root, "second.sqlite"),
     );
-    const firstSnapshot = captureSqliteDatabaseAdmissions(undefined, {
+    const firstSnapshot = captureAdmissions(undefined, {
       location: first.location()!,
     })[0]!;
-    const secondSnapshot = captureSqliteDatabaseAdmissions(undefined, {
+    const secondSnapshot = captureAdmissions(undefined, {
       location: second.location()!,
     })[0]!;
     const receiver = new SqliteDatabaseAdmissionRegistry();
@@ -328,15 +302,15 @@ describe("native SQLite schema snapshots and callbacks", () => {
       receiver.publish(receiver.records.get(secondSnapshot.identity)!);
       expect(receiver.records.has(firstSnapshot.identity)).toBe(false);
     } finally {
-      captureSqliteDatabaseAdmissions();
+      captureAdmissions();
     }
   });
 
   it("installs a recreated scope when only the sender's latest publication is delivered", () => {
     const location = path.join(tempDirs.make("sqlite-recreated-scope-"), "proof.sqlite");
     const database = openDatabase("CREATE TABLE proof(value)", true, location);
-    const original = readSqliteDatabaseScopedWriteToken(database, "reused");
-    const [snapshot] = captureSqliteDatabaseAdmissions(undefined, { location });
+    const original = scopedWriteToken(database, "reused");
+    const [snapshot] = captureAdmissions(undefined, { location });
     const sender = new SqliteDatabaseAdmissionRegistry();
     sender.install(structuredClone([snapshot!]));
     const receipts = createSqliteDatabaseWriteReceipts({
@@ -352,15 +326,15 @@ describe("native SQLite schema snapshots and callbacks", () => {
     });
     try {
       receipts.retireSqliteDatabaseWriteScopes(database, ["reused"]);
-      const replacement = receipts.readSqliteDatabaseScopedWriteToken(database, "reused");
+      const replacement = receipts.scopedWriteToken(database, "reused");
       expect(replacement).toBeTypeOf("string");
       expect(replacement).not.toBe(original);
 
       installSqliteDatabaseAdmissions(structuredClone(sender.capture()));
-      expect(readSqliteDatabaseScopedWriteToken(database, "reused")).toBe(replacement);
+      expect(scopedWriteToken(database, "reused")).toBe(replacement);
     } finally {
       // The synthetic sender's environment publication must not replace the process owner.
-      captureSqliteDatabaseAdmissions();
+      captureAdmissions();
     }
   });
 
@@ -369,7 +343,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     (nextCapture) => {
       const cursor = createSqliteDatabaseAdmissionCursor();
       // Other cases retain process-wide admissions; acknowledge those before creating this pair.
-      captureSqliteDatabaseAdmissions(cursor);
+      captureAdmissions(cursor);
       const root = tempDirs.make("openclaw-admission-scoped-cursor-");
       const first = path.join(root, "first.sqlite");
       const second = path.join(root, "second.sqlite");
@@ -377,17 +351,14 @@ describe("native SQLite schema snapshots and callbacks", () => {
       const secondDatabase = openDatabase(undefined, true, second);
 
       expect(
-        captureSqliteDatabaseAdmissions(cursor, { location: first }).map(
-          (record) => record.location,
-        ),
+        captureAdmissions(cursor, { location: first }).map((record) => record.location),
       ).toEqual([firstDatabase.location()]);
       expect(
-        captureSqliteDatabaseAdmissions(
-          cursor,
-          nextCapture === "scoped" ? { location: second } : undefined,
-        ).map((record) => record.location),
+        captureAdmissions(cursor, nextCapture === "scoped" ? { location: second } : undefined).map(
+          (record) => record.location,
+        ),
       ).toEqual([secondDatabase.location()]);
-      expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+      expect(captureAdmissions(cursor)).toEqual([]);
     },
   );
 
@@ -409,9 +380,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
       pendingIndex: "local_pending_state",
       observedTables: [],
     });
-    const schema = getAdmittedSqliteSchemaFacts(database);
+    const schema = admittedSchema(database);
     const localRevision = () =>
-      runSqliteReadOperationSync(database, () => getSqliteReadOperationRevision(database));
+      withReadOperation(database, () => getSqliteReadOperationRevision(database));
     const beforeLocal = localRevision();
     expect(beforeLocal).toBeDefined();
     const schemaMutation = vi.fn();
@@ -419,9 +390,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
     observeReads((queries) => {
       database.exec(sql);
       expect(localRevision()).not.toBe(beforeLocal);
-      expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).toBe(schema?.admissionId);
+      expect(admittedSchema(database)?.admissionId).toBe(schema?.admissionId);
       const sibling = openDatabase("", true, filename);
-      expect(getAdmittedSqliteSchemaFacts(sibling)?.admissionId).toBe(schema?.admissionId);
+      expect(admittedSchema(sibling)?.admissionId).toBe(schema?.admissionId);
       expect(schemaMutation).not.toHaveBeenCalled();
       expect(queries).toEqual([]);
       const beforeWrite = readSqliteDatabaseWriteRevision(sibling);
@@ -445,20 +416,16 @@ describe("native SQLite schema snapshots and callbacks", () => {
     }
     const database = openDatabase("", false, filename);
     const location = database.location()!;
-    expect(captureSqliteDatabaseAdmissions().some((record) => record.location === location)).toBe(
-      false,
-    );
+    expect(captureAdmissions().some((record) => record.location === location)).toBe(false);
     admitSqliteSchema(database);
-    const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location)!;
+    const record = captureAdmissions().find((entry) => entry.location === location)!;
     expect(fstatSync(record.descriptor).isFile()).toBe(true);
     const staleTransfer = structuredClone([record]);
     database.close();
     retireSqliteDatabaseAdmissionForPath(filename);
     expect(() => fstatSync(record.descriptor)).toThrow();
     installSqliteDatabaseAdmissions(staleTransfer);
-    expect(
-      captureSqliteDatabaseAdmissions().some((entry) => entry.identity === record.identity),
-    ).toBe(false);
+    expect(captureAdmissions().some((entry) => entry.identity === record.identity)).toBe(false);
   });
 
   it("does not retire canonical admission through a snapshot hardlink", () => {
@@ -467,9 +434,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const database = openDatabase(undefined, true, filename);
     const snapshot = path.join(root, "snapshot.sqlite");
     linkSync(filename, snapshot);
-    const record = captureSqliteDatabaseAdmissions().find(
-      (entry) => entry.location === database.location(),
-    )!;
+    const record = captureAdmissions().find((entry) => entry.location === database.location())!;
     retireSqliteDatabaseAdmissionForPath(snapshot);
     expect(fstatSync(record.descriptor).isFile()).toBe(true);
     expect(tableExists(database, "original")).toBe(true);
@@ -487,7 +452,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
         read: (value: unknown) => (typeof value === "number" ? value : undefined),
       };
       publishSqliteDatabaseAdmission(database, key, 1);
-      runSqliteImmediateTransactionSync(database, () => {
+      withTransaction(database, () => {
         database.exec("UPDATE original SET id=2");
         publishSqliteDatabaseAdmission(database, key, 2);
         database.exec("SAVEPOINT s; UPDATE original SET id=3");
@@ -498,7 +463,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
         expect(database.prepare("SELECT id FROM original").get()?.id).toBe(2);
       });
       expect(getSqliteDatabaseAdmission(sibling, key)).toBeUndefined();
-      runSqliteImmediateTransactionSync(database, () => {
+      withTransaction(database, () => {
         publishSqliteDatabaseAdmission(database, key, 2);
         expect(getSqliteDatabaseAdmission(database, key)).toBe(2);
       });
@@ -513,10 +478,10 @@ describe("native SQLite schema snapshots and callbacks", () => {
       schemaDependent: true,
       read: (value: unknown) => (value === true ? true : undefined),
     };
-    runSqliteImmediateTransactionSync(database, () => {
+    withTransaction(database, () => {
       database.exec("SAVEPOINT s");
       database.exec("CREATE TABLE rolled_back(id)");
-      expect(getAdmittedSqliteSchemaFacts(database)?.tables.has("rolled_back")).toBe(true);
+      expect(admittedSchema(database)?.tables.has("rolled_back")).toBe(true);
       publishSqliteDatabaseAdmission(database, key, true);
       expect(getSqliteDatabaseAdmission(database, key)).toBe(true);
       database.exec("ROLLBACK TO s");
@@ -545,14 +510,14 @@ describe("native SQLite schema snapshots and callbacks", () => {
     }
     expect(reader.isTransaction).toBe(true);
     writer.exec("CREATE TABLE committed_sibling(id); PRAGMA user_version=2");
-    const committed = getAdmittedSqliteSchemaFacts(writer);
+    const committed = admittedSchema(writer);
     expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
     admitSqliteSchema(reader);
-    expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(1);
+    expect(admittedSchema(reader)?.userVersion).toBe(1);
     expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
     expect(tableExists(reader, "committed_sibling")).toBe(false);
     reader.exec("COMMIT");
-    expect(getAdmittedSqliteSchemaFacts(reader)?.admissionId).toBe(committed?.admissionId);
+    expect(admittedSchema(reader)?.admissionId).toBe(committed?.admissionId);
   });
 
   it("settles abandoned native statements without retaining writer custody", async ({ signal }) => {
@@ -595,9 +560,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
       try {
         expect(rows.next().done).toBe(false);
         writer.exec("CREATE TABLE committed_sibling(id); PRAGMA user_version=2");
-        const committed = getAdmittedSqliteSchemaFacts(writer);
+        const committed = admittedSchema(writer);
         observeReads((queries) => {
-          expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
+          expect(admittedSchema(reader)?.userVersion).toBe(version);
           expect(tableExists(reader, "committed_sibling")).toBe(version === 2);
           // Schema capture retains the physical encoding across native snapshots.
           expect(queries).toHaveLength(3);
@@ -607,7 +572,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
           reader.prepare("SELECT name FROM sqlite_schema WHERE name='committed_sibling'").get() !==
           undefined;
         expect(visible).toBe(version === 2);
-        expect(getAdmittedSqliteSchemaFacts(writer)?.admissionId).toBe(committed?.admissionId);
+        expect(admittedSchema(writer)?.admissionId).toBe(committed?.admissionId);
         if (finish === "return") {
           rows.return?.();
         } else if (finish === "complete") {
@@ -621,7 +586,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
           statement[finish]?.();
         }
         observeReads((queries) => {
-          expect(getAdmittedSqliteSchemaFacts(reader)?.admissionId).toBe(committed?.admissionId);
+          expect(admittedSchema(reader)?.admissionId).toBe(committed?.admissionId);
           expect(queries).toEqual([]);
         });
         reader.exec("CREATE TABLE after_reset(value)");
@@ -645,7 +610,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       );
       reader.function("read_catalog", () => {
         writer.exec("CREATE TABLE added(id); PRAGMA user_version=2");
-        expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(1);
+        expect(admittedSchema(reader)?.userVersion).toBe(1);
         expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
         expect(tableExists(reader, "added")).toBe(false);
         return 1;
@@ -664,8 +629,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
         reader.prepare(sql)[method]();
       }
       observeReads((queries) => {
-        expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(2);
-        expect(getAdmittedSqliteSchemaFacts(writer)?.userVersion).toBe(2);
+        expect(admittedSchema(reader)?.userVersion).toBe(2);
+        expect(admittedSchema(writer)?.userVersion).toBe(2);
         expect(queries).toEqual([]);
       });
     },
@@ -874,84 +839,81 @@ describe("native SQLite schema snapshots and callbacks", () => {
       expect(observed).toBe(true);
       expect(getSqliteDatabaseSchemaRevision(sibling)).toBeGreaterThan(revision);
       writer.setAuthorizer(null);
-      expect(getAdmittedSqliteSchemaFacts(writer)?.tables.has("authorized_table")).toBe(true);
-      expect(getAdmittedSqliteSchemaFacts(sibling)?.tables.has("authorized_table")).toBe(true);
+      expect(admittedSchema(writer)?.tables.has("authorized_table")).toBe(true);
+      expect(admittedSchema(sibling)?.tables.has("authorized_table")).toBe(true);
       writer.setAuthorizer((action) =>
         action === constants.SQLITE_CREATE_TABLE ? constants.SQLITE_DENY : constants.SQLITE_OK,
       );
       expect(() => writer.exec("CREATE TABLE denied_table(value)")).toThrow(/authorized/iu);
       writer.setAuthorizer(null);
-      expect(getAdmittedSqliteSchemaFacts(sibling)?.tables.has("denied_table")).toBe(false);
+      expect(admittedSchema(sibling)?.tables.has("denied_table")).toBe(false);
     },
   );
 
   it.each([
-    { admitted: false, read: "SELECT id FROM original", version: 1 },
-    { admitted: true, read: "SELECT id FROM original", version: 1 },
-    { admitted: true, read: undefined, version: 2 },
-    { admitted: true, read: "SELECT 1", version: 2 },
-  ])(
-    "binds native snapshots after read=$read, admitted=$admitted",
-    ({ admitted, read, version }) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-raw-snapshot-"), "state.sqlite");
+    ["raw", false, "SELECT id FROM original", 1, false],
+    ["raw", true, "SELECT id FROM original", 1, false],
+    ["raw", true, undefined, 2, false],
+    ["raw", true, "SELECT 1", 2, false],
+    ["managed", true, "SELECT id FROM original", 1, false],
+    ["managed", true, "SELECT 1", 2, false],
+    ["managed", true, "PRAGMA busy_timeout", 2, false],
+    ["managed", true, "PRAGMA query_only", 2, false],
+    ["managed", true, "SELECT id FROM original", 1, true],
+  ] as const)(
+    "qualifies %s snapshots: admitted=%s, read=%s, version=%i, pinned=%s",
+    (mode, admitted, read, version, pinned) => {
+      const filename = path.join(tempDirs.make("sqlite-snapshot-qualification-"), "state.sqlite");
       const reader = openDatabase(undefined, admitted, filename);
       reader.exec("PRAGMA journal_mode=WAL");
       const writer = openDatabase("", true, filename);
       reader.exec("BEGIN");
-      if (read) {
-        reader.prepare(read).all();
+      let committed: ReturnType<typeof admittedSchema>;
+      const inspect = () => {
+        if (read) {
+          reader.prepare(read).all();
+        }
+        writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
+        committed = admittedSchema(writer);
+        if (mode === "raw") {
+          admitSqliteSchema(reader);
+        }
+        if (pinned) {
+          withSchemaSnapshot(reader, () => reader.prepare("SELECT id FROM original").all());
+        }
+        const verify = (queries?: string[]) => {
+          const qualified = admittedSchema(reader);
+          expect(qualified?.userVersion).toBe(version);
+          expect(qualified?.tables.has("committed_sibling")).toBe(version === 2);
+          if (queries) {
+            const before = [...queries];
+            expect(before.filter((query) => query.includes("sqlite_schema"))).toHaveLength(1);
+            expect(admittedSchema(reader)).toBe(qualified);
+            expect(queries).toEqual(before);
+          }
+        };
+        if (mode === "managed") {
+          observeReads(verify);
+        } else {
+          verify();
+        }
+        expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+        expect(admittedSchema(writer)?.admissionId).toBe(committed?.admissionId);
+      };
+      if (mode === "managed") {
+        withReadOperation(reader, inspect);
+      } else {
+        inspect();
       }
-      writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
-      const committed = getAdmittedSqliteSchemaFacts(writer);
-      admitSqliteSchema(reader);
-      expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
-      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-      expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("committed_sibling")).toBe(
-        version === 2,
-      );
-      expect(getAdmittedSqliteSchemaFacts(writer)?.admissionId).toBe(committed?.admissionId);
       reader.exec("ROLLBACK");
-      expect(getAdmittedSqliteSchemaFacts(reader)?.admissionId).toBe(committed?.admissionId);
+      if (mode === "raw") {
+        expect(admittedSchema(reader)?.admissionId).toBe(committed?.admissionId);
+      } else {
+        withSchemaSnapshot(reader, () => {
+          expect(admittedSchema(reader)?.userVersion).toBe(2);
+          expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(2);
+        });
+      }
     },
   );
-
-  it.each([
-    { read: "SELECT id FROM original", version: 1, followup: "none" },
-    { read: "SELECT 1", version: 2, followup: "none" },
-    { read: "PRAGMA busy_timeout", version: 2, followup: "none" },
-    { read: "PRAGMA query_only", version: 2, followup: "none" },
-    { read: "SELECT id FROM original", version: 1, followup: "pinned" },
-  ])("qualifies read=$read, followup=$followup", ({ read, version, followup }) => {
-    const filename = path.join(tempDirs.make("openclaw-schema-managed-snapshot-"), "state.sqlite");
-    const reader = openDatabase(undefined, true, filename);
-    reader.exec("PRAGMA journal_mode=WAL");
-    const writer = openDatabase("", true, filename);
-    reader.exec("BEGIN");
-    runSqliteReadOperationSync(reader, () => {
-      reader.prepare(read).all();
-      writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
-      if (followup === "pinned") {
-        runSqliteSchemaReadSnapshotSync(reader, () =>
-          reader.prepare("SELECT id FROM original").all(),
-        );
-      }
-      observeReads((queries) => {
-        const qualified = getAdmittedSqliteSchemaFacts(reader);
-        expect(qualified?.userVersion).toBe(version);
-        expect(qualified?.tables.has("committed_sibling")).toBe(version === 2);
-        const qualificationQueries = [...queries];
-        expect(
-          qualificationQueries.filter((query) => query.includes("sqlite_schema")),
-        ).toHaveLength(1);
-        expect(getAdmittedSqliteSchemaFacts(reader)).toBe(qualified);
-        expect(queries).toEqual(qualificationQueries);
-      });
-      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-    });
-    reader.exec("ROLLBACK");
-    runSqliteSchemaReadSnapshotSync(reader, () => {
-      expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(2);
-      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(2);
-    });
-  });
 });
