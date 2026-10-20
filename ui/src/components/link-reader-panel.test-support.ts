@@ -3,6 +3,7 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
@@ -10,6 +11,11 @@ import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./link-reader-panel.tsx";
 
 export type Panel = HTMLElementTagNameMap["openclaw-link-reader-panel"];
+export type DetailRequest<T = ControlUiLinkReaderDocument> = (
+  method: string,
+  params?: unknown,
+  options?: { signal?: AbortSignal },
+) => Promise<T>;
 export const storageKey = "openclaw.link-reader.panel.v1";
 export const itemUrl = (number: number) => "https://forge.example/items/" + number;
 export const reader: ControlUiLinkReaderDescriptor = {
@@ -48,20 +54,10 @@ export function requestedItem(params: unknown): ControlUiLinkReaderDocument {
   return item(Number(new URL((params as { url: string }).url).pathname.split("/").at(-1)));
 }
 
-export function deferredDetail() {
-  let resolve!: (value: ControlUiLinkReaderDocument) => void;
-  const promise = new Promise<ControlUiLinkReaderDocument>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+export const deferredDetail = () => createDeferred<ControlUiLinkReaderDocument>();
 
 export async function mount(
-  request: (
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ) => Promise<unknown>,
+  request: DetailRequest<unknown>,
   options: Partial<
     Pick<Panel, "embedded" | "presented" | "sessionKey" | "tabsInHeader" | "onClose">
   > = {},

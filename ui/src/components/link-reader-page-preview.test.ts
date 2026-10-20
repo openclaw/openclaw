@@ -177,30 +177,28 @@ describe("generic link hovercards", () => {
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
   });
-  it.each([["https://github.com/openclaw/openclaw", "github.com", "^/openclaw/openclaw$"]])(
-    "keeps the detail-only plugin claim authoritative without prefetching %s",
-    async (href, host, pathPattern) => {
-      const view = fixture();
-      view.anchor.href = href;
-      await prefetchLinkReader(view.anchor, new AbortController().signal);
-      expect(view.request).not.toHaveBeenCalled();
-      view.provider.claimedReaders = [
-        {
-          pluginId: "forge",
-          id: "commits",
-          label: "Commits",
-          linkReader: {
-            hosts: [host],
-            pathPattern,
-            detailMethod: "forge.detail",
-          },
+  it("keeps the detail-only plugin claim authoritative without prefetching", async () => {
+    const href = "https://github.com/openclaw/openclaw";
+    const { anchor, request, provider } = fixture();
+    anchor.href = href;
+    await prefetchLinkReader(anchor, new AbortController().signal);
+    expect(request).not.toHaveBeenCalled();
+    provider.claimedReaders = [
+      {
+        pluginId: "forge",
+        id: "commits",
+        label: "Commits",
+        linkReader: {
+          hosts: ["github.com"],
+          pathPattern: "^/openclaw/openclaw$",
+          detailMethod: "forge.detail",
         },
-      ];
-      await hover(view.anchor);
-      expect(view.request).not.toHaveBeenCalled();
-      expect(card()).toBeNull();
-    },
-  );
+      },
+    ];
+    await hover(anchor);
+    expect(request).not.toHaveBeenCalled();
+    expect(card()).toBeNull();
+  });
 
   it("does not unlock plugin loading hints after a public page succeeds", async () => {
     const view = fixture();

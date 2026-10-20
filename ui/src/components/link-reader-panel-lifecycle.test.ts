@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
@@ -9,6 +8,7 @@ import {
   reader,
   item,
   deferredDetail,
+  type DetailRequest,
   mount,
   open,
   expectTitle,
@@ -34,13 +34,7 @@ describe("Link reader publication lifecycle", () => {
     const first = deferredDetail();
     const second = deferredDetail();
     const request = vi
-      .fn<
-        (
-          _method: string,
-          _params?: unknown,
-          options?: { signal?: AbortSignal },
-        ) => Promise<ControlUiLinkReaderDocument>
-      >()
+      .fn<DetailRequest>()
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     const panel = await mount(request);
@@ -76,13 +70,7 @@ describe("Link reader publication lifecycle", () => {
   it("retires a pending render on removal and keeps the replacement view authoritative", async () => {
     const stale = deferredDetail();
     const request = vi
-      .fn<
-        (
-          _method: string,
-          _params?: unknown,
-          options?: { signal?: AbortSignal },
-        ) => Promise<ControlUiLinkReaderDocument>
-      >()
+      .fn<DetailRequest>()
       .mockReturnValueOnce(stale.promise)
       .mockResolvedValue(item(2));
     const panel = await mount(request, { embedded: true, presented: true });
