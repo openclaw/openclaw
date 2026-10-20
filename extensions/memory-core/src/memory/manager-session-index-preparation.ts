@@ -112,7 +112,8 @@ export async function prepareSessionIndexStream(
     control.throwIfCancelled();
     const response = await channel.request({ chunks: pending } satisfies SessionIndexProgress);
     pending = [];
-    // The paired host owns this private protocol; no source text enters diagnostics.
+    // No source text from this private protocol enters diagnostics.
+    // SAFETY: the paired host answers only with pages produced by sessionIndexPages.
     const page = response.input as SessionIndexPage;
     for (const line of page.lines) {
       control.throwIfCancelled();

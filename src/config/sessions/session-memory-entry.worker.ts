@@ -1,3 +1,4 @@
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
   buildSessionEntryInProcess,
@@ -6,6 +7,7 @@ import {
 import { LruCache } from "../../infra/lru-cache.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -169,6 +171,25 @@ export async function prepareSessionMemoryEntries(
     }
   }
   return results;
+}
+
+/** Hands each prepared entry to the host and waits for it to accept that entry before the next. */
+export async function deliverSessionMemoryEntries(
+  entries: SessionEntriesWorkerInput["entries"],
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
+): Promise<SessionTranscriptWorkerValues["session-entries"]> {
+  if (!channel) {
+    throw new Error("Session exports require their host delivery channel");
+  }
+  channel.consumeInput();
+  await prepareSessionMemoryEntries(entries, async (index, value) => {
+    control.throwIfCancelled();
+    const response = await channel.request({ kind: "session-entries", index, value });
+    response.consumed();
+    control.throwIfCancelled();
+  });
+  return { entries: [] };
 }
 
 /** Reads a transcript above the retention limit in short slices after its batch transaction. */

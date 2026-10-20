@@ -303,6 +303,7 @@ export async function prepareMemoryIndexInWorker(input: MemoryIndexPreparationIn
         inputBytes: Math.min(inputBytes, MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES),
         onRequest: (value) => {
           // The worker exchanges a completed chunk batch for the next immutable source page.
+          // SAFETY: only the paired prepare-session worker sends requests on this task.
           const progress = value as SessionIndexProgress;
           for (const chunk of progress.chunks) {
             chunks.push(chunk);
