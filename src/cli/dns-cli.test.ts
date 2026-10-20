@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const testState = vi.hoisted(() => ({ zonePath: "" }));
+const domain = "openclaw.internal";
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -49,8 +50,7 @@ describe("dns-cli probe bounds", () => {
   let brewPrefix: string;
 
   beforeEach(() => {
-    // A real writable temp prefix lets the un-mocked fs writes (Corefile, conf.d,
-    // zone bootstrap) succeed on Linux CI without touching sudo paths.
+    // Real writes stay in a writable prefix, including on Linux CI.
     brewPrefix = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dns-cli-test-"));
     testState.zonePath = path.join(brewPrefix, "test.zone");
     spawnSyncMock.mockReset();
@@ -70,29 +70,15 @@ describe("dns-cli probe bounds", () => {
     registerDnsCli(program);
     // The action gates on process.platform; os.platform() is not consulted.
     await withMockedPlatform("darwin", () =>
-      program.parseAsync([
-        "node",
-        "openclaw",
-        "dns",
-        "setup",
-        "--domain",
-        "openclaw.internal",
-        "--apply",
-      ]),
+      program.parseAsync(["node", "openclaw", "dns", "setup", "--domain", domain, "--apply"]),
     );
   }
 
-  it("bounds the brew prefix probe with a SIGKILL-backed timeout", async () => {
+  it("bounds only the brew prefix probe with a SIGKILL-backed timeout", async () => {
     await runDnsSetupApply();
 
     const probeCall = spawnSyncMock.mock.calls.find(isBrewPrefixProbe);
-    expect(probeCall).toBeDefined();
     expect(probeCall?.[2]).toMatchObject({ timeout: 15_000, killSignal: "SIGKILL" });
-  });
-
-  it("leaves long-running setup subprocesses unbounded", async () => {
-    await runDnsSetupApply();
-
     const nonProbeCalls = spawnSyncMock.mock.calls.filter((call) => !isBrewPrefixProbe(call));
     expect(nonProbeCalls.length).toBeGreaterThan(0);
     for (const call of nonProbeCalls) {
@@ -128,35 +114,24 @@ describe("dns-cli probe bounds", () => {
     },
   );
 
-  it("names the deadline and signal when the brew prefix probe times out", async () => {
-    spawnSyncMock.mockImplementation((cmd: string, args: string[]) =>
-      cmd === "brew" && args[0] === "--prefix"
-        ? {
-            ...spawnOk(),
-            status: null,
-            signal: "SIGKILL",
-            error: Object.assign(new Error("spawnSync brew ETIMEDOUT"), { code: "ETIMEDOUT" }),
-          }
-        : spawnOk(),
-    );
-
-    await expect(runDnsSetupApply()).rejects.toThrow(
-      "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)",
-    );
-  });
-
-  it("names the signal when a setup step is killed", async () => {
+  it.each(["SIGKILL", "SIGTERM"])("reports %s subprocess failures", (signal) => {
+    const timeout = signal === "SIGKILL";
+    const error = timeout
+      ? Object.assign(new Error("spawnSync brew ETIMEDOUT"), { code: "ETIMEDOUT" })
+      : undefined;
     spawnSyncMock.mockImplementation((cmd: string, args: string[]) => {
+      if (timeout ? isBrewPrefixProbe([cmd, args]) : cmd === "sudo" && args[0] === "brew") {
+        return { ...spawnOk(), status: null, signal, ...(error ? { error } : {}) };
+      }
       if (cmd === "brew" && args[0] === "--prefix") {
         return spawnOk(`${brewPrefix}\n`);
       }
-      return cmd === "sudo" && args[0] === "brew"
-        ? { ...spawnOk(), status: null, signal: "SIGTERM" }
-        : spawnOk();
+      return spawnOk();
     });
-
-    await expect(runDnsSetupApply()).rejects.toThrow(
-      "sudo brew services restart coredns failed: signal SIGTERM",
+    return expect(runDnsSetupApply()).rejects.toThrow(
+      timeout
+        ? "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)"
+        : "sudo brew services restart coredns failed: signal SIGTERM",
     );
   });
 });

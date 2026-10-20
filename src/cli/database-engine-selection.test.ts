@@ -29,17 +29,19 @@ const database = {
 };
 
 const prepare = (...args: string[]) => prepareCliDatabaseEngine(["node", "openclaw", ...args]);
-const withState = (run: (state: OpenClawTestState) => Promise<void>) =>
-  withOpenClawTestState(
-    {
-      label: "cli-engine-selection",
-      env: {
-        OPENCLAW_TEST_CLI_DSN: undefined,
-        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: undefined,
+const withState =
+  <Args extends unknown[]>(run: (state: OpenClawTestState, ...args: Args) => Promise<void>) =>
+  (...args: Args) =>
+    withOpenClawTestState(
+      {
+        label: "cli-engine-selection",
+        env: {
+          OPENCLAW_TEST_CLI_DSN: undefined,
+          OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: undefined,
+        },
       },
-    },
-    run,
-  );
+      (state) => run(state, ...args),
+    );
 async function expectUnselected(state: OpenClawTestState) {
   expect(getDatabaseEngineSelection()).toBeUndefined();
   await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
@@ -65,16 +67,12 @@ const recoveryOwnerCommands = [
   ["setup", "--wizard", "--reset"],
   ["setup", "--wizard", "--reset", "--reset-scope", "config"],
   ["agent", "--agent", "main", "--message", "hello"],
-  ["gateway", "restart"],
-  ["daemon", "restart"],
-  ["node", "restart"],
+  ...["gateway", "daemon", "node"].map((command) => [command, "restart"]),
   ["gateway", "stop", "--force"],
   ["daemon", "stop", "--force"],
   ["gateway", "uninstall"],
   ["daemon", "uninstall"],
-  ["node", "stop"],
-  ["node", "uninstall"],
-  ["node", "status"],
+  ...["stop", "uninstall", "status"].map((action) => ["node", action]),
   ["cron", "status"],
   ["automations", "list"],
   ["devices", "list"],
@@ -91,9 +89,7 @@ const recoveryOwnerCommands = [
   ["update", "--dry-run"],
   ["update", "--channel", "beta"],
   ["update", "status", "--json"],
-  ["update", "repair"],
-  ["update", "finalize"],
-  ["update", "wizard"],
+  ...["repair", "finalize", "wizard"].map((action) => ["update", action]),
   ["update", "migration-plan", "--snapshot-state", "/selected/state"],
   ["reset", "--scope", "config"],
   ["reset", "--scope=config"],
@@ -105,30 +101,28 @@ const recoveryOwnerCommands = [
 describe("one-shot CLI engine selection", () => {
   it.each([["models", "list"], ["onboard"], ["setup", "--wizard"], ["crestodian"]])(
     "selects the config-directed target for %j without opening a database",
-    async (...args) => {
-      await withState(async (state) => {
-        process.env.OPENCLAW_TEST_CLI_DSN = "postgresql://127.0.0.1:1/test";
-        const target = state.path("selected.json");
-        await fs.writeFile(target, JSON.stringify({ database, plugins: { enabled: false } }));
-        await state.writeConfig({
-          env: { vars: { OPENCLAW_CONFIG_PATH: target } },
-          plugins: { enabled: false },
-        });
-        delete process.env.OPENCLAW_CONFIG_PATH;
-        await prepare(...args);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBe(target);
-        expect(getDatabaseEngineSelection()).toMatchObject({
-          effectiveEngines: { state: "postgres", agent: "postgres" },
-          postgres: {
-            connection: "postgresql://127.0.0.1:1/test",
-            schemaPrefix: "cli_selection",
-          },
-        });
-        await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+    withState(async (state, ...args: string[]) => {
+      process.env.OPENCLAW_TEST_CLI_DSN = "postgresql://127.0.0.1:1/test";
+      const target = state.path("selected.json");
+      await fs.writeFile(target, JSON.stringify({ database, plugins: { enabled: false } }));
+      await state.writeConfig({
+        env: { vars: { OPENCLAW_CONFIG_PATH: target } },
+        plugins: { enabled: false },
       });
-    },
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      await prepare(...args);
+      expect(process.env.OPENCLAW_CONFIG_PATH).toBe(target);
+      expect(getDatabaseEngineSelection()).toMatchObject({
+        effectiveEngines: { state: "postgres", agent: "postgres" },
+        postgres: {
+          connection: "postgresql://127.0.0.1:1/test",
+          schemaPrefix: "cli_selection",
+        },
+      });
+      await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }),
   );
 
   it.each([
@@ -143,8 +137,9 @@ describe("one-shot CLI engine selection", () => {
     },
     { source: "include" },
     { source: "missing include" },
-  ])("preserves $source failure diagnostics before selecting storage", async ({ source, args }) => {
-    await withState(async (state) => {
+  ])(
+    "preserves $source failure diagnostics before selecting storage",
+    withState(async (state, { source, args }: { source: string; args?: string[] }) => {
       const missing = source === "missing include";
       const heading = missing ? "Config could not be read at" : "Invalid config at";
       const raw = source.includes("include") ? '{"$include":"included.json"}' : "{ invalid config";
@@ -159,8 +154,8 @@ describe("one-shot CLI engine selection", () => {
       });
       expect(await fs.readFile(state.configPath, "utf8")).toBe(raw);
       await expectUnselected(state);
-    });
-  });
+    }),
+  );
 
   it.each(
     [
@@ -172,13 +167,12 @@ describe("one-shot CLI engine selection", () => {
       ["config", "validate", "--json"],
       ["gateway", "status", "--runtime-intent-only", "--json"],
       ["daemon", "status", "--runtime-intent-only", "--json"],
-      ["gateway", "discover"],
       ["gateway", "call", "health"],
-      ["gateway", "health"],
-      ["gateway", "suspend"],
+      ...["discover", "health", "suspend", "usage-cost", "stability"].map((action) => [
+        "gateway",
+        action,
+      ]),
       ["gateway", "resume", "synthetic-suspension"],
-      ["gateway", "usage-cost"],
-      ["gateway", "stability"],
       ["channels", "status"],
       ["plugins", "build"],
       ["completion"],
@@ -190,31 +184,29 @@ describe("one-shot CLI engine selection", () => {
       ["doctor", "--session-sqlite", "inspect", "--session-sqlite-store", "/selected/store"],
       ["doctor", "--post-upgrade"],
       ["update", "admit", "--context", "/selected/context"],
-      ["update", "migrate"],
-      ["update", "restore"],
-      ["update", "finish"],
-      ["update", "recover"],
-      ["update", "adopt-immutable"],
+      ...["migrate", "restore", "finish", "recover", "adopt-immutable"].map((action) => [
+        "update",
+        action,
+      ]),
       ["update", "--channel", "--", "cleanup"],
       ...recoveryOwnerCommands,
     ].map((args) => ({ args })),
-  )("leaves $args with its existing target owner", async ({ args }) => {
-    await withState(async (state) => {
+  )(
+    "leaves $args with its existing target owner",
+    withState(async (state, { args }: { args: string[] }) => {
       await state.writeConfig({ database, plugins: { enabled: false } });
       await prepare(...args);
       await expectUnselected(state);
-    });
-  });
+    }),
+  );
 
   it.each(recoveryOwnerCommands.map((args) => ({ args })))(
     "keeps malformed source diagnostics with the $args owner",
-    async ({ args }) => {
-      await withState(async (state) => {
-        await fs.writeFile(state.configPath, '{"database":{"engine":"postgres"}, broken');
-        expect(await prepare(...args)).toBe(false);
-        await expectUnselected(state);
-      });
-    },
+    withState(async (state, { args }: { args: string[] }) => {
+      await fs.writeFile(state.configPath, '{"database":{"engine":"postgres"}, broken');
+      expect(await prepare(...args)).toBe(false);
+      await expectUnselected(state);
+    }),
   );
 
   it.each(
@@ -231,13 +223,14 @@ describe("one-shot CLI engine selection", () => {
       ["uninstall", "--service", "--all"],
       ["uninstall", "--", "--service"],
     ].map((args) => ({ args })),
-  )("still selects state for broader cleanup $args", async ({ args }) => {
-    await withState(async (state) => {
+  )(
+    "still selects state for broader cleanup $args",
+    withState(async (state, { args }: { args: string[] }) => {
       await state.writeConfig({ database, plugins: { enabled: false } });
       await expect(prepare(...args)).rejects.toThrow("SecretRef is unresolved");
       await expectUnselected(state);
-    });
-  });
+    }),
+  );
 
   it.each([
     { engine: "sqlite", source: "root" },
@@ -246,39 +239,39 @@ describe("one-shot CLI engine selection", () => {
     { engine: "postgres", source: "include" },
   ])(
     "does not open existing storage while Doctor cannot parse $engine $source config",
-    async ({ engine, source }) => {
-      await withState(async (state) => {
-        if (source === "include") {
-          await fs.writeFile(
-            state.configPath,
-            JSON.stringify({ database: { engine }, $include: "broken.json" }),
-          );
-          await fs.writeFile(state.statePath("broken.json"), "{broken json");
-        } else {
-          await fs.writeFile(state.configPath, `{"database":{"engine":"${engine}"}, broken`);
-        }
-        const databasePath = state.statePath("state", "openclaw.sqlite");
-        await fs.mkdir(state.statePath("state"), { recursive: true });
-        await fs.writeFile(databasePath, "unopened synthetic store");
-        const expectUnopened = watchDatabaseOpens();
-        expect(await prepare("doctor", "--non-interactive", "--json")).toBe(true);
-        expectUnopened();
-        expect(await fs.readFile(databasePath, "utf8")).toBe("unopened synthetic store");
-      });
-    },
+    withState(async (state, { engine, source }: { engine: string; source: string }) => {
+      if (source === "include") {
+        await fs.writeFile(
+          state.configPath,
+          JSON.stringify({ database: { engine }, $include: "broken.json" }),
+        );
+        await fs.writeFile(state.statePath("broken.json"), "{broken json");
+      } else {
+        await fs.writeFile(state.configPath, `{"database":{"engine":"${engine}"}, broken`);
+      }
+      const databasePath = state.statePath("state", "openclaw.sqlite");
+      await fs.mkdir(state.statePath("state"), { recursive: true });
+      await fs.writeFile(databasePath, "unopened synthetic store");
+      const expectUnopened = watchDatabaseOpens();
+      expect(await prepare("doctor", "--non-interactive", "--json")).toBe(true);
+      expectUnopened();
+      expect(await fs.readFile(databasePath, "utf8")).toBe("unopened synthetic store");
+    }),
   );
 
-  it("keeps updater-owned Doctor selection with its result receipt", async () => {
-    await withState(async (state) => {
+  it(
+    "keeps updater-owned Doctor selection with its result receipt",
+    withState(async (state) => {
       process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "-";
       await state.writeConfig({ database, plugins: { enabled: false } });
       expect(await prepare("doctor")).toBe(false);
       expect(getDatabaseEngineSelection()).toBeUndefined();
-    });
-  });
+    }),
+  );
 
-  it("keeps storage unopened when prefix repair leaves a PostgreSQL credential unresolved", async () => {
-    await withState(async (state) => {
+  it(
+    "keeps storage unopened when prefix repair leaves a PostgreSQL credential unresolved",
+    withState(async (state) => {
       const config = { database, plugins: { enabled: false } };
       await fs.writeFile(state.configPath, `synthetic warning\n${JSON.stringify(config)}\n`);
       const expectUnopened = watchDatabaseOpens();
@@ -290,6 +283,6 @@ describe("one-shot CLI engine selection", () => {
       ).toBe(true);
       expectUnopened();
       expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(config);
-    });
-  });
+    }),
+  );
 });

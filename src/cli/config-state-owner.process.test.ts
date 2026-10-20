@@ -6,16 +6,11 @@ import { readLatestConfigSnapshotAuditRecordAsync } from "../config/config-journ
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
-const entrypoint = resolveRuntimeWorkerArgv(
-  resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
-);
 const operations = [
   { name: "set", args: ["config", "set", "logging.level", "warn"], level: "warn" },
   {
@@ -33,13 +28,6 @@ describe("config CLI database effects", () => {
   let owner: GatewayLockHandle | null;
   let originalConfig: string;
 
-  const run = (childEnv: NodeJS.ProcessEnv, args: string[], input?: string) =>
-    runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env: childEnv, input });
-  async function expectUnchanged() {
-    expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
-    expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
-  }
-
   async function fixture(home: string): Promise<NodeJS.ProcessEnv> {
     const stateDir = path.join(home, "state");
     const configPath = path.join(home, "openclaw.json");
@@ -48,18 +36,7 @@ describe("config CLI database effects", () => {
       configPath,
       JSON.stringify({ gateway: { mode: "local" }, logging: { level: "debug" } }),
     );
-    return {
-      PATH: process.env.PATH,
-      SystemRoot: process.env.SystemRoot,
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    };
+    return stateOwnerEnv(home);
   }
 
   beforeAll(async () => {
@@ -73,14 +50,21 @@ describe("config CLI database effects", () => {
     await owner?.release();
   });
 
-  it.each(operations)(
-    "allows $name previews while another process owns state",
-    async ({ args, input }) => {
-      const result = await run(env, [...args, "--dry-run"], input);
-      expect(result.code, result.stderr).toBe(0);
-      await expectUnchanged();
-    },
-  );
+  it.each(
+    operations.flatMap((operation) => [
+      { ...operation, mode: "preview", flags: ["--dry-run"], code: 0 },
+      { ...operation, mode: "write", flags: [], code: 1 },
+    ]),
+  )("$name $mode respects live state ownership", async ({ args, input, flags, code }) => {
+    const result = await run(env, [...args, ...flags], input);
+    expect(result.code, result.stderr).toBe(code);
+    if (code === 1) {
+      expect(result.stderr).toContain("exclusive offline state ownership");
+      expect(result.stderr).toContain("stop the Gateway");
+    }
+    expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
+    expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
+  });
 
   it("does not bootstrap state for an unchanged config value", async () => {
     const offline = await fixture(roots.make("openclaw-config-unchanged-"));
@@ -91,17 +75,6 @@ describe("config CLI database effects", () => {
       fs.access(path.join(offline.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
-
-  it.each(operations)(
-    "refuses $name before changing live-owned config",
-    async ({ args, input }) => {
-      const result = await run(env, args, input);
-      expect(result.code, result.stderr).toBe(1);
-      expect(result.stderr).toContain("exclusive offline state ownership");
-      expect(result.stderr).toContain("stop the Gateway");
-      await expectUnchanged();
-    },
-  );
 
   it.each(operations)(
     "persists $name and ancillary state while offline",

@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -17,40 +16,26 @@ import {
   type OpenClawExternalStateOwnership,
 } from "../state/openclaw-state-ownership.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { runStateOwnerCli, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
-const entrypoint = resolveRuntimeWorkerArgv(
-  resolveRuntimeWorkerUrl(localStateOwnerFixtureEntrypoint),
-);
 
 function createEnvironment(): NodeJS.ProcessEnv {
   const root = roots.make("openclaw-ownership-claim-");
-  const env = {
-    PATH: process.env.PATH,
-    SystemRoot: process.env.SystemRoot,
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_HOME: root,
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    OPENCLAW_SUPERVISOR_MODE: "external",
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
-  };
-  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}\n");
+  const env = stateOwnerEnv(root, { OPENCLAW_SUPERVISOR_MODE: "external" });
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH!, "{}\n");
   return env;
 }
 
-function claim(env: NodeJS.ProcessEnv, direct = false) {
-  return runCliProcessChild({
-    nodeArgs: direct
-      ? [...entrypoint, "ownership-claim-direct", "--json"]
-      : [...entrypoint, "database", "ownership", "claim", "--manager", "supervisor", "--json"],
+async function claim(env: NodeJS.ProcessEnv, direct = false, code = 0) {
+  const result = await runStateOwnerCli(
     env,
-  });
+    direct
+      ? ["ownership-claim-direct", "--json"]
+      : ["database", "ownership", "claim", "--manager", "supervisor", "--json"],
+  );
+  expect(result.code, result.stderr).toBe(code);
+  return JSON.parse(result.stdout);
 }
 
 function snapshot(databasePath: string) {
@@ -78,18 +63,13 @@ describe("database ownership claim process boundary", () => {
         const gatewayEnv = { ...env, OPENCLAW_SUPERVISOR_MODE: undefined };
         const database = openOpenClawStateDatabase({ env: gatewayEnv });
         const before = snapshot(database.path);
-        const result = await claim(env);
-        expect(result.code, result.stderr).toBe(1);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          error: expect.stringMatching(/stop.*external supervisor/iu),
-        });
-        assert.deepStrictEqual(snapshot(database.path), before);
-        const direct = await claim(env, true);
-        expect(direct.code, direct.stderr).toBe(1);
-        expect(JSON.parse(direct.stdout)).toMatchObject({
-          error: { message: expect.stringMatching(/OpenClaw state database is busy/iu) },
-        });
-        assert.deepStrictEqual(snapshot(database.path), before);
+        for (const [direct, error] of [
+          [false, expect.stringMatching(/stop.*external supervisor/iu)],
+          [true, { message: expect.stringMatching(/OpenClaw state database is busy/iu) }],
+        ] as const) {
+          expect(await claim(env, direct, 1)).toMatchObject({ error });
+          assert.deepStrictEqual(snapshot(database.path), before);
+        }
         expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();
         runOpenClawStateWriteTransaction(
           ({ db }) => {
@@ -117,9 +97,7 @@ describe("database ownership claim process boundary", () => {
     async (direct) => {
       const env = createEnvironment();
       const databasePath = resolveOpenClawStateSqlitePath(env);
-      const first = await claim(env, direct);
-      expect(first.code, first.stderr).toBe(0);
-      const firstResult: { ownership: OpenClawExternalStateOwnership } = JSON.parse(first.stdout);
+      const firstResult: { ownership: OpenClawExternalStateOwnership } = await claim(env, direct);
       expect(firstResult.ownership).toMatchObject({ managerId: "supervisor", mode: "external" });
       const observation: { pid: number; ownershipWrites: Array<{ pid?: number; role?: string }> } =
         JSON.parse(
@@ -134,9 +112,7 @@ describe("database ownership claim process boundary", () => {
       }
       expect(fs.existsSync(resolveGatewayLockPaths(env).ownerLockPath)).toBe(false);
 
-      const repeated = await claim(env, direct);
-      expect(repeated.code, repeated.stderr).toBe(0);
-      expect(JSON.parse(repeated.stdout)).toEqual(JSON.parse(first.stdout));
+      expect(await claim(env, direct)).toEqual(firstResult);
 
       const successor = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
       expect(successor).not.toBeNull();

@@ -1,5 +1,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CliDeps } from "./deps.js";
 import { createOutboundSendDeps } from "./outbound-send-deps.js";
 
 const mocks = vi.hoisted(() => ({
@@ -16,21 +17,18 @@ vi.mock("./send-runtime/channel-outbound-send.js", async (importOriginal) => {
 });
 
 describe("createDefaultDeps", () => {
-  async function loadDeps(scope: string) {
-    return (
+  let deps: CliDeps;
+  beforeEach(async ({ task }) => {
+    vi.clearAllMocks();
+    deps = (
       await importFreshModule<typeof import("./deps.js")>(
         import.meta.url,
-        `./deps.js?scope=${scope}`,
+        `./deps.js?scope=${task.id}`,
       )
     ).createDefaultDeps();
-  }
-
-  beforeEach(() => {
-    vi.clearAllMocks();
   });
 
   it("loads the send runtime only when used and routes each call to its channel", async () => {
-    const deps = await loadDeps("lazy-load");
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
     const sendDiscord = deps.discord as (...args: unknown[]) => Promise<unknown>;
 
@@ -50,28 +48,21 @@ describe("createDefaultDeps", () => {
   });
 
   it("does not create channel senders for Discord voice helper keys", async () => {
-    const deps = await loadDeps("discord-voice-helper");
-
-    expect(deps.discordVoice).toBeUndefined();
-    expect(deps.sendDiscordVoice).toBeUndefined();
+    expect([deps.discordVoice, deps.sendDiscordVoice]).toEqual([undefined, undefined]);
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("does not expose lazy channel senders as low-level outbound transports", async () => {
-    const deps = await loadDeps("outbound-transport-boundary");
-
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
     await sendTelegram("chat", "hello", { verbose: false });
 
     const outbound = createOutboundSendDeps(deps);
-    expect(outbound.telegram).toBeUndefined();
-    expect(outbound.sendTelegram).toBeUndefined();
+    expect([outbound.telegram, outbound.sendTelegram]).toEqual([undefined, undefined]);
     expect(mocks.sendMessage).toHaveBeenCalledOnce();
   });
 
   it("allows another send after a transient channel failure", async () => {
     mocks.sendMessage.mockRejectedValueOnce(new Error("transient channel failure"));
-    const deps = await loadDeps("send-retry");
     const sendTelegram = deps.telegram as (...args: unknown[]) => Promise<unknown>;
 
     await expect(sendTelegram("chat", "first", { verbose: false })).rejects.toThrow(

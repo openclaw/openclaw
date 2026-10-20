@@ -1,7 +1,8 @@
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { cliOutputScript } from "./cli-process-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Reuse temporary source transforms while each child keeps its own scenario state.
@@ -10,32 +11,26 @@ const summaryBytes = 128 * 1024;
 const sentinel = "\nEND-CRON-SUMMARY\n";
 const summary = "x".repeat(summaryBytes - sentinel.length) + sentinel;
 
-describe("cron process output", () => {
-  it.each([
-    { name: "wait success", args: ["run", "job-1", "--wait"], exitCode: 0, kind: "wait" },
-    {
-      name: "wait failure",
-      args: ["run", "job-1", "--wait", "--json"],
-      exitCode: 1,
-      kind: "wait",
-    },
-    { name: "queued run", args: ["run", "job-1"], exitCode: 0, kind: "admission" },
-    { name: "not-due run", args: ["run", "job-1", "--due"], exitCode: 1, kind: "admission" },
-    { name: "run history", args: ["runs", "--id", "job-1"], exitCode: 0, kind: "history" },
-    { name: "human error", args: ["show", "missing-job"], exitCode: 1, kind: "error" },
-  ])(
-    "drains output and preserves the exit code for $name",
-    ({ args, exitCode, kind }) => {
-      const root = tempDirs.make("openclaw-cron-output-");
-      const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
-      const status = exitCode === 0 ? "ok" : "error";
-      const completionStatus = exitCode === 0 ? "succeeded" : "failed";
-      const admission =
-        exitCode === 0 ? { ok: true, enqueued: true, runId: "run-1" } : { ok: true, ran: false };
-      const rpcSource = `
+it.each([
+  ["wait success", ["run", "job-1", "--wait"], 0, "wait"],
+  ["wait failure", ["run", "job-1", "--wait", "--json"], 1, "wait"],
+  ["queued run", ["run", "job-1"], 0, "admission"],
+  ["not-due run", ["run", "job-1", "--due"], 1, "admission"],
+  ["run history", ["runs", "--id", "job-1"], 0, "history"],
+  ["human error", ["show", "missing-job"], 1, "error"],
+] as const)(
+  "flushes cron %s output before exit",
+  (_name, args, exitCode, kind) => {
+    const root = tempDirs.make("openclaw-cron-output-");
+    const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
+    const status = exitCode === 0 ? "ok" : "error";
+    const completionStatus = exitCode === 0 ? "succeeded" : "failed";
+    const run = { jobId: "job-1", runId: "run-1", status, completionStatus };
+    const admission =
+      exitCode === 0 ? { ok: true, enqueued: true, runId: "run-1" } : { ok: true, ran: false };
+    const rpcSource = `
       const summary = "x".repeat(${summaryBytes} - ${sentinel.length}) + ${JSON.stringify(sentinel)};
-      const row = { ts: 1700000001000, jobId: "job-1", runId: "run-1", action: "finished",
-        status: ${JSON.stringify(status)}, completionStatus: ${JSON.stringify(completionStatus)},
+      const row = { ts: 1700000001000, ...${JSON.stringify(run)}, action: "finished",
         summary, runAtMs: 1700000000000, durationMs: 1000 };
       export async function callGatewayFromCliRuntime(method) {
         if (method === "cron.run") return ${JSON.stringify(kind === "wait" ? { ok: true, enqueued: true, runId: "run-1" } : admission)};
@@ -52,86 +47,60 @@ describe("cron process output", () => {
         throw new Error("unexpected Gateway RPC: " + method);
       }
     `;
-      // Real Commander actions, runtime, and finalizer write to an ordinary OS pipe.
-      // Only Gateway RPC results are synthetic; no live job or operator store is touched.
-      const script = `
-      import { registerHooks } from "node:module";
-      import { Command } from "commander";
-      registerHooks({
-        resolve(specifier, context, nextResolve) {
-          if (specifier.endsWith("/gateway-rpc.runtime.js")) return {
-            shortCircuit: true,
-            url: "data:text/javascript," + encodeURIComponent(${JSON.stringify(rpcSource)}),
-          };
-          return nextResolve(specifier, context);
-        },
-      });
-      const { registerCronCli } = await import(${JSON.stringify(sourceUrl("./cron-cli.ts"))});
-      const { runCliWithExitFinalization } = await import(${JSON.stringify(sourceUrl("./one-shot-exit.ts"))});
+    const script = cliOutputScript({
+      registration: [sourceUrl("./cron-cli.ts"), "registerCronCli"],
+      exitUrl: sourceUrl("./one-shot-exit.ts"),
+      argv: ["cron", ...args],
+      modules: { "/gateway-rpc.runtime.js": rpcSource },
+      setup: `
       const { applyResolvedCommandOutputMode } = await import(${JSON.stringify(sourceUrl("./json-output-mode.ts"))});
       const { isCommandJsonOutputMode } = await import(${JSON.stringify(sourceUrl("./program/json-mode.ts"))});
-      process.argv = [process.execPath, "openclaw", "cron", ...${JSON.stringify(args)}];
-      await runCliWithExitFinalization({
-        run: async () => {
-          const program = new Command().name("openclaw");
-          registerCronCli(program);
           program.hook("preAction", (_parent, command) => {
             const jsonMode = isCommandJsonOutputMode(command, process.argv);
             if (jsonMode !== ${kind !== "error"}) throw new Error("incorrect command output mode");
             applyResolvedCommandOutputMode(jsonMode);
           });
-          await program.parseAsync(process.argv);
-        },
-        onError: error => { throw error; },
-      });
-    `;
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        TMPDIR: childTempDir,
-        TEMP: childTempDir,
-        TMP: childTempDir,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NO_COLOR: "1",
-      };
-      delete env.VITEST;
-      delete env.VITEST_POOL_ID;
-      delete env.VITEST_WORKER_ID;
-      const result = spawnNodeEvalSync(script, {
-        imports: ["tsx"],
-        env,
-        maxBuffer: 2 * summaryBytes,
-        timeout: 30_000,
-      });
+    `,
+    });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      TMPDIR: childTempDir,
+      TEMP: childTempDir,
+      TMP: childTempDir,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NO_COLOR: "1",
+    };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const result = spawnNodeEvalSync(script, {
+      imports: ["tsx"],
+      env,
+      maxBuffer: 2 * summaryBytes,
+      timeout: 30_000,
+    });
 
-      expect(result.error).toBeUndefined();
-      expect(result.signal).toBeNull();
-      expect(result.status, result.stderr).toBe(exitCode);
-      if (kind === "error") {
-        expect(result.stdout).toBe("");
-        expect(result.stderr).toContain(
-          "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
-        );
-        return;
-      }
-      expect(result.stderr).toBe("");
-      const value = JSON.parse(result.stdout);
-      if (kind === "admission") {
-        expect(value).toEqual(admission);
-        return;
-      }
-      expect(kind === "wait" ? value.run : value.entries[0]).toMatchObject({
-        jobId: "job-1",
-        runId: "run-1",
-        status,
-        completionStatus,
-        summary,
-      });
-      if (kind === "wait") {
-        expect(value).toMatchObject({ completed: true, status, completionStatus });
-      }
-    },
-    30_000,
-  );
-});
+    expect(result.error).toBeUndefined();
+    expect(result, result.stderr).toMatchObject({ signal: null, status: exitCode });
+    if (kind === "error") {
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
+      );
+      return;
+    }
+    expect(result.stderr).toBe("");
+    const value = JSON.parse(result.stdout);
+    if (kind === "admission") {
+      expect(value).toEqual(admission);
+      return;
+    }
+    expect(kind === "wait" ? value.run : value.entries[0]).toMatchObject({ ...run, summary });
+    if (kind === "wait") {
+      expect(value).toMatchObject({ completed: true, status, completionStatus });
+    }
+  },
+  30_000,
+);
