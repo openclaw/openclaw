@@ -15,6 +15,7 @@ const suite = createControlUiE2eSuite({
 const CUSTODIAN_SESSION_STORAGE_KEY = "openclaw.custodian.session.v1";
 const MOCK_SESSION_ID = "e2e-custodian-panel";
 const WORK_SESSION_KEY = "agent:main:work";
+const chatMethods = ["chat.metadata", "chat.startup", "chat.history", "chat.send"];
 const contextOptions = {
   colorScheme: "dark",
   locale: "en-US",
@@ -24,18 +25,22 @@ const contextOptions = {
 const capture = (page: Page, name: string) =>
   page.screenshot({ animations: "disabled", path: path.join(suite.artifactDir, name + ".png") });
 
+async function openHome(page: Page, scenario: ControlUiMockGatewayScenario) {
+  const gateway = await installMockGateway(page, { sessionKey: WORK_SESSION_KEY, ...scenario });
+  expect(
+    (await page.goto(controlUiSessionUrl(suite.server.baseUrl, WORK_SESSION_KEY)))?.status(),
+  ).toBe(200);
+  await page.locator(".sidebar-brand__search").waitFor();
+  await page.locator(".sidebar-identity-card").waitFor();
+  await page.locator(".sidebar-footer-bar__home").click();
+  return { gateway, panel: page.locator("openclaw-assistant-panel") };
+}
+
 function custodianGatewayScenario(): ControlUiMockGatewayScenario {
   return {
     sessionKey: WORK_SESSION_KEY,
     sessions: [{ key: WORK_SESSION_KEY, label: "Main", kind: "direct", updatedAt: Date.now() }],
-    featureMethods: [
-      "chat.metadata",
-      "chat.startup",
-      "chat.history",
-      "chat.send",
-      "openclaw.chat",
-      "openclaw.chat.history",
-    ],
+    featureMethods: [...chatMethods, "openclaw.chat", "openclaw.chat.history"],
     methodResponses: {
       "sessions.list": {
         cases: [
@@ -64,17 +69,7 @@ function custodianGatewayScenario(): ControlUiMockGatewayScenario {
 suite.define(() => {
   it("keeps Home available without an OpenClaw tab when openclaw.chat is not advertised", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        sessionKey: WORK_SESSION_KEY,
-        featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
-      });
-
-      const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, WORK_SESSION_KEY));
-      expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-brand__search").waitFor();
-      await page.locator(".sidebar-identity-card").waitFor();
-      await page.locator(".sidebar-footer-bar__home").click();
-      const panel = page.locator("openclaw-assistant-panel");
+      const { gateway, panel } = await openHome(page, { featureMethods: chatMethods });
       await panel.getByRole("button", { name: "Home", exact: true }).waitFor();
       expect(await panel.getByRole("button", { name: "Ask OpenClaw", exact: true }).count()).toBe(
         0,
@@ -91,15 +86,7 @@ suite.define(() => {
         recordVideo: { dir: suite.artifactDir, size: contextOptions.viewport },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, custodianGatewayScenario());
-
-        const response = await page.goto(
-          controlUiSessionUrl(suite.server.baseUrl, WORK_SESSION_KEY),
-        );
-        expect(response?.status()).toBe(200);
-
-        await page.locator(".sidebar-footer-bar__home").click();
-        const panel = page.locator("openclaw-assistant-panel");
+        const { gateway, panel } = await openHome(page, custodianGatewayScenario());
         const openClawTab = panel.getByRole("button", { name: "Ask OpenClaw", exact: true });
         await openClawTab.waitFor();
         await capture(page, "01-home-dock");

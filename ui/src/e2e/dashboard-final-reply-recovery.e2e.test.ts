@@ -92,43 +92,25 @@ suite.define(() => {
       await emitDelta(partialFinalText, 2, true);
       await page.locator(".chat-thread-inner", { hasText: partialFinalText }).waitFor();
 
-      const persistedInterimHistory = [
+      const assistantMessage = (id: string, text: string, seq: number, phase?: string) => ({
+        role: "assistant",
+        timestamp: seq,
+        __openclaw: { id: `dashboard-${id}`, runId, seq },
+        ...(phase
+          ? { phase, content: [{ text, type: "text", cache_control: { type: "ephemeral" } }] }
+          : { content: textContent(text), stopReason: "stop" }),
+      });
+      const persistedHistory = [
         {
           role: "user",
           content: textContent(prompt),
           timestamp: 1,
           __openclaw: { id: "dashboard-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
         },
-        {
-          role: "assistant",
-          phase: "commentary",
-          // A stale snapshot can contain newer commentary with producer key
-          // order and metadata changes; it is still not the terminal reply.
-          content: [
-            { text: updatedInterimText, type: "text", cache_control: { type: "ephemeral" } },
-          ],
-          timestamp: 2,
-          __openclaw: { id: "dashboard-interim", runId, seq: 2 },
-        },
-        {
-          role: "assistant",
-          phase: "final_answer",
-          content: [
-            { text: stalePartialFinalText, type: "text", cache_control: { type: "ephemeral" } },
-          ],
-          timestamp: 3,
-          __openclaw: { id: "dashboard-partial-final", runId, seq: 3 },
-        },
-      ];
-      const persistedHistory = [
-        ...persistedInterimHistory,
-        {
-          role: "assistant",
-          content: textContent(finalText),
-          stopReason: "stop",
-          timestamp: 4,
-          __openclaw: { id: "dashboard-final", runId, seq: 4 },
-        },
+        // Stale phased messages retain reordered keys and cache metadata, not a terminal reply.
+        assistantMessage("interim", updatedInterimText, 2, "commentary"),
+        assistantMessage("partial-final", stalePartialFinalText, 3, "final_answer"),
+        assistantMessage("final", finalText, 4),
       ];
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await gateway.setHistoryMessages(persistedHistory);

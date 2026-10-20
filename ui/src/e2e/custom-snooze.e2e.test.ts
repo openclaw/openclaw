@@ -37,11 +37,7 @@ suite.define(() => {
               sessionRow(otherKey, "Review documentation", Date.now() - 1000),
             ],
             historyMessages: [
-              {
-                role: "assistant",
-                content:
-                  "The release notes are ready for review. We can revisit the documentation tomorrow.",
-              },
+              { role: "assistant", content: "Release notes are ready for review." },
             ],
           });
           await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
@@ -135,8 +131,10 @@ suite.define(() => {
               .filter((item) => item.matches('[role^="menuitem"]'))
               .map((item) => item.textContent?.trim()),
           );
-          expect(menuRows.at(-1)).toBe("Choose another time");
-          expect(menuRows.at(-2)).toMatch(/^Custom · /);
+          expect(menuRows.slice(-2)).toEqual([
+            expect.stringMatching(/^Custom · /),
+            "Choose another time",
+          ]);
           expect(menuRows.filter((label) => label?.startsWith("Custom · "))).toHaveLength(1);
           expect(await custom.textContent()).toContain("10:30 AM");
           await capture("after-reusable");

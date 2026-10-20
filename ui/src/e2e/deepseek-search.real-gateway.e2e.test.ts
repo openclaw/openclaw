@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -81,6 +82,12 @@ if (!live) {
       await suite.withPage(
         { viewport: { width: 1440, height: 1200 }, locale: "en-US", serviceWorkers: "block" },
         async ({ page }) => {
+          const capture = async (name: string, targets: Locator[]) => {
+            const { png } = await takeControlUiScreenshotFrame(page, surface, targets, {
+              animations: "disabled",
+            });
+            await fs.writeFile(path.join(suite.artifactDir, name + ".png"), png);
+          };
           const methods: string[] = [];
           page.on("websocket", (socket) =>
             socket.on("framesent", ({ payload }) => {
@@ -98,13 +105,7 @@ if (!live) {
           expect(await picker.locator('option[value="deepseek"]').count()).toBe(1);
           await picker.selectOption("deepseek");
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
-          const before = await takeControlUiScreenshotFrame(
-            page,
-            surface,
-            [picker, surface.getByText("Off", { exact: true })],
-            { animations: "disabled" },
-          );
-          await fs.writeFile(path.join(suite.artifactDir, "before-setup.png"), before.png);
+          await capture("before-setup", [picker, surface.getByText("Off", { exact: true })]);
           const toggle = surface.getByRole("switch", { name: "Web search", exact: true });
           await toggle.check();
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
@@ -123,16 +124,12 @@ if (!live) {
           await surface.getByText("Search succeeded", { exact: true }).waitFor({ timeout: 40_000 });
           const source = surface.locator('a[href^="https://docs.openclaw.ai/"]').first();
           await source.waitFor();
-          expect(methods).toContain("webSearch.status");
-          expect(methods).toContain("webSearch.test");
+          expect(methods).toEqual(expect.arrayContaining(["webSearch.status", "webSearch.test"]));
           expect(methods.some((method) => method.startsWith("config."))).toBe(true);
-          const after = await takeControlUiScreenshotFrame(
-            page,
-            surface,
-            [surface.getByText("Search succeeded", { exact: true }), source],
-            { animations: "disabled" },
-          );
-          await fs.writeFile(path.join(suite.artifactDir, "after-live-search.png"), after.png);
+          await capture("after-live-search", [
+            surface.getByText("Search succeeded", { exact: true }),
+            source,
+          ]);
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await expect.poll(() => picker.inputValue()).toBe("deepseek");
@@ -152,22 +149,19 @@ if (!live) {
             expect(hash(await response.body())).toBe(hash(built));
             assets.push({ asset: asset.pathname, sha256: hash(built) });
           }
+          const report = {
+            scenario:
+              "real installed candidate, real Gateway and Chromium, real authenticated DeepSeek HTTP",
+            profile,
+            viewport: { width: 1440, height: 1200 },
+            assets,
+            methods: [...new Set(methods)],
+            persistedSearch: await readback(),
+            credentialsPrinted: false,
+          };
           await fs.writeFile(
             path.join(suite.artifactDir, "report.json"),
-            JSON.stringify(
-              {
-                scenario:
-                  "real installed candidate, real Gateway and Chromium, real authenticated DeepSeek HTTP",
-                profile,
-                viewport: { width: 1440, height: 1200 },
-                assets,
-                methods: [...new Set(methods)],
-                persistedSearch: await readback(),
-                credentialsPrinted: false,
-              },
-              null,
-              2,
-            ),
+            JSON.stringify(report, null, 2),
           );
           console.log(`DeepSeek browser proof: ${suite.artifactDir}`);
         },

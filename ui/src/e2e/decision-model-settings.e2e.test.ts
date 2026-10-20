@@ -60,9 +60,13 @@ suite.define(() => {
             "sessions.usage": { aggregates: { byProvider: [] } },
           },
         });
-        const saveSnapshot = async () => {
+        const commitConfig = async (method: "config.patch" | "config.set") => {
           revision++;
           await gateway.setMethodResponse("config.get", snapshot());
+          const response =
+            method === "config.set" ? snapshot() : { config, hash: `decision-${revision}` };
+          await gateway.resolveDeferred(method, { ...response, ok: true });
+          await page.reload();
         };
 
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
@@ -81,13 +85,7 @@ suite.define(() => {
           const patch = requestRaw(request);
           expect(patch).toMatchObject({ agents: { defaults: { decisionModel: value || null } } });
           config = applyMergePatch(config, patch);
-          await saveSnapshot();
-          await gateway.resolveDeferred("config.patch", {
-            ok: true,
-            config,
-            hash: `decision-${revision}`,
-          });
-          await page.reload();
+          await commitConfig("config.patch");
           await expect.poll(() => pickerValue(global)).toBe(value);
         }
         expect(JSON.stringify(config)).not.toContain('"model":');
@@ -123,9 +121,7 @@ suite.define(() => {
           } else {
             expect(config).toHaveProperty("agents.entries.scout.decisionModel", expected);
           }
-          await saveSnapshot();
-          await gateway.resolveDeferred("config.set", { ...snapshot(), ok: true });
-          await page.reload();
+          await commitConfig("config.set");
           await expect.poll(() => pickerValue(agent)).toBe(value);
           await capture(page, proof);
         }
