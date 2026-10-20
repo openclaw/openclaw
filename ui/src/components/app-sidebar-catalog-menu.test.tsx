@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
@@ -58,56 +58,45 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-describe("sidebar catalog menu", () => {
-  it("dismisses the hovercard before opening and updates the mounted row", async () => {
-    const trigger = document.createElement("button");
-    document.body.append(trigger);
-    const order: string[] = [];
-    trigger.addEventListener(SESSION_MENU_OPEN_EVENT, () => order.push("dismiss"));
-    const { owner, mount } = fixture(() => order.push("open"));
-    const view = mount();
-
-    owner.open(request, 10, 20, trigger);
-
-    expect(order).toEqual(["dismiss", "open"]);
-    expect(owner.isOpen()).toBe(true);
-    expect(owner.isOpenFor(request.key)).toBe(true);
-    await waitForSolid(() => {
-      expect(view.container.querySelector("output")?.textContent).toBe("open");
-      expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull();
-    });
-    owner.close();
-    expect(owner.isOpen()).toBe(false);
-    await waitForSolid(() => {
-      expect(view.container.querySelector("output")?.textContent).toBe("closed");
-      expect(view.container.querySelector(popupSelector)).toBeNull();
-    });
+it.each([false, true])("projects open/close menu state (replace view=%s)", async (replace) => {
+  const trigger = document.createElement("button");
+  document.body.append(trigger);
+  const order: string[] = [];
+  trigger.addEventListener(SESSION_MENU_OPEN_EVENT, () => order.push("dismiss"));
+  const { owner, mount } = fixture(() => order.push("open"));
+  let view = mount();
+  owner.open(request, 10, 20, replace ? undefined : trigger);
+  expect(order).toEqual(replace ? ["open"] : ["dismiss", "open"]);
+  expect(owner.isOpen()).toBe(true);
+  expect(owner.isOpenFor(request.key)).toBe(true);
+  await waitForSolid(() => {
+    expect(view.container.querySelector("output")?.textContent).toBe("open");
+    expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull();
   });
-
-  it("projects retained menu state after the mounted view is replaced", async () => {
-    const { owner, mount } = fixture();
-    const first = mount();
-    owner.open(request, 10, 20);
-    await expectState(first, "open");
-    first.unmount();
-    const replacement = mount();
-    await expectState(replacement, "open");
-    owner.close();
-    await expectState(replacement, "closed");
+  if (replace) {
+    view.unmount();
+    view = mount();
+    await expectState(view, "open");
+  }
+  owner.close();
+  expect(owner.isOpen()).toBe(false);
+  await waitForSolid(() => {
+    expect(view.container.querySelector("output")?.textContent).toBe("closed");
+    expect(view.container.querySelector(popupSelector)).toBeNull();
   });
+});
 
-  it("retargets an adopted row without remounting its open popup", async () => {
-    const original = document.createElement("button");
-    const replacement = document.createElement("button");
-    document.body.append(original, replacement);
-    const { owner, mount } = fixture();
-    const view = mount();
-    owner.open(request, 10, 20, original);
-    await waitForSolid(() => expect(view.container.querySelector(popupSelector)).not.toBeNull());
-    const popup = view.container.querySelector(popupSelector)!;
-    original.remove();
-    owner.retargetTrigger(request.key, replacement);
-    await waitForSolid(() => expect(popup.trigger).toBe(replacement));
-    expect(view.container.querySelector(popupSelector)).toBe(popup);
-  });
+it("retargets an adopted row without remounting its open popup", async () => {
+  const original = document.createElement("button");
+  const replacement = document.createElement("button");
+  document.body.append(original, replacement);
+  const { owner, mount } = fixture();
+  const view = mount();
+  owner.open(request, 10, 20, original);
+  await waitForSolid(() => expect(view.container.querySelector(popupSelector)).not.toBeNull());
+  const popup = view.container.querySelector(popupSelector)!;
+  original.remove();
+  owner.retargetTrigger(request.key, replacement);
+  await waitForSolid(() => expect(popup.trigger).toBe(replacement));
+  expect(view.container.querySelector(popupSelector)).toBe(popup);
 });

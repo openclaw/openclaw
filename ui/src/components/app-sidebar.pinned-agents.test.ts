@@ -26,6 +26,7 @@ const menuItem = (sidebar: Element, value: string) =>
 async function openMenu(sidebar: Element, value = "sessions") {
   sidebar.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!.click();
   await vi.waitFor(() => expect(menuItem(sidebar, value)).not.toBeNull());
+  return menuItem(sidebar, value);
 }
 const modalButton = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
@@ -37,8 +38,7 @@ it("pins an agent into a menu-less gallery above the roster and preserves the ot
   sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
   await settleRoster(sidebar);
-  await openMenu(sidebar, "pin");
-  menuItem(sidebar, "pin").click();
+  (await openMenu(sidebar, "pin")).click();
   await vi.waitFor(() => {
     expect(pinned(sidebar)).not.toBeNull();
     expect(agentIds(sidebar)).toEqual(["recent", "working"]);
@@ -153,14 +153,12 @@ it("offers agent sessions and settings without a create action, and confirms age
   expect(context.agentSelection.state.selectedId).toBe("main");
   expect(onNavigate).toHaveBeenCalledWith("sessions");
 
-  await openMenu(sidebar);
-  menuItem(sidebar, "settings").click();
+  (await openMenu(sidebar, "settings")).click();
   expect(navigate).toHaveBeenCalledWith("agents", {
     pathname: "/settings/agents/main",
   });
 
-  await openMenu(sidebar);
-  menuItem(sidebar, "delete").click();
+  (await openMenu(sidebar, "delete")).click();
   await vi.waitFor(() =>
     expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
       "Delete Harbor?",
@@ -175,8 +173,7 @@ it("offers agent sessions and settings without a create action, and confirms age
       ? Promise.resolve({ ok: true, agentId: "main", removedBindings: 0 })
       : previousRequest(...args),
   );
-  await openMenu(sidebar);
-  menuItem(sidebar, "delete").click();
+  (await openMenu(sidebar, "delete")).click();
   await vi.waitFor(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
   modalButton("Delete").click();
   await vi.waitFor(() => {

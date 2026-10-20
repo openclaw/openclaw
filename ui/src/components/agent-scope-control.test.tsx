@@ -5,14 +5,7 @@ import { expect, it, vi } from "vitest";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { AgentScopeControl } from "./agent-scope-control.tsx";
-import type { AgentSelectOption } from "./agent-select.ts";
-
-type AgentSelectElement = HTMLElement & {
-  options: AgentSelectOption[];
-  value: string;
-  onSelect: (value: string) => void;
-  updateComplete: Promise<boolean>;
-};
+import type { AgentSelectElement } from "./agent-select.ts";
 
 function createSelection(setScope: (agentId: string | null) => void) {
   return {
@@ -81,24 +74,15 @@ it("includes historical agent ids and maps All agents back to null", async () =>
   expect(setScope).toHaveBeenNthCalledWith(2, null);
 });
 
-it("keeps semantic system agents out of roster and historical options", async () => {
+it.each([true, false])("excludes system agents with allowAll=%s", async (allowAll) => {
   const select = await mountScope({
     agents: systemAgents,
-    additionalAgentIds: ["ordinary-looking-id", "retired"],
+    additionalAgentIds: allowAll ? ["ordinary-looking-id", "retired"] : undefined,
     selectedId: "ordinary-looking-id",
+    allowAll,
   });
-  expect(select?.value).toBe("");
-  expect(values(select)).toEqual(["", "main", "retired", "writer"]);
-});
-
-it("uses the first selectable agent when a concrete selector receives a system id", async () => {
-  const select = await mountScope({
-    agents: systemAgents,
-    allowAll: false,
-    selectedId: "ordinary-looking-id",
-  });
-  expect(select?.value).toBe("main");
-  expect(values(select)).toEqual(["main", "writer"]);
+  expect(select?.value).toBe(allowAll ? "" : "main");
+  expect(values(select)).toEqual(allowAll ? ["", "main", "retired", "writer"] : ["main", "writer"]);
 });
 
 it("supports a concrete-agent selector without an all-agents option", async () => {

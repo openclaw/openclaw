@@ -1,109 +1,46 @@
 /* @vitest-environment jsdom */
-
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../lib/sessions/session-capability.test-support.ts";
 import { bindChatPageSession } from "../pages/chat/chat-state-route.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import {
-  createContext,
-  createGatewayHarness,
-  createSidebarElement,
-  TWO_AGENTS,
-} from "../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+  other,
+  ownedSession,
+  viewer,
+  withOwnerSidebar,
+} from "../test-helpers/agent-sidebar.test-support.ts";
+import { selectSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
-import "./app-sidebar.tsx";
-
-function session(
-  key: string,
-  ownerId: string,
-  extra: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
-  return {
-    key,
-    agentId: key.split(":")[1],
-    kind: "direct",
-    owner: { actor: { type: "human", id: ownerId } },
-    ...extra,
-  };
-}
 
 it("keeps selected owners across agents and resumes the selected agent's own conversation", async () => {
   const rows: GatewaySessionRow[] = [
-    session("agent:main:mine", "viewer", { label: "My working session" }),
-    session("agent:research:shared", "other", {
+    ownedSession("agent:main:mine", "viewer", { label: "My working session" }),
+    ownedSession("agent:research:shared", "other", {
       label: "Another user's shared session",
       updatedAt: 3000,
       unread: true,
     }),
-    session("agent:research:dashboard:00000002-0000-4000-8000-000000000000", "viewer", {
+    ownedSession("agent:research:dashboard:00000002-0000-4000-8000-000000000000", "viewer", {
       label: "My research session",
       updatedAt: 2000,
       unread: true,
     }),
-    session("agent:research:main", "viewer", {
+    ownedSession("agent:research:main", "viewer", {
       updatedAt: 1000,
       hasActiveRun: true,
       status: "running",
     }),
   ];
-  const gateway = createGatewayHarness(
-    createTestGatewayClient(async (method, raw) => {
-      const params = asOptionalRecord(raw);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.describe") {
-        return { session: rows.find((row) => row.key === params?.key) ?? null };
-      }
-      if (method === "sessions.groups.list") {
-        return { names: [], groups: [], sectionOrder: [] };
-      }
-      if (method !== "sessions.list") {
-        return {};
-      }
-      const selected = rows.filter(
-        (row) =>
-          (!params?.agentId || row.agentId === params.agentId) &&
-          (!params?.ownerId || row.owner?.actor.id === params.ownerId),
-      );
-      return {
-        ...sessionsResult(selected, 1),
-        owners: [
-          { type: "human", id: "viewer", label: "Viewer" },
-          { type: "human", id: "other", label: "Other" },
-        ],
-      };
-    }),
-  );
-  gateway.publish({ selfUser: { id: "viewer", name: "Viewer" } });
-  const sessions = createTestSessionCapability(gateway.gateway);
-  await sessions.refresh({ agentId: "main", force: true });
-  const context = createContext(gateway.gateway, sessions, TWO_AGENTS);
-  const provider = createApplicationContextProvider(context);
-  const sidebar = await createSidebarElement();
-  sidebar.activeRouteId = "chat";
-  sidebar.sidebarAgentsMode = "chip";
-  provider.append(sidebar.hostElement);
-  document.body.append(provider);
-  const visit = async (row: GatewaySessionRow, refresh = true) => {
-    bindChatPageSession(context, row.key);
-    sidebar.sessionKey = row.key;
-    await settleLitElement(sidebar);
-    if (refresh) {
-      await sidebar.sessionData.refreshSidebarSessions();
+  await withOwnerSidebar(rows, [viewer, other], "personal", async ({ sidebar, context }) => {
+    const visit = async (row: GatewaySessionRow, refresh = true) => {
+      bindChatPageSession(context, row.key);
+      sidebar.sessionKey = row.key;
       await settleLitElement(sidebar);
-    }
-  };
-  try {
-    sidebar.connected = true;
+      if (refresh) {
+        await sidebar.sessionData.refreshSidebarSessions();
+        await settleLitElement(sidebar);
+      }
+    };
     for (const row of [rows[1]!, rows[0]!, rows[1]!]) {
       await visit(row);
 
@@ -162,9 +99,5 @@ it("keeps selected owners across agents and resumes the selected agent's own con
         '.sidebar-agent-menu [data-value="agent:research"] [aria-label="Unread"]',
       ),
     ).toBeNull();
-  } finally {
-    provider.remove();
-    context.connectionBootstrap.reset();
-    sessions.dispose();
-  }
+  });
 });
