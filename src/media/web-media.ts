@@ -31,6 +31,7 @@ import {
   readGeneratedHtmlProvenance,
   writeGeneratedHtmlProvenance,
 } from "./generated-html-provenance.js";
+import { getValidatedHostReadText, hasHtmlDocumentShape } from "./host-read-text.js";
 import { ImageOptimizationLimitError } from "./image-optimization-error.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import { createImageProcessorWithPixelLimits } from "./image-processor.js";
@@ -185,81 +186,11 @@ function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
 }
 
-function textPrintableRatio(text: string): number {
-  let printable = 0;
-  let total = 0;
-  for (const char of text) {
-    total += 1;
-    const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13 || (code >= 32 && (code < 0x7f || code > 0x9f))) {
-      printable += 1;
-    }
-  }
-  return total === 0 ? 0 : printable / total;
-}
-
-function hasSingleByteTextShape(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return true;
-  }
-  let asciiText = 0;
-  let control = 0;
-  for (const byte of buffer) {
-    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 0x20 && byte <= 0x7e)) {
-      asciiText += 1;
-      continue;
-    }
-    if (byte < 0x20 || byte === 0x7f) {
-      control += 1;
-    }
-  }
-  const total = buffer.length;
-  const highBytes = total - asciiText - control;
-  return control === 0 && asciiText / total >= 0.7 && highBytes / total <= 0.3;
-}
-
-function decodeHostReadText(buffer: Buffer): string | undefined {
-  // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
-  // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
-  // an attacker can prepend a BOM and get a printable ratio near 1.0 on pure
-  // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
-  // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
-  // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    if (!hasSingleByteTextShape(buffer)) {
-      return undefined;
-    }
-    // WHATWG latin1 decodes common Excel-style single-byte exports via Windows-1252 mapping.
-    return new TextDecoder("latin1").decode(buffer);
-  }
-}
-
-function getValidatedHostReadText(buffer?: Buffer): string | undefined {
-  if (!buffer) {
-    return undefined;
-  }
-  if (buffer.length === 0) {
-    return "";
-  }
-  const text = decodeHostReadText(buffer);
-  if (text === undefined) {
-    return undefined;
-  }
-  return textPrintableRatio(text) > 0.95 ? text : undefined;
-}
-
 function resolveLocalMediaFileName(filePath: string): string | undefined {
   const fileName = basenameFromAnyPath(filePath) || undefined;
   return fileName && isPathInside(getMediaDir(), filePath)
     ? extractOriginalFilename(fileName)
     : fileName;
-}
-
-function hasHtmlDocumentShape(text: string): boolean {
-  const sample = text.trimStart().slice(0, 8192);
-  return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
 }
 
 type HostReadHtmlTrust =
@@ -428,7 +359,7 @@ function assertHostReadMediaAllowed(params: {
       isAllowedHostReadTextAlias(declaredMime, params.filePath) &&
       !params.sniffedContentType &&
       params.buffer &&
-      getValidatedHostReadText(params.buffer) !== undefined
+      getValidatedHostReadText(params.buffer, params.filePath) !== undefined
     ) {
       return;
     }
@@ -462,7 +393,7 @@ function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     isAllowedHostReadTextAlias(normalizedMime, params.filePath) &&
     params.buffer &&
-    getValidatedHostReadText(params.buffer) !== undefined
+    getValidatedHostReadText(params.buffer, params.filePath) !== undefined
   ) {
     return;
   }
