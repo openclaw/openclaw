@@ -103,15 +103,20 @@ describe("process panel observation ownership", () => {
     settled.dispose();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(f.request).toHaveBeenCalledTimes(2);
+    expect(f.request.mock.calls.every(([method]) => method === "sessions.processes.list")).toBe(
+      true,
+    );
     f.open(key, false);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(f.request).toHaveBeenCalledTimes(3);
     second.dispose();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.data.snapshot.rows).toEqual([]);
     f.open();
     await f.data.refresh();
     expect(f.request).toHaveBeenCalledTimes(4);
+    expect(f.data.snapshot.rows[0]?.tail).toBe("Compiling");
   });
 
   it("retires shared output while the document is hidden and catches up once on return", async () => {
@@ -175,25 +180,6 @@ describe("process panel observation ownership", () => {
       expect(f.data.snapshot.rows.map((row) => row.instanceId)).toEqual(["current"]);
     },
   );
-
-  it("refreshes only while visible without invoking process.poll", async () => {
-    vi.useFakeTimers();
-    const f = fixture(() => page());
-    f.open();
-    await f.data.refresh();
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(f.request).toHaveBeenCalledTimes(2);
-    expect(f.request.mock.calls.every(([method]) => method === "sessions.processes.list")).toBe(
-      true,
-    );
-    f.open(key, false);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(f.request).toHaveBeenCalledTimes(2);
-    expect(f.data.snapshot.rows).toEqual([]);
-    f.open();
-    await f.data.refresh();
-    expect(f.data.snapshot.rows[0]?.tail).toBe("Compiling");
-  });
 
   it("refreshes placement changes and rejects Stop callbacks for the previous process", async () => {
     vi.useFakeTimers();

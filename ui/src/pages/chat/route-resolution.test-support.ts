@@ -7,6 +7,22 @@ import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { loadChatRoute } from "./route-loader.ts";
+
+export function loadSessionRoute(
+  context: Parameters<typeof loadChatRoute>[0],
+  location: Parameters<typeof loadChatRoute>[1],
+  face: Parameters<typeof loadChatRoute>[2] = "chat",
+) {
+  return loadChatRoute(context, location, face, new AbortController().signal);
+}
+
+export function canonicalSession(loaded: Awaited<ReturnType<typeof loadChatRoute>>) {
+  if (!("kind" in loaded) || loaded.kind !== "session" || !loaded.canonicalLocation) {
+    throw new Error("Expected a canonical session location");
+  }
+  return { ...loaded, canonicalLocation: loaded.canonicalLocation };
+}
 
 const uuid = "12345678-90ab-cdef-1234-567890abcdef";
 const sessionKey = `agent:roboclaw:thread:${uuid}`;
