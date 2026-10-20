@@ -29,10 +29,11 @@ function requester(requesterSenderId: string, serverName = "worker-read") {
   return requesterMcpOAuthIdentity(serverName, serverUrl, { requesterSenderId });
 }
 
-it("only ignores the port for portless HTTP loopback registrations", async () => {
+it("uses the legacy default and only ignores ports for HTTP loopback registrations", async () => {
   await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-registered-redirect-" }, async () => {
     const identity = operatorMcpOAuthIdentity("redirects", serverUrl);
-    const cases: [string, string, boolean][] = [
+    const cases: [string, string | undefined, boolean][] = [
+      [defaultRedirect, undefined, true],
       ["http://127.0.0.1:8989/callback", "http://127.0.0.1:8989/callback", true],
       ["http://127.0.0.1/oauth/callback", "http://127.0.0.1:8989/oauth/callback", true],
       ["http://[::1]/oauth/callback", "http://[::1]:8989/oauth/callback", true],
@@ -58,6 +59,12 @@ it("only ignores the port for portless HTTP loopback registrations", async () =>
       const clientInformation = { client_id: "fixture-client", redirect_uris: [registered] };
       seedMcpOAuthStoreForTest(identity.storeKey, { clientInformation });
       await withMcpOAuthProviderForTest({ identity, config: { redirectUrl } }, async (provider) => {
+        if (redirectUrl === undefined) {
+          expect(provider).toMatchObject({
+            redirectUrl: defaultRedirect,
+            clientMetadata: { redirect_uris: [defaultRedirect] },
+          });
+        }
         expect(await provider.clientInformation(), `${registered} -> ${redirectUrl}`).toEqual(
           matches ? clientInformation : undefined,
         );
@@ -155,19 +162,5 @@ it("rejects a retired captured store instead of reopening it for a read", async 
       }),
     ).rejects.toMatchObject(retiredRead);
     await absent();
-  });
-});
-
-it("keeps the legacy loopback redirect as the default for upgrade compatibility", async () => {
-  await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-default-redirect-" }, async () => {
-    await withMcpOAuthProviderForTest(
-      { identity: operatorMcpOAuthIdentity("Calendly", "https://mcp.calendly.com/") },
-      async (provider) => {
-        expect(provider).toMatchObject({
-          redirectUrl: defaultRedirect,
-          clientMetadata: { redirect_uris: [defaultRedirect] },
-        });
-      },
-    );
   });
 });
