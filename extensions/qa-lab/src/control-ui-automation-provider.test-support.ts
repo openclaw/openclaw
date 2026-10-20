@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { inspect } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,7 +12,6 @@ import {
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
 
-const scheduledReply = "Scheduled reminder completed.";
 const makeRestartCheckpoint = (marker: string) => ({ marker, recovering: false, reached: false });
 
 export async function startAutomationProvider() {
@@ -43,10 +43,8 @@ export async function startAutomationProvider() {
         throw new Error("Expected a Responses request");
       }
       const input = body.input.filter(isRecord);
-      const userText = extractLastUserText(input);
-      const markerPattern = /\[automation-proof:([a-z-]+)\]/u;
       marker =
-        markerPattern.exec(userText)?.[1] ??
+        /\[automation-proof:([a-z-]+)\]/u.exec(extractLastUserText(input))?.[1] ??
         (restartHold && JSON.stringify(input).includes(`[automation-proof:${restartHold.marker}]`)
           ? restartHold.marker
           : undefined);
@@ -63,11 +61,8 @@ export async function startAutomationProvider() {
       const output = extractToolOutput(input);
       const hasOutput = hasToolOutput(input);
       const toolAvailable = hasToolDefinition(body, "automations");
-      observedRequests.push({
-        marker: marker ?? null,
-        inputTypes: input.map((item) => item.type ?? item.role),
-        hasOutput,
-      });
+      const inputTypes = input.map((item) => item.type ?? item.role);
+      observedRequests.push({ marker: marker ?? null, inputTypes, hasOutput });
       if (marker && args && !hasOutput) {
         // A retry must not erase an earlier exposure of an owner-only tool.
         toolAvailability.set(marker, toolAvailability.get(marker) === true || toolAvailable);
@@ -75,31 +70,31 @@ export async function startAutomationProvider() {
       if (marker && args && hasOutput) {
         results.set(marker, output);
       }
+      const reply =
+        marker && args
+          ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\``
+          : "Scheduled reminder completed.";
       const events =
         args && !hasOutput
           ? toolAvailable
             ? buildToolCallEventsWithArgs("automations", args)
             : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
-          : buildAssistantEvents(
-              marker && args ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\`` : scheduledReply,
-            );
+          : buildAssistantEvents(reply);
       if (body.stream === true) {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
       } else {
-        const completed = events.find((event) => event.type === "response.completed");
         response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(completed?.response));
+        response.end(
+          JSON.stringify(events.find((event) => event.type === "response.completed")?.response),
+        );
       }
     })().catch((error: unknown) => {
       failures.push({ method: request.method, url: request.url, marker: marker ?? null, error });
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Automation provider did not bind a loopback port");
@@ -116,12 +111,9 @@ export async function startAutomationProvider() {
         automationsToolAvailable: toolAvailability.get(marker) ?? null,
         resultReceived: results.has(marker),
         observedRequests,
-        providerErrors: failures.map(({ method, url, marker: requestMarker, error }) => ({
-          method,
-          url,
-          marker: requestMarker,
-          error: redactQaGatewayDebugText(inspect(error)),
-        })),
+        providerErrors: failures.map((failure) =>
+          Object.assign({}, failure, { error: redactQaGatewayDebugText(inspect(failure.error)) }),
+        ),
       };
     },
     holdInitialRequestForRestart(marker: string) {

@@ -67,20 +67,14 @@ describe("Crabline provider-native inbound message identity", () => {
           const snapshot = busState.getSnapshot();
 
           expect(first.id).toBe(second.id);
-          expect(snapshot.messages.map((message) => message.conversation.id)).toEqual([
-            first.conversation.id,
-            second.conversation.id,
-          ]);
-          expect(snapshot.events).toEqual(
-            [first, second].map((message) =>
-              expect.objectContaining({
-                message: expect.objectContaining({
-                  id: message.id,
-                  conversation: expect.objectContaining({ id: message.conversation.id }),
-                }),
-              }),
-            ),
-          );
+          const identities = [first, second].map(({ id, conversation }) => ({
+            id,
+            conversation: { id: conversation.id },
+          }));
+          expect(snapshot).toMatchObject({
+            messages: identities,
+            events: identities.map((message) => ({ message })),
+          });
           expect(() => busState.readMessage({ messageId: first.id })).toThrow(
             `qa-bus message id is ambiguous for selected account: ${first.id}`,
           );

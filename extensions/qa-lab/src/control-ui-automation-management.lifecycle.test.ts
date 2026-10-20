@@ -1,6 +1,13 @@
 import type { Server } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 
+function mockModule(id: string, overrides: Record<string, unknown>) {
+  vi.doMock(id, async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    ...overrides,
+  }));
+}
+
 afterEach(() => {
   vi.doUnmock("vitest");
   vi.doUnmock("node:http");
@@ -21,10 +28,9 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
     const bodies = new Map<string, () => Promise<void>>();
     const register = (name: string, _options: unknown, body: () => Promise<void>) =>
       bodies.set(name, body);
-    vi.doMock("vitest", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("vitest")>()),
+    mockModule("vitest", {
       it: Object.assign(register, { skipIf: () => register }),
-    }));
+    });
     vi.doMock("node:http", async (importOriginal) => {
       const http = await importOriginal<typeof import("node:http")>();
       return {
@@ -37,24 +43,17 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
         },
       };
     });
-    vi.doMock(
-      "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts",
-      async (importOriginal) => ({
-        ...(await importOriginal<
-          typeof import("../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts")
-        >()),
-        createControlUiE2eSuite: () => ({
-          artifactDir: ".artifacts/automation-cleanup",
-          server: { baseUrl: "http://127.0.0.1:43210" },
-          define: (body: () => void) => body(),
-        }),
+    mockModule("../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts", {
+      createControlUiE2eSuite: () => ({
+        artifactDir: ".artifacts/automation-cleanup",
+        server: { baseUrl: "http://127.0.0.1:43210" },
+        define: (body: () => void) => body(),
       }),
-    );
+    });
     const start = vi.fn(async () => {
       throw originalError;
     });
-    vi.doMock("./gateway-child.ts", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./gateway-child.ts")>()),
+    mockModule("./gateway-child.ts", {
       createQaGatewayChild: () => ({
         start,
         stop: async () => {
@@ -65,12 +64,10 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
           return { errors: [] };
         },
       }),
-    }));
-    vi.doMock("./crabline-transport.ts", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./crabline-transport.ts")>()),
+    });
+    mockModule("./crabline-transport.ts", {
       createQaCrablineTransportAdapter: async () => {
-        expect(servers).toHaveLength(1);
-        expect(servers[0]?.listening).toBe(true);
+        expect(servers).toMatchObject([{ listening: true }]);
         if (failure !== "gateway-start") {
           throw originalError;
         }
@@ -80,7 +77,7 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
           },
         };
       },
-    }));
+    });
     try {
       await import("./control-ui-automation-management.real-gateway.e2e.test.ts");
       const body = bodies.get(
@@ -106,15 +103,12 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
       expect(servers[0]?.listening).toBe(false);
     } finally {
       // Keep the regression itself settled when run against the leaking implementation.
-      await Promise.all(
-        servers.map(
-          (server) =>
-            new Promise<void>((resolve) => {
-              server.closeAllConnections();
-              server.close(() => resolve());
-            }),
-        ),
-      );
+      for (const server of servers) {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
     }
   },
 );

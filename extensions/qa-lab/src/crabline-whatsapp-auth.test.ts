@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
@@ -8,7 +9,7 @@ import {
 } from "@openclaw/whatsapp/api.js";
 import { WhatsAppConfigSchema } from "@openclaw/whatsapp/config-api.js";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { startCrablineDiscordReplies } from "./crabline-discord-replies.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 import { createSelection, withTransport } from "./crabline-transport.test-support.js";
@@ -33,48 +34,30 @@ afterEach(() => {
 });
 
 const selection = createSelection("whatsapp");
+const selfJid = "15550000000@s.whatsapp.net";
 
-function seededAuth() {
-  const result = vi.mocked(createWhatsAppQaAuthState).mock.results[0];
-  if (!result || result.type !== "return") {
-    throw new Error("WhatsApp fixture did not initialize auth state");
-  }
-  return result.value;
-}
-
-function startedProvider() {
-  const result = vi.mocked(startOpenClawCrablineAdapter).mock.results[0];
-  if (!result || result.type !== "return") {
-    throw new Error("WhatsApp fixture did not start its provider");
-  }
+function returned<T extends (...args: never[]) => unknown>(mock: MockInstance<T>) {
+  const result = mock.mock.results[0];
+  assert(result?.type === "return", "Fixture did not return");
   return result.value;
 }
 
 describe("Crabline WhatsApp fixture authentication", () => {
   it("links the isolated account before Gateway startup and retains it until Gateway teardown", async () => {
-    let authDir: string | undefined;
-    await withTransport("whatsapp", async (transport) => {
-      authDir = await seededAuth();
+    const removedAuthDir = await withTransport("whatsapp", async (transport) => {
+      const authDir = await returned(vi.mocked(createWhatsAppQaAuthState));
       const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-      const whatsapp = WhatsAppConfigSchema.parse(config.channels?.whatsapp);
-      expect(whatsapp.accounts?.[transport.accountId]?.authDir).toBe(authDir);
-      expect(resolveWhatsAppAuthDir({ cfg: config, accountId: transport.accountId })).toEqual({
-        authDir,
-        isLegacy: false,
-      });
-      expect(resolveWhatsAppAccount({ cfg: config, accountId: transport.accountId }).authDir).toBe(
-        authDir,
-      );
-      expect(authDir).toEqual(expect.any(String));
-      if (!authDir) {
-        throw new Error("WhatsApp fixture auth directory is missing");
-      }
+      const account = { cfg: config, accountId: transport.accountId };
+      expect([
+        WhatsAppConfigSchema.parse(config.channels?.whatsapp).accounts?.[transport.accountId]
+          ?.authDir,
+        resolveWhatsAppAuthDir(account),
+        resolveWhatsAppAccount(account).authDir,
+      ]).toEqual([authDir, { authDir, isLegacy: false }, authDir]);
+      assert(typeof authDir === "string" && authDir.length > 0, "Missing auth directory");
       const credsPath = path.join(authDir, "creds.json");
       const before = await fs.readFile(credsPath, "utf8");
-      expect(JSON.parse(before)).toMatchObject({
-        me: { id: "15550000000@s.whatsapp.net" },
-        registered: false,
-      });
+      expect(JSON.parse(before)).toMatchObject({ me: { id: selfJid }, registered: false });
       await transport.reset();
       await transport.cleanup?.();
       expect(
@@ -82,10 +65,9 @@ describe("Crabline WhatsApp fixture authentication", () => {
           ?.accounts?.[transport.accountId]?.authDir,
       ).toBe(authDir);
       expect(await fs.readFile(credsPath, "utf8")).toBe(before);
+      return authDir;
     });
-    if (authDir) {
-      await expect(fs.lstat(authDir)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    await expect(fs.lstat(removedAuthDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("admits the actual restart scenario's direct peer through the Crabline provider contract", async () => {
@@ -94,7 +76,7 @@ describe("Crabline WhatsApp fixture authentication", () => {
       if (typeof config?.conversationId !== "string" || typeof config.senderId !== "string") {
         throw new Error("WhatsApp restart scenario is missing its direct peer");
       }
-      expect(config.conversationId).not.toBe("15550000000@s.whatsapp.net");
+      expect(config.conversationId).not.toBe(selfJid);
       await expect(
         transport.sendInbound({
           conversation: { id: config.conversationId, kind: "direct" },
@@ -113,8 +95,8 @@ describe("Crabline WhatsApp fixture authentication", () => {
       await expect(createQaCrablineTransportAdapter({ outputDir, selection })).rejects.toThrow(
         "state initialization failed",
       );
-      const authDir = await seededAuth();
-      const adapter = await startedProvider();
+      const authDir = await returned(vi.mocked(createWhatsAppQaAuthState));
+      const adapter = await returned(vi.mocked(startOpenClawCrablineAdapter));
       await expect(fs.lstat(authDir)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(adapter.probe()).rejects.toThrow();
     });
@@ -123,8 +105,8 @@ describe("Crabline WhatsApp fixture authentication", () => {
   it("attempts both provider and auth cleanup and reports both failures after Gateway stop", async () => {
     await withTempDir("qa-crabline-whatsapp-cleanup-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({ outputDir, selection });
-      const adapter = await startedProvider();
-      const authDir = await seededAuth();
+      const adapter = await returned(vi.mocked(startOpenClawCrablineAdapter));
+      const authDir = await returned(vi.mocked(createWhatsAppQaAuthState));
       const close = adapter.close.bind(adapter);
       const providerFailure = new Error("provider close failed");
       const authFailure = new Error("auth removal failed");

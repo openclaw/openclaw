@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,9 +22,7 @@ export function createSelection(
 }
 
 export function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`${label} is required`);
-  }
+  assert(typeof value === "string" && value.length > 0, `${label} is required`);
   return value;
 }
 
@@ -44,13 +43,12 @@ export function telegramApi(transport: Pick<QaTransportAdapter, "createGatewayCo
       message_thread_id: Number(threadId),
       text,
     });
-    if (
-      !isRecord(payload) ||
-      !isRecord(payload.result) ||
-      typeof payload.result.message_id !== "number"
-    ) {
-      throw new Error("Crabline Telegram send did not return a message ID");
-    }
+    assert(
+      isRecord(payload) &&
+        isRecord(payload.result) &&
+        typeof payload.result.message_id === "number",
+      "Crabline Telegram send did not return a message ID",
+    );
     return payload.result.message_id;
   };
   return { url, post, send };
@@ -73,24 +71,20 @@ export async function postJson<T = unknown>(
     auditContext,
   });
   try {
-    if (init.status === undefined) {
-      expect(response.ok).toBe(true);
-    } else {
-      expect(response.status).toBe(init.status);
-    }
+    expect(init.status === undefined ? response.ok : response.status).toBe(init.status ?? true);
     return (await response.json()) as T;
   } finally {
     await release();
   }
 }
 
-export async function withTransport(
+export async function withTransport<T>(
   channel: OpenClawCrablineChannelDriverSelection["channel"],
-  run: (transport: CrablineTransport, outputDir: string, state: QaBusState) => Promise<void>,
+  run: (transport: CrablineTransport, outputDir: string, state: QaBusState) => Promise<T>,
   transportPolicy?: Parameters<typeof createQaCrablineTransportAdapter>[0]["transportPolicy"],
   state = createQaBusState(),
 ) {
-  await withTempDir("qa-crabline-transport-", async (outputDir) => {
+  return await withTempDir("qa-crabline-transport-", async (outputDir) => {
     const transport = await createQaCrablineTransportAdapter({
       outputDir,
       selection: createSelection(channel),
@@ -98,7 +92,7 @@ export async function withTransport(
       transportPolicy,
     });
     try {
-      await run(transport, outputDir, state);
+      return await run(transport, outputDir, state);
     } finally {
       await transport.cleanupAfterGatewayStop();
     }
