@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "../../config/sessions.js";
-import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  hasRestartRecoveryTerminalRun,
+  resolveRestartRecoveryChannelAuthority,
+} from "../../config/sessions/restart-recovery-state.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -24,12 +27,33 @@ import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-sto
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 
 export async function pendingFinalRecoveryAction(
-  pending: NonNullable<SessionEntry["pendingFinalDelivery"]>,
+  entry: SessionEntry,
   stateDir?: string,
-): Promise<"complete" | "defer" | "fail" | "notice" | "retry"> {
+): Promise<"complete" | "defer" | "fail" | "notice" | "retry" | "unconfirmed" | undefined> {
+  const pending = entry.pendingFinalDelivery;
+  if (!pending) {
+    return undefined;
+  }
   const deliveries = pending.deliveries;
   if (!deliveries?.length) {
-    return "fail";
+    return entry.status === "done" &&
+      pending.kind === "replayable" &&
+      !pending.intentId &&
+      !pending.sourceRunId &&
+      !entry.lifecycleRunId &&
+      !entry.activeWriterRunId &&
+      !entry.restartRecoveryDeliveryRunId &&
+      !entry.restartRecoveryDeliverySourceRunId &&
+      !entry.restartRecoveryHarnessCompletion &&
+      entry.lastRunId &&
+      hasRestartRecoveryTerminalRun(entry, entry.lastRunId) &&
+      (entry.restartRecoveryRuns ?? []).every((run) =>
+        hasRestartRecoveryTerminalRun(entry, run.runId),
+      ) &&
+      entry.mainRestartRecovery?.chargedAttempts === 0 &&
+      !entry.mainRestartRecovery.startedAttempt
+      ? "unconfirmed"
+      : "fail";
   }
   if (deliveries.every(({ state }) => state === "delivered" || state === "suppressed")) {
     return "complete";

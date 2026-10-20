@@ -1,11 +1,18 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
 import { claimForeground, recoveryEntry } from "./main-session-recovery-state.test-support.js";
@@ -87,6 +94,91 @@ function unfinishedEntry(overrides: Partial<SessionEntry> = {}) {
 }
 
 describe("main session recovery terminal-only residue", () => {
+  it("preserves an unowned legacy final without replaying completed work or blocking fresh input", async () => {
+    setRuntimeConfigSnapshot({});
+    try {
+      await withStore(async ({ storePath, stateDir, read, write, mark }) => {
+        const pendingFinalDelivery = {
+          kind: "replayable" as const,
+          text: "The saved answer is 42.",
+          createdAt: 100,
+          context: { channel: "slack", to: "channel:legacy", threadId: "1.0" },
+        };
+        const entry: SessionEntry = {
+          sessionId: "session-1",
+          status: "done",
+          abortedLastRun: false,
+          updatedAt: 200,
+          endedAt: 200,
+          lastRunId: "completed-run",
+          activeWriterRunId: "completed-run",
+          restartRecoveryTerminalRunIds: ["completed-run"],
+          pendingFinalDelivery,
+          pendingDeliveryNotice: {
+            createdAt: 50,
+            context: { channel: "slack", to: "channel:earlier", threadId: "0.0" },
+            intentId: "earlier-notice",
+            state: "acknowledged",
+          },
+        };
+        await write(entry);
+        const target = { agentId: "main", sessionKey, sessionId: entry.sessionId, storePath };
+        const transcriptRead = {
+          mode: "full" as const,
+          reason: "verify legacy final preservation",
+        };
+        await appendTranscriptMessage(target, {
+          message: { role: "user", content: "Calculate the answer." },
+        });
+        const unexpected = vi.fn(unexpectedRuntimeCall);
+        const runtime: GatewayRecoveryRuntime = {
+          prepareRestartRecovery: unexpected,
+          dispatchSessionMethod: unexpected,
+          dispatchAgent: unexpected,
+          waitForAgent: unexpected,
+          sendRecoveryNotice: unexpected,
+          resumeChatInput: unexpected,
+        };
+        const recover = () =>
+          recoverStore({
+            gatewayRuntime: runtime,
+            handledSessionKeys: new Set(),
+            storePath,
+            stateDir,
+          });
+
+        await mark();
+        expect(read()?.activeWriterRunId).toBeUndefined();
+        const recovered = await recover();
+        expect(unexpected).not.toHaveBeenCalled();
+        expect(recovered).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
+        const settled = expectDefined(read(), "settled legacy final");
+        expect(settled).toMatchObject({ status: "done", lastRunId: "completed-run", endedAt: 200 });
+        expect(settled?.pendingFinalDelivery).toBeUndefined();
+        expect(settled.pendingDeliveryNotice).toEqual(entry.pendingDeliveryNotice);
+        const messages = await readSessionMessagesAsync(target, transcriptRead);
+        const receipt = messages
+          .map(extractFirstTextBlock)
+          .find((text) => text?.includes("Saved reply (delivery unconfirmed)"));
+        expect(receipt).toContain(pendingFinalDelivery.text);
+        expect(receipt).toContain(
+          JSON.stringify({
+            createdAt: pendingFinalDelivery.createdAt,
+            context: pendingFinalDelivery.context,
+          }),
+        );
+        await mark();
+        await expect(recover()).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+        expect(await readSessionMessagesAsync(target, transcriptRead)).toEqual(messages);
+        expect(unexpected).not.toHaveBeenCalled();
+        expect(claimForeground(settled)).toEqual({ kind: "no_change" });
+        expectRetired(settled);
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it.each([false, true])(
     "retires foreground residue only if every fence is terminal (%s)",
     (live) => {

@@ -63,8 +63,8 @@ export async function prepareRequesterRestartRecovery(params: {
   });
 }
 
-/** Publish one local interruption notice and retire the exact input without replay or delivery. */
-async function settleInterruptedRestartRecovery(params: {
+/** Preserve unresolved output locally and retire the exact input without replay or delivery. */
+export async function settleInterruptedRestartRecovery(params: {
   agentId: string;
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;
@@ -73,11 +73,13 @@ async function settleInterruptedRestartRecovery(params: {
   assertCurrent: () => void;
   reason: string;
   cronOwned?: boolean;
+  preserveCompletedOutcome?: true;
 }): Promise<{ outcome: "settled" | "changed" | "failed" }> {
   const { entry, reason } = params;
   // Legacy interrupted inputs can lack both run IDs. The recovery cycle still
   // identifies their settlement; this receipt never authorizes execution.
   const terminalRunId =
+    (params.preserveCompletedOutcome ? entry.lastRunId : undefined) ??
     entry.restartRecoveryDeliveryRunId ??
     entry.restartRecoveryDeliverySourceRunId ??
     `main-session-restart-recovery:${params.observation.cycleId}:interrupted`;
@@ -86,6 +88,7 @@ async function settleInterruptedRestartRecovery(params: {
     entry.pendingFinalDelivery?.kind === "replayable"
       ? stripInternalMetadataForDisplay(entry.pendingFinalDelivery.text).trim()
       : undefined;
+  const pending = entry.pendingFinalDelivery;
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -97,12 +100,21 @@ async function settleInterruptedRestartRecovery(params: {
       pendingFinalDelivery: entry.pendingFinalDelivery ?? null,
     },
     assertCurrent: params.assertCurrent,
-    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:interrupted`,
+    idempotencyKey:
+      params.preserveCompletedOutcome && pending
+        ? `main-session-restart-recovery:${entry.sessionId}:${pending.createdAt}:unconfirmed`
+        : `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:interrupted`,
     text:
-      (params.cronOwned
-        ? "The scheduled turn was interrupted by a Gateway restart. Cron owns its continuation; check the job history for its retry or interruption outcome. Your session and transcript are preserved."
-        : `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
-          "Your session and transcript are preserved. Send a new authenticated message to continue.") +
+      (params.preserveCompletedOutcome
+        ? `A saved final reply could not be reconciled after the Gateway restarted: ${reason}. ` +
+          "Your session and transcript are preserved. Send a new authenticated message to continue."
+        : params.cronOwned
+          ? "The scheduled turn was interrupted by a Gateway restart. Cron owns its continuation; check the job history for its retry or interruption outcome. Your session and transcript are preserved."
+          : `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
+            "Your session and transcript are preserved. Send a new authenticated message to continue.") +
+      (params.preserveCompletedOutcome && pending
+        ? `\n\nSaved reply metadata:\n${JSON.stringify({ createdAt: pending.createdAt, context: pending.context })}`
+        : "") +
       (capturedReply ? `\n\nSaved reply (delivery unconfirmed):\n${capturedReply}` : ""),
     sessionLifecyclePatch: {
       ...buildMainSessionRecoverySettlementPatch({
@@ -110,13 +122,17 @@ async function settleInterruptedRestartRecovery(params: {
         recordTerminalSource: true,
         terminalRunId,
       }),
-      status: "interrupted",
       pendingFinalDelivery: undefined,
       lifecycleRunId: undefined,
-      lastRunId: resolveRestartRecoveryTerminalClientRunId(entry) ?? terminalRunId,
-      lastRunError: reason,
-      endedAt,
-      runtimeMs: Math.max(0, endedAt - (entry.startedAt ?? endedAt)),
+      ...(params.preserveCompletedOutcome
+        ? {}
+        : {
+            status: "interrupted",
+            lastRunId: resolveRestartRecoveryTerminalClientRunId(entry) ?? terminalRunId,
+            lastRunError: reason,
+            endedAt,
+            runtimeMs: Math.max(0, endedAt - (entry.startedAt ?? endedAt)),
+          }),
       updatedAt: endedAt,
     },
   });

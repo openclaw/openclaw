@@ -1126,6 +1126,14 @@ its recovery ownership together with its delivery claim, so the next agent turn
 can proceed. The notice and terminal deduplication evidence survive another
 restart; completed work is not replayed.
 
+A completed legacy turn can retain a saved final without any delivery or source
+identity. When the completed run is correlated with its terminal marker and no
+other work owns the session, recovery preserves that saved reply locally as
+delivery-unconfirmed instead of starting another model turn. Its original route
+and capture time remain beside the saved reply in that local transcript artifact. This does not claim that the old reply reached the channel. Fresh input can
+continue in the same conversation; interrupted work and identified pending
+deliveries keep their normal recovery behavior.
+
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider

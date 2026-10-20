@@ -49,6 +49,7 @@ import {
 import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-exact-target.js";
 import {
   prepareRequesterRestartRecovery,
+  settleInterruptedRestartRecovery,
   finishDelegatedRestartRecovery,
   tombstoneMainRestartRecoveryWithNotice,
 } from "./main-session-restart-recovery-failure.js";
@@ -273,11 +274,35 @@ export async function recoverStore(params: {
         entry.restartRecoveryDeliverySourceRunId,
       );
 
-      const pendingAction = entry.pendingFinalDelivery
-        ? await pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
-        : undefined;
+      const pendingAction = await pendingFinalRecoveryAction(entry, params.stateDir);
       if (stopped()) {
         return result;
+      }
+      if (pendingAction === "unconfirmed") {
+        // A completed run cannot supply missing delivery identity for an older
+        // final. Preserve its text and uncertainty without buying another turn.
+        const settled = await settleInterruptedRestartRecovery({
+          ...target,
+          entry,
+          observation: recoveryView.observation,
+          assertCurrent: () => {
+            if (stopped()) {
+              throw new Error("Legacy pending final reconciliation stopped before settlement");
+            }
+          },
+          reason: "the saved final has no durable delivery identity",
+          preserveCompletedOutcome: true,
+        });
+        if (settled.outcome === "settled") {
+          params.handledSessionKeys.add(resumeDedupeKey);
+          decision = { decision: "settled", reason: "legacy_pending_delivery", nextOwner: "none" };
+          result.settled++;
+        } else if (settled.outcome === "changed") {
+          skip("state_changed");
+        } else {
+          result.failed++;
+        }
+        continue;
       }
       if (pendingAction === "defer") {
         // The exact durable queue owner is still responsible for settlement.
