@@ -63,22 +63,19 @@ describe("Testbox lease freshness", () => {
         ...(workflow ? [workflow] : []),
       ];
       for (const owner of owners) {
-        const file = join(fixture.root, owner);
-        mkdirSync(dirname(file), { recursive: true });
-        writeFileSync(file, "original\n");
+        fixture.write(owner, "original\n");
       }
       fixture.git(["add", "."]);
       fixture.advanceBase();
       const args = workflow ? ["--blacksmith-workflow", workflow] : ["--blacksmith-workflow="];
       fixture.allocate(args);
       const prepare = () => fixture.reuse(args);
-      writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
+      fixture.write("unrelated-source.ts", "source change\n");
       expect(() => prepare()).not.toThrow();
       for (const owner of owners) {
-        const file = join(fixture.root, owner);
-        writeFileSync(file, "changed executable owner\n");
+        fixture.write(owner, "changed executable owner\n");
         expect(() => prepare(), owner).toThrow("environmentDigest");
-        writeFileSync(file, "original\n");
+        fixture.write(owner, "original\n");
       }
     },
   );
@@ -94,9 +91,9 @@ describe("Testbox lease freshness", () => {
       if (field === "baseSha") {
         fixture.advanceBase();
       } else if (field === "dependencyDigest") {
-        writeFileSync(join(fixture.root, "package.json"), '{"name":"changed"}\n');
+        fixture.write("package.json", '{"name":"changed"}\n');
       } else if (field === "environmentDigest") {
-        writeFileSync(join(fixture.root, ".node-version"), "26.8.1\n");
+        fixture.write(".node-version", "26.8.1\n");
       } else {
         args = [`--blacksmith-${field}`, "changed"];
       }
@@ -108,9 +105,9 @@ describe("Testbox lease freshness", () => {
   it("reuses audited install inputs after metadata and non-install scripts change", () => {
     const fixture = createLeaseFixture();
     const prepared = fixture.allocate();
-    const manifest = JSON.parse(readFileSync(join(fixture.root, "package.json"), "utf8"));
-    writeFileSync(
-      join(fixture.root, "package.json"),
+    const manifest = JSON.parse(fixture.read("package.json"));
+    fixture.write(
+      "package.json",
       JSON.stringify(
         {
           ...manifest,
@@ -126,8 +123,7 @@ describe("Testbox lease freshness", () => {
 
   it.each(["run", "warmup"])("admits sparse dependency inputs for %s", (operation) => {
     const fixture = createLeaseFixture();
-    mkdirSync(join(fixture.root, "patches"));
-    writeFileSync(join(fixture.root, "patches/dependency.patch"), "original patch bytes\n");
+    fixture.write("patches/dependency.patch", "original patch bytes\n");
     fixture.git(["add", "patches"]);
     fixture.advanceBase();
     const prepared = fixture.allocate();
@@ -139,8 +135,7 @@ describe("Testbox lease freshness", () => {
     const reuse = () => fixture.prepare([operation, "--id", "tbx_fixture"]);
     expect(reuse()?.current).toEqual(prepared?.current);
     expect(() => reuse()?.assertCurrent()).not.toThrow();
-    mkdirSync(join(fixture.root, "patches"), { recursive: true });
-    writeFileSync(join(fixture.root, "patches/dependency.patch"), "changed patch bytes\n");
+    fixture.write("patches/dependency.patch", "changed patch bytes\n");
     expect(() => reuse()).toThrow("dependencyDigest");
     expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
   });
@@ -149,21 +144,17 @@ describe("Testbox lease freshness", () => {
     "rejects changed %s without refreshing allocation provenance",
     (input) => {
       const fixture = createLeaseFixture();
-      mkdirSync(join(fixture.root, "patches"));
-      const patch = join(fixture.root, "patches/dependency.patch");
-      writeFileSync(patch, "original patch bytes\n");
+      const patch = "patches/dependency.patch";
+      fixture.write(patch, "original patch bytes\n");
       fixture.allocate();
       const saved = readFileSync(fixture.statePath, "utf8");
       const file =
         input === "patch bytes"
           ? patch
-          : join(
-              fixture.root,
-              input === "workspace manifest"
-                ? "packages/example/package.json"
-                : ".github/actions/setup-node-env/install-dependencies.sh",
-            );
-      writeFileSync(
+          : input === "workspace manifest"
+            ? "packages/example/package.json"
+            : ".github/actions/setup-node-env/install-dependencies.sh";
+      fixture.write(
         file,
         input === "workspace manifest"
           ? '{"name":"changed-workspace"}\n'
@@ -178,8 +169,8 @@ describe("Testbox lease freshness", () => {
     const fixture = createLeaseFixture();
     fixture.allocate();
     const saved = readFileSync(fixture.statePath, "utf8");
-    writeFileSync(
-      join(fixture.root, "package.json"),
+    fixture.write(
+      "package.json",
       JSON.stringify({
         name: "lease-fixture",
         private: true,
@@ -198,7 +189,7 @@ describe("Testbox lease freshness", () => {
     const originalStat = statSync(fixture.statePath);
     for (const change of ["unchanged", "empty commit", "source commit"]) {
       if (change === "source commit") {
-        writeFileSync(join(fixture.root, "source.ts"), "export const value = 2;\n");
+        fixture.write("source.ts", "export const value = 2;\n");
         fixture.git(["add", "source.ts"]);
       }
       const head = change === "unchanged" ? allocation?.current.headSha : fixture.advanceHead();
@@ -288,8 +279,10 @@ describe("Testbox lease freshness", () => {
     expect(prepared?.current.taskKey).toMatch(/^[a-f0-9]{64}$/u);
     expect(prepared?.current.checkoutKey).toMatch(/^[a-f0-9]{64}$/u);
     expect(prepared?.attribution.commandKey).toMatch(/^[a-f0-9]{64}$/u);
-    expect(prepared?.attribution.requestedIdleTimeout).toBe("30m");
-    expect(prepared?.attribution.requestedTtl).toBe("1h");
+    expect(prepared?.attribution).toMatchObject({
+      requestedIdleTimeout: "30m",
+      requestedTtl: "1h",
+    });
   });
 
   it.each([
@@ -333,27 +326,23 @@ describe("Testbox lease freshness", () => {
   it("ignores lease flags inside the command payload", () => {
     const fixture = createLeaseFixture();
     const env = { CODEX_THREAD_ID: undefined };
+    const payload = {
+      id: "tbx_payload",
+      label: "payload-task",
+      "idle-timeout": "9h",
+      ttl: "12h",
+      "blacksmith-workflow": "payload-workflow",
+      "blacksmith-job": "payload-job",
+      "blacksmith-ref": "payload-ref",
+    };
     const prepared = fixture.prepare(
       [
         "run",
         "--",
         "echo",
-        "--id",
-        "tbx_payload",
-        "--label",
-        "payload-task",
+        ...Object.entries(payload).flatMap(([flag, value]) => [`--${flag}`, value]),
         "--keep",
         "--keep-on-failure",
-        "--idle-timeout",
-        "9h",
-        "--ttl",
-        "12h",
-        "--blacksmith-workflow",
-        "payload-workflow",
-        "--blacksmith-job",
-        "payload-job",
-        "--blacksmith-ref",
-        "payload-ref",
       ],
       env,
     );
@@ -400,6 +389,12 @@ describe("Testbox lease freshness", () => {
 
 function createLeaseFixture() {
   const root = tempDirs.make("openclaw-testbox-freshness-");
+  const read = (file: string) => readFileSync(join(root, file), "utf8");
+  const write = (file: string, content: string) => {
+    const target = join(root, file);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  };
   const env = {
     ...process.env,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -420,13 +415,9 @@ function createLeaseFixture() {
     mkdirSync(dirname(file), { recursive: true });
     copyFileSync(new URL("../../" + relative, import.meta.url), file);
   }
-  writeFileSync(join(root, "package.json"), '{"name":"lease-fixture","private":true}\n');
-  mkdirSync(join(root, "packages/example"), { recursive: true });
-  writeFileSync(join(root, "packages/example/package.json"), '{"name":"workspace-fixture"}\n');
-  writeFileSync(
-    join(root, "pnpm-lock.yaml"),
-    "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/example: {}\n",
-  );
+  write("package.json", '{"name":"lease-fixture","private":true}\n');
+  write("packages/example/package.json", '{"name":"workspace-fixture"}\n');
+  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/example: {}\n");
   git(["add", "."]);
   const tree = git(["write-tree"]);
   const initial = git(["commit-tree", tree], "Initial fixture\n");
@@ -452,6 +443,8 @@ function createLeaseFixture() {
   };
   return {
     root,
+    read,
+    write,
     git,
     prepare,
     advanceHead,

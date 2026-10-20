@@ -19,17 +19,9 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string): v
 
 function makeSkipInventoryFixture(): string {
   const repoRoot = createTempDir("openclaw-test-skip-inventory-");
-  writeRepoFile(
-    repoRoot,
-    "src/runtime.ts",
-    `
-describe.skip("ignored because this is not a test file", () => {});
-`,
-  );
-  writeRepoFile(
-    repoRoot,
-    "src/example.test.ts",
-    `
+  const files = {
+    "src/runtime.ts": '\ndescribe.skip("ignored because this is not a test file", () => {});\n',
+    "src/example.test.ts": `
 describe.skip("temporarily disabled suite", () => {});
 it.skipIf(process.platform === "win32")("uses POSIX shell", () => {});
 test.todo("covers migration edge");
@@ -43,53 +35,41 @@ it.concurrent.only("focused concurrent test", () => {});
 test.skip("skipped sequential test", { concurrent: false }, () => {});
 const fixture = 'describe.skip("not code", () => {})';
 `,
-  );
-  writeRepoFile(
-    repoRoot,
-    "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
-    `
-reader.skip(wire);
-`,
-  );
-  writeRepoFile(
-    repoRoot,
-    "test/scripts/test-live.test.ts",
-    `
-const posixIt = process.platform === "win32" ? it.skip : it;
-`,
-  );
-  writeRepoFile(
-    repoRoot,
-    "extensions/provider/live.test.ts",
-    `
+    "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts": "\nreader.skip(wire);\n",
+    "test/scripts/test-live.test.ts":
+      '\nconst posixIt = process.platform === "win32" ? it.skip : it;\n',
+    "extensions/provider/live.test.ts": `
 const LIVE = process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = LIVE ? describe : describe.skip;
 describeLive("provider live", () => {});
 `,
-  );
-  writeRepoFile(
-    repoRoot,
-    "ui/src/e2e/chat-flow.e2e.test.ts",
-    `
+    "ui/src/e2e/chat-flow.e2e.test.ts": `
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 describeControlUiE2e("control UI", () => {});
 `,
-  );
+  };
+  for (const [file, source] of Object.entries(files)) {
+    writeRepoFile(repoRoot, file, source);
+  }
   return repoRoot;
 }
 
 describe("collectTestSkipInventoryReport", () => {
   it("renders a compact non-blocking text report", () => {
-    const report = collectTestSkipInventoryReport({ repoRoot: makeSkipInventoryFixture() });
-
-    const rendered = renderTestSkipInventoryReport(report, { limit: 4 });
-
-    expect(rendered).toContain("OpenClaw test skip inventory");
-    expect(rendered).toContain("Findings: 14 in 4 file(s)");
-    expect(rendered).toContain("platform-gate: 6");
-    expect(rendered).toContain("- src/example.test.ts (11)");
-    expect(rendered).toContain("L2 describe.skip explicit-skip");
-    expect(rendered).toContain("... 10 more finding(s) not shown");
+    const rendered = renderTestSkipInventoryReport(
+      collectTestSkipInventoryReport({ repoRoot: makeSkipInventoryFixture() }),
+      { limit: 4 },
+    );
+    for (const text of [
+      "OpenClaw test skip inventory",
+      "Findings: 14 in 4 file(s)",
+      "platform-gate: 6",
+      "- src/example.test.ts (11)",
+      "L2 describe.skip explicit-skip",
+      "... 10 more finding(s) not shown",
+    ]) {
+      expect(rendered).toContain(text);
+    }
   });
 
   it("rejects missing CLI repo roots and loose limits before scanning", () => {
@@ -103,9 +83,7 @@ describe("collectTestSkipInventoryReport", () => {
         "--repo-root",
         "--json",
       ],
-      {
-        encoding: "utf8",
-      },
+      { encoding: "utf8" },
     );
 
     expect(result.status).toBe(1);

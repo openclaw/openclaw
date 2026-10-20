@@ -1,4 +1,3 @@
-// Ts Topology tests cover ts topology script behavior.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,35 +9,31 @@ import { createCapturedIo } from "../helpers/captured-io.js";
 
 const repoRoot = path.join(process.cwd(), "test", "fixtures", "ts-topology", "basic");
 
-function buildFixtureScope() {
-  return createFilesystemPublicSurfaceScope(repoRoot, {
+const publicSurfaceEnvelope = analyzeTopology({
+  repoRoot,
+  scope: createFilesystemPublicSurfaceScope(repoRoot, {
     id: "custom",
     entrypointRoot: "src/public",
     importPrefix: "fixture-sdk",
-  });
-}
-
-const fixtureScope = buildFixtureScope();
-const publicSurfaceEnvelope = analyzeTopology({
-  repoRoot,
-  scope: fixtureScope,
+  }),
   report: "public-surface-usage",
 });
 
-function deriveReportEnvelope(report: Parameters<typeof filterRecordsForReport>[1]) {
-  return {
-    ...publicSurfaceEnvelope,
-    report,
-    records: filterRecordsForReport(publicSurfaceEnvelope.records, report),
-  };
+async function runCli(args: string[]) {
+  const captured = createCapturedIo();
+  const code = await main(args, captured.io);
+  return { code, stdout: captured.readStdout(), stderr: captured.readStderr() };
 }
 
 describe("ts-topology", () => {
   it("runs the CLI entrypoint when invoked from a filesystem path", () => {
-    const scriptPath = path.resolve("scripts/ts-topology.ts");
-    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, "--help"], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", path.resolve("scripts/ts-topology.ts"), "--help"],
+      {
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -65,27 +60,32 @@ describe("ts-topology", () => {
   });
 
   it("emits stable JSON through the CLI and filtered report output", async () => {
-    const captured = createCapturedIo();
-    const jsonExit = await main(
-      [
-        "--scope=custom",
-        "--entrypoint-root=src/public",
-        "--import-prefix=fixture-sdk",
-        "--repo-root=test/fixtures/ts-topology/basic",
-        "--report=single-owner-shared",
-        "--json",
-      ],
-      captured.io,
-    );
+    const result = await runCli([
+      "--scope=custom",
+      "--entrypoint-root=src/public",
+      "--import-prefix=fixture-sdk",
+      "--repo-root=test/fixtures/ts-topology/basic",
+      "--report=single-owner-shared",
+      "--json",
+    ]);
 
-    expect(jsonExit).toBe(0);
-    const payload = JSON.parse(captured.readStdout());
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout);
     expect(payload.report).toBe("single-owner-shared");
     expect(
       payload.records.map((record: { exportNames: string[] }) => record.exportNames[0]),
     ).toEqual(["aliasedThing", "singleOwnerHelper"]);
 
-    expect(renderTextReport(deriveReportEnvelope("consumer-topology"), 2)).toMatchInlineSnapshot(`
+    expect(
+      renderTextReport(
+        {
+          ...publicSurfaceEnvelope,
+          report: "consumer-topology",
+          records: filterRecordsForReport(publicSurfaceEnvelope.records, "consumer-topology"),
+        },
+        2,
+      ),
+    ).toMatchInlineSnapshot(`
       "Scope: custom
       Records with consumers: 4
       
@@ -96,12 +96,9 @@ describe("ts-topology", () => {
   });
 
   it("rejects malformed CLI limits", async () => {
-    const captured = createCapturedIo();
-    const exitCode = await main(["--limit=abc"], captured.io);
-
-    expect(exitCode).toBe(1);
-    expect(captured.readStderr()).toContain("--limit must be a positive integer");
-    expect(captured.readStdout()).toBe("");
+    const result = await runCli(["--limit=abc"]);
+    expect(result).toMatchObject({ code: 1, stdout: "" });
+    expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
   it("throws a clear error for invalid text report names", () => {
