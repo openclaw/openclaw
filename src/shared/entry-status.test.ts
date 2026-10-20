@@ -1,9 +1,16 @@
-// Entry status tests cover shared presentation metadata and requirement evaluation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "./entry-status.js";
 
 type EntryParams = Parameters<typeof evaluateEntryRequirementsForCurrentPlatform>[0];
+const requirements = (overrides: Partial<ReturnType<typeof evaluate>["required"]> = {}) => ({
+  bins: [],
+  anyBins: [],
+  env: [],
+  config: [],
+  os: [],
+  ...overrides,
+});
 
 function evaluate(overrides: Partial<EntryParams>) {
   return evaluateEntryRequirementsForCurrentPlatform({
@@ -24,18 +31,21 @@ describe("shared/entry-status", () => {
   it("combines metadata presentation fields with evaluated requirements", () => {
     mockProcessPlatform("linux");
 
+    const required = requirements({
+      bins: ["bun"],
+      anyBins: ["ffmpeg", "sox"],
+      env: ["OPENCLAW_TOKEN"],
+      config: ["gateway.bind"],
+      os: ["darwin"],
+    });
+    const { os, ...requires } = structuredClone(required);
     const result = evaluate({
       entry: {
         metadata: {
           emoji: "🦀",
           homepage: " https://openclaw.ai ",
-          requires: {
-            bins: ["bun"],
-            anyBins: ["ffmpeg", "sox"],
-            env: ["OPENCLAW_TOKEN"],
-            config: ["gateway.bind"],
-          },
-          os: ["darwin"],
+          requires,
+          os,
         },
         frontmatter: {
           emoji: "🙂",
@@ -52,20 +62,8 @@ describe("shared/entry-status", () => {
     expect(result).toEqual({
       emoji: "🦀",
       homepage: "https://openclaw.ai",
-      required: {
-        bins: ["bun"],
-        anyBins: ["ffmpeg", "sox"],
-        env: ["OPENCLAW_TOKEN"],
-        config: ["gateway.bind"],
-        os: ["darwin"],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: ["OPENCLAW_TOKEN"],
-        config: [],
-        os: ["darwin"],
-      },
+      required,
+      missing: requirements({ env: ["OPENCLAW_TOKEN"], os: ["darwin"] }),
       requirementsSatisfied: false,
       configChecks: [{ path: "gateway.bind", satisfied: true }],
     });
@@ -75,11 +73,7 @@ describe("shared/entry-status", () => {
     mockProcessPlatform("darwin");
 
     const result = evaluate({
-      entry: {
-        metadata: {
-          os: ["darwin"],
-        },
-      },
+      entry: { metadata: { os: ["darwin"] } },
       isEnvSatisfied: () => true,
       isConfigSatisfied: () => true,
     });
@@ -94,11 +88,7 @@ describe("shared/entry-status", () => {
     const result = evaluate({
       always: true,
       entry: {
-        metadata: {
-          requires: {
-            bins: ["missing-bin"],
-          },
-        },
+        metadata: { requires: { bins: ["missing-bin"] } },
         frontmatter: {
           website: " https://docs.openclaw.ai ",
           emoji: "🙂",
@@ -109,20 +99,8 @@ describe("shared/entry-status", () => {
     expect(result).toEqual({
       emoji: "🙂",
       homepage: "https://docs.openclaw.ai",
-      required: {
-        bins: ["missing-bin"],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
+      required: requirements({ bins: ["missing-bin"] }),
+      missing: requirements(),
       requirementsSatisfied: true,
       configChecks: [],
     });
@@ -157,9 +135,7 @@ describe("shared/entry-status", () => {
       homepage: undefined,
     },
   ])("preserves presentation precedence: $name", ({ entry, emoji, homepage }) => {
-    const result = evaluate({
-      entry,
-    });
+    const result = evaluate({ entry });
 
     expect(result.emoji).toBe(emoji);
     expect(result.homepage).toBe(homepage);

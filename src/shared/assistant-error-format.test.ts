@@ -17,39 +17,34 @@ describe("formatTransportErrorCopy", () => {
     ).toBeUndefined();
   });
 
-  it.each(["dns: no response from resolver"])(
-    "retains connection guidance for %s without treating DNS as an error code",
-    (message) => {
-      expect(formatTransportErrorCopy(message)).toContain("Couldn't connect to the AI service.");
-      expect(isKnownTransportErrorCode("DNS")).toBe(false);
-    },
-  );
+  it("retains connection guidance without treating DNS as an error code", () => {
+    expect(formatTransportErrorCopy("dns: no response from resolver")).toContain(
+      "Couldn't connect to the AI service.",
+    );
+    expect(isKnownTransportErrorCode("DNS")).toBe(false);
+  });
 });
 
 describe("formatProviderRefusalText", () => {
-  it("directs a misalignment stop to review instead of another ordinary retry", () => {
+  it.each([
+    [
+      "misalignment",
+      "Chat stopped as a precaution. Review the findings in chat before continuing.",
+    ],
+    ["bio", "The provider refused this request (category: bio). Revise the request and try again."],
+  ])("formats %s refusal guidance", (category, expected) => {
     expect(
       formatProviderRefusalText({
-        diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
+        diagnostics: [{ type: "provider_refusal", details: { category } }],
       }),
-    ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
-  });
-  it("formats a sanitized refusal category", () => {
-    expect(
-      formatProviderRefusalText({
-        diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }],
-      }),
-    ).toBe("The provider refused this request (category: bio). Revise the request and try again.");
+    ).toBe(expected);
   });
 });
 
 describe("extractErrorHttpStatus", () => {
-  it.each([["unexpected status 503 from upstream", 503]])(
-    "extracts guarded status from %s",
-    (message, code) => {
-      expect(extractErrorHttpStatus(message)?.code).toBe(code);
-    },
-  );
+  it("extracts guarded upstream status", () => {
+    expect(extractErrorHttpStatus("unexpected status 503 from upstream")?.code).toBe(503);
+  });
 });
 
 describe("HTTP status consumers", () => {
@@ -63,13 +58,13 @@ describe("HTTP status consumers", () => {
     expect(parseApiErrorInfo(JSON.stringify(payload))).toMatchObject(expected);
   });
 
-  it.each(["HTTP 502: "])("preserves distinct validation type and code after %s", (prefix) => {
+  it("preserves distinct validation type and code after HTTP 502", () => {
     const error = {
       type: "invalid_request_error",
       code: "unknown_parameter",
       message: "Unsupported parameter: timeout",
     };
-    expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
+    expect(parseApiErrorInfo(`HTTP 502: ${JSON.stringify({ error })}`)).toMatchObject(error);
   });
 
   it("extracts the final upstream rejection from a proxy failure envelope", () => {
@@ -91,11 +86,7 @@ describe("HTTP status consumers", () => {
   });
 
   it("does not return raw HTML after an HTTP reason phrase", () => {
-    const raw = [
-      "HTTP 502 Bad Gateway",
-      "",
-      "<!doctype html><html><body><h1>502</h1></body></html>",
-    ].join("\n");
+    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body><h1>502</h1></body></html>";
 
     expect(formatRawAssistantErrorForUi(raw)).toBe(
       "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",

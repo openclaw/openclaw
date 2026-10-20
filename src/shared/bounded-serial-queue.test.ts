@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { BoundedSerialQueue } from "./bounded-serial-queue.js";
 
+function completion<T>(
+  admission: { accepted: true; completion: Promise<T> } | { accepted: false },
+) {
+  expect(admission.accepted).toBe(true);
+  if (!admission.accepted) {
+    throw new Error("Expected queue admission");
+  }
+  return admission.completion;
+}
+
 describe("BoundedSerialQueue", () => {
   it("retains each caller's async context across waits and failures", async () => {
     const context = new AsyncLocalStorage<string>();
@@ -27,9 +37,7 @@ describe("BoundedSerialQueue", () => {
     );
     const three = queue.enqueue(() => observed.push(context.getStore()));
     expect(one.accepted && two.accepted && three.accepted).toBe(true);
-    const rejected = expect(two.accepted ? two.completion : Promise.resolve()).rejects.toBe(
-      failure,
-    );
+    const rejected = expect(completion(two)).rejects.toBe(failure);
     first.resolve();
     await Promise.all([queue.flush(), rejected]);
 
@@ -37,10 +45,7 @@ describe("BoundedSerialQueue", () => {
     expect(context.getStore()).toBeUndefined();
     expect(queue.isIdle).toBe(true);
     const reused = context.run("reused", () => queue.enqueue(() => context.getStore()));
-    expect(reused.accepted).toBe(true);
-    if (reused.accepted) {
-      await expect(reused.completion).resolves.toBe("reused");
-    }
+    await expect(completion(reused)).resolves.toBe("reused");
   });
 
   it("bounds waiting count and weight, then seals on the first overflow", () => {
@@ -65,26 +70,17 @@ describe("BoundedSerialQueue", () => {
     const active = queue.enqueue(async () => await first.promise);
     const waiting = queue.enqueue(async () => undefined);
 
-    expect(
-      queue.enqueue(async () => undefined, {
-        sealOnOverflow: false,
-      }),
-    ).toEqual({ accepted: false, reason: "capacity" });
+    expect(queue.enqueue(async () => undefined, { sealOnOverflow: false })).toEqual({
+      accepted: false,
+      reason: "capacity",
+    });
     expect(queue.didOverflow).toBe(false);
 
     first.resolve();
     await queue.flush();
     const afterDrain = queue.enqueue(async () => "accepted");
-    expect(afterDrain.accepted).toBe(true);
-    if (afterDrain.accepted) {
-      await expect(afterDrain.completion).resolves.toBe("accepted");
-    }
-    if (active.accepted) {
-      await active.completion;
-    }
-    if (waiting.accepted) {
-      await waiting.completion;
-    }
+    await expect(completion(afterDrain)).resolves.toBe("accepted");
+    await Promise.all([completion(active), completion(waiting)]);
   });
 
   it("flushes only the accepted prefix visible at call time", async () => {
@@ -106,15 +102,11 @@ describe("BoundedSerialQueue", () => {
     second.resolve();
     await queue.flush();
     expect(queue.isIdle).toBe(true);
-    if (active.accepted) {
-      await active.completion;
-    }
-    if (late.accepted) {
-      await late.completion;
-    }
+    await Promise.all([completion(active), completion(late)]);
   });
 
-  it.each([undefined])("preserves the first failure (%s) in a sealed prefix", async (failure) => {
+  it("preserves the first failure (undefined) in a sealed prefix", async () => {
+    const failure = undefined;
     const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
     const first = createDeferred();
     const task = queue.enqueue(() => first.promise);
@@ -130,8 +122,8 @@ describe("BoundedSerialQueue", () => {
     await Promise.all([
       expect(ordinaryFlush).resolves.toBeUndefined(),
       expect(strictFlush).rejects.toBe(failure),
-      expect(task.accepted ? task.completion : Promise.resolve()).rejects.toBe(failure),
-      expect(later.accepted ? later.completion : Promise.resolve()).rejects.toBe(laterFailure),
+      expect(completion(task)).rejects.toBe(failure),
+      expect(completion(later)).rejects.toBe(laterFailure),
     ]);
     expect(queue.isIdle).toBe(true);
   });
@@ -145,17 +137,13 @@ describe("BoundedSerialQueue", () => {
     const later = queue.enqueue(() => {
       throw failure;
     });
-    const laterFailure = expect(later.accepted ? later.completion : Promise.resolve()).rejects.toBe(
-      failure,
-    );
+    const laterFailure = expect(completion(later)).rejects.toBe(failure);
 
     first.resolve();
 
     await Promise.all([expect(prefix).resolves.toBeUndefined(), laterFailure]);
     await expect(queue.flush({ requireSuccess: true })).rejects.toBe(failure);
-    if (active.accepted) {
-      await active.completion;
-    }
+    await completion(active);
     expect(queue.isIdle).toBe(true);
   });
 });
