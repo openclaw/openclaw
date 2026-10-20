@@ -2,6 +2,7 @@ import { Show, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 
 export function ChatSidebarEditorMenu(props: {
   absolutePath: string | null;
@@ -20,9 +21,9 @@ export function ChatSidebarEditorMenu(props: {
           placement="bottom-end"
           open={props.open}
           onOpenChange={props.onOpenChange}
-          label="Open in editor"
+          label={t("chat.sessionDiff.openInEditor")}
           triggerClass="btn btn--sm sidebar-file-view__action"
-          triggerAttributes={{ title: "Open in editor" }}
+          triggerAttributes={{ title: t("chat.sessionDiff.openInEditor") }}
           trigger={<Icon name="externalLink" />}
           items={EDITOR_IDS.map((editor) => ({
             id: editor,

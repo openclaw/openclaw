@@ -104,14 +104,14 @@ describe("file sidebar editor locality", () => {
     };
     container.append(panel);
     await panel.updateComplete;
-    expect(panel.querySelector('[aria-label="Open in editor"]')).not.toBeNull();
+    expect(panel.querySelector('[aria-label="Open in Editor"]')).not.toBeNull();
     expect(panel.querySelectorAll(".sidebar-file-view__editor-item")).toHaveLength(4);
     expect(panel.querySelector(".sidebar-file-view__editor")).not.toBeNull();
 
     setNativeGatewayTestState("remote");
     await panel.updateComplete;
 
-    expect(panel.querySelector('[aria-label="Open in editor"]')).toBeNull();
+    expect(panel.querySelector('[aria-label="Open in Editor"]')).toBeNull();
     expect(panel.querySelector(".sidebar-file-view__editor")).toBeNull();
   });
 });
