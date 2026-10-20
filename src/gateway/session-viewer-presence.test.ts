@@ -44,8 +44,7 @@ function createDeclarations() {
 
 describe("session viewer presence declarations", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2041-01-01T00:00:00Z"));
+    vi.useFakeTimers({ now: new Date("2041-01-01T00:00:00Z") });
   });
   afterEach(() => {
     vi.setSystemTime(Date.now() + 300_001);
@@ -111,28 +110,19 @@ describe("presence projection without resident session facts", () => {
         { sessionId: "presence-pending", updatedAt: 1, visibility: "shared" },
       );
       const cfg = { agents: { entries: { main: {} } } };
-      const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] }).catch(
-        (error: unknown) => {
-          release();
-          throw error;
-        },
-      );
-      try {
-        await projection.ensureMaterialized();
-        const person = { text: "watcher", ts: 1 };
-        const presence = [{ ...person, watchedSessions: [key] }];
-        const snapshot = () =>
-          createPresenceRecipientProjection({ cfg, presence, projection })(recipient());
-        expect(snapshot()).toEqual(presence);
-        sessionChanges.emit({ sessionKey: key, factsInvalidated: "category" });
-        expect(snapshot()).toEqual([person]);
-        await projection.prepareMembership();
-        expect(snapshot()).toEqual(presence);
-      } finally {
-        projection.dispose();
-        release();
-      }
+      using _ = { [Symbol.dispose]: retainSessionListForegroundWork() };
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      using owner = { projection, [Symbol.dispose]: () => projection.dispose() };
+      await owner.projection.ensureMaterialized();
+      const person = { text: "watcher", ts: 1 };
+      const presence = [{ ...person, watchedSessions: [key] }];
+      const snapshot = () =>
+        createPresenceRecipientProjection({ cfg, presence, projection })(recipient());
+      expect(snapshot()).toEqual(presence);
+      sessionChanges.emit({ sessionKey: key, factsInvalidated: "category" });
+      expect(snapshot()).toEqual([person]);
+      await projection.prepareMembership();
+      expect(snapshot()).toEqual(presence);
     });
   });
 
@@ -148,18 +138,15 @@ describe("presence projection without resident session facts", () => {
       const node = recipient();
       node.connect.role = "node";
       const sql = observeHostDataSql();
-      try {
-        const project = createPresenceRecipientProjection({ cfg: {}, presence });
-        for (const allowed of [recipient(), pending]) {
-          expect(project(allowed)).toEqual([person]);
-        }
-        for (const denied of [recipient([]), node, null]) {
-          expect(project(denied)).toEqual([]);
-        }
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
+      using _ = { [Symbol.dispose]: sql.restore };
+      const project = createPresenceRecipientProjection({ cfg: {}, presence });
+      for (const allowed of [recipient(), pending]) {
+        expect(project(allowed)).toEqual([person]);
       }
+      for (const denied of [recipient([]), node, null]) {
+        expect(project(denied)).toEqual([]);
+      }
+      expect(sql.queries).toEqual([]);
     });
   });
 });

@@ -462,23 +462,20 @@ describe("retained exact row publications", () => {
           retained = assertCurrent;
           expect(target.store[key]?.sessionId).toBe("incognito-retained");
           const sql = observeHostDataSql();
-          try {
-            for (let i = 0; i < 3; i++) {
-              assertCurrent();
-            }
-            expect(sql.queries).toEqual([]);
-            sessionChanges.emit({ all: true, scope: "stores" });
-            sessionChanges.emit({
-              all: true,
-              scope: { agentId: "main", storePath: "durable.sqlite", topology: true },
-            });
-            sessionChanges.emit({ all: true, scope: "agent-runs" });
-            sessionChanges.emit({ all: true, scope: "profiles" });
+          using _ = { [Symbol.dispose]: sql.restore };
+          for (let i = 0; i < 3; i++) {
             assertCurrent();
-            expect(sql.queries).toEqual([]);
-          } finally {
-            sql.restore();
           }
+          expect(sql.queries).toEqual([]);
+          sessionChanges.emit({ all: true, scope: "stores" });
+          sessionChanges.emit({
+            all: true,
+            scope: { agentId: "main", storePath: "durable.sqlite", topology: true },
+          });
+          sessionChanges.emit({ all: true, scope: "agent-runs" });
+          sessionChanges.emit({ all: true, scope: "profiles" });
+          assertCurrent();
+          expect(sql.queries).toEqual([]);
         },
       );
       expect(retained).toBeTypeOf("function");

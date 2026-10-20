@@ -23,21 +23,15 @@ it("reads committed durable rows without host SQL and checks caller authority", 
     const key = "agent:main:saved";
     const scope = { agentId: "main", sessionKey: key, env: state.env };
     const params = { cfg, key, env: state.env };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "saved",
-      updatedAt: 1,
-      displayName: "Before",
-    });
+    const entry = { sessionId: "saved", updatedAt: 1, displayName: "Before" };
+    await upsertSessionEntryCore(scope, entry);
     const read = () => withRead(params, async (loaded) => loaded.entry);
     await read();
     const expectRead = async (displayName: string) => {
       const sql = observeHostDataSql();
-      try {
-        expect(await read()).toMatchObject({ sessionId: "saved", displayName });
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      using _ = { [Symbol.dispose]: sql.restore };
+      expect(await read()).toMatchObject({ sessionId: "saved", displayName });
+      expect(sql.queries).toEqual([]);
     };
     await expectRead("Before");
     await patchSessionEntryCore(scope, () => ({ displayName: "After" }), {
