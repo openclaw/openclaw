@@ -14,21 +14,19 @@ describe("normalizeJsonSchemaForTypeBox", () => {
 
     expect(normalized).toMatchObject({
       patternProperties: {
-        "^https:": {
-          allOf: [{ minLength: 1 }, { maxLength: 10 }],
-        },
+        "^https:": { allOf: [{ minLength: 1 }, { maxLength: 10 }] },
       },
     });
   });
 
-  it.each(["__proto__"])("preserves pattern property key %s", (pattern) => {
+  it("preserves pattern property key __proto__", () => {
     const normalized = normalizeJsonSchemaForTypeBox({
       type: "object",
-      patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
+      patternProperties: Object.fromEntries([["__proto__", { type: "string" }]]),
     });
 
     expect(normalized).toMatchObject({
-      patternProperties: Object.fromEntries([[pattern, { type: "string" }]]),
+      patternProperties: Object.fromEntries([["__proto__", { type: "string" }]]),
     });
   });
 
@@ -45,35 +43,27 @@ describe("normalizeJsonSchemaForTypeBox", () => {
     ).toBeUndefined();
   });
 
-  it.each(["#foo%zz"])(
-    "reports malformed percent-encoding in local ref anchor %s as unresolved instead of throwing",
-    (ref) => {
-      expect(findJsonSchemaShapeError({ $ref: ref })).toBe("<schema>.$ref: unresolved ref");
-    },
-  );
+  it("reports malformed percent-encoding in local ref anchors as unresolved", () => {
+    expect(findJsonSchemaShapeError({ $ref: "#foo%zz" })).toBe("<schema>.$ref: unresolved ref");
+  });
 
-  it.each([{ type: ["string", undefined] }])(
-    "rejects undefined type union entries: $type",
-    ({ type }) => {
-      expect(findJsonSchemaShapeError({ type })).toBe(
-        "<schema>.type: unsupported JSON Schema type",
-      );
-    },
-  );
+  it("rejects undefined type union entries", () => {
+    expect(findJsonSchemaShapeError({ type: ["string", undefined] })).toBe(
+      "<schema>.type: unsupported JSON Schema type",
+    );
+  });
 });
 
 describe("applyJsonSchemaDefaults prototype safety", () => {
   const readPollution = () => (Object.prototype as Record<string, unknown>).polluted;
+  const polluting = { type: "object", properties: { polluted: { default: "yes" } } };
 
   afterEach(() => {
     delete (Object.prototype as Record<string, unknown>).polluted;
   });
 
   it("does not pollute Object.prototype through a __proto__ property schema", () => {
-    const schema = JSON.parse(
-      '{"type":"object","properties":{"__proto__":{"type":"object","properties":{"polluted":{"default":"yes"}}}}}',
-    );
-
+    const schema = { type: "object", properties: Object.fromEntries([["__proto__", polluting]]) };
     const result = applyJsonSchemaDefaults(schema, {});
 
     expect(readPollution()).toBeUndefined();
@@ -82,9 +72,7 @@ describe("applyJsonSchemaDefaults prototype safety", () => {
   });
 
   it("does not pollute Object.prototype through a __proto__ pattern property schema", () => {
-    const schema = JSON.parse(
-      '{"type":"object","patternProperties":{".*":{"type":"object","properties":{"polluted":{"default":"yes"}}}}}',
-    );
+    const schema = { type: "object", patternProperties: { ".*": polluting } };
     const value = JSON.parse('{"__proto__":{}}');
 
     applyJsonSchemaDefaults(schema, value);
@@ -93,9 +81,7 @@ describe("applyJsonSchemaDefaults prototype safety", () => {
   });
 
   it("does not pollute Object.prototype through a __proto__ additional property schema", () => {
-    const schema = JSON.parse(
-      '{"type":"object","additionalProperties":{"type":"object","properties":{"polluted":{"default":"yes"}}}}',
-    );
+    const schema = { type: "object", additionalProperties: polluting };
     const value = JSON.parse('{"__proto__":{}}');
 
     applyJsonSchemaDefaults(schema, value);
@@ -129,10 +115,10 @@ describe("JSON Schema child traversal", () => {
     }
   });
 
-  it.each(["nested"])("does not cross the nested resource boundary %j for anchors", ($id) => {
+  it("does not cross the nested resource boundary for anchors", () => {
     const schema = {
       $ref: "#target",
-      $defs: { nested: { $id, $anchor: "target", default: "not local" } },
+      $defs: { nested: { $id: "nested", $anchor: "target", default: "not local" } },
     };
 
     expect(findJsonSchemaShapeError(schema)).toBe("<schema>.$ref: unresolved ref");
@@ -154,28 +140,14 @@ describe("JSON Schema child traversal", () => {
   });
 
   it("settles reverse-ordered dependent schemas beyond the root property count", () => {
+    const adds = (key: string) => ({ properties: { [key]: { default: true } } });
     const schema = {
-      properties: { a: { default: true } },
-      dependentSchemas: Object.fromEntries(
-        (
-          [
-            ["e", "f"],
-            ["d", "e"],
-            ["c", "d"],
-            ["b", "c"],
-            ["a", "b"],
-          ] as const
-        ).map(([trigger, added]) => [trigger, { properties: { [added]: { default: true } } }]),
-      ),
+      ...adds("a"),
+      dependentSchemas: { e: adds("f"), d: adds("e"), c: adds("d"), b: adds("c"), a: adds("b") },
     };
 
-    expect(applyJsonSchemaDefaults(schema, {})).toEqual({
-      a: true,
-      b: true,
-      c: true,
-      d: true,
-      e: true,
-      f: true,
-    });
+    expect(applyJsonSchemaDefaults(schema, {})).toEqual(
+      Object.fromEntries(["a", "b", "c", "d", "e", "f"].map((key) => [key, true])),
+    );
   });
 });

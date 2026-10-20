@@ -1,4 +1,3 @@
-// Shared ignore-rules tests cover workspace ignore-file scanning.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,8 +8,29 @@ function oversizedIgnoreFileContent(): string {
   return `#${"x".repeat(4 * 1024 * 1024)}`;
 }
 
+function expectPaths(
+  ig: ReturnType<typeof addIgnoreRules>,
+  ignored: string[],
+  visible: string[] = [],
+) {
+  for (const pathname of ignored) {
+    expect(ig.ignores(pathname), pathname).toBe(true);
+  }
+  for (const pathname of visible) {
+    expect(ig.ignores(pathname), pathname).toBe(false);
+  }
+}
+
 describe("addIgnoreRules", () => {
   let tempDir: string;
+  const write = (content: string, name = ".gitignore", dir = tempDir) =>
+    fs.writeFileSync(path.join(dir, name), content, "utf-8");
+  const scan = (dir = tempDir) => addIgnoreRules(dir, tempDir);
+  const mkdir = (...parts: string[]) => {
+    const dir = path.join(tempDir, ...parts);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  };
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-"));
@@ -21,66 +41,38 @@ describe("addIgnoreRules", () => {
   });
 
   it("keeps root-anchored patterns and negations at the top level", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "/build\nkeep\n!/keep\n", "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("build/")).toBe(true);
-    expect(ig.ignores("skills/build/")).toBe(false);
-    expect(ig.ignores("keep")).toBe(false);
-    expect(ig.ignores("skills/keep")).toBe(true);
+    write("/build\nkeep\n!/keep\n");
+    expectPaths(scan(), ["build/", "skills/keep"], ["skills/build/", "keep"]);
   });
 
   it("parses a large ignore file under the byte cap", () => {
-    const huge = `#${"x".repeat(2 * 1024 * 1024)}\nignored-file\n`;
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), huge, "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("ignored-file")).toBe(true);
-    expect(ig.ignores("unrelated-file")).toBe(false);
+    write(`#${"x".repeat(2 * 1024 * 1024)}\nignored-file\n`);
+    expectPaths(scan(), ["ignored-file"], ["unrelated-file"]);
   });
 
   it("enforces the rule-count budget across ignore files", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "a\n".repeat(10_000), "utf-8");
-    fs.writeFileSync(path.join(tempDir, ".ignore"), "b\n".repeat(10_001), "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("unrelated-file")).toBe(true);
+    write("a\n".repeat(10_000));
+    write("b\n".repeat(10_001), ".ignore");
+    expect(scan().ignores("unrelated-file")).toBe(true);
   });
 
   it("fails closed before compiling an excessively long pattern", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "a".repeat(16 * 1024 + 1), "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("unrelated-file")).toBe(true);
+    write("a".repeat(16 * 1024 + 1));
+    expect(scan().ignores("unrelated-file")).toBe(true);
   });
 
   it("counts directory prefixes toward the compiled-pattern budget", () => {
     const first = "a".repeat(150);
     const second = "b".repeat(150);
-    const nestedDir = path.join(tempDir, first, second);
-    fs.mkdirSync(nestedDir, { recursive: true });
-    fs.writeFileSync(path.join(nestedDir, ".gitignore"), "x\n".repeat(20_000), "utf-8");
-
-    const ig = addIgnoreRules(nestedDir, tempDir);
-
-    expect(ig.ignores(`${first}/${second}`)).toBe(true);
-    expect(ig.ignores(`${first}/${second}/secret.txt`)).toBe(true);
+    const nestedDir = mkdir(first, second);
+    write("x\n".repeat(20_000), ".gitignore", nestedDir);
+    expectPaths(scan(nestedDir), [`${first}/${second}`, `${first}/${second}/secret.txt`]);
   });
 
   it("keeps the subtree excluded when a later ignore file negates it", () => {
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-    // A later .ignore could reopen the subtree if the oversized-file exclusion
-    // were not terminal for this directory.
-    fs.writeFileSync(path.join(tempDir, ".ignore"), "!ignored-file\n!secret.txt\n", "utf-8");
-
-    const ig = addIgnoreRules(tempDir, tempDir);
-
-    expect(ig.ignores("ignored-file")).toBe(true);
-    expect(ig.ignores("secret.txt")).toBe(true);
+    write(oversizedIgnoreFileContent());
+    write("!ignored-file\n!secret.txt\n", ".ignore");
+    expectPaths(scan(), ["ignored-file", "secret.txt"]);
   });
 
   it("treats fail-closed subtree paths literally", () => {
@@ -92,55 +84,44 @@ describe("addIgnoreRules", () => {
       "[private]",
       ...(process.platform === "win32" ? [] : ["private?docs", "private*docs"]),
     ];
-    let ig: ReturnType<typeof addIgnoreRules> | undefined;
+    let ig = scan();
 
     for (const name of unusualNames) {
-      const nestedDir = path.join(tempDir, name);
-      fs.mkdirSync(nestedDir);
-      fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversized, "utf-8");
+      const nestedDir = mkdir(name);
+      write(oversized, ".gitignore", nestedDir);
       ig = addIgnoreRules(nestedDir, tempDir, ig);
 
-      expect(ig.ignores(name)).toBe(true);
-      expect(ig.ignores(`${name}/secret.txt`)).toBe(true);
-      expect(ig.ignores([name, "nested", "secret.txt"].join(path.sep))).toBe(true);
+      expectPaths(ig, [name, `${name}/secret.txt`, [name, "nested", "secret.txt"].join(path.sep)]);
     }
 
-    if (!ig) {
-      throw new Error("expected ignore matcher");
-    }
-    expect(ig.ignores("public/secret.txt")).toBe(false);
-    expect(ig.ignores("private/secret.txt")).toBe(true);
+    expectPaths(ig, ["private/secret.txt"], ["public/secret.txt"]);
     if (process.platform !== "win32") {
       expect(ig.ignores("#private\\secret.txt")).toBe(false);
     }
   });
 
   it("keeps fail-closed metadata when the matcher is extended", () => {
-    const nestedDir = path.join(tempDir, "locked");
-    fs.mkdirSync(nestedDir);
-    fs.writeFileSync(path.join(nestedDir, ".gitignore"), oversizedIgnoreFileContent(), "utf-8");
-    const ig = addIgnoreRules(nestedDir, tempDir);
+    const nestedDir = mkdir("locked");
+    write(oversizedIgnoreFileContent(), ".gitignore", nestedDir);
+    const ig = scan(nestedDir);
 
-    fs.writeFileSync(path.join(tempDir, ".gitignore"), "!locked/\n!locked/secret.txt\n", "utf-8");
+    write("!locked/\n!locked/secret.txt\n");
     expect(addIgnoreRules(tempDir, tempDir, ig)).toBe(ig);
 
-    expect(ig.ignores("locked")).toBe(true);
-    expect(ig.ignores("locked/secret.txt")).toBe(true);
+    expectPaths(ig, ["locked", "locked/secret.txt"]);
   });
 
   it("follows a chain of symlinks to the final regular .gitignore", () => {
     const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
     try {
-      fs.writeFileSync(path.join(realDir, "real.gitignore"), "node_modules/\n", "utf-8");
+      write("node_modules/\n", "real.gitignore", realDir);
       const linkA = path.join(realDir, "link-a");
       const linkB = path.join(realDir, "link-b");
       fs.symlinkSync(path.join(realDir, "real.gitignore"), linkA);
       fs.symlinkSync(linkA, linkB);
       fs.symlinkSync(linkB, path.join(tempDir, ".gitignore"));
 
-      const ig = addIgnoreRules(tempDir, tempDir);
-
-      expect(ig.ignores("node_modules/foo")).toBe(true);
+      expect(scan().ignores("node_modules/foo")).toBe(true);
     } finally {
       fs.rmSync(realDir, { force: true, recursive: true });
     }
