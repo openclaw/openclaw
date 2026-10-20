@@ -1,4 +1,5 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { makeCallbackRetryContext } from "./bot.create-telegram-bot.test-support.js";
 
 export function createReplyPhotoMessage(text: string) {
   return {
@@ -21,9 +22,7 @@ export type TelegramTestMiddleware = (
   next: () => Promise<void>,
 ) => Promise<void> | void;
 
-type MiddlewareUseSpy = {
-  mock: { calls: unknown[][] };
-};
+type MiddlewareUseSpy = { mock: { calls: unknown[][] } };
 
 type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound");
 type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
@@ -111,26 +110,14 @@ export function createTelegramCallbackContext(params: {
   updateId?: number;
   update?: Record<string, unknown>;
 }): TelegramTestContext {
-  const callbackQuery = {
-    id: params.id,
-    data: params.data,
-    from: params.from ?? { id: 9, first_name: "Ada", username: "ada_bot" },
-    message: {
-      chat: { id: 1234, type: "private" },
-      date: 1_736_380_800,
-      message_id: 10,
-      ...params.message,
-    },
-  };
+  const context = makeCallbackRetryContext({ ...params, messageId: 10 });
   return {
+    ...context,
     ...(params.update
       ? { update: params.update }
       : params.updateId === undefined
         ? {}
-        : { update: { update_id: params.updateId, callback_query: callbackQuery } }),
-    callbackQuery,
-    me: { username: "openclaw_bot" },
-    getFile: async () => ({ download: async () => new Uint8Array() }),
+        : { update: { update_id: params.updateId, callback_query: context.callbackQuery } }),
   };
 }
 
@@ -149,11 +136,7 @@ export async function runTelegramTestMiddlewareChain(
     }
     index = nextIndex;
     const middleware = middlewares[nextIndex];
-    if (!middleware) {
-      await finalHandler(ctx);
-      return;
-    }
-    await middleware(ctx, async () => dispatch(nextIndex + 1));
+    await (middleware ? middleware(ctx, async () => dispatch(nextIndex + 1)) : finalHandler(ctx));
   };
   await dispatch(0);
 }

@@ -76,22 +76,26 @@ describe("Telegram API error logging", () => {
   });
 
   it.each([
-    [true, true, true, false, true],
-    [true, true, false, false, true],
-    [true, false, true, false, true],
-    [false, true, true, true, false],
-    [false, true, false, false, false],
-    [false, false, true, false, false],
+    [true, true, true, true, false, true],
+    [true, true, false, true, false, true],
+    [true, false, true, true, false, true],
+    [false, true, true, true, true, false],
+    [false, true, false, true, false, false],
+    [false, false, true, true, false, false],
+    [true, undefined, true, false, true, false],
+    [true, undefined, false, false, false, false],
   ] as const)(
-    "keeps one content-free HTTP failure owner (diagnostics=%s, API logging=%s, predicate=%s)",
-    async (diagnostics, useApiErrorLogging, shouldLog, apiRecord, httpRecord) => {
-      const error = new HttpError(
-        "private outer request text",
-        Object.assign(new Error("private nested request text"), {
-          code: "ECONNRESET",
-          syscall: "read",
-        }),
-      );
+    "routes failure logs (diagnostics=%s, API logging=%s, predicate=%s, HTTP=%s)",
+    async (diagnostics, useApiErrorLogging, shouldLog, httpError, apiRecord, httpRecord) => {
+      const error = httpError
+        ? new HttpError(
+            "private outer request text",
+            Object.assign(new Error("private nested request text"), {
+              code: "ECONNRESET",
+              syscall: "read",
+            }),
+          )
+        : new Error("expected API rejection");
       const request = createTelegramRequestWithDiag({
         cfg: { diagnostics: { flags: diagnostics ? ["telegram.http"] : [] } },
         useApiErrorLogging,
@@ -102,29 +106,13 @@ describe("Telegram API error logging", () => {
       ).rejects.toBe(error);
 
       expect(logs.apiError.mock.calls).toEqual(
-        apiRecord ? [[`telegram sendMessage failed: ${safeFailure}`]] : [],
+        apiRecord
+          ? [[`telegram sendMessage failed: ${httpError ? safeFailure : "expected API rejection"}`]]
+          : [],
       );
       expect(logs.httpWarning.mock.calls).toEqual(
         httpRecord ? [[`telegram http error (sendMessage): ${safeFailure}`]] : [],
       );
-    },
-  );
-
-  it.each([true, false])(
-    "preserves the ordinary API log predicate for non-HTTP errors (%s)",
-    async (shouldLog) => {
-      const error = new Error("expected API rejection");
-      const request = createTelegramRequestWithDiag({
-        cfg: { diagnostics: { flags: ["telegram.http"] } },
-        retry: { attempts: 1 },
-      });
-      await expect(
-        request(rejecting(error), "sendMessage", { shouldLog: () => shouldLog }),
-      ).rejects.toBe(error);
-      expect(logs.apiError.mock.calls).toEqual(
-        shouldLog ? [["telegram sendMessage failed: expected API rejection"]] : [],
-      );
-      expect(logs.httpWarning).not.toHaveBeenCalled();
     },
   );
 });

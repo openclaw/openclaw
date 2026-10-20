@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId, lookupTelegramChatId } from "./api-fetch.js";
 
-const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
-
 function getChat(fetchImpl?: typeof fetch) {
   return fetchTelegramChatId({ token: "abc", chatId: "@user", fetchImpl });
 }
@@ -49,17 +47,13 @@ describe("fetchTelegramChatId", () => {
     const response = new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(new Uint8Array(TELEGRAM_GETCHAT_JSON_CAP_BYTES + 1));
+          controller.enqueue(new Uint8Array(4 * 1024 * 1024 + 1));
         },
         cancel,
       }),
       { headers: { "content-type": "application/json" }, status: 200 },
     );
-    Object.defineProperty(response, "json", {
-      value: async () => {
-        throw new Error("unbounded json reader was used");
-      },
-    });
+    vi.spyOn(response, "json").mockRejectedValue(new Error("unbounded json reader was used"));
     await expect(getChat(async () => response)).resolves.toBeNull();
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -116,32 +110,30 @@ describe("fetchTelegramChatId", () => {
   });
 });
 
-describe("lookupTelegramChatId", () => {
-  it.each(["success", "transport failure"])(
-    "closes its owned transport after %s",
-    async (outcome) => {
-      proxyMocks.undiciFetch.mockReset();
-      const expected = outcome === "success" ? "12345" : null;
-      if (expected) {
-        proxyMocks.undiciFetch.mockResolvedValueOnce(
-          Response.json({ ok: true, result: { id: 12345 } }),
-        );
-      } else {
-        proxyMocks.undiciFetch.mockRejectedValueOnce(new Error("network failed"));
-      }
+it.each(["success", "transport failure"])(
+  "lookupTelegramChatId closes its owned transport after %s",
+  async (outcome) => {
+    proxyMocks.undiciFetch.mockReset();
+    const expected = outcome === "success" ? "12345" : null;
+    if (expected) {
+      proxyMocks.undiciFetch.mockResolvedValueOnce(
+        Response.json({ ok: true, result: { id: 12345 } }),
+      );
+    } else {
+      proxyMocks.undiciFetch.mockRejectedValueOnce(new Error("network failed"));
+    }
 
-      await expect(
-        lookupTelegramChatId({
-          token: "abc",
-          chatId: "@user",
-          network: { autoSelectFamily: false },
-        }),
-      ).resolves.toBe(expected);
+    await expect(
+      lookupTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        network: { autoSelectFamily: false },
+      }),
+    ).resolves.toBe(expected);
 
-      const init = proxyMocks.undiciFetch.mock.calls[0]?.[1] as
-        | (RequestInit & { dispatcher?: { destroyed?: boolean } })
-        | undefined;
-      expect(init?.dispatcher?.destroyed).toBe(true);
-    },
-  );
-});
+    const init = proxyMocks.undiciFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: { destroyed?: boolean } })
+      | undefined;
+    expect(init?.dispatcher?.destroyed).toBe(true);
+  },
+);

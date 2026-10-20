@@ -9,14 +9,13 @@ vi.mock("undici/index.js", async () => {
   return { ...actual, fetch: rawFetch };
 });
 
-const requests: Array<{ bytes: Buffer; dispatcher: Agent }> = [];
+const requests: Array<{ wire: string; dispatcher: Agent }> = [];
 let respond: () => Response | Promise<Response>;
 
 const expectedRequests = (...chatIds: string[]) =>
-  chatIds.map((chatId) =>
-    Buffer.from(
+  chatIds.map(
+    (chatId) =>
       `GET https://api.telegram.org/bot123:fixture-token/getChatMember?chat_id=${chatId}&user_id=123\n`,
-    ),
   );
 const auditGroups = (groupIds = ["-1001"]) =>
   auditTelegramGroupMembership({
@@ -41,7 +40,7 @@ beforeEach(() => {
     }
     const request = new Request(input, init);
     requests.push({
-      bytes: Buffer.from(`${request.method} ${request.url}\n${await request.text()}`),
+      wire: `${request.method} ${request.url}\n${await request.text()}`,
       dispatcher,
     });
     expect(dispatcher.destroyed).toBe(false);
@@ -55,22 +54,19 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it.each(["success", "network failure", "malformed JSON"] as const)(
+it.each(["network failure", "malformed JSON"] as const)(
   "closes its owned audit transport after %s without changing the request",
   async (outcome) => {
     respond = () => {
       if (outcome === "network failure") {
         throw new Error("membership fixture failed");
       }
-      return outcome === "malformed JSON"
-        ? new Response("not-json")
-        : Response.json({ ok: true, result: { status: "member" } });
+      return new Response("not-json");
     };
     const result = await auditGroups();
 
-    expect(result.ok).toBe(outcome === "success");
-    expect(result.checkedGroups).toBe(1);
-    expect(requests.map(({ bytes }) => bytes)).toEqual(expectedRequests("-1001"));
+    expect(result).toMatchObject({ ok: false, checkedGroups: 1 });
+    expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001"));
     expect(requests[0]?.dispatcher.destroyed).toBe(true);
   },
 );
@@ -78,36 +74,38 @@ it.each(["success", "network failure", "malformed JSON"] as const)(
 it("keeps the audit transport open until the final group's response body settles", async () => {
   const readingBody = Promise.withResolvers<void>();
   const finishBody = Promise.withResolvers<void>();
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        readingBody.resolve();
+        await finishBody.promise;
+        controller.enqueue(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
   respond = () =>
     requests.length === 1
       ? Response.json({ ok: true, result: { status: "member" } })
-      : new Response(
-          new ReadableStream<Uint8Array>(
-            {
-              async pull(controller) {
-                readingBody.resolve();
-                await finishBody.promise;
-                controller.enqueue(Buffer.from('{"ok":true,"result":{"status":"administrator"}}'));
-                controller.close();
-              },
-            },
-            { highWaterMark: 0 },
-          ),
-        );
+      : new Response(body);
   const audit = auditGroups(["-1001", "-1002"]);
   try {
     await readingBody.promise;
-    expect(requests.map(({ bytes }) => bytes)).toEqual(expectedRequests("-1001", "-1002"));
+    expect(requests.map(({ wire }) => wire)).toEqual(expectedRequests("-1001", "-1002"));
     expect(requests[0]?.dispatcher).toBe(requests[1]?.dispatcher);
     expect(requests[1]?.dispatcher.destroyed).toBe(false);
   } finally {
     finishBody.resolve();
   }
   const result = await audit;
-  expect(result.groups.map(({ chatId, status }) => [chatId, status])).toEqual([
-    ["-1001", "member"],
-    ["-1002", "administrator"],
-  ]);
-  expect(result.ok).toBe(true);
+  expect(result).toMatchObject({
+    ok: true,
+    checkedGroups: 2,
+    groups: [
+      { chatId: "-1001", status: "member" },
+      { chatId: "-1002", status: "administrator" },
+    ],
+  });
   expect(requests[1]?.dispatcher.destroyed).toBe(true);
 });

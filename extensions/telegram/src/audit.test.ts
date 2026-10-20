@@ -3,32 +3,21 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 let collectTelegramUnmentionedGroupIds: typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
 let auditTelegramGroupMembership: typeof import("./audit.js").auditTelegramGroupMembership;
 const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
-const resolveTelegramTransportMock = vi.hoisted(() =>
-  vi.fn(() => ({ fetch: fetchWithTimeoutMock, close: async () => {} })),
-);
-const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
+const member = { ok: true, result: { status: "member" } };
 
 vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
   fetchWithTimeout: fetchWithTimeoutMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
-  const { normalizeOptionalString } =
-    await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
-  const isMockRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null;
-  return { isRecord: isMockRecord, normalizeOptionalString };
-});
-
 function auditGroups(groupIds = ["-1001"], timeoutMs = 5000) {
   return auditTelegramGroupMembership({ token: "t", botId: 123, groupIds, timeoutMs });
 }
 
-function makeStallingJsonResponse(payload: unknown, cancel: (reason?: unknown) => void): Response {
+function makeStallingMembershipResponse(cancel: (reason?: unknown) => void): Response {
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(member)));
       },
       cancel,
     }),
@@ -39,8 +28,8 @@ function makeStallingJsonResponse(payload: unknown, cancel: (reason?: unknown) =
 describe("telegram audit", () => {
   beforeAll(async () => {
     vi.doMock("./fetch.js", () => ({
-      resolveTelegramApiBase: resolveTelegramApiBaseMock,
-      resolveTelegramTransport: resolveTelegramTransportMock,
+      resolveTelegramApiBase: () => "https://api.telegram.org",
+      resolveTelegramTransport: () => ({ fetch: fetchWithTimeoutMock, close: async () => {} }),
     }));
     ({ collectTelegramUnmentionedGroupIds, auditTelegramGroupMembership } =
       await import("./audit.js"));
@@ -48,8 +37,6 @@ describe("telegram audit", () => {
 
   beforeEach(() => {
     fetchWithTimeoutMock.mockReset();
-    resolveTelegramTransportMock.mockClear();
-    resolveTelegramApiBaseMock.mockClear();
   });
   afterEach(() => vi.useRealTimers());
 
@@ -87,16 +74,11 @@ describe("telegram audit", () => {
       fetchWithTimeoutMock.mockImplementationOnce(
         () =>
           new Promise<Response>((resolve) => {
-            setTimeout(
-              () => resolve(Response.json({ ok: true, result: { status: "member" } })),
-              delay,
-            );
+            setTimeout(() => resolve(Response.json(member)), delay);
           }),
       );
     }
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      makeStallingJsonResponse({ ok: true, result: { status: "member" } }, cancel),
-    );
+    fetchWithTimeoutMock.mockResolvedValueOnce(makeStallingMembershipResponse(cancel));
 
     vi.useFakeTimers();
     const auditPromise = auditGroups(groupIds, 50);
