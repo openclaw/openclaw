@@ -12,9 +12,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 describe("write-build-info", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function createPackage(version = "2026.7.10"): string {
+  function createPackage(): string {
     const rootDir = tempDirs.make("openclaw-build-info-");
-    fs.writeFileSync(path.join(rootDir, "package.json"), `${JSON.stringify({ version })}\n`);
+    fs.writeFileSync(path.join(rootDir, "package.json"), '{"version":"2026.7.10"}\n');
     return rootDir;
   }
   const resolve = (options: Parameters<typeof resolveBuildInfo>[0]) =>
@@ -89,11 +89,8 @@ describe("write-build-info", () => {
     );
   });
 
-  it("rejects abbreviated or malformed explicit commits", () => {
-    expect(() => normalizeBuildCommit("abc1234")).toThrow(
-      "GIT_COMMIT must be a full 40-character Git commit SHA.",
-    );
-    expect(() => normalizeBuildCommit("g".repeat(40))).toThrow(
+  it.each(["abc1234", "g".repeat(40)])("rejects malformed explicit commit %s", (commit) => {
+    expect(() => normalizeBuildCommit(commit)).toThrow(
       "GIT_COMMIT must be a full 40-character Git commit SHA.",
     );
   });
