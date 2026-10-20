@@ -1,7 +1,6 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { retainPreparedPluginRegistry } from "../agents/prepared-model-runtime.plugin-lifetime.js";
+import { disposeLoaderFixtures, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { acquirePluginRegistryForInspection, loadOpenClawPlugins } from "./loader.js";
@@ -32,22 +31,17 @@ function writeProbePlugin(id: string, body = "") {
           async execute() { return { content: [{ type: "text", text: String(generation) }] }; } });
       } };`,
   });
-  writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      configSchema: { type: "object", properties: {} },
-      contracts: { tools: [`${id.replaceAll("-", "_")}_probe`] },
-    }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id,
+    configSchema: { type: "object", properties: {} },
+    contracts: { tools: [`${id.replaceAll("-", "_")}_probe`] },
+  });
   return plugin;
 }
 
 const registries: PluginRegistry[] = [];
 afterEach(async () => {
-  for (const registry of registries.splice(0).toReversed()) {
-    await disposePluginRegistryInstances(registry);
-  }
+  await disposeLoaderFixtures(registries);
   await clearActivePluginRegistry();
   Reflect.deleteProperty(globalThis, evaluations);
   resetPluginLoaderTestStateForTest();

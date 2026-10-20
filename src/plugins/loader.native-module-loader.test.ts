@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
@@ -12,58 +13,45 @@ const tempDirs = createTempDirTracker();
 
 function writePreSplitSdkBridgeConsumerFixture() {
   const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
-  const write = (name: string, content: string | object) =>
-    fs.writeFileSync(
-      path.join(pluginRoot, name),
-      typeof content === "string" ? content : JSON.stringify(content),
-      "utf-8",
-    );
+  const write = (name: string, content: string) =>
+    fs.writeFileSync(path.join(pluginRoot, name), content, "utf-8");
   // Native ESM default imports retain raw CommonJS exports despite transpiler markers.
   write(
     "dependency.cjs",
     "module.exports = { __esModule: true, default: { answer: 17 }, answer: 42 };",
   );
   fs.mkdirSync(path.join(pluginRoot, "dist"));
-  write("package.json", {
+  writeFixtureJson(pluginRoot, "package.json", {
     name: "@openclaw/sdk-bridge-consumer",
     version: "2026.7.2-beta.7",
     type: "module",
     openclaw: { extensions: ["./dist/index.js"], runtimeExtensions: ["./dist/index.js"] },
   });
-  write("openclaw.plugin.json", {
+  writeFixtureJson(pluginRoot, "openclaw.plugin.json", {
     id: "sdk-bridge-consumer",
     configSchema: { type: "object", additionalProperties: false, properties: {} },
   });
-  // Import shapes copied from published 2026.7.2-beta.7 artifacts:
-  // voice-call/matrix doctor contracts (runtime-doctor), whatsapp ack policy
-  // (channel-feedback), slack progress-draft render (channel-outbound).
-  // Covers both alias classes on purpose: runtime-doctor is private-local-only,
-  // the channel subpaths are public. The host fixture supplies real compiled
-  // SDK artifacts, matching the installed-package boundary.
+  // Published 2026.7.2-beta.7 imports: private-local doctor and public channel aliases.
+  const imports = {
+    "runtime-doctor":
+      "archiveLegacyStateSource, detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema, detectPluginInstallPathIssue, formatPluginInstallPathIssue, removePluginFromConfig, createPluginStateSyncKeyedStore",
+    "channel-feedback": "shouldAckReactionForWhatsApp",
+    "channel-outbound": "resolveChannelProgressDraftRender",
+  };
   write(
     "dist/index.js",
     [
       'import assert from "node:assert/strict";',
       'import { createRequire } from "node:module";',
       'import dependency from "../dependency.cjs";',
-      'import { archiveLegacyStateSource, detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema, detectPluginInstallPathIssue, formatPluginInstallPathIssue, removePluginFromConfig, createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";',
-      'import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";',
-      'import { resolveChannelProgressDraftRender } from "openclaw/plugin-sdk/channel-outbound";',
+      ...Object.entries(imports).map(
+        ([subpath, names]) => `import { ${names} } from "openclaw/plugin-sdk/${subpath}";`,
+      ),
       'export default { id: "sdk-bridge-consumer", register() {',
       '  assert.equal(dependency, createRequire(import.meta.url)("../dependency.cjs"));',
       "  assert.equal(dependency.answer, 42);",
       "  assert.equal(dependency.default.answer, 17);",
-      "  const bridged = [",
-      "    archiveLegacyStateSource,",
-      "    detectOpenClawStateDatabaseSchemaMigrations,",
-      "    repairOpenClawStateDatabaseSchema,",
-      "    detectPluginInstallPathIssue,",
-      "    formatPluginInstallPathIssue,",
-      "    removePluginFromConfig,",
-      "    createPluginStateSyncKeyedStore,",
-      "    shouldAckReactionForWhatsApp,",
-      "    resolveChannelProgressDraftRender,",
-      "  ];",
+      `  const bridged = [${Object.values(imports).join(", ")}];`,
       '  if (bridged.some((entry) => typeof entry !== "function")) throw new Error("missing bridge");',
       "} };",
     ].join("\n"),

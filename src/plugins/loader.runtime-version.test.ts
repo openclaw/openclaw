@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { formatPluginLine } from "../cli/plugins-list-format.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -44,8 +45,7 @@ it.each([
 export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
     );
     writePluginMetadata({
-      dir: plugin.dir,
-      id: plugin.id,
+      ...plugin,
       packageJson: {
         name: packageName,
         version,
@@ -54,13 +54,11 @@ export const result = { content: [{ type: "text", text: "runtime ready" }] };`,
     });
     const manifestFile = path.join(plugin.dir, "openclaw.plugin.json");
     const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
-    fs.writeFileSync(
-      manifestFile,
-      JSON.stringify({ ...manifest, contracts: { tools: ["runtime_probe"] } }),
-    );
-    const config = {
-      plugins: { allow: [plugin.id], load: { paths: [plugin.dir] }, slots: { memory: "none" } },
-    };
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      ...manifest,
+      contracts: { tools: ["runtime_probe"] },
+    });
+    const config = pluginFixtureConfig({ id: plugin.id, file: plugin.dir });
     const registry = loadOpenClawPlugins({
       config,
       manifestRegistry: loadPluginManifestRegistryCore({ config, installRecords: {} }),
