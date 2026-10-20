@@ -32,10 +32,8 @@ function readFailure(rootDir: string, scenario: string): Error {
         relativePath: scenario === "entry-boundary" ? "../outside.json" : "hardlink.json",
         rejectHardlinks: true,
       });
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.error;
-      }
+      assert.ok(!result.ok);
+      error = result.error;
       break;
     }
     case "file-missing":
@@ -48,10 +46,8 @@ function readFailure(rootDir: string, scenario: string): Error {
         rejectHardlinks: scenario === "file-hardlink",
         maxBytes: scenario === "file-overflow" ? 2 : undefined,
       });
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.failure.error;
-      }
+      assert.ok(!result.ok);
+      error = result.failure.error;
       break;
     }
     case "regular-missing":
@@ -60,24 +56,17 @@ function readFailure(rootDir: string, scenario: string): Error {
         path.join(rootDir, scenario === "regular-missing" ? "missing.json" : "file.json"),
         { maxBytes: scenario === "regular-overflow" ? 2 : undefined },
       );
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.error;
-      }
+      assert.ok(!result.ok);
+      error = result.error;
       break;
     }
     case "json":
     case "json5": {
       const file = readPluginCacheFile(params);
-      assert.equal(file.ok, true);
-      if (!file.ok) {
-        throw new Error("Expected invalid JSON bytes to be readable");
-      }
+      assert.ok(file.ok, "Expected invalid JSON bytes to be readable");
       const result = parsePluginCacheJson(file, { json5: scenario === "json5" });
-      assert.equal(result.ok, false);
-      if (!result.ok) {
-        error = result.error;
-      }
+      assert.ok(!result.ok);
+      error = result.error;
       break;
     }
     default:

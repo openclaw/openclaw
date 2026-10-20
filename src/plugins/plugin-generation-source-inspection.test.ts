@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createJiti } from "./jiti-factory.js";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { inspectPluginSourceDependencies } from "./plugin-generation-source-inspection.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import { visitPluginSourceReferences } from "./plugin-source-references.js";
@@ -16,10 +17,9 @@ it("inspects retained import.meta reads and assignments without evaluating depen
   const codec = path.join(root, "codec.mjs");
   const glue = path.join(root, "glue.mjs");
   const resolved = path.join(root, "resolved.mjs");
-  fs.writeFileSync(entryFile, `export const load = () => import("./codec.mjs");`);
-  fs.writeFileSync(
-    codec,
-    `import path from "node:path";
+  writeTree(root, {
+    "index.mjs": `export const load = () => import("./codec.mjs");`,
+    "codec.mjs": `import path from "node:path";
      import "./glue.mjs";
      const meta = import.meta;
      const url = import.meta["url"];
@@ -32,9 +32,9 @@ it("inspects retained import.meta reads and assignments without evaluating depen
      export const schema = path.join(import.meta.dirname, "schema.json");
      export const next = import.meta.resolve("./resolved.mjs");
      throw new Error("inspection must not execute plugin code");`,
-  );
-  fs.writeFileSync(glue, "export {};");
-  fs.writeFileSync(resolved, "export {};");
+    "glue.mjs": "export {};",
+    "resolved.mjs": "export {};",
+  });
 
   const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
   expect(inspection.references).toEqual([
@@ -61,8 +61,10 @@ it("names the dependency whose source cannot be parsed", () => {
   const root = temp.make("plugin-inspection-parse-failure-");
   const entryFile = path.join(root, "index.mjs");
   const broken = path.join(root, "broken.mjs");
-  fs.writeFileSync(entryFile, `export const load = () => import("./broken.mjs");`);
-  fs.writeFileSync(broken, "\nconst pattern = /(/;");
+  writeTree(root, {
+    "index.mjs": `export const load = () => import("./broken.mjs");`,
+    "broken.mjs": "\nconst pattern = /(/;",
+  });
 
   expect(() => inspectPluginSourceDependencies([{ rootDir: root, entryFile }])).toThrow(
     expect.objectContaining({
@@ -87,14 +89,10 @@ it("inspects a captured cyclic dependency graph without following its dependency
     [alpha, "alpha", "beta", beta],
     [beta, "beta", "alpha", alpha],
   ] as const) {
-    fs.writeFileSync(
-      path.join(directory, "package.json"),
-      JSON.stringify({ name, main: "index.cjs", dependencies: { [dependency]: "1.0.0" } }),
-    );
-    fs.writeFileSync(
-      path.join(directory, "index.cjs"),
-      `require('${dependency}'); throw new Error('inspection must not execute plugin code');`,
-    );
+    writeTree(directory, {
+      "package.json": { name, main: "index.cjs", dependencies: { [dependency]: "1.0.0" } },
+      "index.cjs": `require('${dependency}'); throw new Error('inspection must not execute plugin code');`,
+    });
     fs.symlinkSync(target, path.join(directory, "node_modules", dependency), "junction");
   }
 
@@ -140,15 +138,14 @@ it.for(
     const entryFile = path.join(root, kind === "import" ? "index.mjs" : "index.cjs");
     const selected = path.join(root, "sync.mjs");
     const selection = { "module-sync": "./sync.mjs", default: "./fallback.mjs" };
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({
+    writeTree(root, {
+      "package.json": {
         name: "inspection-conditions",
         type: "module",
         imports: { "#selected": selection },
         exports: { "./selected": selection },
-      }),
-    );
+      },
+    });
     for (const file of [selected, path.join(root, "fallback.mjs")]) {
       fs.writeFileSync(file, "throw new Error('inspection must not evaluate plugin code');");
     }

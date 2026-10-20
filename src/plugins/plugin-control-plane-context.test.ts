@@ -1,4 +1,3 @@
-// Verifies plugin control-plane context construction and boundaries.
 import { describe, expect, it } from "vitest";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
@@ -49,77 +48,46 @@ function createIndex(
 
 describe("plugin control-plane context", () => {
   it("includes policy, inventory, and activation in one control-plane fingerprint", () => {
-    const config = { plugins: { allow: ["demo"] } };
-    const base = resolvePluginControlPlaneFingerprint({
-      config,
-      env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+    const params = {
+      config: { plugins: { allow: ["demo"] } },
+      env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" },
       index: createIndex("demo"),
       activationFingerprint: "activation-a",
-    });
-
+    };
+    const base = resolvePluginControlPlaneFingerprint(params);
+    const fingerprint = (overrides: Partial<typeof params>) =>
+      resolvePluginControlPlaneFingerprint({ ...params, ...overrides });
+    expect(fingerprint({ index: createIndex("other") })).not.toBe(base);
+    expect(fingerprint({ activationFingerprint: "activation-b" })).not.toBe(base);
     expect(
       resolvePluginControlPlaneFingerprint({
-        config,
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
-        index: createIndex("other"),
-        activationFingerprint: "activation-a",
-      }),
-    ).not.toBe(base);
-    expect(
-      resolvePluginControlPlaneFingerprint({
-        config,
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
-        index: createIndex("demo"),
-        activationFingerprint: "activation-b",
-      }),
-    ).not.toBe(base);
-    expect(
-      resolvePluginControlPlaneFingerprint({
+        ...params,
         config: { plugins: { deny: ["demo"] } },
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
-        index: createIndex("demo"),
-        activationFingerprint: "activation-a",
       }),
     ).not.toBe(base);
   });
 
   it("tracks doctor contract content but ignores index generation time", () => {
-    const baseIndex = createIndex("demo", {
-      doctorContractHash: "contract-a",
-      generatedAtMs: 1,
-    });
-    const changedContractIndex = createIndex("demo", {
-      doctorContractHash: "contract-b",
-      generatedAtMs: 1,
-    });
-    const regeneratedIndex = createIndex("demo", {
-      doctorContractHash: "contract-a",
-      generatedAtMs: 2,
-    });
-    const retimedContractIndex = createIndex("demo", {
-      doctorContractHash: "contract-a",
+    const makeIndex = (options: Parameters<typeof createIndex>[1] = {}) =>
+      createIndex("demo", { doctorContractHash: "contract-a", ...options });
+    const baseIndex = makeIndex();
+    const changedContractIndex = makeIndex({ doctorContractHash: "contract-b" });
+    const regeneratedIndex = makeIndex({ generatedAtMs: 2 });
+    const retimedContractIndex = makeIndex({
       doctorContractFile: { size: 10, mtimeMs: 20, ctimeMs: 30 },
-      generatedAtMs: 1,
     });
-    const rebuiltIndex = createIndex("demo", {
-      doctorContractHash: "contract-a",
+    const rebuiltIndex = makeIndex({
       packageBuild: { openclawVersion: "next", bundledDist: false },
     });
-    const buildOnlyIndex = createIndex("demo", {
-      doctorContractHash: "contract-a",
-      packageBuild: { openclawVersion: "test" },
-    });
+    const buildOnlyIndex = makeIndex({ packageBuild: { openclawVersion: "test" } });
     const withoutBuildIndex: InstalledPluginIndex = {
       ...buildOnlyIndex,
       plugins: buildOnlyIndex.plugins.map(({ packageBuild: _packageBuild, ...plugin }) => plugin),
     };
-    const bundledDistIndex = createIndex("demo", {
-      doctorContractHash: "contract-a",
+    const bundledDistIndex = makeIndex({
       packageBuild: { openclawVersion: "test", bundledDist: true },
     });
-    const reorderedIndexSource = createIndex("demo", {
-      doctorContractHash: "contract-a",
-    });
+    const reorderedIndexSource = makeIndex();
     const { pluginId, ...reorderedPlugin } = reorderedIndexSource.plugins[0]!;
     const reorderedIndex: InstalledPluginIndex = {
       ...reorderedIndexSource,
@@ -128,43 +96,23 @@ describe("plugin control-plane context", () => {
     const resolveControlPlaneFingerprint = (index: InstalledPluginIndex) =>
       resolvePluginControlPlaneFingerprint({
         config: { plugins: { allow: ["demo"] } },
-        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" } as NodeJS.ProcessEnv,
+        env: { HOME: "/home/a", OPENCLAW_HOME: "/openclaw/a" },
         index,
         activationFingerprint: "activation-a",
       });
 
-    const inventoryFingerprint = resolveInstalledManifestRegistryIndexFingerprint(baseIndex);
-    expect(resolveInstalledManifestRegistryIndexFingerprint(changedContractIndex)).not.toBe(
-      inventoryFingerprint,
-    );
-    expect(resolveInstalledManifestRegistryIndexFingerprint(regeneratedIndex)).toBe(
-      inventoryFingerprint,
-    );
-    expect(resolveInstalledManifestRegistryIndexFingerprint(retimedContractIndex)).toBe(
-      inventoryFingerprint,
-    );
-    expect(resolveInstalledManifestRegistryIndexFingerprint(rebuiltIndex)).toBe(
-      inventoryFingerprint,
-    );
-    expect(resolveInstalledManifestRegistryIndexFingerprint(withoutBuildIndex)).toBe(
-      resolveInstalledManifestRegistryIndexFingerprint(buildOnlyIndex),
-    );
-    expect(resolveInstalledManifestRegistryIndexFingerprint(bundledDistIndex)).not.toBe(
-      inventoryFingerprint,
-    );
-    expect(resolveInstalledManifestRegistryIndexFingerprint(reorderedIndex)).toBe(
-      inventoryFingerprint,
-    );
-
-    const controlPlaneFingerprint = resolveControlPlaneFingerprint(baseIndex);
-    expect(resolveControlPlaneFingerprint(changedContractIndex)).not.toBe(controlPlaneFingerprint);
-    expect(resolveControlPlaneFingerprint(regeneratedIndex)).toBe(controlPlaneFingerprint);
-    expect(resolveControlPlaneFingerprint(retimedContractIndex)).toBe(controlPlaneFingerprint);
-    expect(resolveControlPlaneFingerprint(rebuiltIndex)).toBe(controlPlaneFingerprint);
-    expect(resolveControlPlaneFingerprint(withoutBuildIndex)).toBe(
-      resolveControlPlaneFingerprint(buildOnlyIndex),
-    );
-    expect(resolveControlPlaneFingerprint(bundledDistIndex)).not.toBe(controlPlaneFingerprint);
-    expect(resolveControlPlaneFingerprint(reorderedIndex)).toBe(controlPlaneFingerprint);
+    for (const fingerprint of [
+      resolveInstalledManifestRegistryIndexFingerprint,
+      resolveControlPlaneFingerprint,
+    ]) {
+      const base = fingerprint(baseIndex);
+      expect(fingerprint(changedContractIndex)).not.toBe(base);
+      expect(fingerprint(regeneratedIndex)).toBe(base);
+      expect(fingerprint(retimedContractIndex)).toBe(base);
+      expect(fingerprint(rebuiltIndex)).toBe(base);
+      expect(fingerprint(withoutBuildIndex)).toBe(fingerprint(buildOnlyIndex));
+      expect(fingerprint(bundledDistIndex)).not.toBe(base);
+      expect(fingerprint(reorderedIndex)).toBe(base);
+    }
   });
 });

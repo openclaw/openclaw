@@ -17,9 +17,14 @@ const packageRoots: string[] = [];
 
 function createPackageFixture(params: {
   sourceExtension: string;
-  runtimeOutputs?: string[];
+  runtimeOutputs?: readonly string[];
   includeSource?: boolean;
-}): { packageDir: string; sourceEntry: string; manifest: PackageManifest } {
+}): {
+  packageDir: string;
+  sourceEntry: string;
+  manifest: PackageManifest;
+  resolution: Omit<Parameters<typeof resolvePackageRuntimeExtensionSources>[0], "manifest">;
+} {
   const packageDir = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-runtime-entry-")),
   );
@@ -37,6 +42,13 @@ function createPackageFixture(params: {
   return {
     packageDir,
     sourceEntry,
+    resolution: {
+      packageDir,
+      extensions: [sourceEntry],
+      origin: "global",
+      sourceLabel: packageDir,
+      diagnostics: [],
+    },
     manifest: {
       name: "runtime-entry-fixture",
       version: "1.0.0",
@@ -54,82 +66,48 @@ afterEach(() => {
 
 describe("canonical installed package runtime entries", () => {
   it.each([
-    {
-      name: "TSX source with its flat JavaScript build",
-      sourceExtension: ".tsx",
-      runtimeOutputs: ["dist/entry.js"],
-      expectedRuntime: "dist/entry.js",
-    },
-    {
-      name: "TSX source omitted from a published package",
-      sourceExtension: ".tsx",
-      runtimeOutputs: ["dist/entry.js"],
-      includeSource: false,
-      expectedRuntime: "dist/entry.js",
-    },
-    {
-      name: "TypeScript compiler output that preserves the src directory",
-      sourceExtension: ".ts",
-      runtimeOutputs: ["dist/src/entry.js"],
-      expectedRuntime: "dist/src/entry.js",
-    },
-    {
-      name: "ES module TypeScript output ahead of an unrelated .js artifact",
-      sourceExtension: ".mts",
-      runtimeOutputs: ["dist/entry.js", "dist/entry.mjs"],
-      expectedRuntime: "dist/entry.mjs",
-    },
-    {
-      name: "CommonJS TypeScript output ahead of an unrelated .js artifact",
-      sourceExtension: ".cts",
-      runtimeOutputs: ["dist/entry.js", "dist/entry.cjs"],
-      expectedRuntime: "dist/entry.cjs",
-    },
-  ])("keeps install, discovery, setup, and loading aligned for $name", async (scenario) => {
-    const { packageDir, sourceEntry, manifest } = createPackageFixture(scenario);
-    const installResult = await validatePackageExtensionEntriesForInstall({
-      packageDir,
-      extensions: [sourceEntry],
-      manifest,
-    });
-    const diagnostics: Parameters<typeof resolvePackageRuntimeExtensionSources>[0]["diagnostics"] =
-      [];
-    const runtimeSources = resolvePackageRuntimeExtensionSources({
-      packageDir,
-      manifest,
-      extensions: [sourceEntry],
-      origin: "global",
-      sourceLabel: packageDir,
-      diagnostics,
-    });
-    const setupSource = resolvePackageSetupSource({
-      packageDir,
-      manifest,
-      origin: "global",
-      sourceLabel: packageDir,
-      diagnostics,
-    });
-    const artifact = resolvePluginRuntimeArtifact({
-      pluginId: "runtime-entry-fixture",
-      entryKind: "runtime",
-      source: path.join(packageDir, sourceEntry),
-      rootDir: packageDir,
-      origin: "global",
-      preferBuiltPluginArtifacts: true,
-    });
-    const expectedSource = fs.realpathSync(path.join(packageDir, scenario.expectedRuntime));
+    [".tsx", ["dist/entry.js"], "dist/entry.js", true],
+    [".tsx", ["dist/entry.js"], "dist/entry.js", false],
+    [".ts", ["dist/src/entry.js"], "dist/src/entry.js", true],
+    [".mts", ["dist/entry.js", "dist/entry.mjs"], "dist/entry.mjs", true],
+    [".cts", ["dist/entry.js", "dist/entry.cjs"], "dist/entry.cjs", true],
+  ] as const)(
+    "aligns install, discovery, setup, and loading: %s, outputs %j, selected %s, source %s",
+    async (sourceExtension, runtimeOutputs, expectedRuntime, includeSource) => {
+      const { packageDir, sourceEntry, manifest, resolution } = createPackageFixture({
+        sourceExtension,
+        runtimeOutputs,
+        includeSource,
+      });
+      const installResult = await validatePackageExtensionEntriesForInstall({
+        packageDir,
+        extensions: [sourceEntry],
+        manifest,
+      });
+      const runtimeSources = resolvePackageRuntimeExtensionSources({ ...resolution, manifest });
+      const setupSource = resolvePackageSetupSource({ ...resolution, manifest });
+      const artifact = resolvePluginRuntimeArtifact({
+        pluginId: "runtime-entry-fixture",
+        entryKind: "runtime",
+        source: path.join(packageDir, sourceEntry),
+        rootDir: packageDir,
+        origin: "global",
+        preferBuiltPluginArtifacts: true,
+      });
+      const expectedSource = fs.realpathSync(path.join(packageDir, expectedRuntime));
 
-    expect(installResult).toEqual({ ok: true });
-    expect(runtimeSources).toEqual([expectedSource]);
-    expect(setupSource).toBe(expectedSource);
-    expect(artifact.source).toBe(expectedSource);
-    expect(diagnostics).toEqual([]);
-  });
+      expect(installResult).toEqual({ ok: true });
+      expect(runtimeSources).toEqual([expectedSource]);
+      expect(setupSource).toBe(expectedSource);
+      expect(artifact.source).toBe(expectedSource);
+      expect(resolution.diagnostics).toEqual([]);
+    },
+  );
 
   it.each([".ts", ".tsx", ".mts", ".cts"])(
     "rejects published source-only %s entries while allowing linked source checkouts",
     async (sourceExtension) => {
-      const { packageDir, sourceEntry, manifest } = createPackageFixture({
+      const { packageDir, sourceEntry, manifest, resolution } = createPackageFixture({
         sourceExtension,
         runtimeOutputs: ["index.js"],
       });
@@ -151,33 +129,17 @@ describe("canonical installed package runtime entries", () => {
           }),
         ).toEqual({ ok: true });
       }
-      const diagnostics: Parameters<
-        typeof resolvePackageRuntimeExtensionSources
-      >[0]["diagnostics"] = [];
-
-      expect(
-        resolvePackageRuntimeExtensionSources({
-          packageDir,
-          manifest,
-          extensions: [sourceEntry],
-          origin: "global",
-          sourceLabel: packageDir,
-          diagnostics,
-        }),
-      ).toEqual([]);
-      expect(diagnostics).toEqual([
+      expect(resolvePackageRuntimeExtensionSources({ ...resolution, manifest })).toEqual([]);
+      expect(resolution.diagnostics).toEqual([
         expect.objectContaining({
           message: expect.stringContaining("requires compiled runtime output"),
         }),
       ]);
       expect(
         resolvePackageRuntimeExtensionSources({
-          packageDir,
+          ...resolution,
           manifest,
-          extensions: [sourceEntry],
-          origin: "global",
           requireBuiltRuntimeEntry: false,
-          sourceLabel: packageDir,
           diagnostics: [],
         }),
       ).toEqual([fs.realpathSync(path.join(packageDir, sourceEntry))]);

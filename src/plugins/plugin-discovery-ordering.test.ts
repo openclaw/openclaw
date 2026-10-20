@@ -16,32 +16,30 @@ function createTemporaryRoot(): string {
   return root;
 }
 
-function createPlugin(params: {
-  pluginRoot: string;
-  pluginId: string;
-  bundledDist?: boolean;
-}): void {
-  fs.mkdirSync(params.pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "package.json"),
-    JSON.stringify({
-      name: `@qa/${params.pluginId}`,
+function createPlugin(pluginRoot: string, id: string, bundledDist?: boolean) {
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  const files = {
+    "package.json": JSON.stringify({
+      name: `@qa/${id}`,
       openclaw: {
         extensions: ["./index.cjs"],
-        ...(params.bundledDist === undefined ? {} : { build: { bundledDist: params.bundledDist } }),
+        ...(bundledDist === undefined ? {} : { build: { bundledDist } }),
       },
     }),
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({ id: params.pluginId, configSchema: { type: "object" } }),
-  );
-  fs.writeFileSync(
-    path.join(params.pluginRoot, "index.cjs"),
-    `module.exports = { id: "${params.pluginId}", register(api) { ` +
+    "openclaw.plugin.json": JSON.stringify({ id, configSchema: { type: "object" } }),
+    "index.cjs":
+      `module.exports = { id: "${id}", register(api) { ` +
       `api.on("gateway_start", () => {}); ` +
-      `api.registerService({ id: "${params.pluginId}-service", start() {} }); } };`,
-  );
+      `api.registerService({ id: "${id}-service", start() {} }); } };`,
+  };
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(pluginRoot, name), content);
+  }
+  return pluginRoot;
+}
+
+function createPlugins(root: string, bundledDist?: boolean) {
+  return ["zeta", "alpha"].map((id) => createPlugin(path.join(root, id), id, bundledDist));
 }
 
 function reverseDirectoryEntries(directory: string): void {
@@ -78,9 +76,7 @@ describe("deterministic plugin discovery ownership", () => {
   it("keeps plugin, equal-priority hook, and service order independent of directory enumeration", () => {
     const stateRoot = createTemporaryRoot();
     const extensionRoot = path.join(stateRoot, "extensions");
-    for (const pluginId of ["zeta", "alpha"]) {
-      createPlugin({ pluginRoot: path.join(extensionRoot, pluginId), pluginId });
-    }
+    createPlugins(extensionRoot);
     reverseDirectoryEntries(extensionRoot);
 
     const registry = loadOpenClawPlugins({
@@ -97,13 +93,8 @@ describe("deterministic plugin discovery ownership", () => {
 
   it("keeps configured load-path precedence under deterministic directory discovery", () => {
     const stateRoot = createTemporaryRoot();
-    const alphaRoot = path.join(stateRoot, "alpha");
-    const zetaRoot = path.join(stateRoot, "zeta");
-    createPlugin({ pluginRoot: alphaRoot, pluginId: "alpha" });
-    createPlugin({ pluginRoot: zetaRoot, pluginId: "zeta" });
-
     const discovery = discoverOpenClawPlugins({
-      extraPaths: [zetaRoot, alphaRoot],
+      extraPaths: createPlugins(stateRoot),
       installRecords: {},
       env: {
         OPENCLAW_STATE_DIR: path.join(stateRoot, "state"),
@@ -118,9 +109,8 @@ describe("deterministic plugin discovery ownership", () => {
     "keeps the first configured alias for each physical source (alias first: %s)",
     (aliasFirst) => {
       const stateRoot = createTemporaryRoot();
-      const pluginRoot = path.join(stateRoot, "plugin");
+      const pluginRoot = createPlugin(path.join(stateRoot, "plugin"), "ordered-plugin");
       const aliasRoot = path.join(stateRoot, "alias");
-      createPlugin({ pluginRoot, pluginId: "ordered-plugin" });
       fs.symlinkSync(pluginRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
       const loadPaths = (aliasFirst ? [aliasRoot, pluginRoot] : [pluginRoot, aliasRoot]).map(
         (root) => path.join(root, "index.cjs"),
@@ -144,13 +134,7 @@ describe("deterministic plugin discovery ownership", () => {
     fs.mkdirSync(bundledRoot, { recursive: true });
     fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/fake.git");
     fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []");
-    for (const pluginId of ["zeta", "alpha"]) {
-      createPlugin({
-        pluginRoot: path.join(sourceRoot, pluginId),
-        pluginId,
-        bundledDist: false,
-      });
-    }
+    createPlugins(sourceRoot, false);
     reverseDirectoryEntries(sourceRoot);
 
     const discovery = discoverOpenClawPlugins({
@@ -169,9 +153,7 @@ describe("deterministic plugin discovery ownership", () => {
     const root = createTemporaryRoot();
     const home = path.join(root, "home");
     const extensionRoot = path.join(home, ".openclaw", "extensions");
-    for (const pluginId of ["zeta", "alpha"]) {
-      createPlugin({ pluginRoot: path.join(extensionRoot, pluginId), pluginId });
-    }
+    createPlugins(extensionRoot);
     reverseDirectoryEntries(extensionRoot);
 
     const records = listOpenClawPluginManifestMetadata({

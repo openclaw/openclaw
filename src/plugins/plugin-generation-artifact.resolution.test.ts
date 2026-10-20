@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as jitiFactory from "./jiti-factory.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -22,9 +23,10 @@ it.each([false, true])(
     const imports: string[] = [];
     for (let index = 0; index < 25; index++) {
       const directory = path.join(root, `part-${index}`);
-      fs.mkdirSync(directory);
-      fs.writeFileSync(path.join(directory, "value.ts"), `export const value = ${index};`);
-      fs.writeFileSync(path.join(directory, "index.ts"), 'export { value } from "./value.js";');
+      writeTree(directory, {
+        "value.ts": `export const value = ${index};`,
+        "index.ts": 'export { value } from "./value.js";',
+      });
       imports.push(`export { value as value${index} } from "./part-${index}/index.js";`);
     }
     fs.writeFileSync(entry, imports.join("\n"));
@@ -72,11 +74,7 @@ it.each(["value.js", "value.js.ts", "value.js/index.js", "value.js.json", "value
     // Native loader hooks can select a TS sibling before Jiti's final require fallback.
     const expected = fileURLToPath(
       jitiFactory
-        .createJiti(entry, {
-          fsCache: false,
-          moduleCache: false,
-          tryNative: false,
-        })
+        .createJiti(entry, { fsCache: false, moduleCache: false, tryNative: false })
         .esmResolve(path.join(root, "value.js"), { conditions: ["node", "module-sync", "import"] }),
     );
     const artifact = capturePluginGenerationArtifact(root, entry);
@@ -95,11 +93,11 @@ it("resolves package alias targets from the importing source", () => {
   const root = temp.make("plugin-resolution-alias-");
   const nested = path.join(root, "nested");
   for (const directory of [root, nested]) {
-    const dependency = path.join(directory, "node_modules", "fixture");
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(path.join(directory, "index.ts"), "");
-    fs.writeFileSync(path.join(dependency, "package.json"), '{"main":"index.js"}');
-    fs.writeFileSync(path.join(dependency, "index.js"), "exports.value = 1;");
+    writeTree(directory, {
+      "index.ts": "",
+      "node_modules/fixture/package.json": { main: "index.js" },
+      "node_modules/fixture/index.js": "exports.value = 1;",
+    });
   }
   const reference = path.join(root, "alias.js");
   const resolution = createPluginCaptureResolver({ alias: { [reference]: "fixture" } });
