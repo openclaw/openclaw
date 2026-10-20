@@ -36,12 +36,12 @@ import {
   buildIMessageApprovalConversationKeyForTarget,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
+  resolveIMessageApprovalControlActor,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
 import { resolveIMessageReactionContext } from "./monitor/reaction-context.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
-import { normalizeIMessageHandle } from "./targets.js";
 
 const PERSISTENT_NAMESPACE = "imessage.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
@@ -414,7 +414,7 @@ function readApprovalReactionEvent(
   }
   const reactionKey = reaction.emoji;
   const primary = reaction.targetGuid;
-  const actorHandle = normalizeIMessageHandle(message.sender ?? "");
+  const actorHandle = resolveIMessageApprovalControlActor(message);
   if (!reactionKey || !primary || !actorHandle) {
     return null;
   }

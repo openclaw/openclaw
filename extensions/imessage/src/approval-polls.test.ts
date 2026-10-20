@@ -206,6 +206,29 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it.each([
+    ["peer reported as sender", "+15555550123"],
+    ["local account reported as sender", APPROVER],
+  ])("attributes is_from_me DM votes to the local account (%s)", async (_name, sender) => {
+    const peer = "+15555550123";
+    expect(await bind({ conversation: { handle: peer } })).toBe(true);
+    const vote = {
+      ...buildVote({
+        sender,
+        participant: APPROVER,
+        isFromMe: true,
+        destinationCallerId: APPROVER,
+      }),
+      chat_identifier: peer,
+      is_group: false,
+    } as IMessagePayload;
+
+    expect(await resolveVote(vote)).toBe(true);
+    expect(resolverMocks.resolve).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "allow-once", senderId: APPROVER }),
+    );
+  });
+
+  it.each([
     ["does not trust destination_caller_id on received rows", ""],
     ["rejects imsg's local-identity sender fallback on received rows", APPROVER],
   ])("%s", async (_name, sender) => {
