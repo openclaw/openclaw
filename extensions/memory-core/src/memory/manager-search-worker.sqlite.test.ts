@@ -17,12 +17,13 @@ import { executeMemorySearchWorkerQuery } from "./manager-search.worker.js";
 
 // Frozen from the unchanged direct SQLite helpers before routing these cases through
 // worker dispatch. Hash the exact SQL bytes, including whitespace and statement order.
+// Keyword entries include the `LIMIT +?` and `LIKE (? || '')` bindings.
 const baselineStatements = {
   keyword: [
-    "4ef955cb4eb5d833877cc5481645d12d752c8ec66b563c9450f698551657be2d",
-    "e0eb673f20e6406407742bdf77b68a4339fb325f93c57767d13341b8428aa173",
-    "fa8fb1408e402a805b1bc7b4fdf56cd7a4574c43ef745c1b7c2a5cf7c74aa25f",
-    "60ff181c3ad4dbf8a65f4ed156c75f1a49a1b2b6223f511a2d3786ce106aa950",
+    "0d8edb57312b94e844b0dbb9c5b52492984c7144b0128e97b10b08a4db6c61f1",
+    "d21b7990e9e84dd27defe48d362fbc1b9052516c16f7f12ed8585f816a7f804d",
+    "0452ff06b004ffa625a01700b4807576c1fc9b47fb5692b2228e9073a6e62416",
+    "6e57716adee36fd2e181a5439b23095e7b5c7efe8c37a14521ca767088e493cc",
   ],
   fallback: [
     "93b82ea8ca193cfa2452b7c06fc751197a8ce4a6dcc1530908e7e5f1f1b41f38",

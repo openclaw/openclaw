@@ -1,56 +1,12 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readCanonicalCronListPage,
+  resolveCronListPageNextOffset,
+} from "../../../../src/cron/service/list-page-validation.js";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import type { CronJobsState } from "./types.ts";
-
-export function readCanonicalCronJobsPage<Row>(
-  value: CronJobsListResult<Row>,
-  requestedLimit: number,
-): CronJobsListResult<Row> {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.jobs) ||
-    typeof value.snapshotRevision !== "string" ||
-    value.snapshotRevision.length === 0 ||
-    typeof value.total !== "number" ||
-    !Number.isSafeInteger(value.total) ||
-    value.total < 0 ||
-    typeof value.offset !== "number" ||
-    !Number.isSafeInteger(value.offset) ||
-    value.offset < 0 ||
-    typeof value.limit !== "number" ||
-    !Number.isSafeInteger(value.limit) ||
-    value.limit < 1 ||
-    value.limit > requestedLimit ||
-    value.jobs.length > value.limit ||
-    typeof value.hasMore !== "boolean" ||
-    (value.nextOffset !== null &&
-      (typeof value.nextOffset !== "number" ||
-        !Number.isSafeInteger(value.nextOffset) ||
-        value.nextOffset < 0))
-  ) {
-    throw new Error("cron.list returned an invalid inventory page");
-  }
-  return value;
-}
-
-export function assertCanonicalCronJobsCursor(
-  page: CronJobsListResult<unknown>,
-  requestedOffset: number,
-) {
-  const nextOffset = requestedOffset + page.jobs.length;
-  if (
-    page.offset !== requestedOffset ||
-    !Number.isSafeInteger(nextOffset) ||
-    nextOffset > page.total ||
-    (page.hasMore
-      ? page.nextOffset !== nextOffset || nextOffset <= requestedOffset || nextOffset >= page.total
-      : page.nextOffset !== null || nextOffset !== page.total)
-  ) {
-    throw new Error("cron.list returned an invalid inventory page");
-  }
-}
 
 function queueCronJobsSnapshotRecovery<Row>(state: CronJobsState<Row>, tableFilters: boolean) {
   if (state.cronJobsReloadPending) {
@@ -89,7 +45,7 @@ type CronRuntimeState = Pick<
 export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean; event?: unknown };
 export type CronJobsProjection<Row extends CronInventoryJob> = {
   compact?: true;
-  readRows: (rows: Row[]) => Row[];
+  readRows?: (rows: Row[]) => Row[];
   applyRuntime: (
     state: CronJobsState<Row>,
     index: number,
@@ -310,7 +266,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
     if (!isCurrentScope()) {
       return;
     }
-    const page = readCanonicalCronJobsPage<Row>(res, state.cronJobsLimit);
+    const page = readCanonicalCronListPage<Row>(res, state.cronJobsLimit);
     if (
       append &&
       (page.snapshotRevision !== state.cronJobsSnapshotRevision ||
@@ -321,8 +277,8 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
       queueCronJobsSnapshotRecovery(state, opts?.tableFilters === true);
       return;
     }
-    assertCanonicalCronJobsCursor(page, offset);
-    const jobs = projection.readRows(page.jobs);
+    resolveCronListPageNextOffset(page, offset);
+    const jobs = projection.readRows?.(page.jobs) ?? page.jobs;
     state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;
