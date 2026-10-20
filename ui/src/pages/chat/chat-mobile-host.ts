@@ -17,8 +17,7 @@ export type MobileDetailsRoute =
         | "outputs"
         | "automations";
     }
-  | { kind: "pull-request"; id: string }
-  | { kind: "automation" | "automation-transcript"; id: string };
+  | { kind: "pull-request"; id: string };
 
 /** Controlled leaves supply content; the pane alone owns navigation and presentation. */
 export type MobileHostDestination = {
