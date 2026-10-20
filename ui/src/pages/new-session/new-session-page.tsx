@@ -22,6 +22,7 @@ import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
+import { ChatWelcome } from "../chat/components/chat-welcome.tsx";
 import { DirectDictationView } from "../chat/components/direct-dictation-view.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
@@ -32,7 +33,6 @@ import { isWorktreeNameValid } from "./create-params.ts";
 import { DraftError, NewSessionBody, preloadNewSessionSubmission } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
-import { DraftWelcome } from "./draft-welcome.tsx";
 import {
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
@@ -422,9 +422,8 @@ function renderPageContent(host: PageHost) {
             <Show
               when={Boolean(completed())}
               fallback={
-                <DraftWelcome
-                  sessions={page().context?.sessions}
-                  options={page().welcomeOptions()}
+                <ChatWelcome
+                  {...page().welcomeOptions()}
                   assistantNameControl={
                     !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
                       <DraftAgentSelect page={page} />

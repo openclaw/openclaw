@@ -82,6 +82,13 @@ or the connection changes.
 Session shortcuts show their own emoji or image, or title initials when no icon
 is set. Only a running ring and unread dot decorate these shortcuts.
 
+### Recent chats
+
+On signed-in multi-user Gateways, **Recent chats** on New Session and in an empty
+chat uses your **Involving me** sessions for the active agent. Personal hide/show
+choices apply before pagination; **All owners** remains available in the sidebar
+for discovering other conversations. Single-user Gateways keep their usual recents.
+
 ### Session owner filter
 
 Each view has one header row. In Sessions, the title is the owner-filter chip:

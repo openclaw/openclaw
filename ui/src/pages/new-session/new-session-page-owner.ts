@@ -449,7 +449,7 @@ export class NewSessionPageOwner {
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
       onModelSetup: () => this.context?.navigate("model-setup"),
-      sessions: this.context?.sessions.state.result,
+      applicationContext: this.context,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.place.agentId || "main",
         mainKey: this.context?.agents.state.agentsList?.mainKey,

@@ -41,8 +41,6 @@ export function resolveAssistantDisplayAvatar(props: {
   };
 }
 
-export type WelcomeRecentSession = ReturnType<typeof prepareWelcomeRecentSessions>[number];
-
 /**
  * Recent user-created chats for the welcome screen: the sidebar's visible-row
  * rules (no archived/cron/subagent/spawned rows, scoped to the active agent)

@@ -1,22 +1,23 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
+import type { ApplicationContext } from "../../../app/context.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Kbd } from "../../../components/solid/kbd.tsx";
 import "../../../components/openclaw-mascot.ts";
 import { registerCommandPaletteEnglish } from "../../../i18n/locales/en-command-palette.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import { projectGateway } from "../../../lib/reactive/application.ts";
 import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import {
+  parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
-import {
-  prepareWelcomeRecentSessions,
-  resolveAssistantDisplayAvatar,
-  type WelcomeRecentSession,
-} from "./chat-welcome.ts";
+import { prepareWelcomeRecentSessions, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 registerCommandPaletteEnglish();
 
@@ -35,6 +36,7 @@ export type ChatWelcomeIdentityProps = {
 };
 
 export type ChatWelcomeProps = {
+  applicationContext?: Pick<ApplicationContext, "gateway" | "sessions">;
   /** Existing agent picker, shown in the new-session welcome heading. */
   assistantNameControl?: JSX.Element;
   /** Hero hint override; defaults to the chat slash-command hint. */
@@ -57,21 +59,79 @@ const WELCOME_SUGGESTION_KEYS = [
 ];
 
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
-export function ChatWelcome(
-  props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
-) {
+export function ChatWelcome(props: ChatWelcomeProps) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
-  const recentSessions = createMemo(() => {
-    if (props.preparedRecents) {
-      return props.preparedRecents;
+  const context = createMemo(() => props.applicationContext);
+  const gateway = createMemo(() => {
+    const owner = context()?.gateway;
+    return owner ? projectGateway(owner) : undefined;
+  });
+  const scope = createMemo(
+    () => {
+      const snapshot = gateway()?.read().snapshot;
+      return {
+        sessionKey: props.sessionKey,
+        agentId:
+          parseAgentSessionKey(props.sessionKey)?.agentId ??
+          resolveUiSelectedGlobalAgentId(props.sessionHost ?? {}),
+        profileId:
+          snapshot?.hello?.policy?.hasMultipleSessionSharingIdentities === true
+            ? snapshot.selfUser?.id
+            : undefined,
+        identityPending: Boolean(snapshot && snapshot.selfUser === undefined),
+      };
+    },
+    {
+      equals: (a, b) =>
+        a.sessionKey === b.sessionKey &&
+        a.agentId === b.agentId &&
+        a.profileId === b.profileId &&
+        a.identityPending === b.identityPending,
+    },
+  );
+  const sessions = createMemo(() => {
+    const owner = context()?.sessions;
+    const selected = scope();
+    if (!owner || selected.identityPending) {
+      return undefined;
+    }
+    if (!selected.profileId) {
+      return projectOwner(owner, (current) => current.state.result);
+    }
+    const query = {
+      agentId: selected.agentId,
+      involvingMe: true,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    };
+    // Membership (including mentions and personal hide/show) is decided by the
+    // Gateway before pagination, independently of the primary All owners roster.
+    return projectSource(
+      { owner, query },
+      {
+        read: (source) => source.owner.listSnapshot(source.query).result,
+        subscribe: (source, notify) => {
+          const stop = source.owner.subscribeList(source.query, notify);
+          void source.owner.refreshList(source.query);
+          return stop;
+        },
+        equality: "revision",
+      },
+    );
+  });
+  const excluded = createMemo(() => props.hideSecondaryContent || props.modelSetupRequired);
+  const presented = createMemo(() => !excluded() && !props.fadeSecondaryContent);
+  const recentSessions = createParkedProjection(() => {
+    if (excluded()) {
+      return [];
     }
     i18nRevision();
     return prepareWelcomeRecentSessions(
-      props.sessions,
-      props.sessionKey,
-      resolveUiSelectedGlobalAgentId(props.sessionHost ?? {}),
+      context() ? sessions()?.read() : props.sessions,
+      scope().sessionKey,
+      scope().agentId,
     );
-  });
+  }, presented);
   return (
     <Show
       when={!props.modelSetupRequired}
