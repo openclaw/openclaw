@@ -482,6 +482,7 @@ describe("ChatAvatar", () => {
     expect(slot?.classList.contains("is-fallback")).toBe(false);
 
     image?.dispatchEvent(new Event("error"));
+    flush();
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
 
@@ -569,6 +570,27 @@ describe("refreshChatAvatar", () => {
     );
     invalidateChatAvatarCache(host);
     invalidateChatAvatarCache(sibling);
+  });
+
+  it("keeps a working avatar across repeated failed replacements until the identity clears it", async () => {
+    const host = avatarHost();
+    const identities = identityCapability(host);
+    const fetchAvatar = mockAvatarFetch();
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:working-avatar");
+    await refreshChatAvatar(host);
+    identities.invalidate(["main"]);
+    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "/avatar/main?v=2" });
+    fetchAvatar.mockResolvedValue(new Response(null, { status: 503 }));
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:working-avatar");
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBe("blob:working-avatar");
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
+    identities.invalidate(["main"]);
+    host.request.mockResolvedValue({ agentId: "main", name: "Main", avatar: "🦉" });
+    await refreshChatAvatar(host);
+    expect(host.chatAvatarUrl).toBeNull();
+    invalidateChatAvatarCache(host);
   });
 
   it("keeps a live waiter's shared avatar when a stale waiter settles under cache pressure", async () => {
@@ -765,6 +787,10 @@ describe("refreshSenderAgentAvatars", () => {
     host.chatMessages = forwardedMessages("research");
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.get("research")).toBe("blob:working-forward");
+    host.chatMessages = forwardedMessages("research");
+    await refreshSenderAgentAvatars(host);
+    expect(host.senderAgentAvatars?.get("research")).toBe("blob:working-forward");
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
     host.connected = false;
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.size).toBe(0);
@@ -772,7 +798,7 @@ describe("refreshSenderAgentAvatars", () => {
   });
 
   it("loads newly committed forwards and releases cleared senders", async () => {
-    const host = { ...senderHost(), requestUpdate: vi.fn() };
+    const host = senderHost();
     const fetchAvatar = mockAvatarFetch();
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:forwarded");
     await refreshSenderAgentAvatars(host);
@@ -782,7 +808,6 @@ describe("refreshSenderAgentAvatars", () => {
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.get("research")).toBe("blob:forwarded");
     expect(fetchAvatar).toHaveBeenCalledOnce();
-    expect(host.requestUpdate).toHaveBeenCalledOnce();
     host.chatMessages = [];
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.size).toBe(0);
@@ -981,9 +1006,8 @@ describe("attributed sender avatars", () => {
 
     setIdentity({ ...sender });
     flush();
-    expect(container.querySelector(".chat-avatar-slot")?.classList.contains("is-fallback")).toBe(
-      true,
-    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".is-pending")).toBeNull();
     expect(container.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
   });
 });

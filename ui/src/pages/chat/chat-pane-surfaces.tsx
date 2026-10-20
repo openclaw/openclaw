@@ -18,6 +18,7 @@ export function ChatBoardPanel(props: {
       }
     >
       <BoardSessionSurface
+        onViewRef={props.surface.onViewRef}
         active={props.surface.active}
         session={props.surface.session}
         snapshot={props.surface.snapshot}
@@ -34,8 +35,10 @@ export function ChatBoardPanel(props: {
 }
 
 export function ChatBoardResetConfirmation(props: { onResolve: (confirmed: boolean) => void }) {
+  let cancelButton!: HTMLButtonElement;
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => cancelButton}
       label={t("chat.board.resetTitle")}
       description={t("chat.board.resetDescription")}
       onModal-cancel={() => props.onResolve(false)}
@@ -51,7 +54,15 @@ export function ChatBoardResetConfirmation(props: { onResolve: (confirmed: boole
           <button class="btn primary" type="button" onClick={() => props.onResolve(true)}>
             {t("common.confirm")}
           </button>
-          <button class="btn" type="button" autofocus onClick={() => props.onResolve(false)}>
+          <button
+            ref={(element) => {
+              cancelButton = element;
+            }}
+            class="btn"
+            type="button"
+            autofocus
+            onClick={() => props.onResolve(false)}
+          >
             {t("common.cancel")}
           </button>
         </openclaw-modal-actions>

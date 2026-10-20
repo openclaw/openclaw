@@ -258,6 +258,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
         attemptedThinking: new Set(["off"]),
         maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+        refreshTransportForConnectionError: vi.fn(async () => {}),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },

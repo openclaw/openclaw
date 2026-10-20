@@ -25,23 +25,17 @@ const mocks = vi.hoisted(() => ({
   providers: [] as RealtimeVoiceProviderPlugin[],
   providerRequests: [] as Array<{ model?: string; tools?: unknown[] }>,
   createSession: vi.fn(),
+  findProvider: (id: string | undefined): RealtimeVoiceProviderPlugin | undefined =>
+    mocks.providers.find((provider) => provider.id === id || provider.aliases?.includes(id ?? "")),
 }));
 
-vi.mock("../src/talk/provider-registry.js", () => ({
+vi.mock("../src/talk/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/talk/provider-registry.js")>()),
   canonicalizeRealtimeVoiceProviderId: (id: string | undefined) => {
     const normalized = id?.trim().toLowerCase();
-    return (
-      mocks.providers.find(
-        (provider) => provider.id === normalized || provider.aliases?.includes(normalized ?? ""),
-      )?.id ?? normalized
-    );
+    return mocks.findProvider(normalized)?.id ?? normalized;
   },
-  getRealtimeVoiceProvider: (id: string) =>
-    mocks.providers.find(
-      (provider) =>
-        provider.id === id.trim().toLowerCase() ||
-        provider.aliases?.includes(id.trim().toLowerCase()),
-    ),
+  getRealtimeVoiceProvider: (id: string) => mocks.findProvider(id.trim().toLowerCase()),
   listRealtimeVoiceProviders: () => mocks.providers,
 }));
 vi.mock("../src/tts/provider-registry.js", () => ({
@@ -140,17 +134,9 @@ describe("OpenAI browser Talk catalog defaults", () => {
     },
     { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
     {
-      label: "Live launch over configured GA",
+      label: "configured GA through a provider alias",
       model: "gpt-realtime-2.1",
-      launchModel: "gpt-live-1",
-      camera: false,
-      expected: "gpt-live-1",
-    },
-    {
-      label: "GA launch through a provider alias",
-      model: "gpt-live-1",
-      launchModel: "gpt-realtime-2.1",
-      launchProvider: " OPENAI-VOICE ",
+      providerId: " OPENAI-VOICE ",
       camera: true,
       expected: "gpt-realtime-2.1",
     },
@@ -163,7 +149,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
     },
   ])(
     "preserves $label from discovery through session creation",
-    async ({ model, launchModel, launchProvider, camera, expected, audioOnly }) => {
+    async ({ model, providerId, camera, expected, audioOnly }) => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
@@ -172,7 +158,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
           talk: {
             agentId: "main",
             realtime: {
-              provider: "openai",
+              provider: providerId ?? "openai",
               ...(model ? { model } : {}),
               providers: { openai: { apiKey: "test-platform-key" } },
             },
@@ -310,13 +296,11 @@ describe("OpenAI browser Talk catalog defaults", () => {
           { request } as GatewayBrowserClient,
           "agent:main:main",
           audioOnly ? {} : { onVideoCapability },
-          launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {},
         );
         try {
           await session.start();
           expect(mocks.createSession).toHaveBeenCalledWith({
             sessionKey: "agent:main:main",
-            ...(launchModel ? { provider: launchProvider ?? "openai", model: launchModel } : {}),
             capabilities: camera
               ? ["voice-transcript", "voice-selection", "camera-frame"]
               : ["voice-transcript", "voice-selection"],

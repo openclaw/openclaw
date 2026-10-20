@@ -7,7 +7,6 @@ import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../cli/daemon-cli/restart-health-probe.js";
-import { INTERRUPTED_UPDATE_SETTLE_PROBES } from "../cli/daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
   isSameGatewayRestartGeneration,
@@ -90,7 +89,6 @@ export async function observeInterruptedUpdateGateway(
         ...probe,
         phase: "health-wait",
         requireRunningService: true,
-        settle: { probes: INTERRUPTED_UPDATE_SETTLE_PROBES },
       }),
     );
     waitOutcome = before.waitOutcome;

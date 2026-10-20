@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
   assertStateDatabaseAccessAllowed,
   getStateDatabaseSchemaLease,
@@ -43,7 +43,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
     return;
   }
   const env = options.env ?? process.env;
-  if (getDatabaseEngineSelection()?.input) {
+  if (getDatabaseEngineInput("state")) {
     const read = await executeExistingOpenClawStateRead(
       { path: databasePath, env },
       { type: "stateBootstrap.ownership", input: { pathname: databasePath } },

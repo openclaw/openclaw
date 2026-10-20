@@ -3,6 +3,12 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { defaultRuntime } from "../../../runtime.js";
+import {
+  retireSessionControllerInput,
+  type SessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import { waitForSessionRunEnd } from "../../../sessions/session-controller.native-runtime.js";
+import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
 import {
@@ -26,6 +32,7 @@ import {
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
   SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRuns,
@@ -35,6 +42,7 @@ import {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "../registry/subagent-registry-read.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
@@ -74,13 +82,8 @@ import {
   readSubagentTimeoutProgress,
 } from "./subagent-announce-output.js";
 import type { PreparedAnnounceResult } from "./subagent-announce-result.js";
-import {
-  callSubagentLifecycleGateway,
-  dispatchGatewayMethodInProcess,
-  isEmbeddedAgentRunActive,
-  getRuntimeConfig,
-  waitForEmbeddedAgentRunEnd,
-} from "./subagent-announce.runtime.js";
+import { describeChildrenEndedWithoutResult } from "./subagent-announce.requester-settle-message.js";
+import { callSubagentLifecycleGateway, getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 const loadSubagentRegistryRuntime = createLazyPromise(
   () => import("../registry/subagent-registry.js"),
@@ -88,9 +91,9 @@ const loadSubagentRegistryRuntime = createLazyPromise(
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceFlowOutcome =
-  | NonNullable<SubagentAnnounceDeliveryResult["disposition"]>
-  | "requester_turn_pending";
+export type SubagentAnnounceFlowOutcome = NonNullable<
+  SubagentAnnounceDeliveryResult["disposition"]
+>;
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -147,11 +150,15 @@ type SubagentAnnounceFlowParams = {
   /** Live owner check for requester delivery after awaited phases. */
   isCompletionDeliveryAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
+  /** Exact source reserved synchronously by the durable registry handoff. */
+  controllerInput?: SessionControllerInput;
   signal?: AbortSignal;
   onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
+  /** A killed child produces no further output, so its notice never waits for one. */
+  endedReason?: SubagentRunRecord["endedReason"];
 };
 
 export async function runSubagentAnnounceFlow(
@@ -176,10 +183,7 @@ async function runSubagentAnnounceFlowBound(
     deliveryResultReported = true;
     // A receipt observer may fail after handoff. Keep the transport outcome
     // authoritative so cleanup does not replay work the requester already consumed.
-    announceOutcome =
-      delivery.reason === "requester_turn_pending"
-        ? "requester_turn_pending"
-        : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
+    announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
     await params.onDeliveryResult?.(delivery);
   };
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -226,10 +230,10 @@ async function runSubagentAnnounceFlowBound(
       childSessionId &&
       (await prepareChildSessionEffects()) &&
       childSessionEffectsAllowed() &&
-      isEmbeddedAgentRunActive(childSessionId)
+      isSessionRunActive(childSessionId)
     ) {
-      const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
-      if (!settled && isEmbeddedAgentRunActive(childSessionId)) {
+      const settled = await waitForSessionRunEnd(childSessionId, settleTimeoutMs);
+      if (!settled && isSessionRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
         if (outcome?.status !== "timeout" || params.cleanup === "delete") {
@@ -238,8 +242,9 @@ async function runSubagentAnnounceFlowBound(
       }
     }
     const failedTerminalOutcome = outcome.status === "error";
+    const killed = params.endedReason === SUBAGENT_ENDED_REASON_KILLED;
     const allowFailedOutputCapture =
-      !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
+      !killed && (!failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply));
     if (failedTerminalOutcome && !params.terminalReply) {
       reply = undefined;
     }
@@ -340,12 +345,7 @@ async function runSubagentAnnounceFlowBound(
         isChildSessionEffectsAllowed: () =>
           childSessionEffectsAllowed() && completionDeliveryAllowed(),
         resolveGatewayContext: params.resolveGatewayContext,
-        deps: {
-          callGateway: callSubagentLifecycleGateway,
-          dispatchGatewayMethodInProcess,
-          getRuntimeConfig,
-          replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteerCore,
-        },
+        replaceSubagentRunAfterSteer: subagentRegistryRuntime.replaceSubagentRunAfterSteerCore,
         signal: params.signal,
       });
       if (woke) {
@@ -435,8 +435,10 @@ async function runSubagentAnnounceFlowBound(
               : (params.roundOneReply ?? visibleFallback);
     }
 
-    const statusLabel =
-      outcome.status === "ok"
+    const taskLabel = params.label || params.task || "task";
+    const statusLabel = killed
+      ? describeChildrenEndedWithoutResult([taskLabel])
+      : outcome.status === "ok"
         ? "completed; ready for parent review"
         : outcome.status === "timeout"
           ? outcome.error
@@ -446,7 +448,6 @@ async function runSubagentAnnounceFlowBound(
             ? `failed: ${outcome.error || "unknown error"}`
             : "finished with unknown status";
 
-    const taskLabel = params.label || params.task || "task";
     const announceSessionId =
       childSessionCurrent && childSessionEffectsAllowed() ? childSessionId || "unknown" : "unknown";
     // Descendant findings are wake input; only this child's own answer travels onward.
@@ -605,9 +606,11 @@ async function runSubagentAnnounceFlowBound(
           signal: params.signal,
           onExecutionStarted: params.onExecutionStarted,
           resolveGatewayContext: params.resolveGatewayContext,
+          controllerInput: params.controllerInput,
         });
         await reportDeliveryResult(delivery);
       },
+      () => params.controllerInput,
     );
   } catch (err) {
     shouldDeleteChildSession = false;
@@ -631,6 +634,9 @@ async function runSubagentAnnounceFlowBound(
       );
     }
   } finally {
+    if (params.controllerInput && !params.controllerInput.custody.rpcAdopted) {
+      retireSessionControllerInput(params.controllerInput);
+    }
     if (
       shouldDeleteChildSession &&
       (await prepareChildSessionEffects()) &&

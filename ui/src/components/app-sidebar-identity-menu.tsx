@@ -18,7 +18,7 @@ import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menu
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 import "./viewer-facepile.ts";
 import "./theme-mode-toggle.ts";
 
@@ -34,12 +34,30 @@ type SidebarIdentityMenuParams = {
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
   themeMode: ThemeMode;
+  onThemeChange?: (mode: ThemeMode, element: HTMLElement) => void;
   triggerWidth: number;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
   onRetryConnect?: () => void;
 };
+
+function renderGatewayHealth(health: NativeGatewaysSnapshot["gateways"][number]["health"]) {
+  return (
+    <span
+      class="sidebar-gateway-health"
+      data-health={health}
+      role="img"
+      aria-label={
+        {
+          ok: t("nav.gateway.connected"),
+          error: t("nav.gateway.unreachable"),
+          unknown: t("nav.gateway.unknown"),
+        }[health]
+      }
+    />
+  );
+}
 
 function renderIdentityGateways(
   snapshot: NativeGatewaysSnapshot | null,
@@ -50,19 +68,9 @@ function renderIdentityGateways(
     return [];
   }
   const current = snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId);
-  return [
-    {
-      kind: "content",
-      id: "gateway-title",
-      content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
-    },
+  const gateways: MenuEntry[] = [
     ...(snapshot?.gateways ?? []).map((gateway, index): MenuItem => {
       const selected = gateway.id === snapshot?.currentId;
-      const healthLabel = {
-        ok: t("nav.gateway.connected"),
-        error: t("nav.gateway.unreachable"),
-        unknown: t("nav.gateway.unknown"),
-      }[gateway.health];
       const openWindow = (event: MouseEvent) => {
         if (capability.openWindow && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
@@ -78,14 +86,7 @@ function renderIdentityGateways(
         checked: selected,
         class: "sidebar-customize-menu__item",
         attributes: { onClick: openWindow, onContextMenu: openWindow },
-        icon: (
-          <span
-            class="sidebar-gateway-health"
-            data-health={gateway.health}
-            role="img"
-            aria-label={healthLabel}
-          />
-        ),
+        icon: renderGatewayHealth(gateway.health),
         content: <span class="sidebar-customize-menu__text">{gateway.name}</span>,
         details: (
           <span class="sidebar-gateway-details">
@@ -114,6 +115,23 @@ function renderIdentityGateways(
         ]
       : []),
     renderSidebarMenuAction("command:gateway-settings", t("nav.gateway.openSettings"), "server"),
+  ];
+  return [
+    {
+      kind: "content",
+      id: "gateway-title",
+      content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
+    },
+    {
+      id: "command:gateways",
+      label: current?.name ?? t("nav.gateway.sectionLabel"),
+      class: "sidebar-customize-menu__item",
+      icon: current ? renderGatewayHealth(current.health) : undefined,
+      details: current?.isPrimary ? (
+        <span class="sidebar-gateway-primary">{t("nav.gateway.primaryTag")}</span>
+      ) : undefined,
+      children: gateways,
+    },
     {
       kind: "content",
       id: "gateway-separator",
@@ -123,6 +141,7 @@ function renderIdentityGateways(
 }
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
+  const controls = createMenuControls();
   const position = params.position;
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
@@ -202,7 +221,9 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
         disabled: !params.canPairDevice,
         title: params.canPairDevice ? undefined : t("devices.pairing.adminRequired"),
       }),
-      renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid"),
+      ...(!document.documentElement.classList.contains("openclaw-native-macos")
+        ? [renderSidebarMenuAction("command:apps", t("agentChip.getApps"), "layoutGrid")]
+        : []),
       renderSidebarMenuAction("command:debug-overlay", t("debug.overlay.title"), "activity", {
         details: (
           <KeyboardShortcut
@@ -252,6 +273,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
                 basePath={params.basePath}
                 gatewayVersion={params.gatewayVersion}
                 menuAttributes={menuAttributes}
+                copyButtonRef={controls.ref()}
               />
             ),
           },
@@ -265,6 +287,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
                   prop:mode={params.themeMode}
                   prop:menuItem={true}
                   prop:menuAttributes={menuAttributes}
+                  prop:onChange={params.onThemeChange}
                 />
               </span>
             ),
@@ -275,6 +298,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
   };
   return (
     <SidebarDropdown
+      controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
       position={position}
       anchor={params.anchor}

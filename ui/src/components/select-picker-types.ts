@@ -9,6 +9,10 @@ export type PickerOption = {
 };
 
 export type PickerGroup = { id: string; label: string; leading?: JSX.Element };
+export type PickerFocusHandle = {
+  trigger: HTMLButtonElement;
+  elements(): readonly HTMLElement[];
+};
 export type PickerParams<Option extends PickerOption> = {
   id?: string;
   label: string;
@@ -30,6 +34,8 @@ export type PickerParams<Option extends PickerOption> = {
   showOptionTooltips?: boolean;
   showSelectedDescription?: boolean;
   onOpen?: () => void;
+  /** Exposes this mounted picker's controls to an enclosing focus boundary. */
+  focusRef?: (handle: PickerFocusHandle) => void;
   onChange: (value: string) => void;
   onChangeTarget?: (value: string, select: HTMLElement) => void;
   renderLeading?: (option: Option) => JSX.Element;

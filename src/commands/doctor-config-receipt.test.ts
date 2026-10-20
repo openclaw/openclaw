@@ -142,7 +142,8 @@ describe("Doctor receipt owner with real config files", () => {
       ctx.cfg = { gateway: { mode: "local" } };
       expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
       const first = await fs.readFile(configPath, "utf8");
-      ctx.cfg = { gateway: { mode: "local", port: 19090 } };
+      const persisted = (await readConfigFileSnapshot()).sourceConfig;
+      ctx.cfg = { ...persisted, gateway: { ...persisted.gateway, port: 19090 } };
       expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
       expect(await fs.readFile(configPath + ".bak", "utf8")).toBe(first);
       const alternate = path.join(path.dirname(configPath), "alternate.json");
@@ -151,7 +152,7 @@ describe("Doctor receipt owner with real config files", () => {
       const baseline = ctx.cfgForPersistence;
       const receipt = ctx.configResult.confirmedConfigSource;
       const retained = await files(path.dirname(configPath));
-      ctx.cfg = { gateway: { mode: "local", port: 19091 } };
+      ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19091 } };
       await withEnvAsync({ OPENCLAW_CONFIG_PATH: alternate }, async () => {
         expect(await runWriteConfigHealth(ctx)).toBe(false);
       });

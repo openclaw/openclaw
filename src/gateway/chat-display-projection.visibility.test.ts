@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
@@ -204,6 +205,30 @@ describe("internal history display projection", () => {
     expect(JSON.stringify(projected)).not.toContain("image_generate:task-123");
     expect(JSON.stringify(projected)).not.toContain("/root/.openclaw/media");
   });
+
+  it.each(["no_r", "NO_R", "No_Repl"])(
+    "keeps ordinary %s replies visible, including explicit display rows",
+    (text) => {
+      const messages = [
+        assistantTextMessage(text, 1),
+        { role: "assistant", display: true, content: text },
+      ];
+      expect(projectChatDisplayMessages(messages)).toEqual(messages);
+    },
+  );
+
+  it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+    "requires heartbeat context to hide a truncated reply after %s",
+    (kind, marker) => {
+      for (const prompt of [marker, `${MESSAGE_TOOL_DELIVERY_HINTS[0]} ${marker}`]) {
+        const answer = { role: "assistant", display: true, content: "no_r" };
+        const projected = projectChatDisplayMessages([{ role: "user", content: prompt }, answer]);
+        expect(projected).toEqual(
+          kind === "heartbeat" ? [] : [{ ...answer, __openclaw: { turnBoundary: true } }],
+        );
+      }
+    },
+  );
 
   it("hides heartbeat prompt and ok acknowledgements from visible history", () => {
     const projected = projectChatDisplayMessages([

@@ -1,14 +1,25 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ThemeArtwork, ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
 export type LobsterRunOutcome = "ok" | "error" | "aborted";
 
+// Renderers own the collision surfaces; the pet only measures their individual boxes.
+export type LobsterComposerElements = {
+  root: HTMLElement;
+  composer: HTMLElement;
+  editor: HTMLTextAreaElement;
+  footer: HTMLElement;
+  controls: readonly HTMLElement[];
+  obstacles: readonly HTMLElement[];
+};
+
 export type LobsterPetProps = {
+  composerElements: (() => LobsterComposerElements | null) | undefined;
   seed: number;
   mode: LobsterPetMode;
   visitsEnabled: boolean;
@@ -142,5 +153,5 @@ export function resolveLobsterPetMode(
   if (!connected) {
     return "offline";
   }
-  return sessions?.some(isSessionRunActive) ? "busy" : "idle";
+  return sessions?.some(isSessionRunStateActive) ? "busy" : "idle";
 }

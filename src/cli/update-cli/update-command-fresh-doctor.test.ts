@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   resolveEntrypoint: vi.fn(),
   command: vi.fn(),
+  cliHelp: vi.fn(),
   runUtf8: vi.fn<typeof import("../../process/exec.js").runUtf8CommandWithTimeout>(),
   pendingMigrations: vi.fn<typeof readDeferredPluginMigrationsAsync>(),
 }));
@@ -69,9 +70,11 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
   return {
     ...actual,
     runExec: (...args: Parameters<typeof actual.runExec>) =>
-      args[1].includes("config") && args[1].includes("validate")
-        ? mocks.command(...args)
-        : actual.runExec(...args),
+      args[1].includes("doctor") && args[1].includes("--help")
+        ? mocks.cliHelp(...args)
+        : args[1].includes("config") && args[1].includes("validate")
+          ? mocks.command(...args)
+          : actual.runExec(...args),
     runUtf8CommandWithTimeout: async (
       ...args: Parameters<typeof actual.runUtf8CommandWithTimeout>
     ) => {
@@ -143,6 +146,7 @@ const readinessExit = {
   outputLimitExceeded: undefined,
   stderr: "",
 } as const;
+const signaledReadiness = { termination: "signal", signal: "SIGTERM", killed: true } as const;
 
 afterEach(() => {
   restoreTempRoot();
@@ -159,6 +163,7 @@ describe("post-plugin update readiness", () => {
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
     mocks.command.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+    mocks.cliHelp.mockReset();
     mocks.pendingMigrations.mockReset().mockResolvedValue([]);
     mocks.runUtf8.mockReset().mockResolvedValue({
       ...readinessExit,
@@ -245,10 +250,10 @@ describe("post-plugin update readiness", () => {
   );
 
   it.each([
-    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: undefined },
+    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: 5_000 },
     { phase: "post-plugin", operatorPolicy: "external", timeout: "3", expected: 3_000 },
     { phase: "pre-plugin", operatorPolicy: undefined, timeout: "3", expected: 3_000 },
-    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: undefined },
+    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: 5_000 },
   ] as const)(
     "keeps parent service authority and the operator deadline in $phase Doctor ($operatorPolicy, $timeout)",
     async ({ phase, operatorPolicy, timeout, expected }) => {
@@ -380,12 +385,21 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it.each([undefined, 5_000])(
-    "bounds post-plugin checks separately from Doctor (%s)",
-    async (timeoutMs) => {
+  it.each([
+    { timeoutMs: undefined, fullIntegrityCheck: false, supported: false },
+    { timeoutMs: 5_000, fullIntegrityCheck: true, supported: true },
+    { timeoutMs: 5_000, fullIntegrityCheck: true, supported: false },
+  ])(
+    "bounds post-plugin checks separately from Doctor ($timeoutMs, full=$fullIntegrityCheck supported=$supported)",
+    async ({ timeoutMs, fullIntegrityCheck, supported }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("post-plugin-empty-budget-"));
+      mocks.cliHelp.mockResolvedValue({
+        stdout: supported ? "  --full-integrity-check  Check all indexes\n" : "  --fix  Repair\n",
+        stderr: "",
+      });
       await completePostCorePluginUpdate({
         ...updateOptions,
+        opts: { ...updateOptions.opts, fullIntegrityCheck },
         timeoutMs,
       });
 
@@ -397,9 +411,11 @@ describe("post-plugin update readiness", () => {
           "--non-interactive",
           "--no-workspace-suggestions",
           "--yes",
+          ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : []),
         ],
         ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
       ]);
+      expect(mocks.cliHelp).toHaveBeenCalledTimes(fullIntegrityCheck ? 1 : 0);
       expect(mocks.runUtf8).toHaveBeenCalledExactlyOnceWith(
         [
           "/usr/bin/node",
@@ -828,22 +844,14 @@ describe("post-plugin update readiness", () => {
   });
 
   it.each([
-    {
-      exists: true,
+    ...[true, false].map((exists) => ({
+      exists,
       source: "memory-core",
       checkId: "memory-core/managed-local-embedding-setup",
       message: "Managed local embeddings are unavailable.",
       fixHint: "Run `openclaw models --agent main auth login --provider llama-cpp --method local`.",
-      severity: "error",
-    },
-    {
-      exists: false,
-      source: "memory-core",
-      checkId: "memory-core/managed-local-embedding-setup",
-      message: "Managed local embeddings are unavailable.",
-      fixHint: "Run `openclaw models --agent main auth login --provider llama-cpp --method local`.",
-      severity: "error",
-    },
+      severity: "error" as const,
+    })),
     {
       exists: true,
       source: undefined,
@@ -958,24 +966,9 @@ describe("post-plugin update readiness", () => {
   it.each([
     { name: "policy exit", physical: { code: 1 } },
     { name: "other exit", physical: { code: 2 } },
-    {
-      name: "signal",
-      physical: { code: null, termination: "signal", signal: "SIGTERM", killed: true },
-    },
-    {
-      name: "timeout",
-      physical: { code: 124, termination: "timeout", signal: "SIGTERM", killed: true },
-    },
-    {
-      name: "overflow",
-      physical: {
-        code: 1,
-        termination: "signal",
-        signal: "SIGTERM",
-        killed: true,
-        outputLimitExceeded: true,
-      },
-    },
+    { name: "signal", physical: { ...signaledReadiness, code: null } },
+    { name: "timeout", physical: { ...signaledReadiness, code: 124, termination: "timeout" } },
+    { name: "overflow", physical: { ...signaledReadiness, code: 1, outputLimitExceeded: true } },
   ] as const)(
     "retains physical $name facts without accepting interrupted policy output",
     async ({ physical }) => {

@@ -86,6 +86,10 @@ Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
 
+Session readers can review changes with `sessions.diff` for conversations they can
+currently read, including their own private sessions. Existing sharing and agent
+access rules still apply; no general Gateway read grant is needed.
+
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within a visible session's workspace. Reads
 outside that root also require the session's file tools to allow Gateway-host
@@ -93,8 +97,11 @@ access and the caller to have current permission to start a turn there, includin
 ownership, sharing-role, agent, and sandbox checks. Such previews are read-only.
 `canvas.document.preview` also accepts session read access: it returns the
 caller's HTML and isolated sandbox location without reading session data.
-Stored Canvas documents still require broader read access through
-`canvas.document.view`.
+For saved inline widgets, `canvas.document.view` also accepts session read access
+with `sessionKey`: the Gateway verifies a successful saved `show_widget` result
+for that document in a conversation the caller can currently read. Inaccessible
+conversations and unbound documents remain denied. Broad `operator.read` callers
+retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,
@@ -106,9 +113,14 @@ Reconnecting rechecks current permission before replaying a Stop for its origina
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
-agent access, and runtime and sandbox requirements still apply. The
-`artifacts.list`, `artifacts.get`, and `artifacts.download` APIs require
-the broader `operator.read` scope.
+agent access, and runtime and sandbox requirements still apply.
+
+Session readers can also use `artifacts.list`, `artifacts.get`, and
+`artifacts.download` for artifacts in a conversation they can currently read.
+Both session-key and run-ID queries retain the selected session's visibility,
+identity, and lifecycle checks. An artifact ID alone does not grant access to
+another conversation's files; reads and downloads recheck access before returning
+content.
 
 Hidden native sub-agents started through `sessions_spawn` use the initiating
 person's session-write authority for the exact owned child and its private
@@ -468,6 +480,8 @@ Connection authority is resolved in this order:
 2. OpenClaw unions a matching server-side identity grant with those scopes.
 3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
    An absent header means no cap. A present-but-empty header yields no scopes.
+   The intersection honors scope implications: an `operator.write` grant with
+   an `operator.read` cap yields only `operator.read`.
 4. If the authenticated profile has an effective named operator role,
    OpenClaw intersects the result with that role's configured scope ceiling.
 

@@ -1,6 +1,5 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -12,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { isSessionRunActive } from "./session-controller.queries.js";
 import {
   recordSessionHumanDirectMessage,
   recordSessionStateEventAsync,
@@ -31,7 +31,7 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   now?: () => number;
   signal?: AbortSignal;
   loadEntry?: typeof loadSessionEntryReadOnly;
-  isRunActive?: typeof isEmbeddedAgentRunActive;
+  isRunActive?: typeof isSessionRunActive;
   loadOwnRecentUserTexts?: (params: {
     entry: SessionEntry;
     probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
@@ -78,7 +78,7 @@ function isIdleSession(
   return Boolean(
     !options.signal?.aborted &&
     entry?.sessionId &&
-    !(options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId),
+    !(options.isRunActive ?? isSessionRunActive)(entry.sessionId),
   );
 }
 

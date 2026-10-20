@@ -17,17 +17,31 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
-import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
+import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import {
   createSessionMaintenanceKickStore,
   observeSessionMaintenancePlanningWorker,
-  observeNextPeriodicMaintenance,
 } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:age-kick";
+
+function observeMaintenanceCompletion(databasePath: string) {
+  const completed = createDeferred();
+  const release = maintenance.releaseSessionEntryMaintenanceExecution;
+  const observer = vi
+    .spyOn(maintenance, "releaseSessionEntryMaintenanceExecution")
+    .mockImplementation((pathname, owner) => {
+      release(pathname, owner);
+      if (pathname === databasePath && owner.release) {
+        void owner.release.then(completed.resolve, completed.reject);
+      }
+    });
+  return (signal: AbortSignal) =>
+    withinTest(completed.promise, signal).finally(() => observer.mockRestore());
+}
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -37,7 +51,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function createCapBatchStore(protectedOnly = false) {
+function createCapBatchStore(protectedOnly = false, afterPlan?: () => void | Promise<void>) {
   const fixture = createSessionMaintenanceKickStore({
     storePath: path.join(tempDirs.make("session-maintenance-cap-"), "agent.sqlite"),
     key: sessionKey,
@@ -71,6 +85,7 @@ function createCapBatchStore(protectedOnly = false) {
     const result = await run(params);
     if (result.kind === "maintenance-plan") {
       plans.push(result.value);
+      await afterPlan?.();
     }
     return result;
   });
@@ -85,7 +100,7 @@ it.for(["automatic", "inline", "protected"] as const)(
       plans.push(
         runOpenClawAgentWriteTransaction(
           (database) =>
-            applySessionEntryMaintenance(database, {
+            maintenance.applySessionEntryMaintenance(database, {
               activeSessionKey: sessionKey,
               archiveDirectory: request.archiveDirectory,
               forceMaintenance: true,
@@ -101,9 +116,9 @@ it.for(["automatic", "inline", "protected"] as const)(
         ),
       );
     } else {
-      const scheduled = observeNextPeriodicMaintenance();
+      const completed = observeMaintenanceCompletion(storePath);
       kickSessionEntryMaintenanceAfterWrite(request);
-      await scheduled(signal);
+      await completed(signal);
     }
     // The first automatic batch leaves 116 entries, below high-water 125 but above cap 100.
     expect(plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived)).toEqual(
@@ -123,16 +138,21 @@ it.for(["automatic", "inline", "protected"] as const)(
 it.for(["victim", "remaining"] as const)(
   "releases the cap writer between batches and honors new protection (%s)",
   async (protection, { signal }) => {
-    const { request, storePath, keys, plans } = createCapBatchStore();
-    const protectedKey = keys[64]!;
     let protectedKeys: string[] = [];
+    let releases = 0;
+    let foreground: Promise<unknown> | undefined;
+    const { request, storePath, keys, plans } = createCapBatchStore(false, async () => {
+      if (++releases === 1) {
+        protectedKeys = protection === "remaining" ? [sessionKey, ...keys.slice(64)] : [keys[64]!];
+        await withinTest(foreground!, signal);
+      }
+    });
+    const protectedKey = keys[64]!;
     const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
       capture: () => protectedKeys,
       dispose() {},
     }));
     let commits = 0;
-    let releases = 0;
-    let foreground: Promise<unknown> | undefined;
     let foregroundCompleted = false;
     observeSessionMaintenancePlanningWorker({
       afterExecute(result) {
@@ -147,13 +167,6 @@ it.for(["victim", "remaining"] as const)(
           });
         }
       },
-      async afterRelease() {
-        if (++releases === 1) {
-          protectedKeys =
-            protection === "remaining" ? [sessionKey, ...keys.slice(64)] : [protectedKey];
-          await withinTest(foreground!, signal);
-        }
-      },
       beforeExecute() {
         if (commits > 0) {
           expect(foregroundCompleted).toBe(true);
@@ -161,9 +174,9 @@ it.for(["victim", "remaining"] as const)(
       },
     });
     try {
-      const scheduled = observeNextPeriodicMaintenance();
+      const completed = observeMaintenanceCompletion(storePath);
       kickSessionEntryMaintenanceAfterWrite(request);
-      await scheduled(signal);
+      await completed(signal);
       expect(plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived)).toEqual(
         protection === "remaining" ? [64] : [64, 16],
       );
@@ -191,16 +204,13 @@ it.for(["victim", "remaining"] as const)(
 it("keeps the first cap receipt and stops later batches when maintenance authority retires", async ({
   signal,
 }) => {
-  const { database, request, storePath, keys, plans } = createCapBatchStore();
   const retired = createDeferred();
   let releases = 0;
-  observeSessionMaintenancePlanningWorker({
-    afterRelease() {
-      if (++releases === 1) {
-        markGatewayRestartDraining();
-        retired.resolve();
-      }
-    },
+  const { database, request, storePath, keys, plans } = createCapBatchStore(false, () => {
+    if (++releases === 1) {
+      markGatewayRestartDraining();
+      retired.resolve();
+    }
   });
   kickSessionEntryMaintenanceAfterWrite(request);
   await withinTest(retired.promise, signal);

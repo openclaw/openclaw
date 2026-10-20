@@ -39,6 +39,7 @@ afterEach(resetThreadLifecycleTestFixtures);
 async function fixture() {
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
+  params.disableTools = false;
   params.agentId = "main";
   const identity = {
     kind: "session" as const,

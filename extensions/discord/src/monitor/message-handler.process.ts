@@ -3,7 +3,6 @@ import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk
 import {
   dispatchChannelInboundTurn,
   getGroupThreadDeliverySession,
-  hasFinalInboundReplyDispatch,
   readAgentRunTerminalOutcome,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -19,12 +18,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchRuntimeInfo, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleepWithAbort,
-} from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { discordTextHasBroadcastMention } from "../mentions.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
@@ -58,21 +52,12 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-type DiscordMessageProcessObserver = {
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
-  onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
-};
-
 type DiscordProviderDeliveryInfo = ReplyDispatchRuntimeInfo & {
   onPlatformSendDispatch: () => Promise<void>;
   assertPlatformSendAuthorized: () => void;
 };
 
-export async function processDiscordMessage(
-  ctx: DiscordMessagePreflightContext,
-  observer?: DiscordMessageProcessObserver,
-) {
+export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const dispatchStartedAt = Date.now();
   const {
     cfg,
@@ -165,11 +150,6 @@ export async function processDiscordMessage(
     log: logVerbose,
   });
   const replyReference = activeThreadRoute.replyReference;
-  observer?.onReplyPlanResolved?.({
-    createdThreadId: replyPlan.createdThreadId,
-    sessionKey: persistedSessionKey,
-  });
-
   const {
     replyPipeline,
     onModelSelected,
@@ -191,8 +171,6 @@ export async function processDiscordMessage(
     dispatchStartedAt,
     feedbackRest: reactions.feedbackRest,
     deliveryRest: reactions.deliveryRest,
-    onFinalReplyStart: observer?.onFinalReplyStart,
-    onFinalReplyDelivered: observer?.onFinalReplyDelivered,
   });
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
@@ -578,14 +556,5 @@ export async function processDiscordMessage(
       (finalReceipt?.failedBeforeSend ?? 0) + (finalReceipt?.failedAfterSend ?? 0) > 0;
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
-  }
-  if (!dispatchResult || !hasFinalInboundReplyDispatch(dispatchResult)) {
-    return;
-  }
-  if (shouldLogVerbose()) {
-    const finalCount = dispatchResult.settledReceipt?.counts.final.delivered ?? 0;
-    logVerbose(
-      `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyPlan.replyTarget}`,
-    );
   }
 }

@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { formatApprovalDecisionLabel } from "openclaw/plugin-sdk/approval-runtime";
 import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import {
   buildPluginBindingResolvedText,
@@ -224,16 +225,10 @@ async function updateSlackInteractionMessage(
 }
 
 function resolveSlackApprovalTerminalLabel(approval: ApprovalResolveResult["approval"]): string {
-  if (approval.status === "allowed") {
-    return approval.decision === "allow-always" ? "Allowed always" : "Allowed once";
+  if (approval.status === "allowed" || approval.status === "denied") {
+    return formatApprovalDecisionLabel(approval.decision);
   }
-  if (approval.status === "denied") {
-    return "Denied";
-  }
-  if (approval.status === "expired") {
-    return "Expired";
-  }
-  return "Cancelled";
+  return approval.status === "expired" ? "Expired" : "Cancelled";
 }
 
 function removeSlackApprovalControls(blocks: unknown[]): (Block | KnownBlock)[] {

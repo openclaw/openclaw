@@ -26,7 +26,6 @@ import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
-  logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
   resolveTelegramMessageIdOrThrow,
   sendLogger,
@@ -320,8 +319,6 @@ export async function sendMessageTelegram(
           : {}),
       };
       let mediaParts: [TelegramPreparedSendPart, ...TelegramPreparedSendPart[]];
-      let operation = mediaSender.operation;
-      let deliveryKind = mediaSender.label;
       try {
         if (batch.length > 1) {
           try {
@@ -331,7 +328,6 @@ export async function sendMessageTelegram(
               plainCaption: htmlCaption ? plainCaption : undefined,
             });
             mediaParts = album.parts;
-            operation = "sendMediaGroup";
           } catch (error) {
             if (!isTelegramPhotoLimitError(error)) {
               throw error;
@@ -355,8 +351,6 @@ export async function sendMessageTelegram(
             plainCaption: htmlCaption ? plainCaption : undefined,
           });
           mediaParts = [delivery];
-          operation = delivery.sender.operation;
-          deliveryKind = delivery.sender.label;
         }
       } catch (error) {
         if (
@@ -407,7 +401,6 @@ export async function sendMessageTelegram(
         mediaParts,
         async (part) => {
           const deliveredCaption = part.plainText || undefined;
-          const acceptedParams = toAcceptedThreadScopedParams(part.acceptedParams);
           const resolvedChatId = String(part.result.chat?.id ?? chatId);
           const meta = {
             ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
@@ -432,16 +425,6 @@ export async function sendMessageTelegram(
           if (!followUpText || !lastPart) {
             await recordMediaPromptPart(part, lastPart);
           }
-          logTelegramOutboundSendOk({
-            accountId: account.accountId,
-            chatId: resolvedChatId,
-            messageId: String(part.messageId),
-            operation,
-            deliveryKind,
-            messageThreadId: acceptedParams?.message_thread_id,
-            replyToMessageId: opts.replyToMessageId,
-            silent: opts.silent,
-          });
         },
         {
           partialDeliveryResult: () => ({

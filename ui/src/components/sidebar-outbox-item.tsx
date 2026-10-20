@@ -4,36 +4,45 @@ import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-atte
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { clampText } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
+import { useApplication } from "../lib/reactive/context.ts";
+import { projectAgents, projectSessions } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { findUiSessionRow, sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import "./tooltip.ts";
 import "../styles/sidebar-outbox-item.css";
 import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
-export function renderSidebarOutboxItem(params: {
-  entry: Extract<SidebarInboxEntry, { type: "outbox" }>;
-  context: ApplicationContext;
-  onNavigate: ApplicationContext["navigate"];
-}) {
-  const captured = untrack(() => ({ entry: params.entry, context: params.context }));
-  const context = captured.context;
+export function renderSidebarOutboxItem(
+  params: {
+    entry: Extract<SidebarInboxEntry, { type: "outbox" }>;
+    onNavigate: ApplicationContext["navigate"];
+  },
+  context: ApplicationContext = useApplication(),
+) {
+  // Keep the mounted row and Gateway authority for retained click handlers.
+  const initialEntry = untrack(() => params.entry);
   const connectionRevision = context.gateway.connectionRevision;
   const recoveryScope = context.gateway.snapshot.client?.recoveryScope;
+  const gateway = projectGateway(context.gateway);
+  const agents = projectAgents(context.agents);
+  const sessions = projectSessions(context.sessions);
   const view = createMemo(() => {
+    gateway.revision();
+    agents.revision();
+    sessions.revision();
     const entry = params.entry;
-    const currentContext = params.context;
-    const row = findUiSessionRow(currentContext, entry.sessionKey, entry.agentId);
+    const row = findUiSessionRow(context, entry.sessionKey, entry.agentId);
     // Global previews omit the old tab/Gateway queue's private message and attachment text.
     const conversation = clampText(
       row?.displayName?.trim() || row?.label?.trim() || t("attention.outbox.conversation"),
       100,
     );
-    const agent = currentContext.agents.state.agentsList?.agents.find(
-      (item) => item.id === entry.agentId,
-    );
+    const agent = context.agents.state.agentsList?.agents.find((item) => item.id === entry.agentId);
     const scope = agent
       ? `${clampText(normalizeAgentLabel(agent), 60)} · ${conversation}`
       : conversation;
@@ -47,14 +56,14 @@ export function renderSidebarOutboxItem(params: {
           : "attention.outbox.failed",
     );
     const target = sessionNavigationTarget({
-      context: currentContext,
+      context,
       face: "chat",
       sessionKey: entry.sessionKey,
       agentId: entry.agentId,
       exactKey: true,
       focusComposer: true,
     });
-    const offline = currentContext.gateway.snapshot.phase !== "connected";
+    const offline = context.gateway.snapshot.phase !== "connected";
     const guidance = [
       t(
         entry.unconfirmed
@@ -69,13 +78,20 @@ export function renderSidebarOutboxItem(params: {
   });
   return (
     <article
-      class={`sidebar-issues-panel__details sidebar-issues-panel__details--${params.entry.severity}`}
+      class={[
+        "sidebar-issues-panel__details",
+        `sidebar-issues-panel__details--${params.entry.severity}`,
+      ]}
       data-attention-kind="outbox"
       data-outbox-id={params.entry.id}
     >
       <div class="sidebar-issues-panel__summary sidebar-outbox-row">
         <span
-          class={`sidebar-issues-panel__icon sidebar-outbox-row__icon sidebar-outbox-row__icon--${params.entry.severity}`}
+          class={[
+            "sidebar-issues-panel__icon",
+            "sidebar-outbox-row__icon",
+            `sidebar-outbox-row__icon--${params.entry.severity}`,
+          ]}
           aria-hidden="true"
         >
           <Icon name="alertTriangle" />
@@ -95,6 +111,7 @@ export function renderSidebarOutboxItem(params: {
         </div>
         <openclaw-tooltip prop:content={view().guidance}>
           <a
+            ref={sidebarAttentionFocusRef("row")}
             class="sidebar-issues-panel__action sidebar-outbox-row__review"
             href={view().target.href}
             aria-label={t("attention.outbox.review")}
@@ -111,9 +128,9 @@ export function renderSidebarOutboxItem(params: {
                 !context.sidebarAttention.entries.some(
                   (current) =>
                     current.type === "outbox" &&
-                    current.id === captured.entry.id &&
-                    current.sessionKey === captured.entry.sessionKey &&
-                    current.agentId === captured.entry.agentId,
+                    current.id === initialEntry.id &&
+                    current.sessionKey === initialEntry.sessionKey &&
+                    current.agentId === initialEntry.agentId,
                 )
               ) {
                 return;

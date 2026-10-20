@@ -2,12 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
+import {
+  GatewayServiceStopUnsafeError,
+  SystemdInspectionTimeout,
+} from "../../daemon/service-inspection-error.js";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as ports from "../../infra/ports-inspect.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
@@ -21,6 +26,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as utils from "../../utils.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
@@ -28,9 +34,13 @@ import * as shared from "./shared.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
-import { validConfigSnapshot } from "./update-command-lifecycle.test-support.js";
+import {
+  prepareFinalizationPackage,
+  validConfigSnapshot,
+} from "./update-command-lifecycle.test-support.js";
 import * as plugins from "./update-command-plugins.js";
 import * as sourceRuntime from "./update-command-runtime.js";
+import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 import * as servicePlan from "./update-command-service-plan.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
@@ -43,6 +53,7 @@ const native = vi.hoisted(() => ({
   elapsedMs: 0,
   root: "",
   absent: false,
+  realOwner: false,
 }));
 vi.mock("../../config/paths.js", async (original) => ({
   ...(await original<typeof import("../../config/paths.js")>()),
@@ -72,7 +83,12 @@ vi.mock("../../infra/gateway-state-owner.js", async (original) => {
   return {
     ...actual,
     acquireGatewayStateOwner: (params: Parameters<typeof actual.acquireGatewayStateOwner>[0]) => {
-      if (!native.absent && native.inspecting && (!native.stopped || native.contend)) {
+      if (
+        !native.realOwner &&
+        !native.absent &&
+        native.inspecting &&
+        (!native.stopped || native.contend)
+      ) {
         native.events.push(native.stopped ? "non-serving-holder" : "running-holder");
         throw new actual.GatewayStateOwnerContentionError(params.databasePath);
       }
@@ -84,11 +100,13 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
   const actual = await original<typeof import("./update-command-service-maintenance.js")>();
   return {
     ...actual,
-    maybeStopManagedServiceBeforeMutableUpdate: async (params: {
-      phase?: string;
-      onStopped?: (before: unknown) => void;
-    }) => {
+    maybeStopManagedServiceBeforeMutableUpdate: async (
+      params: Parameters<typeof actual.maybeStopManagedServiceBeforeMutableUpdate>[0],
+    ) => {
       native.inspecting = true;
+      if (native.realOwner) {
+        return actual.maybeStopManagedServiceBeforeMutableUpdate(params);
+      }
       if (native.absent) {
         return {
           stopped: false,
@@ -108,14 +126,19 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
         native.elapsedMs += GATEWAY_SERVICE_STOP_TIMEOUT_MS;
         native.events.push("stop-verified");
       }
-      const before = {
+      const before: PreManagedServiceStop = {
         stopped: native.stopped,
         inspected: true,
         runtimeInspected: true,
         running: !native.stopped,
         offline: native.stopped,
         serviceEnv: { ...process.env },
-        serviceUpdateVerdict: { kind: "owned", root: native.root, refreshDefinition: false },
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: native.root,
+          fingerprint: "fixture-service",
+          refreshDefinition: false,
+        },
       };
       if (native.stopped) {
         params.onStopped?.(before);
@@ -125,7 +148,8 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
     revalidateManagedGatewayServiceAfterUpdate: async () => ({ kind: "owned", root: native.root }),
   };
 });
-vi.mock("../../daemon/service.js", () => ({
+vi.mock("../../daemon/service.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () => ({
     readCommand: async () => null,
     readRuntime: async () => ({ status: "stopped", missingUnit: true }),
@@ -135,12 +159,17 @@ vi.mock("../../daemon/service.js", () => ({
       native.stopped = false;
     },
   }),
-  readGatewayServiceState: async () => ({
-    env: { ...process.env },
-    command: null,
-    loadState: { status: "loaded" },
-    runtime: { status: "stopped" },
-  }),
+  readGatewayServiceState: async () => {
+    if (native.realOwner) {
+      throw new SystemdInspectionTimeout("systemctl --user show");
+    }
+    return {
+      env: { ...process.env },
+      command: null,
+      loadState: { status: "loaded" },
+      runtime: { status: "stopped" },
+    };
+  },
 }));
 vi.mock("../../daemon/service-operation-lock.js", () => ({
   withGatewayServiceOperationLock: async (
@@ -188,15 +217,18 @@ const pending = {
 
 beforeEach(async () => {
   const base = dirs.make("finalize-refusal-");
+  vi.stubEnv("HOME", base);
+  vi.stubEnv("USERPROFILE", base);
+  vi.stubEnv("OPENCLAW_HOME", undefined);
+  mockSystemAccountHome();
   native.root = path.join(base, "package");
   native.absent = false;
+  native.realOwner = false;
   await fs.mkdir(native.root);
-  await fs.writeFile(
-    path.join(native.root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-  );
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(base, "state", "openclaw.json"));
+  await prepareFinalizationPackage(native.root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, ".openclaw"));
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(base, ".openclaw", "openclaw.json"));
+  vi.mocked(verifyUpdateFailureRecovery).mockClear();
   for (const key of [
     "OPENCLAW_UPDATE_RUN_ID",
     "OPENCLAW_UPDATE_RUN_HANDOFF",
@@ -214,7 +246,6 @@ beforeEach(async () => {
   vi.spyOn(performance, "now").mockImplementation(() => native.elapsedMs);
   await recordDeferredPluginMigrations({ pending: [pending] });
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(native.root);
-  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
   vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess").mockResolvedValue(undefined);
   vi.spyOn(plugins, "updatePluginsAfterCoreUpdate");
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -226,6 +257,44 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("keeps repair pending with a real state owner and unavailable systemd inspection", async () => {
+  native.realOwner = true;
+  const createdAt = "2026-10-19T12:00:00.000Z";
+  const owner = acquireGatewayStateOwner({
+    databasePath: path.join(process.env.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"),
+    payload: {
+      pid: process.pid,
+      role: "gateway",
+      createdAt,
+      configPath: process.env.OPENCLAW_CONFIG_PATH!,
+      port: 19483,
+      startTime: getFileLockProcessStartTime(process.pid) ?? undefined,
+    },
+  });
+  try {
+    await expect(
+      updateRepairCommand({ json: true, yes: true, deferCompletionCache: true }),
+    ).rejects.toEqual(new ExitError(2));
+    const output = [
+      ...vi.mocked(defaultRuntime.error).mock.calls,
+      ...vi.mocked(defaultRuntime.log).mock.calls,
+    ]
+      .flat()
+      .join("\n");
+    expect(output).toContain(`pid ${process.pid}`);
+    expect(output).toContain(createdAt);
+    expect(output).toContain("Stalled check: systemctl --user show.");
+    expect(output).toContain("openclaw gateway stop");
+    expect(output).toContain("openclaw update repair");
+    expect(output).not.toContain("manually");
+    expect(readDeferredPluginMigrations()).toEqual([pending]);
+    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+    owner.assertCurrent();
+  } finally {
+    owner.release();
+  }
 });
 
 it.each([true, false])(
@@ -256,7 +325,10 @@ it.each([true, false])(
           postUpdate: {
             doctor: {
               status: "warning",
-              warnings: [expect.stringContaining("update repair")],
+              warnings: [
+                expect.stringContaining("update repair"),
+                expect.stringContaining("GatewayStateOwnerContentionError"),
+              ],
             },
           },
         }),

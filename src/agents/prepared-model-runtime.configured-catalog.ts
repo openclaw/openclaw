@@ -111,9 +111,28 @@ export function prepareCapturedRuntimeFacts(
     params.agentFacts.input.config,
     params.agentFacts.input.env,
   );
+  const manifestCatalog = loadManifestModelCatalog({
+    config: params.agentFacts.input.config,
+    metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+  });
+  const keyOf = createModelCatalogIdentityKeyResolver();
+  const declaredByIdentity = indexFirstByKey(
+    manifestCatalog.filter((entry) => entry.inference !== undefined),
+    keyOf,
+  );
   const entries = dedupeByKey(
     [
-      ...facts.modelCatalog.entries,
+      ...facts.modelCatalog.entries.map((entry) => {
+        const declared = declaredByIdentity.get(keyOf(entry));
+        // Configured membership must retain the exact route's inference contract.
+        // Route changes clear its capabilities without promoting typed rows to chat.
+        return declared
+          ? { ...entry, inference: overlayCatalogMetadata(declared, entry).inference }
+          : entry;
+      }),
+      // Typed-only rows have no conversational registry Model. Carry their canonical
+      // manifest facts into the same prepared generation instead of inventing chat defaults.
+      ...manifestCatalog.filter((entry) => entry.inference?.chat === false),
       // Static hooks also answer runtime provider aliases; publish canonical rows once.
       ...params.templateModelRegistry.getAll().map((model) => {
         const entry = modelCatalogRowToEntry(model);
@@ -121,16 +140,11 @@ export function prepareCapturedRuntimeFacts(
         return entry;
       }),
     ],
-    createModelCatalogIdentityKeyResolver(),
+    keyOf,
   );
-  const orderedEntries = assignProviderModelOrder(
-    entries,
-    loadManifestModelCatalog({
-      config: params.agentFacts.input.config,
-      metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
-    }),
-    { appendUnknown: false },
-  );
+  const orderedEntries = assignProviderModelOrder(entries, manifestCatalog, {
+    appendUnknown: false,
+  });
   return {
     ...facts,
     modelCatalog: { ...facts.modelCatalog, entries: orderedEntries, routeVariants: orderedEntries },

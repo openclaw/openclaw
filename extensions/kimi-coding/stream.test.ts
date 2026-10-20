@@ -531,7 +531,7 @@ describe("kimi tool-call markup wrapper", () => {
 
   it("bounds per-call Kimi Anthropic thinking and lowers its adaptive default to native high", () => {
     const cases = [
-      ["off", undefined],
+      ["off", 1024],
       ["max", 8192],
       [undefined, 8192],
       ["minimal", 1024],
@@ -555,15 +555,13 @@ describe("kimi tool-call markup wrapper", () => {
     for (const [reasoning, budgetTokens] of cases) {
       void wrapped(KIMI_MODEL, KIMI_CONTEXT, { reasoning });
 
-      expect(getCapturedOptions()?.reasoning).toBe(reasoning ?? "high");
-      expect(getCapturedPayload()).toEqual(
-        reasoning === "off"
-          ? { thinking: { type: "disabled" } }
-          : {
-              max_tokens: 16000,
-              thinking: { type: "enabled", budget_tokens: budgetTokens },
-            },
+      expect(getCapturedOptions()?.reasoning).toBe(
+        reasoning === "off" ? "low" : (reasoning ?? "high"),
       );
+      expect(getCapturedPayload()).toEqual({
+        max_tokens: 16000,
+        thinking: { type: "enabled", budget_tokens: budgetTokens },
+      });
     }
   });
 });

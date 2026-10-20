@@ -18,7 +18,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../../admitted-run-context.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -71,7 +74,28 @@ describe("prepared missing-search guidance", () => {
     "aborts $surface tools before parameter preparation or effects ($outcome)",
     async ({ surface, outcome }) => {
       const config: OpenClawConfig = { tools: { codeMode: false, toolSearch: { enabled: false } } };
-      const admission = prepareSystemAgentRunAdmission(config, "attribution", "main", "test");
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "reviewer-caller",
+        scopes: [],
+        assertCurrent() {},
+      });
+      const skillsSnapshot = {
+        prompt: "",
+        skills: [
+          {
+            name: "autoreview",
+            source: { filePath: "/managed/autoreview/SKILL.md", fileHost: "gateway" as const },
+          },
+        ],
+      };
+      const admission = prepareSystemAgentRunAdmission(
+        config,
+        "attribution",
+        "main",
+        "test",
+        undefined,
+        authority,
+      );
       const entered = createDeferred();
       const baseline = createDeferred();
       const runAbortController = new AbortController();
@@ -105,6 +129,7 @@ describe("prepared missing-search guidance", () => {
           }),
           authProfileStore: { version: 1, profiles: {} },
           admittedRunContext: await admission.admit("embedded"),
+          skillsSnapshot,
           awaitSessionDiffBaseline: async () => {
             entered.resolve();
             await baseline.promise;
@@ -134,6 +159,13 @@ describe("prepared missing-search guidance", () => {
           codeModeSkills: [],
           toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
         });
+        const builtInOptions = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0];
+        expect(builtInOptions?.pluginExecutionAuthority).toBe(authority);
+        expect(builtInOptions?.pluginExecutionSkillsSnapshot).toBe(skillsSnapshot);
+        expect(() => builtInOptions?.assertInvocationCurrent?.()).not.toThrow();
+        expect(builtInOptions?.awaitSessionDiffBaseline).toBe(
+          result.toolHookContext.awaitSessionDiffBaseline,
+        );
         const tool =
           surface === "built-in"
             ? result.toolsRaw[0]
@@ -155,6 +187,7 @@ describe("prepared missing-search guidance", () => {
         }
         await expect(pending).rejects.toThrow();
         expect(runAbortController.signal.aborted).toBe(true);
+        expect(() => builtInOptions?.assertInvocationCurrent?.()).toThrow();
         if (outcome === "capture invalidated") {
           expect(runAbortController.signal.reason).toBe(failure);
         }

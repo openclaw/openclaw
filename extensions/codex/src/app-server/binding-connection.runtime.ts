@@ -4,7 +4,6 @@ import type {
   CodexBindingAppServerConnectionParams,
   CodexCatalogHomeDiscovery,
 } from "./binding-connection.js";
-import { readCodexPluginConfig } from "./config-parsing.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
@@ -20,10 +19,7 @@ export async function resolveCodexBindingAppServerConnection(
   await assertCurrentAsync?.();
   assertCurrent?.();
   const usesSupervisionConnection = binding?.connectionScope === "supervision";
-  if (
-    usesSupervisionConnection &&
-    readCodexPluginConfig(runtimeParams.pluginConfig).supervision?.enabled !== true
-  ) {
+  if (usesSupervisionConnection && runtimeParams.pluginConfig?.supervision?.enabled !== true) {
     throw new Error(
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );

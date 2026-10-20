@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
@@ -104,7 +105,10 @@ export function readSessionRowInputs(params: {
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
+  preparedTitle?: Pick<
+    GatewaySessionRow,
+    "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
+  >;
   childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
@@ -201,6 +205,7 @@ export function readSessionRowInputs(params: {
       key,
       entry,
       lightweight,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       swarm: buildSessionSwarmSummary(
         params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
         key,
@@ -227,6 +232,7 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -419,7 +425,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
 
   const row: GatewaySessionRow = {
     key,
-    sessionModelRevision: sessionModelRevision(entry),
+    sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
@@ -469,6 +475,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     displayName: input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
@@ -524,6 +531,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
+    reasoningDefault:
+      resolveAgentConfig(cfg, input.agentId)?.reasoningDefault ??
+      cfg.agents?.defaults?.reasoningDefault,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
@@ -597,6 +607,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
+      lastAssistantMessage: input.lastAssistantMessage,
       childLinks: projectSessionRowChildLinks(input.childLinks),
     },
   };

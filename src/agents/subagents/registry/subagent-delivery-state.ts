@@ -21,9 +21,9 @@ export function resetRequesterSettleWakeRetry(
     ...wake,
     status: "pending",
     attemptCount: 0,
+    privateInput: undefined,
     replayCount: undefined,
     nextAttemptAt: undefined,
-    deferralCount: undefined,
     lastError: undefined,
   };
 }
@@ -276,7 +276,7 @@ export const markRequesterSettleWakePending = (
 ) => {
   const existing = entry.requesterSettleWake;
   entry.requesterSettleWake = {
-    ...structuredClone(existing),
+    ...existing,
     status: existing?.status ?? "pending",
     attemptCount: existing?.attemptCount ?? 0,
     ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true

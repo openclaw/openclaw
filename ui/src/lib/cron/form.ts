@@ -8,7 +8,6 @@ import {
   durationMsToSecondsString,
   parseStaggerSchedule,
 } from "./form-schedule.ts";
-import { getCronJobPayload } from "./payload.ts";
 import type { CronFormState } from "./types.ts";
 
 const CRON_CHANNEL_LAST = "last";
@@ -20,62 +19,6 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
     value === "current" ||
     (value.startsWith("session:") && value.length > "session:".length)
   );
-}
-
-export const DEFAULT_CRON_FORM: CronFormState = {
-  name: "",
-  description: "",
-  agentId: "",
-  sessionKey: "",
-  clearAgent: false,
-  enabled: true,
-  deleteAfterRun: false,
-  scheduleKind: "every",
-  eventSource: "mcp-events",
-  eventServer: "",
-  eventName: "",
-  eventArguments: "{}",
-  scheduleAt: "",
-  everyAmount: "30",
-  everyUnit: "minutes",
-  cronExpr: "0 7 * * *",
-  cronTz: "",
-  scheduleExact: false,
-  staggerAmount: "",
-  staggerUnit: "seconds",
-  triggerEnabled: false,
-  triggerScript: "",
-  triggerOnce: false,
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payloadKind: "agentTurn",
-  payloadLocked: false,
-  payloadText: "",
-  payloadModel: "",
-  payloadThinking: "",
-  payloadLightContext: false,
-  deliveryMode: "none",
-  deliveryChannel: "last",
-  deliveryTo: "",
-  deliveryAccountId: "",
-  deliveryBestEffort: false,
-  deliveryThreadId: undefined,
-  deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  timeoutSeconds: "",
-};
-
-function supportsAnnounceDelivery(
-  form: Pick<CronFormState, "sessionTarget" | "payloadKind" | "payloadLocked">,
-) {
-  return form.sessionTarget !== "main" && (form.payloadKind === "agentTurn" || form.payloadLocked);
 }
 
 export function normalizeCronFormState(
@@ -95,7 +38,11 @@ export function normalizeCronFormState(
       normalized = { ...normalized, sessionTarget: "isolated" };
     }
   }
-  if (normalized.deliveryMode !== "announce" || supportsAnnounceDelivery(normalized)) {
+  if (
+    normalized.deliveryMode !== "announce" ||
+    (normalized.sessionTarget !== "main" &&
+      (normalized.payloadKind === "agentTurn" || normalized.payloadLocked))
+  ) {
     return normalized;
   }
   return {
@@ -118,8 +65,8 @@ export function isReadOnlyCronPayload(
 
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
-  const payload = getCronJobPayload(job);
-  const agentTurn = payload?.kind === "agentTurn" ? payload : undefined;
+  const payload = job.payload;
+  const agentTurn = payload.kind === "agentTurn" ? payload : undefined;
   const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
@@ -148,16 +95,16 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     triggerOnce: job.trigger?.once === true,
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
+    payloadKind: payload.kind,
     payloadLocked,
     payloadText:
-      payload?.kind === "systemEvent"
+      payload.kind === "systemEvent"
         ? payload.text
-        : payload?.kind === "agentTurn"
+        : payload.kind === "agentTurn"
           ? payload.message
-          : payload?.kind === "command"
+          : payload.kind === "command"
             ? payload.argv.join(" ")
-            : payload?.kind === "script"
+            : payload.kind === "script"
               ? payload.script
               : "",
     payloadModel: agentTurn?.model ?? "",

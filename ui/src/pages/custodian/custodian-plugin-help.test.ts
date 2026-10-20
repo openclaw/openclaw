@@ -33,7 +33,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mountPluginHelp(request: ReturnType<typeof vi.fn>) {
+async function mountPluginHelp(request: Parameters<typeof createContext>[0]) {
   const harness = createContext(request);
   publishPluginHelpContext(harness.context, {}, plugin, { installed: true, overview: true });
   const mounted = await mountPage(harness.context, { onboarding: false });

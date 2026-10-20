@@ -528,7 +528,7 @@ async function handleMessageEvent(
 
     const messageContext = await buildLineMessageContext({
       event: answerAs,
-      allMedia: [...allMedia],
+      allMedia,
       mediaUnavailable,
       ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
       cfg,
@@ -540,9 +540,7 @@ async function handleMessageEvent(
       mentions: decision.mentions,
       buildContext: context.buildContext,
     });
-    if (!messageContext) {
-      logVerbose("line: skipping empty message");
-    } else {
+    if (messageContext) {
       await processMessage(messageContext, {
         // The config this event resolved to, not the one the monitor booted on.
         cfg: context.cfg,
@@ -687,7 +685,7 @@ function orderedLineSetMessages(
  * event is the turn's own and the rest are the set parts behind it.
  */
 export async function handleLineWebhookEvents(
-  events: WebhookEvent[],
+  events: readonly WebhookEvent[],
   context: LineHandlerContext,
 ): Promise<void> {
   const [event, ...setParts] = events;
@@ -704,11 +702,8 @@ export async function handleLineWebhookEvents(
         );
         break;
       case "follow":
-      case "unfollow": {
-        const { userId } = getLineSourceInfo(event.source);
-        logVerbose(`line: user ${userId ?? "unknown"} ${event.type}ed`);
+      case "unfollow":
         break;
-      }
       case "join":
         await handleJoinEvent(event, context);
         break;

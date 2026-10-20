@@ -26,7 +26,7 @@ type DraftRepositorySnapshot = Readonly<{
 }>;
 
 type DraftRepositoryCallbacks = {
-  requestUpdate: () => void;
+  changed: () => void;
   persistPreference: (patch: NewSessionPreference) => void;
   capturePreferenceConsumption: (
     owner: Readonly<{ agentId: string; workspace: string }>,
@@ -56,7 +56,8 @@ function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftReposit
     : { kind: "checking", repoRoot };
 }
 
-export class DraftRepositoryController {
+/** Owns synchronous checkout intent and pending discovery across draft handoffs. */
+export class DraftRepositoryStateOwner {
   private worktreeValue = false;
   private readonly details: { baseRef?: string; worktreeName: string } = { worktreeName: "" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
@@ -236,7 +237,7 @@ export class DraftRepositoryController {
       folder: this.read().folder.trim() || this.read().workspace,
       worktree: this.worktreeValue,
     });
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
     return true;
   }
 
@@ -248,7 +249,7 @@ export class DraftRepositoryController {
     this.details[key] = value;
     this.selectedDetails.add(key);
     this.callbacks.persistPreference({ [key]: value });
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   captureSubmittedName(
@@ -291,7 +292,7 @@ export class DraftRepositoryController {
           this.selectionRevision += 1;
           this.details.worktreeName = "";
           this.selectedDetails.add("worktreeName");
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         }))
     );
   }
@@ -357,12 +358,12 @@ export class DraftRepositoryController {
           }
           this.checkoutOptions = options;
           this.reconcileCheckoutChoice();
-          this.callbacks.requestUpdate();
+          this.callbacks.changed();
         })
         .catch(() => {
           if (requestId === this.requestToken) {
             this.checkoutOptions = "error";
-            this.callbacks.requestUpdate();
+            this.callbacks.changed();
           }
         });
     }
@@ -445,6 +446,6 @@ export class DraftRepositoryController {
     }
     this.preferredWorktreeRestore = false;
     this.reconcileCheckoutChoice();
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 }

@@ -1,9 +1,11 @@
+import { onSettled } from "solid-js";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { useSolidControllerHost } from "../lit/solid-controller-host.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
-  AssistantPanelController,
+  createAssistantPanel,
+  type AssistantPanelOwner,
   type AssistantPanelProps,
 } from "./assistant-panel-controller.ts";
 import { AssistantPanelView } from "./assistant-panel-view.tsx";
@@ -18,44 +20,21 @@ type OpenClawAssistantPanel = SolidBridgeElement<AssistantPanelProps, Methods> &
 };
 
 // The host outlives context-only Solid remounts; preserve its dock intent.
-const controls = new WeakMap<HTMLElement, AssistantPanelController>();
+const controls = new WeakMap<HTMLElement, AssistantPanelOwner>();
 defineSolidBridge<AssistantPanelProps, Methods>(
   "openclaw-assistant-panel",
-  (props, element) => {
+  (_props, element) => {
     const application = useOptionalApplication();
-    const { host, revision } = useSolidControllerHost(() => [
-      props.context,
-      props.custodianAvailable,
-      props.homeAvailable,
-      props.custodianSuppressed,
-      props.pageSessionKey,
-      props.pageAgentId,
-      props.pageRouteId,
-      props.pageRouteFailed,
-      props.minimizeRequestId,
-      props.store,
-    ]);
-    const existing = controls.get(element);
-    const controller = existing ?? new AssistantPanelController(props, element, host, application);
-    if (existing) {
-      controller.attach(props, host, application);
-    } else {
-      controls.set(element, controller);
-    }
+    const retained = controls.get(element);
+    const panel = retained ?? createAssistantPanel(element, onSettled);
+    controls.set(element, panel);
+    panel.attach(application);
+    const state = projectOwner(panel, (owner) => owner);
     Object.defineProperties(element, {
-      openSessionKey: { configurable: true, get: () => controller.openSessionKey },
-      assistantPanelOpen: { configurable: true, get: () => controller.assistantPanelOpen },
+      openSessionKey: { configurable: true, get: () => panel.openSessionKey },
+      assistantPanelOpen: { configurable: true, get: () => panel.dockLayout.open },
     });
-    host.addController({
-      hostConnected: () => controller.connected(),
-      hostUpdate: () => controller.update(),
-      hostDisconnected: () => {
-        if (!element.isConnected) {
-          controller.disconnected();
-        }
-      },
-    });
-    return <AssistantPanelView controller={controller} revision={revision} />;
+    return <AssistantPanelView state={state.read} />;
   },
   {
     properties: {
@@ -64,12 +43,14 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       homeAvailable: { default: false, type: Boolean },
       custodianSuppressed: { default: false, type: Boolean },
       pageSessionKey: { default: "" },
+      getPrimaryChatPane: { default: undefined, attribute: false },
       pageAgentId: { default: "" },
       pageRouteId: { default: "chat" },
       pageRouteFailed: { default: false, type: Boolean },
       minimizeRequestId: { default: 0, type: Number },
       store: { default: undefined, attribute: false },
     },
+    propertyChanged: (host) => controls.get(host)?.inputsChanged(),
     methods: {
       openSession: (host, params, activation) =>
         controls.get(host)?.openSession(params, activation),

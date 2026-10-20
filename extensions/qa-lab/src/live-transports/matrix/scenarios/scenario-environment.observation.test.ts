@@ -1,5 +1,6 @@
 // QA Lab Matrix tests cover scenario environment readiness boundaries.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 
 const buildMatrixQaConfig = vi.hoisted(() =>
   vi.fn(() => ({ channels: { matrix: { execApprovals: { enabled: true } } } })),
@@ -23,7 +24,7 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("matrix scenario observation", () => {
@@ -148,7 +149,7 @@ describe("matrix scenario observation", () => {
         },
       });
     };
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
     for (const actorId of ["driver", "observer"] as const) {
       const accessToken = second.scenarioContext[`${actorId}AccessToken`];
       const client = createMatrixQaScenarioClient({

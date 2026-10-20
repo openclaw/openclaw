@@ -1,8 +1,9 @@
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription-session";
+import {
+  measureTranscriptDeltaBytes,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-provider";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumberInRange,
@@ -48,21 +49,6 @@ const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
   "OpenAI Realtime transcription requires an OpenAI Platform API key";
 const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
   "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
-
-function appendedUtf8ByteLength(previous: string, appended: string): number {
-  const appendedBytes = Buffer.byteLength(appended, "utf8");
-  if (!previous || !appended) {
-    return appendedBytes;
-  }
-  const previousCodeUnit = previous.charCodeAt(previous.length - 1);
-  const appendedCodeUnit = appended.charCodeAt(0);
-  const joinsSurrogatePair =
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    appendedCodeUnit >= 0xdc00 &&
-    appendedCodeUnit <= 0xdfff;
-  return joinsSurrogatePair ? appendedBytes - 2 : appendedBytes;
-}
 
 function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
@@ -491,7 +477,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(
                 }
                 const pendingTranscript = pendingTranscripts.get(key);
                 const previousPartial = pendingTranscript?.text ?? "";
-                const deltaBytes = appendedUtf8ByteLength(previousPartial, event.delta);
+                const deltaBytes = measureTranscriptDeltaBytes(previousPartial, event.delta);
                 if (
                   deltaBytes >
                   OPENAI_REALTIME_TRANSCRIPTION_MAX_RETAINED_TRANSCRIPT_BYTES -

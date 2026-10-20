@@ -1,4 +1,3 @@
-// Video generation runtime coordinates provider auth, fallbacks, and job polling.
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -118,7 +117,7 @@ async function runVideoGeneration(
 
   let skipWarnEmitted = false;
   const warnOnFirstSkip = (reason: string) => {
-    // Only the first skipped candidate warrants a warning; callers log the rest at debug.
+    // Warn once; the coordinator retains every skipped candidate in attempts.
     if (!skipWarnEmitted) {
       skipWarnEmitted = true;
       logger.warn(`video-generation candidate skipped: ${reason}`);
@@ -167,9 +166,6 @@ async function runVideoGeneration(
       });
       if (capabilityMismatch) {
         warnOnFirstSkip(capabilityMismatch);
-        logger.debug(
-          `video-generation candidate skipped (mode or reference capability): ${candidate.provider}/${candidate.model}`,
-        );
         return capabilityMismatch;
       }
 
@@ -190,9 +186,6 @@ async function runVideoGeneration(
         });
         if (mismatch) {
           warnOnFirstSkip(mismatch);
-          logger.debug(
-            `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
-          );
           return mismatch;
         }
       }
@@ -218,9 +211,6 @@ async function runVideoGeneration(
         ) {
           const error = `${candidate.provider}/${candidate.model} supports at most ${maxDuration}s per video, ${requestedDuration}s requested; skipping`;
           warnOnFirstSkip(error);
-          logger.debug(
-            `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
-          );
           return error;
         }
       }

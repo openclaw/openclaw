@@ -7,6 +7,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { readConnectErrorRecoveryAdvice } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
@@ -260,12 +261,9 @@ export function resolveUnauthorizedHandshakeContext(params: {
 }): {
   authProvided: AuthProvidedKind;
   canRetryWithDeviceToken: boolean;
-  recommendedNextStep:
-    | "retry_with_device_token"
-    | "update_auth_configuration"
-    | "update_auth_credentials"
-    | "wait_then_retry"
-    | "review_auth_configuration";
+  recommendedNextStep: NonNullable<
+    ReturnType<typeof readConnectErrorRecoveryAdvice>["recommendedNextStep"]
+  >;
 } {
   const authProvided = params.connectAuth?.password
     ? "password"

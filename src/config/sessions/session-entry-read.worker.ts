@@ -8,7 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
@@ -598,7 +598,7 @@ export function readSessionRowDatabaseFacts(
               const { entry } = selected;
               const storedTranscript =
                 selected.row.row_transcript_window_id === null
-                  ? { lastMessagePreview: null, terminalModel: null }
+                  ? { lastMessagePreview: null, lastAssistantMessage: null, terminalModel: null }
                   : readStoredSessionRowTranscriptProjection({
                       json: selected.row.row_transcript_json,
                       updatedAt: selected.row.row_transcript_updated_at,
@@ -611,6 +611,9 @@ export function readSessionRowDatabaseFacts(
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
+                transcriptAssistantMessage: storedTranscript
+                  ? storedTranscript.lastAssistantMessage
+                  : "unknown",
                 transcriptTerminalModel: storedTranscript?.terminalModel,
               };
               if (readSessionActivitySummary(entry)) {
@@ -624,7 +627,7 @@ export function readSessionRowDatabaseFacts(
           };
         };
         return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
+          database.db.isTransaction ? read() : runSqliteReadSnapshotSync(database.db, read),
         );
       }),
     { ...request.database, env: request.env },

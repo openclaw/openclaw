@@ -1,5 +1,7 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
 import { afterEach, vi } from "vitest";
+import type { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
+import type { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
@@ -18,6 +20,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
+import {
+  completeAcpSessionFixture,
+  type AcpSessionFixture,
+} from "./dispatch-from-config.acp-fixture.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
@@ -109,7 +115,7 @@ const internalHookMocks = vi.hoisted(() => ({
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
   readAcpSessionEntry: vi.fn<
-    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+    (params: Parameters<typeof readAcpSessionEntry>[0]) => AcpSessionFixture | null
   >(() => null),
   readAcpSessionMeta: vi.fn<
     (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
@@ -481,6 +487,20 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
   resetGlobalHookRunner: vi.fn(),
+}));
+// mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
+vi.mock("../../acp/runtime/session-meta-read.js", () => ({
+  withAcpSessionEntryRead: async (
+    params: Parameters<typeof withAcpSessionEntryRead>[0],
+    consume: Parameters<typeof withAcpSessionEntryRead>[1],
+  ) =>
+    consume(
+      completeAcpSessionFixture(acpMocks.readAcpSessionEntry(params), {
+        ...params,
+        storePath: sessionStoreMocks.resolveSessionStorePathCore(),
+      }),
+      undefined,
+    ),
 }));
 // mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
 vi.mock("../../acp/runtime/session-meta.js", () => ({

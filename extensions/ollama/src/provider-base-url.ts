@@ -20,11 +20,7 @@ export function readProviderBaseUrl(
   if (!provider) {
     return undefined;
   }
-  if (
-    Object.hasOwn(provider, "baseUrl") &&
-    typeof provider.baseUrl === "string" &&
-    provider.baseUrl.trim()
-  ) {
+  if (Object.hasOwn(provider, "baseUrl") && provider.baseUrl?.trim()) {
     return provider.baseUrl.trim();
   }
   const alternate = provider as Partial<ModelProviderConfig> & { baseURL?: unknown };

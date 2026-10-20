@@ -1,3 +1,4 @@
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -9,6 +10,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 
@@ -46,11 +48,12 @@ export function discardSessionPendingInputInWorker(
         admit("commit", receipt);
         return withdrawn;
       };
-      const schema = getAdmittedSqliteSchemaFacts(current.db);
+      const schema =
+        getPostgresPhysicalFacts(current.db) ?? getAdmittedSqliteSchemaFacts(current.db);
       if (!schema) {
         throw new Error("Pending input withdrawal requires admitted schema facts");
       }
-      if (!schema.tables.has("session_pending_inputs")) {
+      if (!hasSessionPendingInputsSchema(current.db)) {
         return commitResult(false);
       }
       const db = getSessionKysely(current.db);

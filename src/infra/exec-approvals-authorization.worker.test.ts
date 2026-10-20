@@ -130,6 +130,10 @@ it("commits accepted usage once and preserves the agent deletion fence", () => {
   );
   expect(writes).toHaveBeenCalledTimes(1);
   expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, false, true]);
+  expect(outcomes[0]).toMatchObject({
+    ok: true,
+    snapshot: { file: { agents: { main: { allowlist: [{ lastUsedCommand: "echo first" }] } } } },
+  });
   expect(outcomes[2]).toMatchObject({
     ok: true,
     snapshot: {
@@ -142,3 +146,19 @@ it("commits accepted usage once and preserves the agent deletion fence", () => {
     },
   });
 });
+
+it.each(["explicit-approval", "auto-review"] as const)(
+  "rejects %s usage without its delayed policy snapshot",
+  (source) => {
+    const { context } = fixture();
+    const outcomes = commitExecAuthorizationsInWorker(
+      {
+        items: [{ ...input, matches: [entry], authorization: { ...input.authorization, source } }],
+      },
+      context,
+    );
+    expect(outcomes).toEqual([{ ok: false, message: "Exec approval changed before execution" }]);
+    const [unchanged] = commitExecAuthorizationsInWorker({ items: [input] }, context);
+    expect(unchanged?.ok && unchanged.snapshot.file.agents?.main?.allowlist).toEqual([entry]);
+  },
+);

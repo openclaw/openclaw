@@ -1,6 +1,3 @@
-/**
- * CDP page-session preparation and committed-navigation observation.
- */
 import { createHash } from "node:crypto";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";

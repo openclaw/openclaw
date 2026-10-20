@@ -231,8 +231,7 @@ function collectProcessTree(processes: AcpxProcessInfo[], rootPid: number): Acpx
     childrenByParent.set(processInfo.ppid, children);
   }
 
-  const byPid = new Map(processes.map((processInfo) => [processInfo.pid, processInfo]));
-  const root = byPid.get(rootPid);
+  const root = processes.find((processInfo) => processInfo.pid === rootPid);
   const collected: AcpxProcessInfo[] = [];
   if (root) {
     collected.push(root);

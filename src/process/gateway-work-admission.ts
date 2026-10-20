@@ -660,7 +660,8 @@ export async function runWithRetainedGatewayRootWork<T>(run: () => T | Promise<T
 
 /** Starts process-lifetime work without inheriting the request root that created it. */
 export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
-  return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.exit(run);
+  const { currentRootWork } = GATEWAY_WORK_ADMISSION_STATE;
+  return currentRootWork.getStore() === undefined ? run() : currentRootWork.exit(run);
 }
 
 /** Active root requests/ticks, optionally excluding the caller running prepare. */

@@ -12,6 +12,7 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
@@ -24,6 +25,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { clearArtifactDownloads } from "./artifact-download-grants.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   measureGatewayCloseStep,
@@ -175,7 +177,6 @@ export type GatewayCloseParams = {
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   clients: Set<{
@@ -226,9 +227,6 @@ export async function prepareGatewayClose(
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
-  // Debug-level: the signal handler already announced the stop/restart at
-  // info, and the completion line below reports duration and outcome.
-  shutdownLog.debug(`shutdown started: ${reason}`);
 
   const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
     const hookName = `gateway:${action}` as const;
@@ -415,6 +413,7 @@ async function closeGatewayResources(
         disposeRuntime("bundle-lsp", params.disposeAllBundleLspRuntimes),
       ]);
     });
+    await shutdownStep("artifact-downloads", clearArtifactDownloads);
     await shutdownStep("periodic-maintenance", () => params.maintenance?.stopPeriodicTasks());
     await shutdownStep("skill-usage", () => params.maintenance?.skillUsageCleanup());
     try {
@@ -441,9 +440,7 @@ async function closeGatewayResources(
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
-    if (params.heartbeatUnsub) {
-      await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!());
-    }
+    heartbeatNotifications.onEvent = () => {};
     if (params.transcriptUnsub) {
       await shutdownStep("transcript-unsub", () => params.transcriptUnsub!());
     }

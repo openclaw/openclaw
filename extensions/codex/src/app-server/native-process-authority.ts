@@ -300,9 +300,6 @@ export class CodexNativeProcessAuthority {
     }
     try {
       this.source?.assertCurrent();
-      if (this.cancelled || this.released) {
-        throw new Error("Codex native process source has ended");
-      }
     } catch (error) {
       this.onAbort();
       throw error;

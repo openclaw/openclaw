@@ -292,21 +292,51 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             evaluate: async (batch, options) => {
               assertRuntimeCurrent();
               const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionInRegistry } = await import("../decisions/runtime.js");
+              const { evaluateDecisionOperation, completeDecisionEvaluation } =
+                await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionInRegistry(
+                evaluateDecisionOperation(
                   batch,
                   options,
                   selectedRegistry,
                   getRuntimeConfig(),
                   record.id,
+                  () => {
+                    assertRuntimeCurrent();
+                    return true;
+                  },
                 ),
               );
               assertRuntimeCurrent();
               options.signal.throwIfAborted();
-              return result;
+              return completeDecisionEvaluation(result);
+            },
+            evaluateV2: async (batch, options) => {
+              assertRuntimeCurrent();
+              const capturedRegistry = currentDecisionRegistry();
+              const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
+                await import("../decisions/runtime.js");
+              assertRuntimeCurrent();
+              const selectedRegistry = currentDecisionRegistry(capturedRegistry);
+              const config = getRuntimeConfig();
+              const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
+                evaluateDecisionV2Operation(
+                  batch,
+                  options,
+                  selectedRegistry,
+                  config,
+                  record.id,
+                  () => {
+                    assertRuntimeCurrent();
+                    return true;
+                  },
+                ),
+              );
+              assertRuntimeCurrent();
+              options.signal.throwIfAborted();
+              return completeDecisionEvaluation(result);
             },
           } satisfies PluginRuntime["decisions"];
         }

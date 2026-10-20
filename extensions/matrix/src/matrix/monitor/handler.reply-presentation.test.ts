@@ -16,7 +16,7 @@ import {
 } from "./handler.test-helpers.js";
 
 const sendMessageMatrixMock = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ messageId: "evt", roomId: "!room" })),
+  vi.fn<typeof import("../send.js").sendMessageMatrix>(),
 );
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
 const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
@@ -40,13 +40,6 @@ vi.mock("../send.js", () => ({
   sendTypingMatrix: vi.fn(async () => {}),
 }));
 
-const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./replies.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./replies.js")>()),
-  deliverMatrixReplies: deliverMatrixRepliesMock,
-}));
-
 type DeliverFn = (
   payload: ReplyPayload,
   info: { kind: "tool" | "block" | "final" },
@@ -55,21 +48,25 @@ type DeliverFn = (
 describe("matrix monitor handler reply presentation", () => {
   beforeEach(() => {
     installMatrixMonitorTestRuntime();
-    sendMessageMatrixMock.mockClear();
+    sendMessageMatrixMock.mockReset().mockImplementation(async (_room, text, options) => {
+      const result = {
+        messageId: "$reply1",
+        primaryMessageId: "$reply1",
+        roomId: "!room",
+        receipt: {
+          primaryPlatformMessageId: "$reply1",
+          platformMessageIds: ["$reply1"],
+          parts: [{ platformMessageId: "$reply1", kind: "text" as const, index: 0 }],
+          sentAt: 1,
+        },
+        content: text ?? "",
+      };
+      await options.onDeliveryResult?.(result);
+      return result;
+    });
     editMessageMatrixMock.mockClear();
     sendSingleTextMessageMatrixMock.mockClear();
     reactMatrixMessageMock.mockClear();
-    deliverMatrixRepliesMock.mockReset().mockResolvedValue({
-      messageIds: ["$reply1"],
-      receipt: {
-        primaryPlatformMessageId: "$reply1",
-        platformMessageIds: ["$reply1"],
-        parts: [{ platformMessageId: "$reply1", kind: "text" as const, index: 0 }],
-        sentAt: 1,
-      },
-      visibleReplySent: true,
-      content: "delivered",
-    });
   });
 
   it.each([undefined] as const)(
@@ -157,19 +154,15 @@ describe("matrix monitor handler reply presentation", () => {
       await handlerDone;
     }
 
-    const delivered = deliverMatrixRepliesMock.mock.calls.at(0)?.[0] as
-      | { replies?: ReplyPayload[] }
-      | undefined;
-    const reply = delivered?.replies?.[0];
-    expect(reply?.text).toContain("Deploy to production?");
-    expect(reply?.presentation).toBeUndefined();
-    expect(
-      ((reply?.channelData?.matrix as { extraContent?: Record<string, unknown> } | undefined)
-        ?.extraContent ?? {})["com.openclaw.presentation"],
-    ).toMatchObject({ type: "message.presentation", version: 1 });
+    const delivered = sendMessageMatrixMock.mock.calls[0];
+    expect(delivered?.[1]).toContain("Deploy to production?");
+    expect(delivered?.[2].extraContent?.["com.openclaw.presentation"]).toMatchObject({
+      type: "message.presentation",
+      version: 1,
+    });
   });
 
-  it("edits a matching live preview to attach the final reply's controls", async () => {
+  it.each(["controls", "answer"] as const)("edits a live preview for %s", async (kind) => {
     const context = {
       cfg: { channels: { matrix: {} } },
       client: {} as MatrixClient,
@@ -202,14 +195,18 @@ describe("matrix monitor handler reply presentation", () => {
       ],
     };
     try {
-      const payload = await prepareMatrixReplyPayload({ presentation });
+      const payload =
+        kind === "controls"
+          ? await prepareMatrixReplyPayload({ presentation })
+          : { text: "answer" };
       if (typeof payload.text !== "string") {
-        throw new Error("prepared controls must have visible fallback text");
+        throw new Error("prepared reply must have visible text");
       }
-      draftController.onPartialReply(payload.text);
+      const previewText = kind === "controls" ? payload.text : "answer\n\nNO_REPLY";
+      draftController.onPartialReply(previewText);
       await draftStream.flush();
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(draftStream.matchesPreparedText(payload.text)).toBe(true);
+      expect(draftStream.matchesPreparedText(previewText)).toBe(true);
 
       const { deliverReply } = createMatrixReplyDispatcher({
         ...context,
@@ -227,18 +224,22 @@ describe("matrix monitor handler reply presentation", () => {
         context.roomId,
         "$draft1",
         payload.text,
-        expect.objectContaining({
-          extraContent: {
-            "com.openclaw.presentation": expect.objectContaining({
-              type: "message.presentation",
-              version: 1,
-              blocks: presentation.blocks,
-            }),
-          },
-        }),
+        expect.objectContaining(
+          kind === "controls"
+            ? {
+                extraContent: {
+                  "com.openclaw.presentation": expect.objectContaining({
+                    type: "message.presentation",
+                    version: 1,
+                    blocks: presentation.blocks,
+                  }),
+                },
+              }
+            : {},
+        ),
       );
       expect(finalizeLive).not.toHaveBeenCalled();
-      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      expect(sendMessageMatrixMock).not.toHaveBeenCalled();
       expect(result).toMatchObject({ messageIds: ["$draft1"], visibleReplySent: true });
     } finally {
       await draftStream.discardPending();

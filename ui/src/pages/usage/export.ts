@@ -3,12 +3,12 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { buildDailyCsv, buildSessionsCsv } from "./query.ts";
-import { createUsageRequest } from "./request.ts";
 import type { UsageJsonExport } from "./types.ts";
 
 registerUsageEnglish();
@@ -18,7 +18,7 @@ export function createUsageExportRequest(
   gateway: GatewayPageBinding,
   query: () => SessionUsageQuery,
 ) {
-  return createUsageRequest(notify, {
+  return createPageRequest(notify, {
     task: async (format: "json" | "sessions-csv" | "daily-csv", { signal }) => {
       const connection = gateway.capture();
       if (!connection) {

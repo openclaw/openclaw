@@ -83,12 +83,52 @@ function oversizedJsonResponse(): Response {
 }
 
 describe("minimax video generation provider", () => {
+  it.each(["minimax", "minimax-portal"])(
+    "rejects an invalid %s media origin before resolving credentials or submitting video",
+    async (providerId) => {
+      await expect(
+        buildMinimaxVideoGenerationProvider(providerId).generateVideo(
+          videoRequest({
+            provider: providerId,
+            cfg: {
+              models: {
+                providers: { [providerId]: { baseUrl: "https://[", models: [] } },
+              },
+            },
+          }),
+        ),
+      ).rejects.toBeInstanceOf(TypeError);
+      expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+      expect(postJsonRequestMock).not.toHaveBeenCalled();
+      expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a duration that rounds to zero before submission", async () => {
     await expect(
       buildMinimaxVideoGenerationProvider().generateVideo(videoRequest({ durationSeconds: 0.4 })),
     ).rejects.toThrow("durationSeconds must be a positive duration");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
+
+  it.each(["constructor", "__proto__", "hasOwnProperty", "unknown-model"])(
+    "preserves requested options for unknown model %s without inherited constraints",
+    async (model) => {
+      mockVideoTask("unknown-model-task", { video_url: "https://example.com/out.mp4" });
+      fetchWithTimeoutMock.mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("synthetic-video"),
+      });
+      await buildMinimaxVideoGenerationProvider().generateVideo(
+        videoRequest({ model, durationSeconds: 5, resolution: "720P" }),
+      );
+      expect(mockCallArg(postJsonRequestMock).body).toMatchObject({
+        model,
+        duration: 5,
+        resolution: "720P",
+      });
+    },
+  );
 
   it("creates a task, polls status, and downloads the generated video", async () => {
     mockVideoTask("task-123", { video_url: "https://example.com/out.mp4", file_id: "file-1" });

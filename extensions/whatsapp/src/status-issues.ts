@@ -3,22 +3,8 @@ import type {
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import {
-  collectIssuesForEnabledAccounts,
-  isRecord,
-  readAccountStatusSnapshot,
-} from "openclaw/plugin-sdk/status-helpers";
+import { collectIssuesForEnabledAccounts, isRecord } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const WHATSAPP_ACCOUNT_STATUS_FIELDS = [
-  "statusState",
-  "linked",
-  "reconnectAttempts",
-  "lastDisconnect",
-  "lastInboundAt",
-  "lastError",
-  "healthState",
-] as const;
 
 const RECENT_DISCONNECT_WARNING_WINDOW_MS = 15 * 60 * 1000;
 
@@ -48,7 +34,7 @@ export function collectWhatsAppStatusIssues(
 ): ChannelStatusIssue[] {
   return collectIssuesForEnabledAccounts({
     accounts,
-    readAccount: (value) => readAccountStatusSnapshot(value, WHATSAPP_ACCOUNT_STATUS_FIELDS),
+    readAccount: (account) => account,
     collectIssues: ({ account, accountId, issues }) => {
       const linked = account.linked === true;
       const statusState = normalizeOptionalString(account.statusState);

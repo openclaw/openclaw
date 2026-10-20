@@ -1,5 +1,6 @@
 import type {
   ChannelsStatusResult,
+  EnvironmentsListResult,
   UserProfile,
   ProjectsCheckoutOptionsResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -98,6 +99,10 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "environments.list": {
+      environments: [],
+      profiles: [],
+    } satisfies EnvironmentsListResult,
     "projects.checkoutOptions": {
       current: true,
       worktree: true,

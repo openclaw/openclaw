@@ -329,12 +329,10 @@ export async function swapStagedPackageInstall(
     packageRollbackVerified = hadPackage && previousVersion !== null;
   };
   try {
-    await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
+    await readBaseline();
     // The optional tree scan must not consume the launcher backup's deadline.
     const launcherReader = createPackageIntegrityReader(params.timeoutMs);
-    await launcherReader.observe("baseline", () =>
-      capturePackageLaunchers(launchers, params, targetLayout, launcherReader),
-    );
+    await capturePackageLaunchers(launchers, params, targetLayout, launcherReader);
     const retireLegacyBackups = params.onTransaction
       ? await captureLegacyPackageBackupRetirement(
           targetLayout.globalRoot,

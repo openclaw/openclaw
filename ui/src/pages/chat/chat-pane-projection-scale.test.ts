@@ -57,6 +57,6 @@ it("keeps a 3,000-message transcript cached when typing publishes an unchanged o
   } finally {
     persistence.stop();
     unsubscribe();
-    pane.chatProps?.transcript.hostDisconnected();
+    pane.chatProps?.transcript.dispose();
   }
 });

@@ -1,3 +1,6 @@
+// This suite owns serialized preload context checks. Cancellation, concurrent
+// preload ownership, backoff and plugin wrapper composition stay as separate
+// cases in stream.test.ts.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";

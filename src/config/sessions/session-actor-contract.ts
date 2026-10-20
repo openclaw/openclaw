@@ -1,5 +1,7 @@
+import type { SessionActivitySummary } from "./activity-summary.js";
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
@@ -167,6 +169,7 @@ export type SessionActorPhaseInputs = {
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
     restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
+    activitySummary?: SessionActivitySummary;
   };
   deliveryPending:
     | {
@@ -253,6 +256,7 @@ export type SessionActorReceipt = {
     append?: SessionActorAppendCommitted;
     projectionNeedsReconcile: boolean;
   };
+  conversationPublication?: readonly ConversationPublication[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
@@ -326,7 +330,11 @@ type SessionActorCommands = {
 };
 
 type SessionActorStorageCommitObserver<Value> = {
-  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(
+    outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>,
+  ): void | Promise<void>;
+  /** Memory companions settle before this owner's FIFO admits later work. */
+  settled?(outcome: SessionActorStorageOutcome<Value>): void | Promise<void>;
   committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 

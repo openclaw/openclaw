@@ -1,13 +1,16 @@
 // Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
 
-export type CommandLaneTaskMarker = Readonly<{
-  lane: string;
-  taskId: number;
-  generation: number;
-}>;
+export function getDefaultLaneConcurrency(lane: string): number {
+  if (lane === "restart-recovery") {
+    return 4;
+  }
+  return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
+    ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
+    : 1;
+}
 
 export type QueuePriority = -1 | 0 | 1;
 
@@ -17,7 +20,7 @@ export type QueueEntry = {
   queued?: true;
   previous?: QueueEntry;
   next?: QueueEntry;
-  task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
+  task: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   /** Monotonic enqueue time; wall-clock corrections must not reorder work. */
@@ -60,6 +63,24 @@ export type LaneState = {
   generation: number;
 };
 
+export function getLaneState(lane: string): LaneState {
+  const queueState = getQueueState();
+  const existing = queueState.lanes.get(lane);
+  if (existing) {
+    return existing;
+  }
+  const created: LaneState = {
+    lane,
+    queue: createLaneQueue(),
+    activeTasks: new Map(),
+    maxConcurrent: getDefaultLaneConcurrency(lane),
+    draining: false,
+    generation: 0,
+  };
+  queueState.lanes.set(lane, created);
+  return created;
+}
+
 export type LaneGroupState = {
   group: string;
   budget: number;
@@ -71,7 +92,7 @@ function createQueueFifo(): QueueFifo {
   return { head: undefined, tail: undefined };
 }
 
-export function createLaneQueue(): LaneQueue {
+function createLaneQueue(): LaneQueue {
   return {
     background: createQueueFifo(),
     normal: createQueueFifo(),

@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../test-helpers/temp-dir.js";
 import { installFromValidatedNpmSpecArchive } from "./install-from-npm-spec.js";
 import { packNpmSpecToArchive, withInstallWorkspace } from "./install-source-utils.js";
 import type { NpmIntegrityDriftPayload } from "./npm-integrity.js";
@@ -207,6 +206,7 @@ describe("installFromValidatedNpmSpecArchive", () => {
       throw new Error("expected prerelease rejection");
     }
     expect(result.error).toContain("prerelease version 1.1.0-beta.1");
+    expect(result.error).toContain('Use "npm:@openclaw/test@beta"');
     expect(installFromArchive).not.toHaveBeenCalled();
   });
 
@@ -261,70 +261,86 @@ describe("installFromValidatedNpmSpecArchive", () => {
 });
 
 describe("archive workspace lifetime", () => {
+  it("preserves workspace settlement rejection instead of exposing install success", async () => {
+    const failure = new Error("workspace cleanup failed");
+    vi.mocked(withInstallWorkspace).mockImplementationOnce(async (_prefix, callback) => {
+      await callback("/tmp/openclaw-npm-pack-install-test");
+      throw failure;
+    });
+    vi.mocked(packNpmSpecToArchive).mockResolvedValueOnce({
+      ok: true,
+      archivePath: "/tmp/openclaw-test.tgz",
+      metadata: {},
+    });
+
+    await expect(
+      installFromValidatedNpmSpecArchive({
+        spec: "audit-hooks@1.0.0",
+        timeoutMs: 1000,
+        tempDirPrefix: "archive-",
+        archiveInstallParams: {},
+        installFromArchive: async () => ({ ok: true as const, pluginId: "audit-hooks" }),
+      }),
+    ).rejects.toBe(failure);
+  });
+
   it.each(["success", "failure", "throw"] as const)(
     "cleans the archive workspace before exposing %s",
     async (outcome) => {
-      await withTestDir({ prefix: "openclaw-npm-archive-" }, async (rootDir) => {
-        // Workspace admission must not depend on the runner's directory umask.
-        await fs.chmod(rootDir, 0o700);
-        const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
-          "./install-source-utils.js",
-        );
-        vi.mocked(withInstallWorkspace).mockImplementationOnce((prefix, callback) =>
-          actual.withInstallWorkspace(prefix, callback, { rootDir }),
-        );
-        let workspace = "";
-        vi.mocked(packNpmSpecToArchive).mockImplementationOnce(async ({ cwd }) => {
-          workspace = cwd;
-          const archivePath = path.join(cwd, "package.tgz");
-          await fs.writeFile(archivePath, "owned archive");
-          return { ok: true, archivePath, metadata: { version: "1.0.0" } };
-        });
-        const transactionKey = Symbol.for("openclaw.packageDirInstallTransaction");
-        const transaction = { commit: vi.fn(), rollback: vi.fn() };
-        const failure = {
-          ok: false as const,
-          error: "policy refused",
-          code: "security_scan_blocked",
-        };
-        const thrown = new Error("installer failed");
-        const result = installFromValidatedNpmSpecArchive({
-          spec: "audit-hooks@1.0.0",
-          timeoutMs: 1000,
-          tempDirPrefix: "archive-",
-          archiveInstallParams: {},
-          installFromArchive: async ({ archivePath }) => {
-            expect(await fs.readFile(archivePath, "utf8")).toBe("owned archive");
-            if (outcome === "throw") {
-              throw thrown;
-            }
-            if (outcome === "failure") {
-              return failure;
-            }
-            return {
-              ok: true as const,
-              [transactionKey]: transaction,
-              get pluginId() {
-                expect(existsSync(workspace)).toBe(false);
-                return "audit-hooks";
-              },
-            };
-          },
-        });
-        if (outcome === "throw") {
-          await expect(result).rejects.toBe(thrown);
-        } else if (outcome === "failure") {
-          await expect(result).resolves.toBe(failure);
-        } else {
-          await expect(result).resolves.toMatchObject({
-            pluginId: "audit-hooks",
-            [transactionKey]: transaction,
-            npmResolution: { version: "1.0.0" },
-          });
-        }
-        expect(workspace).not.toBe("");
-        expect(existsSync(workspace)).toBe(false);
+      const actual = await vi.importActual<typeof import("./install-source-utils.js")>(
+        "./install-source-utils.js",
+      );
+      vi.mocked(withInstallWorkspace).mockImplementationOnce((prefix, callback) =>
+        actual.withInstallWorkspace(prefix, callback),
+      );
+      let workspace = "";
+      vi.mocked(packNpmSpecToArchive).mockImplementationOnce(async ({ cwd }) => {
+        workspace = cwd;
+        const archivePath = path.join(cwd, "package.tgz");
+        await fs.writeFile(archivePath, "owned archive");
+        return { ok: true, archivePath, metadata: { version: "1.0.0" } };
       });
+      const transactionKey = Symbol.for("openclaw.packageDirInstallTransaction");
+      const transaction = { commit: vi.fn(), rollback: vi.fn() };
+      const failure = {
+        ok: false as const,
+        error: "policy refused",
+        code: "security_scan_blocked",
+      };
+      const thrown = new Error("installer failed");
+      const result = installFromValidatedNpmSpecArchive({
+        spec: "audit-hooks@1.0.0",
+        timeoutMs: 1000,
+        tempDirPrefix: "archive-",
+        archiveInstallParams: {},
+        installFromArchive: async ({ archivePath }) => {
+          expect(await fs.readFile(archivePath, "utf8")).toBe("owned archive");
+          if (outcome === "throw") {
+            throw thrown;
+          }
+          if (outcome === "failure") {
+            return failure;
+          }
+          return {
+            ok: true as const,
+            [transactionKey]: transaction,
+            pluginId: "audit-hooks",
+          };
+        },
+      });
+      if (outcome === "throw") {
+        await expect(result).rejects.toBe(thrown);
+      } else if (outcome === "failure") {
+        await expect(result).resolves.toBe(failure);
+      } else {
+        await expect(result).resolves.toMatchObject({
+          pluginId: "audit-hooks",
+          [transactionKey]: transaction,
+          npmResolution: { version: "1.0.0" },
+        });
+      }
+      expect(workspace).not.toBe("");
+      expect(existsSync(workspace)).toBe(false);
     },
   );
 });

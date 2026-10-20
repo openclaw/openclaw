@@ -17,7 +17,6 @@ import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessio
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
   dispatchChatSlashCommand,
   requireChatSessionAction,
@@ -28,7 +27,7 @@ import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-st
 import { loadChatHistory } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import { enqueueChatMessage, readQueuedMessageById } from "./chat-queue.ts";
+import { enqueueChatMessage } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
   cancelChatDelivery,
@@ -58,7 +57,6 @@ import {
   OFFLINE_QUEUE_STORAGE_ERROR,
   prependReplyQuote,
 } from "./chat-send-support.ts";
-import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import {
   withChatSubmitGuard,
@@ -73,7 +71,6 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
-import { controlUiNowMs } from "./performance.ts";
 import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
@@ -117,7 +114,6 @@ export async function handleSendChat(
     return undefined;
   }
   if (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason) {
-    host.requestUpdate?.();
     return undefined;
   }
   const previousDraft = host.chatMessage;
@@ -129,7 +125,7 @@ export async function handleSendChat(
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
   const submitted = trimHumanMentions(rawMessage, draftMentions);
   const userMessage = intent ? rawMessage : submitted.text;
-  const submittedAtMs = controlUiNowMs();
+  const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
@@ -213,7 +209,14 @@ export async function handleSendChat(
   const message =
     rawParsedCommand || intent
       ? userMessage
-      : composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+      : [
+          ...attachmentsToSend.map(({ browserAnnotation }) =>
+            browserAnnotation?.modelContext.trim(),
+          ),
+          userMessage,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   const deliveredAttachments = rawParsedCommand
     ? attachmentsToSend.filter(
@@ -315,7 +318,6 @@ export async function handleSendChat(
       (!parsed?.command.executeLocal || forwardModel) &&
       chatProviderReviewRow(host)?.sendDisabledReason
     ) {
-      host.requestUpdate?.();
       return undefined;
     }
     host.chatRunError = null;
@@ -349,7 +351,6 @@ export async function handleSendChat(
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (chatSendHoldReason(host, submittedSessionKey)) {
-          host.requestUpdate?.();
           return undefined;
         }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
@@ -381,6 +382,7 @@ export async function handleSendChat(
               host.chatMentions = previousMentions ?? [];
               host.chatReplyTarget = previousReplyTarget;
               host.chatAttachments = attachmentsToSend;
+              host.composerDraftChanged?.();
             }
             setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
             return;
@@ -533,8 +535,6 @@ export async function handleSendChat(
         ? chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)
         : chatSendAdmissionHoldReason(host, submittedSessionKey, submittedAgentId);
     if (admissionHoldReason()) {
-      // The composer owns transient recovery notices, including their removal.
-      host.requestUpdate?.();
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
@@ -598,9 +598,7 @@ export async function handleSendChat(
       const hold = admissionHoldReason();
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
-        if (hold) {
-          host.requestUpdate?.();
-        } else {
+        if (!hold) {
           setChatError(host, t("chat.goals.busy"));
         }
         return;
@@ -632,9 +630,13 @@ export async function handleSendChat(
       guard.releaseAttachments();
       if (messageOverride == null && !rawParsedCommand && !intent && submissionOwnerIsCurrent()) {
         // Pending admissions retain their files until their own composer snapshot can settle.
-        host.chatAttachments = host.chatAttachments.filter(
+        const attachments = host.chatAttachments.filter(
           (attachment) => !guard.canRetireAttachment(attachment),
         );
+        if (attachments.length !== host.chatAttachments.length) {
+          host.chatAttachments = attachments;
+          host.composerDraftChanged?.();
+        }
       }
     }
     if (resumedEdit) {
@@ -681,17 +683,7 @@ export async function handleSendChat(
           storageMode: canSendFromMemory ? "memory" : "durable",
         }),
     );
-    const pending = readQueuedMessageById(host, queued.id);
     accepted = sendResult !== "failed";
-    const pendingBusySend =
-      sendResult === "pending" &&
-      pending?.sendState === "waiting-idle" &&
-      host.sessionKey === submittedSessionKey &&
-      visibleSessionMatches(host, submittedSessionKey, pending.agentId) &&
-      (isChatBusy(host) || hasDirectSessionRun(host));
-    if (pendingBusySend) {
-      recordChatSendTiming(host, pending, "queued-busy", submittedAtMs);
-    }
   };
   await withChatSubmitGuard(
     host,

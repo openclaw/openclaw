@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -378,12 +379,7 @@ try {
     const home = path.join(artifactDir, "node-home");
     const state = path.join(home, ".openclaw");
     fs.mkdirSync(state, { recursive: true });
-    const nodeEnv = {
-      ...env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-    };
+    const nodeEnv = createBuildSmokeEnv(home, env);
     fs.writeFileSync(
       nodeEnv.OPENCLAW_CONFIG_PATH,
       JSON.stringify({

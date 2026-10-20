@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat/layout.css";
 import "../../../styles/chat/split-view.css";
@@ -21,7 +22,9 @@ it("opens help on its own retained header and retires native overlays when prese
     { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
   ];
   const first = mountChatPaneHeader(containers, { branches });
-  await first.container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+  await waitForSolid(() =>
+    expect(first.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
+  );
   // Cached chats can retain headers with the same pane slot identity in one document.
   first.container.hidden = true;
   first.container.inert = true;
@@ -32,7 +35,9 @@ it("opens help on its own retained header and retires native overlays when prese
     branches,
     presented: { owner, isPresented: () => presented },
   });
-  await second.container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+  await waitForSolid(() =>
+    expect(second.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
+  );
   const menu = second.container.querySelector<HTMLElement>(".chat-pane__branches-menu")!;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger")!;
   const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
@@ -59,8 +64,10 @@ it("opens help on its own retained header and retires native overlays when prese
   presented = false;
   second.container.inert = true;
   owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-  expect(menuSurface.getClientRects()).toHaveLength(0);
-  expect(help.getClientRects()).toHaveLength(0);
+  await waitForSolid(() => {
+    expect(menuSurface.getClientRects()).toHaveLength(0);
+    expect(help.getClientRects()).toHaveLength(0);
+  });
   expect(second.container.isConnected).toBe(true);
   expect(second.props.onBranchSelect).not.toHaveBeenCalled();
 });

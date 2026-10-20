@@ -113,13 +113,13 @@ function createCronScheduleSchema(params: {
         expr: Type.Optional(
           Type.String({
             description:
-              'Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
+              'Cron wall-time expr; never UTC-convert. Missing tz preserves the existing cron timezone on update; otherwise Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
           }),
         ),
         tz: Type.Optional(
           Type.String({
             description:
-              'IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example "Asia/Shanghai".',
+              'IANA timezone for wall-clock fields. Omit on update to preserve the existing cron timezone; otherwise defaults to Gateway host local timezone. Example "Asia/Shanghai".',
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({

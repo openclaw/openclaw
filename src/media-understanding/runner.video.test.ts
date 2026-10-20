@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+  OpenClawConfig,
+} from "../config/types.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
@@ -39,6 +44,33 @@ function videoConfig(models?: MediaUnderstandingModelConfig[]): OpenClawConfig {
   };
 }
 
+function nativeVideoConfig(
+  input: ModelDefinitionConfig["input"] = ["text", "video"],
+  api: ModelProviderConfig["api"] = "openai-completions",
+): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        lmstudio: {
+          baseUrl: "http://127.0.0.1:1234/v1",
+          api,
+          models: [
+            {
+              id: "video-model",
+              name: "Video model",
+              reasoning: false,
+              input,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 8192,
+              maxTokens: 1024,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
 async function runVideo(
   provider: MediaUnderstandingProvider,
   cfg: OpenClawConfig,
@@ -60,6 +92,98 @@ async function runVideo(
 }
 
 describe("runCapability video", () => {
+  it.each([
+    {
+      name: "hands configured completions video to the active model",
+      cfg: nativeVideoConfig(),
+      kind: "handed-to-native-vision",
+    },
+    {
+      name: "does not hand video to a text-only completions model",
+      cfg: nativeVideoConfig(["text"]),
+      kind: "no-model",
+    },
+    {
+      name: "does not hand video to a model using another API",
+      cfg: nativeVideoConfig(["text", "video"], "openai-responses"),
+      kind: "no-model",
+    },
+  ])("$name", async ({ cfg, kind }) => {
+    const result = await runVideo({ id: "lmstudio" }, cfg, {
+      provider: "lmstudio",
+      model: "video-model",
+    });
+    expect(result.outputs).toEqual([]);
+    expect(result.decision.attachmentDispositions).toEqual({ 0: { kind } });
+  });
+
+  it.each([
+    { api: "openai-completions", kind: "handed-to-native-vision" },
+    { api: "openai-responses", kind: "no-model" },
+  ] as const)("uses prepared $api when the authored API is omitted", async ({ api, kind }) => {
+    const cfg = nativeVideoConfig();
+    delete expectDefined(cfg.models?.providers?.lmstudio, "provider").api;
+    const result = await runVideo({ id: "lmstudio" }, cfg, {
+      provider: "lmstudio",
+      model: "video-model",
+      api,
+    });
+    expect(result.outputs).toEqual([]);
+    expect(result.decision.attachmentDispositions).toEqual({ 0: { kind } });
+  });
+
+  it("hands off every local video despite the default understanding attachment limit", async () => {
+    await withVideoFixture("openclaw-video-first", async (first) => {
+      await withVideoFixture("openclaw-video-second", async (second) => {
+        const ctx = { media: [...first.ctx.media, ...second.ctx.media] };
+        const media = normalizeMediaAttachments(ctx);
+        const cache = createMediaAttachmentCache(media);
+        try {
+          const result = await runCapability({
+            capability: "video",
+            cfg: nativeVideoConfig(),
+            ctx,
+            attachments: cache,
+            media,
+            providerRegistry: new Map(),
+            activeModel: { provider: "lmstudio", model: "video-model" },
+          });
+          expect(result.decision.attachmentDispositions).toEqual({
+            0: { kind: "handed-to-native-vision" },
+            1: { kind: "handed-to-native-vision" },
+          });
+        } finally {
+          await cache.cleanup();
+        }
+      });
+    });
+  });
+
+  it("does not claim native handoff for a remote video URL", async () => {
+    const ctx = {
+      media: [{ url: "https://cdn.example.test/video.mp4", contentType: "video/mp4" }],
+    };
+    const media = normalizeMediaAttachments(ctx);
+    const cache = createMediaAttachmentCache(media);
+    try {
+      const result = await runCapability({
+        capability: "video",
+        cfg: nativeVideoConfig(),
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry: new Map(),
+        activeModel: { provider: "lmstudio", model: "video-model" },
+      });
+      expect(result.decision.attachmentDispositions).toEqual({
+        0: { kind: "failed", reason: "remote-url video is not natively deliverable" },
+      });
+      expect(result.decision.attachments).toEqual([{ attachmentIndex: 0, attempts: [] }]);
+    } finally {
+      await cache.cleanup();
+    }
+  });
+
   it("truncates provider output without splitting a boundary emoji", async () => {
     const prefix = "v".repeat(79);
     const result = await runVideo(

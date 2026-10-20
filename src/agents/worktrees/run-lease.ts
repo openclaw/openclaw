@@ -320,7 +320,7 @@ async function acquireWorktreeRunLeaseInScope(
 ): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
   const context = opts.source?.context ?? captureOpenClawStateWorkerContext({ env });
-  const observed = opts.source ? structuredClone(opts.source.record) : undefined;
+  const observed = opts.source?.record;
   if (observed && observed.id !== id) {
     throw new Error("Worktree run source belongs to another worktree");
   }

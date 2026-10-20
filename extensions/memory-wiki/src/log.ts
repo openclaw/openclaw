@@ -150,7 +150,7 @@ export async function loadMemoryWikiVaultIdentity(
   return identity;
 }
 
-export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
+async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
   const files = (
     await Promise.all(
       COMPILED_SOURCE_DIRECTORIES.map((relativeDir) =>

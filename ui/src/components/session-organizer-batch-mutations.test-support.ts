@@ -14,7 +14,7 @@ import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 
 export function sessionRow(index: number): SidebarRecentSession {
   return {
@@ -142,7 +142,7 @@ export function createHarness(
     sidebarSessionStatusFilter: () => "active",
     pruneSidebarSessionEntry,
     replaceCurrentSession,
-  } as unknown as SessionOrganizerControllerHost;
+  } as unknown as SessionOrganizerDependencies;
   return {
     beginArchive,
     finishArchive,

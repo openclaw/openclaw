@@ -81,9 +81,8 @@ The `models` root also owns global model-catalog behavior.
   release or declared under `models.providers.*.models[].cost`.
 - `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
   accepted only for explicit localhost testing). The default is
-  `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1 or v2.
-  The Gateway
-  checks in the background at startup and every six hours. A compatible download
+  `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1, v2, or v3.
+  The Gateway checks in the background at startup and every six hours. A compatible download
   is prepared and published as one model-and-pricing generation without a
   Gateway restart. Readers retain the current generation until preparation
   succeeds; a release whose bundled catalog is newer always wins.
@@ -93,17 +92,29 @@ warning naming the row. Malformed model rows are skipped without rejecting the
 other models; required bundle and provider fields remain strictly validated.
 If no valid model rows remain, the download is rejected and the previous catalog
 stays active. Pricing-only v1 catalogs without model providers remain supported.
-Both hosted catalog formats keep the `text`, `image`, and `document` input
-modalities accepted by released clients. Bundled model metadata can include
-newer modalities.
+The v1 and v2 publisher outputs keep the `text`, `image`, and `document` input
+modalities accepted by released clients. They omit native-only decision models
+and inference capabilities. V3 preserves those capabilities and newer supported
+input modalities. Chat defaults and recommendations exclude native-only models.
 Rows with only unsupported input modalities are omitted rather than exposed as
 text models; defaults and recommendations do not reference omitted hosted rows.
+
+To use a v3 mirror, set `models.catalogRefresh.url` to its catalog URL. The default
+feed remains v2. Downloads use a separate SQLite cache key; existing v1 and v2
+cache entries remain intact for older clients. Catalog publishers can add
+`--out-v3 <file>` alongside `--out <v1-file>` and `--out-v2 <v2-file>` when running
+`scripts/publish-model-catalog.mts`.
 
 V2 includes pricing in each model row. Unknown or unavailable pricing does not
 mean a model is free. Models outside the catalog, such as older model IDs or
 models routed through a gateway, use standalone rates in the same file: a
 gateway that charges the vendor's price reads that vendor's rate once, without a
 per-gateway copy. Explicit model costs still take precedence.
+
+Native decision usage keeps the provider's reported USD cost, including zero.
+Without a reported cost, estimation uses token rates captured from the prepared
+provider route. Missing rates or billable counters, request-based billing, and
+native non-token units leave the cost unknown.
 
 Pricing updates ship in the same hosted catalog file as model metadata. The
 retired `models.pricing` toggle is removed automatically by `openclaw doctor

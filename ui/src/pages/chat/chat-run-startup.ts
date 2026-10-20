@@ -165,7 +165,8 @@ export function chatStartupStatusLabel(
     case "sending":
       return t("chat.composer.sendingMessage");
     default:
-      return awaitingActivity ? t("chat.startupStatus.preparingContext") : undefined;
+      // Queue custody and recovery can precede execution; only an explicit phase proves preparation.
+      return awaitingActivity ? t("chat.startupStatus.waitingForTurn") : undefined;
   }
 }
 

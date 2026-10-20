@@ -9,12 +9,21 @@ import {
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { deliverAgentHarnessCompletion } from "../../../plugin-sdk/agent-harness-completion.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.backend-contracts.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  clearSessionControllerMailbox,
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
@@ -25,16 +34,15 @@ import {
   type AgentHarnessCompletionCustody,
 } from "../../agent-harness-completion-custody.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   buildCompactAnnounceStatsLine,
   readSubagentRunAnnounceResult,
 } from "./subagent-announce-output.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -54,15 +62,27 @@ type MemoryOwner = ReturnType<typeof memorySessionActorOwners.get>;
 let actor: MemoryOwner;
 let childActor: MemoryOwner;
 const actorEnv = { OPENCLAW_STATE_DIR: "/synthetic/announce" };
+const actorPath = (agentId: string, env = actorEnv) =>
+  resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+function memoryOwner(agentId: string) {
+  return memorySessionActorOwners.get({ agentId, path: actorPath(agentId) });
+}
 
-async function create(owner: MemoryOwner, input: { sessionKey: string; entry: SessionEntry }) {
+async function create(
+  owner: MemoryOwner,
+  sessionKey: string,
+  entry: Pick<SessionEntry, "sessionId"> & Partial<SessionEntry>,
+) {
   const acquired = await owner.acquire(
-    { database: owner.identity, sessionKey: input.sessionKey },
+    { database: owner.identity, sessionKey },
     { assertCurrent() {}, assertReadable() {} },
   );
   try {
     const result = await acquired.storage!.mutate(
-      { type: "session.entry.create", input: { entry: input.entry } },
+      {
+        type: "session.entry.create",
+        input: { entry: { updatedAt: 1, incognito: true, ...entry } },
+      },
       authority,
     );
     expect(result.kind).toBe("committed");
@@ -101,24 +121,40 @@ async function withMemorySource<T>(
   }
 }
 
+function activeOperation(
+  sessionKey: string,
+  sessionId: string,
+  target: ReturnType<typeof captureSessionTarget>,
+  queueMessage: ReplyBackendMessageInjectionV2["queueMessage"],
+) {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    resetTriggered: false,
+    target,
+  });
+  operation.setPhase("running");
+  operation.attachBackend({
+    kind: "embedded",
+    cancel() {},
+    supportsTranscriptCommitWait: true,
+    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+  });
+  return operation;
+}
+
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", actorEnv.OPENCLAW_STATE_DIR);
-  actor = memorySessionActorOwners.get({
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: actorEnv }),
-  });
-  childActor = memorySessionActorOwners.get({
-    agentId: "child",
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "child", env: actorEnv }),
-  });
+  actor = memoryOwner("main");
+  childActor = memoryOwner("child");
   for (const owner of [actor, childActor]) {
-    await create(owner, {
-      sessionKey: `agent:${owner.agentId}:dashboard:incognito-source`,
-      entry: { sessionId: "source", updatedAt: 1, incognito: true },
+    await create(owner, `agent:${owner.agentId}:dashboard:incognito-source`, {
+      sessionId: "source",
     });
   }
 });
 afterEach(() => {
+  setSubagentAnnounceDeliveryDepsForTest();
   clearRuntimeConfigSnapshot();
   resetGatewayWorkAdmission();
   memorySessionActorOwners.reset();
@@ -126,86 +162,110 @@ afterEach(() => {
 });
 
 describe("selected incognito announcement requester", () => {
-  it("refuses a closed requester while active-wake injection is prepared", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-wake-reset";
-    const sessionId = "wake-reset";
-    setRuntimeConfigSnapshot({ session: { store: actor.path } });
-    await create(actor, {
-      sessionKey,
-      entry: { sessionId, updatedAt: 1, lifecycleRevision: "original", incognito: true },
-    });
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const injected: string[] = [];
-    const handle = createEmbeddedRunHandle({ supportsTranscriptCommitWait: true });
-    handle.messageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (text, _options, assertCurrent) => {
-        entered.resolve();
-        await resume.promise;
-        assertCurrent();
-        injected.push(text);
-      },
-    };
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-    const pending = withMemorySource(actor, () =>
-      maybeSteerSubagentAnnounce({
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        steerMessage: "Child completed",
-      }),
-    );
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "Wake settled before injection preparation",
+  it.each(["closed requester", "foreign requester"] as const)(
+    "does not inject into a %s",
+    async (scenario) => {
+      const closed = scenario === "closed requester";
+      const sessionKey = `agent:main:dashboard:incognito-wake-${closed ? "reset" : "collision"}`;
+      const sessionId = closed ? "wake-reset" : "local-requester";
+      setRuntimeConfigSnapshot({ session: { store: actor.path } });
+      await create(actor, sessionKey, {
+        sessionId,
+        ...(closed ? { lifecycleRevision: "original" } : {}),
+      });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const injected: string[] = [];
+      const target = captureSessionTarget({
+        storeScope: actor.path,
+        sessionKey,
+        agentId: "main",
+        incarnation: sessionId,
+      });
+      const operation = activeOperation(
+        sessionKey,
+        closed ? sessionId : "foreign-requester",
+        closed
+          ? target
+          : captureSessionTarget({
+              storeScope: actorPath("main", {
+                OPENCLAW_STATE_DIR: "/synthetic/foreign-announcement",
+              }),
+              sessionKey,
+              agentId: "main",
+              incarnation: "foreign-requester",
+            }),
+        async (text, _options, assertCurrent) => {
+          if (closed) {
+            entered.resolve();
+            await resume.promise;
+          }
+          assertCurrent();
+          injected.push(text);
+        },
       );
-      actor.closeSession(sessionKey);
-      resume.resolve();
-      await expect(pending).resolves.toEqual({ status: "source_owner_changed" });
-      expect(injected).toEqual([]);
-    } finally {
-      resume.resolve();
-      await pending;
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-    }
-  });
-
-  it("does not steer another physical requester's active run with the same key", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-wake-collision";
-    setRuntimeConfigSnapshot({ session: { store: actor.path } });
-    await create(actor, {
-      sessionKey,
-      entry: { sessionId: "local-requester", updatedAt: 1, incognito: true },
-    });
-    const injected: string[] = [];
-    const handle = createEmbeddedRunHandle({ supportsTranscriptCommitWait: true });
-    handle.messageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (text, _options, assertCurrent) => {
-        assertCurrent();
-        injected.push(text);
-      },
-    };
-    setActiveEmbeddedRun("foreign-requester", handle, sessionKey);
-    try {
-      await expect(
-        withMemorySource(actor, () =>
-          maybeSteerSubagentAnnounce({
-            requesterSessionKey: sessionKey,
-            requesterAgentId: "main",
-            steerMessage: "Private completion",
-          }),
-        ),
-      ).resolves.toEqual({ status: "none" });
-      expect(injected).toEqual([]);
-    } finally {
-      clearActiveEmbeddedRun("foreign-requester", handle, sessionKey);
-    }
-  });
+      const input = reserveSessionControllerSource(sessionKey, {
+        target,
+        policy: { mode: "steer" },
+      });
+      const callGateway = vi.fn<typeof runtimeCallGateway>().mockResolvedValue({
+        status: "ok",
+        result: { payloads: [{ text: "Completion accepted by local requester" }] },
+      });
+      if (!closed) {
+        setSubagentAnnounceDeliveryDepsForTest({ callGateway });
+      }
+      const pending = withMemorySource(actor, () =>
+        sendSubagentAnnounceDirectly({
+          requesterSessionKey: sessionKey,
+          targetRequesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          requesterIsSubagent: false,
+          triggerMessage: closed ? "Child completed" : "Private completion",
+          expectsCompletionMessage: true,
+          directIdempotencyKey: closed
+            ? "incognito-closed-requester-completion"
+            : "incognito-physical-requester-completion",
+          controllerInput: input,
+        }),
+      );
+      try {
+        if (closed) {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            pending,
+            "Wake settled before injection preparation",
+          );
+          actor.closeSession(sessionKey);
+          resume.resolve();
+        }
+        await expect(pending).resolves.toMatchObject(
+          closed
+            ? { delivered: false, reason: "source_owner_changed" }
+            : { delivered: true, path: "direct" },
+        );
+        expect(injected).toEqual([]);
+        if (!closed) {
+          expect(callGateway).toHaveBeenCalledOnce();
+          expect(callGateway).toHaveBeenCalledWith(
+            expect.objectContaining({
+              method: "agent",
+              params: expect.objectContaining({ sessionKey, agentId: "main" }),
+            }),
+          );
+        }
+      } finally {
+        resume.resolve();
+        try {
+          await pending;
+        } finally {
+          operation.complete();
+          retireSessionControllerInput(input);
+          clearSessionControllerMailbox(input.mailbox, () => {});
+        }
+      }
+    },
+  );
 
   it.each(["requester-closed", "source-revoked"] as const)(
     "retains cross-agent custody until %s",
@@ -216,14 +276,9 @@ describe("selected incognito announcement requester", () => {
           store: `${actorEnv.OPENCLAW_STATE_DIR}/agents/{agentId}/sessions/sessions.json`,
         },
       });
-      await create(childActor, {
-        sessionKey,
-        entry: {
-          sessionId: "custody",
-          updatedAt: 1,
-          lifecycleRevision: "original",
-          incognito: true,
-        },
+      await create(childActor, sessionKey, {
+        sessionId: "custody",
+        lifecycleRevision: "original",
       });
       const context = createContext();
       const failures = new Set<unknown>();
@@ -289,14 +344,9 @@ describe("selected incognito announcement requester", () => {
     setRuntimeConfigSnapshot({
       session: { store: `${actorEnv.OPENCLAW_STATE_DIR}/agents/{agentId}/sessions/sessions.json` },
     });
-    const created = await create(childActor, {
-      sessionKey,
-      entry: {
-        sessionId: "child-result",
-        updatedAt: 1,
-        lifecycleRevision: "child-result-initial",
-        incognito: true,
-      },
+    const created = await create(childActor, sessionKey, {
+      sessionId: "child-result",
+      lifecycleRevision: "child-result-initial",
     });
     assert(created.entry);
     await withMemorySource(childActor, () =>
@@ -317,19 +367,15 @@ describe("selected incognito announcement requester", () => {
         },
       ),
     );
-    const child: SubagentRunRecord = {
+    const child = createSubagentRunRecord({
       runId,
       childSessionKey: sessionKey,
       childAgentId: "child",
       requesterSessionKey: "agent:main:dashboard:incognito-requester",
-      requesterDisplayKey: "requester",
       requesterAgentId: "main",
-      task: "Return a complete result",
-      cleanup: "keep",
-      createdAt: 1,
       execution: { status: "terminal", outcome: { status: "ok" } },
       completion: { required: true, terminalReply: { disposition: "visible", text: "Truncated" } },
-    };
+    });
     const result = await withMemorySource(actor, () =>
       readSubagentRunAnnounceResult(child, () => child),
     );
@@ -340,15 +386,10 @@ describe("selected incognito announcement requester", () => {
   it("reads child usage from the selected actor and keeps fresh absence noncreating", async () => {
     const sessionKey = "agent:main:dashboard:incognito-stats";
     setRuntimeConfigSnapshot({ session: { store: actor.path } });
-    await create(actor, {
-      sessionKey,
-      entry: {
-        sessionId: "stats",
-        updatedAt: 1,
-        incognito: true,
-        inputTokens: 23,
-        outputTokens: 7,
-      },
+    await create(actor, sessionKey, {
+      sessionId: "stats",
+      inputTokens: 23,
+      outputTokens: 7,
     });
     await expect(
       withMemorySource(actor, () =>
@@ -356,7 +397,7 @@ describe("selected incognito announcement requester", () => {
       ),
     ).resolves.toBe("Stats: runtime 1s • tokens 30 (in 23 / out 7)");
     const env = { OPENCLAW_STATE_DIR: "/synthetic/announce-absent" };
-    const absentPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    const absentPath = actorPath("main", env);
     setRuntimeConfigSnapshot({ session: { store: absentPath } });
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     const absent = await loadRequesterSessionEntry("agent:main:dashboard:incognito-absent", "main");
@@ -383,7 +424,7 @@ describe("selected incognito announcement requester", () => {
 it("reads an unbound incognito announcement from its memory owner", async () => {
   const agentId = "unbound-announcer";
   const sessionKey = `agent:${agentId}:dashboard:incognito-unbound`;
-  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: actorEnv });
+  const storePath = actorPath(agentId);
   setRuntimeConfigSnapshot({ session: { store: storePath } });
   await replaceSessionEntry(
     { agentId, sessionKey, storePath, env: actorEnv },

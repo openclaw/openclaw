@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { CHANNEL_CONFIG_METADATA_KEYS } from "../channels/config-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -15,8 +16,6 @@ export type PluginConfigUninstallActions = {
   contextEngineSlot: boolean;
   channelConfig: boolean;
 };
-
-const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 export function mergePluginConfigUninstallActions(
   ...sources: PluginConfigUninstallActions[]
@@ -56,7 +55,7 @@ export function resolveUninstallChannelConfigKeys(
   opts?: { channelIds?: string[] },
 ): string[] {
   return uniqueStrings(
-    (opts?.channelIds ?? [pluginId]).filter((key) => !SHARED_CHANNEL_CONFIG_KEYS.has(key)),
+    (opts?.channelIds ?? [pluginId]).filter((key) => !CHANNEL_CONFIG_METADATA_KEYS.has(key)),
   );
 }
 

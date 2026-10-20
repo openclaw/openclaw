@@ -2,11 +2,11 @@
 import { WebAPIPlatformError, WebClient } from "@slack/web-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "../context.js";
+import { registerSlackWorkspaceEvents } from "../events.js";
 import {
   updateSlackSuggestedPrompts,
   type SlackSuggestedPromptsOutcome,
 } from "../suggested-prompts.js";
-import { registerSlackHomeEvents } from "./home.js";
 import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
 type HomeHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
@@ -25,9 +25,9 @@ function createHomeContext(params?: {
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
-  registerSlackHomeEvents({
+  registerSlackWorkspaceEvents({
     ctx: harness.ctx,
-    slashCommandName: params?.slashCommandName,
+    appHomeSlashCommandName: params?.slashCommandName,
     trackEvent: params?.trackEvent,
   });
   return {
@@ -45,7 +45,7 @@ function createAgentHomeContext(outcome: SlackSuggestedPromptsOutcome = "accepte
   harness.ctx.accountId = "default";
   harness.ctx.setSlackSuggestedPrompts = setSlackSuggestedPrompts;
   harness.ctx.recordSlackAgentView = recordSlackAgentView;
-  registerSlackHomeEvents({ ctx: harness.ctx });
+  registerSlackWorkspaceEvents({ ctx: harness.ctx });
   return {
     setSlackSuggestedPrompts,
     recordSlackAgentView,
@@ -53,7 +53,7 @@ function createAgentHomeContext(outcome: SlackSuggestedPromptsOutcome = "accepte
   };
 }
 
-describe("registerSlackHomeEvents", () => {
+describe("Slack home events", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

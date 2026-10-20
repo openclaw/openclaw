@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
+  createManager,
   environment,
   startRequest,
   transport,
+  withWorkspaceDrain,
+  workspaceCommandPayload,
+  workspaceSnapshot,
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
 
@@ -117,4 +122,51 @@ describe("node worker tunnel source authority", () => {
       await manager.stop(record.environmentId, record.ownerEpoch);
     }
   });
+});
+
+describe("node worker tunnel workspace command deadline", () => {
+  it.each([300_000, -300_000])(
+    "keeps idempotent retries on the monotonic budget across a %i ms wall-clock step",
+    async (stepMs) => {
+      const wallNow = Date.now.bind(Date);
+      const snapshot = workspaceSnapshot("/gateway/workspace");
+      const nodeTransport = transport();
+      const timeouts: number[] = [];
+      nodeTransport.invoke = withWorkspaceDrain(async (request) => {
+        if ((request.params as NodeWorkerWorkspaceExecInput).argv[0] === "probe") {
+          timeouts.push(request.timeoutMs ?? Number.NaN);
+          if (timeouts.length === 1) {
+            vi.spyOn(Date, "now").mockImplementation(() => wallNow() + stepMs);
+            return { ok: false, error: { code: "DISCONNECTED" } };
+          }
+        }
+        return { ok: true, payloadJSON: workspaceCommandPayload("/node/workspace") };
+      });
+      const manager = createManager(environment(), {
+        getTransport: () => nodeTransport,
+        workspaceTransfer: workspaceTransfer({
+          prepareSync: vi.fn(async () => ({ snapshot, token: "restore-token" })),
+        }),
+      });
+      manager.bindWorkspaceBindingResolver(async () => ({
+        source: { kind: "local" as const, path: "/gateway/workspace" },
+        manifestRef: snapshot.manifestRef,
+        remoteWorkspaceDir: "/node/workspace",
+      }));
+      try {
+        const handle = await manager.start(startRequest());
+        await expect(
+          handle.runWorkspaceCommand({
+            argv: ["probe"],
+            timeoutMs: 30_000,
+            transportRetry: "idempotent",
+          }),
+        ).resolves.toMatchObject({ code: 0 });
+        expect(timeouts).toHaveLength(2);
+        expect(timeouts[1]).toBeLessThanOrEqual(timeouts[0] ?? 0);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
 });

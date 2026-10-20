@@ -1,4 +1,4 @@
-// Covers model catalog metadata declared by plugin manifests.
+// Covers model and provider metadata declared by plugin manifests.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,6 +71,64 @@ describe("plugin manifest model catalog", () => {
       },
       discovery: {
         "claude-cli": "static",
+      },
+    });
+  });
+
+  it("allows cli backends to own pricing policy", () => {
+    const dir = makePluginDir();
+    writeManifest(dir, {
+      id: "anthropic",
+      providers: ["anthropic"],
+      cliBackends: ["claude-cli"],
+      modelPricing: {
+        providers: {
+          "claude-cli": { priceAs: " Anthropic " },
+          unowned: { priceAs: "anthropic" },
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const result = loadPluginManifest(dir);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.manifest.modelPricing?.providers).toEqual({
+      "claude-cli": { priceAs: "anthropic" },
+    });
+  });
+
+  it("normalizes owned request policies at the manifest boundary", () => {
+    const dir = makePluginDir();
+    writeManifest(dir, {
+      id: "example-plugin",
+      providers: [" Demo ", "bad"],
+      providerRequest: {
+        providers: {
+          " DEMO ": {
+            family: " demo-family ",
+            compatibilityFamily: " moonshot ",
+            openAICompletions: { supportsStreamingUsage: true },
+          },
+          unowned: { family: "ignored-family" },
+          bad: [],
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const result = loadPluginManifest(dir);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.manifest.providerRequest).toEqual({
+      providers: {
+        demo: {
+          family: "demo-family",
+          compatibilityFamily: "moonshot",
+          openAICompletions: { supportsStreamingUsage: true },
+        },
       },
     });
   });

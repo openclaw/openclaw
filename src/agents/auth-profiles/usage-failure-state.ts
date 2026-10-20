@@ -7,7 +7,7 @@ import {
 } from "./usage-state.js";
 
 export function resolveUsageWindowUntil(now: number, durationMs: number): number {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+  if (durationMs <= 0) {
     return now;
   }
   return (
@@ -132,9 +132,7 @@ export function computeNextProfileUsageStats(params: {
   const existingUntil = params.existing[window];
   const recomputedUntil = resolveUsageWindowUntil(params.now, backoffMs);
   updatedStats[window] =
-    typeof existingUntil === "number" &&
-    Number.isFinite(existingUntil) &&
-    existingUntil > params.now
+    typeof existingUntil === "number" && existingUntil > params.now
       ? existingUntil
       : recomputedUntil;
   if (disabledFailureReason) {

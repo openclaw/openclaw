@@ -18,7 +18,7 @@ import { gradiumTTS } from "./tts.js";
 
 function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.gradium) ?? asOptionalRecord(rawConfig.gradium);
+  const raw = asOptionalRecord(providers?.gradium);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -31,7 +31,7 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readGradiumProviderConfig(config: SpeechProviderConfig) {
   return normalizeGradiumProviderConfig({
-    gradium: { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { gradium: { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 

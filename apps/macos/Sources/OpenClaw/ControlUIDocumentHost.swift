@@ -132,8 +132,6 @@ final class ControlUIDocumentHost {
         self.retirePendingLoad()
         self.hasLiveContent = false
         self.isShowingFailurePage = false
-        let urlDescription = GatewayEndpointStore.diagnosticURLString(for: url)
-        dashboardWindowLogger.debug("dashboard load \(urlDescription, privacy: .public)")
         guard let browserSessionLease else {
             self.webView.load(URLRequest(url: url))
             return

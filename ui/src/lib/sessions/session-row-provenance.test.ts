@@ -4,6 +4,32 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
 
 describe("session row provenance", () => {
+  it("retains omitted assistant enrichment but respects explicit clearing receipts", () => {
+    const provenance = createSessionRowProvenance();
+    const row: GatewaySessionRow = {
+      key: "agent:main:preview",
+      kind: "direct",
+      sessionId: "preview",
+      snapshotAt: 10,
+      lastAssistantMessage: { text: "Earlier reply", timestamp: 9 },
+    };
+    provenance.observeReadRow(row, 1);
+    const compact: GatewaySessionRow = {
+      key: row.key,
+      kind: "direct",
+      sessionId: "preview",
+      rowMode: "compact",
+      snapshotAt: 20,
+    };
+    provenance.observeReadRow(compact, 2);
+    const merged = provenance.mergeRow(row, compact);
+    expect(merged.lastAssistantMessage).toEqual({ text: "Earlier reply", timestamp: 9 });
+    const cleared = { ...compact, snapshotAt: 30 };
+    provenance.observeReadRow(cleared, 3);
+    provenance.observeClears(cleared, ["lastAssistantMessage"]);
+    expect(provenance.mergeRow(merged, cleared).lastAssistantMessage).toBeUndefined();
+  });
+
   it("retains the sampling time of an unchanged accepted row", () => {
     const provenance = createSessionRowProvenance();
     const row: GatewaySessionRow = {

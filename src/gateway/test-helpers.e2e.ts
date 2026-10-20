@@ -94,7 +94,13 @@ export async function connectGatewayClient(params: {
             "_",
           ),
         );
-        return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
+        return path.join(
+          identityRoot,
+          "test-device-identities",
+          safe,
+          "client",
+          "credentials.sqlite",
+        );
       })(),
     });
   return await acquireGatewayTestClient(

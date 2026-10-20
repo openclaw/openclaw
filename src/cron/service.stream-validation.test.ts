@@ -22,7 +22,7 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
 }
 
 async function createCron(triggersEnabled: boolean, deps: Partial<CronServiceDeps> = {}) {
-  const { storePath } = await makeStorePath();
+  const storePath = deps.storePath ?? (await makeStorePath()).storePath;
   const cron = new CronService({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
@@ -161,15 +161,13 @@ async function withStream(
 ) {
   const { cron, storePath } = await createCron(true, deps);
   try {
-    const job = await cron.add({
-      name: "stream",
-      enabled: true,
-      schedule: { kind: "stream", command: ["echo"] },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "base" },
-      ...input,
-    });
+    const job = await cron.add(
+      streamJob({
+        schedule: { kind: "stream", command: ["echo"] },
+        payload: { kind: "agentTurn", message: "base" },
+        ...input,
+      }),
+    );
     await run(cron, job, storePath);
   } finally {
     cron.stop();
@@ -346,18 +344,13 @@ it("skips invalid main jobs with agentTurn payloads loaded from disk", async () 
       },
     ],
   });
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
+  const { cron } = await createCron(true, {
     storePath,
-    cronEnabled: true,
-    log: logger,
+    cronConfig: undefined,
     enqueueSystemEvent,
     requestHeartbeat,
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   try {
-    await cron.start();
     vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
     await cron.run("job-1", "due");
     expect(enqueueSystemEvent).not.toHaveBeenCalled();

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
@@ -94,7 +94,7 @@ export async function inspectMemorySourceState(params: {
 }
 
 export function loadMemorySourceFileState(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   source: MemorySource;
   paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
@@ -109,7 +109,7 @@ export function loadMemorySourceFileState(params: {
 }
 
 export function refreshMemorySessionSourceState(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
 ): boolean {
   return (

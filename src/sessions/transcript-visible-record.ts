@@ -8,6 +8,7 @@ import {
   readTerminalSourceReplyDeliveryMirror,
 } from "../shared/chat-message-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { readNestedToolActivity } from "./nested-tool-activity.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
@@ -93,6 +94,24 @@ export function matchesTranscriptEvent(
     return isVisibleAssistantResultEventForRun(event, match.runId);
   }
   const message = asOptionalRecord(asOptionalRecord(event)?.message);
+  if (match.kind === "canvas-widget") {
+    if (asOptionalRecord(event)?.type !== "message" || !message) {
+      return false;
+    }
+    if (projection === "navigation") {
+      return message.role === "toolResult" || message.role === "custom";
+    }
+    const activity = readNestedToolActivity(message);
+    const tool = activity?.details ?? (message.role === "toolResult" ? message : undefined);
+    const details = asOptionalRecord(activity ? activity.details.result.details : message.details);
+    return (
+      tool?.toolName === "show_widget" &&
+      tool.isError !== true &&
+      details?.kind === "canvas" &&
+      asOptionalRecord(details.view)?.id === match.docId &&
+      asOptionalRecord(details.presentation)?.target === "assistant_message"
+    );
+  }
   if (match.kind === "idempotency") {
     return (
       message?.idempotencyKey === match.key &&

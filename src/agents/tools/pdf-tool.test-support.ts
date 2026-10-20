@@ -34,6 +34,7 @@ export function withPreparedRuntimeFacts(snapshot: StubPreparedRuntimeSnapshot) 
     configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
+    modelCatalog: { entries: [], routeVariants: [] },
   };
 }
 
@@ -73,7 +74,7 @@ export const FAKE_PDF_MEDIA = {
 // — a plain export would capture the wrong (or no) mock.
 export function createPdfToolInfraStub(completeMock: Mock) {
   function createPdfModelRegistry(find: (provider: string, modelId: string) => unknown) {
-    const modelRegistry = { find };
+    const modelRegistry = { find, getProviderMetadataOwners: () => undefined };
     initializeModelRegistryRuntime(modelRegistry);
     getModelRegistryRuntime(modelRegistry).llmRuntime.completeSimple = completeMock;
     return modelRegistry;

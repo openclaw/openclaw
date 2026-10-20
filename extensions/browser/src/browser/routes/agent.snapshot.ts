@@ -80,7 +80,6 @@ async function saveBrowserMedia(buffer: Buffer, contentType: string, maxBytes: n
 async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "jpeg") {
   const normalized = await normalizeBrowserScreenshot(capture.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
   const annotations = await rescaleAnnotationsForNormalization({
     annotations: capture.annotations,

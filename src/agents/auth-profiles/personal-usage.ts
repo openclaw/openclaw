@@ -4,7 +4,6 @@ import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-stor
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { assertPersonalAuthProfileRuntime } from "./runtime-scope.js";
-import { readUserModelAuthProfileAsync } from "./sqlite-read.js";
 import type { AuthProfileStore } from "./types.js";
 import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 
@@ -18,17 +17,15 @@ export function preparePersonalAuthProfileUsage(store: AuthProfileStore, profile
     assertPersonalAuthProfileRuntime();
   };
   return {
-    read: () => readUserModelAuthProfileAsync(profileId, context),
     record(reduction: PersonalAuthProfileUsageReduction) {
-      const captured = structuredClone(reduction);
       return runOpenClawStateWorkerOperation(
         context,
         async (scope) => {
           const result = await scope.execute({
             type: "authProfiles.personalUsage",
-            input: { profileId, reduction: captured },
+            input: { profileId, reduction },
           });
-          if (result && isDeepStrictEqual(store.profiles[profileId], captured.expectedProfile)) {
+          if (result && isDeepStrictEqual(store.profiles[profileId], reduction.expectedProfile)) {
             store.usageStats = { ...store.usageStats, [profileId]: result.next };
           }
           return result;

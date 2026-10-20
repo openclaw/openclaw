@@ -8,6 +8,15 @@ import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identit
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
 import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
+/** Host-stamped provider speech is a call transcript, not a backing-agent answer. */
+export function isProviderVoiceTranscript(message: unknown): boolean {
+  const record = asRecord(message);
+  return (
+    record?.role === "assistant" &&
+    asRecord(record["__openclaw"])?.voiceTranscript === "provider-owned"
+  );
+}
+
 export function assistantMessageIsInterrupted(message: unknown): boolean {
   const record = asRecord(message);
   const stopReason = typeof record?.stopReason === "string" ? record.stopReason.toLowerCase() : "";
@@ -55,6 +64,7 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
   if (
     !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
     assistantMessageIsInterrupted(message) ||
+    isProviderVoiceTranscript(message) ||
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||

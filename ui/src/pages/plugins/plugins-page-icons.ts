@@ -4,69 +4,56 @@ import {
   type ControlUiAuthSource,
 } from "../../app/control-ui-auth.ts";
 import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
-import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
-import { PluginIconController, pluginIconFetchContext } from "./plugin-icon-controller.ts";
+import type { createPluginDiscovery } from "./plugin-discovery.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "./plugin-icon-owner.ts";
 
 type PluginsPageIconsHost = {
   getContext: () => ApplicationContext;
   isConnected: () => boolean;
   onInstalledUrlsChange: (urls: Record<string, string>) => void;
   onCatalogUrlsChange: (urls: Record<string, string>) => void;
-  onLoadingChange?: () => void;
+  onChange?: () => void;
 };
 
-function renderedPluginIds(view: ParentNode): Set<string> {
-  return new Set(
-    Array.from(
-      view.querySelectorAll<HTMLElement>("[data-plugin-icon-id]"),
-      (tile) => tile.dataset.pluginIconId ?? "",
-    ).filter(Boolean),
-  );
-}
+export function createPluginsPageIcons(host: PluginsPageIconsHost) {
+  let authCandidates: string[] = [];
+  const tiles = new Set<() => string>();
+  const shared = {
+    getFetchContext: () => pluginIconFetchContext(host.getContext()),
+    isConnected: host.isConnected,
+    onLoadingChange: host.onChange,
+  };
+  const installed = new PluginIconOwner({
+    ...shared,
+    onUrlsChange: host.onInstalledUrlsChange,
+  });
+  const catalog = new PluginIconOwner({
+    kind: "catalog",
+    ...shared,
+    onUrlsChange: host.onCatalogUrlsChange,
+  });
 
-export class PluginsPageIcons {
-  private authCandidates: string[] = [];
-  readonly installed: PluginIconController;
-  readonly catalog: PluginIconController;
-
-  constructor(host: PluginsPageIconsHost) {
-    const shared = {
-      getFetchContext: () => pluginIconFetchContext(host.getContext()),
-      isConnected: host.isConnected,
-      onLoadingChange: host.onLoadingChange,
-    };
-    this.installed = new PluginIconController({
-      ...shared,
-      onUrlsChange: host.onInstalledUrlsChange,
-    });
-    this.catalog = new PluginIconController({
-      kind: "catalog",
-      ...shared,
-      onUrlsChange: host.onCatalogUrlsChange,
-    });
-  }
-
-  updateAuth(source: ControlUiAuthSource): boolean {
+  function updateAuth(source: ControlUiAuthSource): boolean {
     const next = resolveControlUiAuthCandidates(source);
     const changed =
-      next.length !== this.authCandidates.length ||
-      next.some((candidate, index) => candidate !== this.authCandidates[index]);
-    this.authCandidates = next;
+      next.length !== authCandidates.length ||
+      next.some((candidate, index) => candidate !== authCandidates[index]);
+    authCandidates = next;
     return changed;
   }
 
-  syncInstalled(result: PluginListResult | null, view: ParentNode): void {
-    // Rendered tile markers preserve the inventory's sorting, filtering, and collapse policy.
-    this.installed.sync(result, renderedPluginIds(view));
-  }
-
-  syncCatalog(
-    discovery: Pick<PluginDiscoveryController, "result" | "featured" | "trending">,
-    view: ParentNode,
+  function sync(
+    result: PluginListResult | null,
+    discovery: Pick<
+      ReturnType<ReturnType<typeof createPluginDiscovery>["read"]>,
+      "result" | "featured" | "trending"
+    >,
+    rendered: ReadonlySet<string>,
     detail?: PluginDiscoveryDetailResult | null,
   ): void {
-    const rendered = renderedPluginIds(view);
-    this.catalog.syncCatalog(
+    // Both inventories follow the same rendered sorting, filtering, and collapse policy.
+    installed.sync(result, rendered);
+    catalog.syncCatalog(
       [
         ...(discovery.result?.items ?? []),
         ...discovery.featured,
@@ -78,8 +65,21 @@ export class PluginsPageIcons {
     );
   }
 
-  reset(): void {
-    this.installed.reset();
-    this.catalog.reset();
+  function reset(): void {
+    installed.reset();
+    catalog.reset();
   }
+  return {
+    installed,
+    catalog,
+    updateAuth,
+    sync,
+    reset,
+    rendered: () => new Set(Array.from(tiles, (readId) => readId()).filter(Boolean)),
+    register(this: void, readId: () => string) {
+      tiles.add(readId);
+      host.onChange?.();
+      return () => tiles.delete(readId);
+    },
+  };
 }

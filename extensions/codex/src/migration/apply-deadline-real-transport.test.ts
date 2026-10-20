@@ -21,7 +21,6 @@ const activationMock = vi.hoisted(() =>
   }),
 );
 const callCount = vi.hoisted(() => ({ count: 0 }));
-const armedDelays = vi.hoisted(() => ({ delays: [] as number[] }));
 
 // mock-isolation: advance fake timers so the polling loop makes monotonic-clock progress
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({ sleep: sleepMock }));
@@ -105,7 +104,6 @@ describe("Codex migration discovery deadline with real request owner", () => {
     sleepMock.mockClear();
     activationMock.mockClear();
     callCount.count = 0;
-    armedDelays.delays.length = 0;
     workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "oc-codex-dl-",
@@ -123,16 +121,16 @@ describe("Codex migration discovery deadline with real request owner", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
 
+    const requestSpy = vi.spyOn(CodexAppServerClient.prototype, "request");
     const fakeSetTimeout = globalThis.setTimeout;
+    let rewound = false;
     vi.spyOn(globalThis, "setTimeout").mockImplementation(((
       cb: (...a: unknown[]) => void,
       t?: number,
       ...a: unknown[]
     ) => {
-      if (typeof t === "number" && t > 0) {
-        armedDelays.delays.push(t);
-      }
-      if (armedDelays.delays.length === 1) {
+      if (!rewound && typeof t === "number" && t > 0) {
+        rewound = true;
         vi.setSystemTime(-120_000);
       }
       return fakeSetTimeout(() => cb(...a), t);
@@ -165,9 +163,13 @@ describe("Codex migration discovery deadline with real request owner", () => {
     const result = await applyCodexMigrationPlan({ ctx, plan });
 
     expect(result.items).toMatchObject([{ status: "migrated", reason: "already active" }]);
-    expect(armedDelays.delays.length).toBeGreaterThanOrEqual(2);
-    for (const d of armedDelays.delays) {
-      expect(d).toBeLessThanOrEqual(30_000);
+    expect(rewound).toBe(true);
+    const discoveryRequests = requestSpy.mock.calls.filter(([method]) => method === "plugin/list");
+    expect(discoveryRequests.length).toBeGreaterThanOrEqual(2);
+    for (const call of discoveryRequests) {
+      const options = call[2];
+      expect(options?.timeoutMs).toBeGreaterThan(0);
+      expect(options?.timeoutMs).toBeLessThanOrEqual(30_000);
     }
   }, 15_000);
 });

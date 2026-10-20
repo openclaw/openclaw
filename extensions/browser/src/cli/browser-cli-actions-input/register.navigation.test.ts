@@ -16,12 +16,12 @@ vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.write
 vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
-const { registerBrowserNavigationCommands } = await import("./register.navigation.js");
+const { registerBrowserActionInputCommands } = await import("./register.js");
 
 function createNavigationProgram(): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.option("--timeout <ms>", "Timeout in ms", "30000");
-  registerBrowserNavigationCommands(browser, parentOpts);
+  registerBrowserActionInputCommands(browser, parentOpts);
   return program;
 }
 
@@ -45,7 +45,7 @@ describe("browser navigation commands", () => {
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
         expect.objectContaining({
           method: "POST",
           path: "/navigate",
@@ -83,7 +83,7 @@ describe("browser navigation commands", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({
         method: "POST",
         path: "/act",

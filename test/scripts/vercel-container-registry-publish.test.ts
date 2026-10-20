@@ -757,14 +757,16 @@ describe("Vercel Container Registry publishing", () => {
       lockfileVersion?: number;
       packages?: Record<string, { integrity?: string; version?: string }>;
     };
-    const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
+    const materialize =
+      readFileSync("scripts/materialize-vercel-cli.sh", "utf8") +
+      readFileSync("scripts/lib/materialize-pinned-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.7.1", vercel: "63.1.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.7.1", vercel: "63.1.2" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-JQvJODfMeBGejhW1nfu0zfczU8I0NiARD3FilxuBjFeMtEzgK2LeBD6RC1yyhwR8mVQzod/p/SbjyDNFx11njQ==",
-      version: "63.1.0",
+        "sha512-kD/AKQVTV5Lwlg69fUNaW0OBGh6iSX42UTRrka10CtbOJDcxcqE8VoDRIuAsduGHiD3Hf90Ak9dX39nNzq8srA==",
+      version: "63.1.2",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
@@ -776,7 +778,12 @@ describe("Vercel Container Registry publishing", () => {
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materialize).toContain("npm ci \\\n");
     expect(materialize).toContain("--ignore-scripts");
-    expect(materialize).toContain('sandbox_cli="${destination}/node_modules/.bin/sandbox"');
-    expect(materialize).toContain('echo "sandbox_cli=${sandbox_cli}"');
+    expect(materialize).toContain("additional_bin=sandbox_cli=sandbox");
+    expect(materialize).toContain(
+      'test -x "${destination}/node_modules/.bin/${additional_bin#*=}"',
+    );
+    expect(materialize).toContain(
+      'echo "${additional_bin%%=*}=${destination}/node_modules/.bin/${additional_bin#*=}"',
+    );
   });
 });

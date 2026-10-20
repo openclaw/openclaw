@@ -9,8 +9,15 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistCliRunBlock } from "./cli-run-transcript.js";
-import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { hasCliSessionTranscript, loadCliSessionHistoryMessages } from "./session-history.js";
+import {
+  prepareCliHistoryBoundary,
+  prepareCliHistoryCompactionBoundary,
+} from "./history-boundary.js";
+import {
+  hasCliSessionTranscript,
+  loadCliSessionHistoryMessages,
+  loadCliSessionPromptContext,
+} from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -117,6 +124,19 @@ it("prepares private CLI history and refuses an unattributed append at execution
         expect(await sessionTranscriptHasContent(target)).toBe(true);
       });
       const manager = await SessionManager.openAsync(target);
+      const retained = manager.getLeafId();
+      assert(retained);
+      const commit = await prepareCliHistoryCompactionBoundary(target, () => {});
+      await manager.appendThinkingLevelChange("off");
+      await manager.appendCompactionAsync("Private CLI summary", retained, 1000);
+      await commit?.();
+      await writer.assertReadable();
+      const compacted = JSON.stringify(
+        (await loadCliSessionPromptContext({ sessionTarget: target })).reseedMessages,
+      );
+      expect(compacted.match(/Private CLI summary/g)).toHaveLength(1);
+      expect(compacted.match(/Private CLI answer/g)).toHaveLength(1);
+      expect(compacted).not.toContain("Private CLI context");
       await manager.appendMessageAsync(makeUserMessage("Different writer", 3));
       await expect(writer.assertReadable()).rejects.toThrow("CLI history authority changed");
     }

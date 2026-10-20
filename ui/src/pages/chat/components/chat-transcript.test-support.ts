@@ -119,6 +119,8 @@ export function installTranscriptDomMocks(): void {
   transcriptDomState.measuredRowHeight = 100;
   transcriptDomState.detachedRowHeight = 100;
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+  // These geometry fixtures publish native offsets and observer receipts explicitly.
+  vi.spyOn(Element.prototype, "scrollTo").mockImplementation(() => {});
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
     this: HTMLElement,
   ) {

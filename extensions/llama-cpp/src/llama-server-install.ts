@@ -7,6 +7,7 @@ import { sha256File as hashFile } from "@openclaw/fs-safe/durability";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 import {
   LLAMA_SERVER_BUILD,
@@ -500,7 +501,6 @@ async function installLlamaServer(
     options.signal?.throwIfAborted();
     await fsp.rm(installDir, { recursive: true, force: true });
     await fsp.rename(extractedRoot, installDir);
-    await validateInstalledServer(command, asset, options.signal);
     return command;
   } finally {
     await Promise.all([
@@ -535,19 +535,10 @@ export async function ensureLlamaServerInstalled(options: LlamaServerInstallOpti
       }
     });
   installationPromises.set(key, pending);
-  const command =
-    previous && options.signal
-      ? await new Promise<string>((resolve, reject) => {
-          const signal = options.signal;
-          const onAbort = () => reject(toErrorObject(signal?.reason, "Installation cancelled"));
-          signal?.addEventListener("abort", onAbort, { once: true });
-          void pending
-            .then(resolve, reject)
-            .finally(() => signal?.removeEventListener("abort", onAbort));
-          if (signal?.aborted) {
-            onAbort();
-          }
-        })
-      : await pending;
+  const command = await racePromiseWithAbortSignal(
+    pending,
+    previous ? options.signal : undefined,
+    (signal) => toErrorObject(signal.reason, "Installation cancelled"),
+  );
   return { command, asset };
 }

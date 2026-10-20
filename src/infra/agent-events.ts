@@ -1,4 +1,3 @@
-// Stores and broadcasts agent lifecycle and streaming events.
 import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -114,11 +113,15 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
 }
 
 type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+type AgentTerminalEventReservation = {
+  publish: (data: AgentTerminalEventData) => void;
+  release: () => void;
+};
 
 /** Reserves client terminal publication without advancing execution settlement. */
 export function reserveAgentTerminalEvent(
   identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
-): (data: AgentTerminalEventData) => void {
+): AgentTerminalEventReservation {
   const { runId } = identity;
   const context = getAgentRunContext(runId);
   const terminalPersistence = captureAgentRunTerminalPersistence(runId);
@@ -128,7 +131,7 @@ export function reserveAgentTerminalEvent(
     }
     const resolved = resolveAgentEventRouting(identity);
     if (!resolved) {
-      return () => {};
+      return { publish: () => {}, release: () => {} };
     }
     const state = getAgentEventState();
     const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
@@ -140,21 +143,32 @@ export function reserveAgentTerminalEvent(
     const storage = getAgentEventExecutionContext();
     const scope = storage.getStore()!;
     let pending = true;
-    return (data: AgentTerminalEventData) => {
-      if (pending) {
+    return {
+      publish: (data: AgentTerminalEventData) => {
+        if (pending) {
+          pending = false;
+          storage.run(scope, () =>
+            dispatchAgentEvent(
+              { ...identity, stream: "lifecycle", data },
+              undefined,
+              undefined,
+              publication,
+              undefined,
+              undefined,
+              terminalPersistence,
+            ),
+          );
+        }
+      },
+      release: () => {
+        if (!pending) {
+          return;
+        }
         pending = false;
-        storage.run(scope, () =>
-          dispatchAgentEvent(
-            { ...identity, stream: "lifecycle", data },
-            undefined,
-            undefined,
-            publication,
-            undefined,
-            undefined,
-            terminalPersistence,
-          ),
-        );
-      }
+        if (runState.terminalPublication === publication) {
+          delete runState.terminalPublication;
+        }
+      },
     };
   });
 }

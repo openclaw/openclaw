@@ -23,11 +23,8 @@ export async function prepareChatAccountSelection(params: {
   authStore: AuthProfileStore;
   sessionEntry?: ChatMetadataSessionEntry;
   requesterProfileId?: string;
-  readRequesterProfileId?: () => string | undefined;
 }): Promise<() => ChatAccountSelection> {
-  const requesterProfileId = params.readRequesterProfileId
-    ? params.readRequesterProfileId()
-    : params.requesterProfileId;
+  const requesterProfileId = params.requesterProfileId;
   const authProfileId = params.sessionEntry?.authProfileOverride?.trim();
   let personal: UserModelAccount | undefined;
   let ownerDisplayName: string | null | undefined;
@@ -69,8 +66,7 @@ export async function prepareChatAccountSelection(params: {
   return () => {
     if (
       isCurrent?.() === false ||
-      params.sessionEntry?.authProfileOverride?.trim() !== authProfileId ||
-      (params.readRequesterProfileId && params.readRequesterProfileId() !== requesterProfileId)
+      params.sessionEntry?.authProfileOverride?.trim() !== authProfileId
     ) {
       throw new PreparedModelRuntimePublicationSupersededError(
         "Personal account changed while preparing its metadata. Retry the request.",

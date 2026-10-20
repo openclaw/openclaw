@@ -181,6 +181,10 @@ already-running older updater.
 While those fingerprints are tracked, the new version's Doctor also reads databases
 through private copies for its schema checks. A Doctor that fails before writing
 therefore leaves the snapshots restorable, and the package rolls back.
+A short-lived OpenClaw command holding state when Doctor starts maintenance does
+not cause that rollback: Doctor first waits for it to finish, while keeping time for
+its own work inside the update step (see
+[how updates run](/cli/update/how-updates-run#when-restart-is-skipped-or-fails)).
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later check cleanup is not mistaken for another writer. If another connection

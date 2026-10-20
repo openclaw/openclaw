@@ -73,23 +73,30 @@ function insertChildren<T>(
       .where("card_id", "=", cardId),
   );
   db.prepare(deletion.compiled.sql).run(...deletion.bind());
-  if (entries?.length) {
-    const { compiled, bind } = compileSqliteQueryBindings<[T, number]>((parameter) =>
+  if (!entries?.length) {
+    return;
+  }
+  // The widest child row has 12 columns; 64 rows stay below 999 parameters.
+  for (let offset = 0; offset < entries.length; offset += 64) {
+    const size = Math.min(64, entries.length - offset);
+    const { compiled, bind } = compileSqliteQueryBindings<readonly T[]>((parameter) =>
       getNodeSqliteKysely<WorkboardCardDatabase>(db)
         .insertInto(table)
-        .values({
-          ordinal: parameter(([, ordinal]) => ordinal),
-          ...Object.fromEntries(
-            Object.entries(fields).map(([column, read]) => [
-              column,
-              parameter(([entry]) => read(entry)),
-            ]),
-          ),
-        }),
+        .values(
+          Array.from({ length: size }, (_, index) => ({
+            ordinal: offset + index,
+            ...Object.fromEntries(
+              Object.entries(fields).map(([column, read]) => [
+                column,
+                parameter((source) => read(source[offset + index]!)),
+              ]),
+            ),
+          })),
+        ),
     );
     // Defer payload getters until native preparation succeeds, as for the parent row.
     const statement = db.prepare(compiled.sql);
-    entries.forEach((entry, ordinal) => statement.run(...bind([entry, ordinal])));
+    statement.run(...bind(entries));
   }
 }
 

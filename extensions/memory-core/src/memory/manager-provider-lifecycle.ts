@@ -540,10 +540,36 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
   }
 
-  protected readRetrievalIndexState(signal?: AbortSignal): Promise<MemoryRetrievalIndexState> {
-    return runMemoryIndexState(
-      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
-      signal,
+  protected async publishedRetrievalState(): Promise<MemoryRetrievalIndexState | undefined> {
+    if (this.database.readOnly) {
+      return undefined;
+    }
+    await this.database.refreshFacts();
+    const { meta, hasIndexedChunks, vectorState } = this.database.facts;
+    // Chunkless legacy FTS content is not represented in publication facts.
+    if (!hasIndexedChunks) {
+      return undefined;
+    }
+    return {
+      meta,
+      hasIndexedChunks,
+      hasFtsContent: false,
+      vectorState:
+        this.database.admission?.engine === "postgres" || (meta && meta.provider !== "none")
+          ? vectorState
+          : { state: "empty" },
+    };
+  }
+
+  protected async readRetrievalIndexState(
+    signal?: AbortSignal,
+  ): Promise<MemoryRetrievalIndexState> {
+    return (
+      (await this.publishedRetrievalState()) ??
+      (await runMemoryIndexState(
+        { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+        signal,
+      ))
     );
   }
 

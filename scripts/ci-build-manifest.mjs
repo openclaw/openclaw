@@ -546,6 +546,33 @@ if (releaseGate) {
 const includeReleaseOnlyRuntimeTests =
   !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
 const includePrExemptRuntimeTests = !runtimePullRequest;
+const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
+const testRuntimePolicy = existsSync(testRuntimePolicyPath)
+  ? await importTargetPlan(testRuntimePolicyPath)
+  : null;
+const dispatchRuntimePolicy =
+  workflowEventName === "workflow_dispatch"
+    ? process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim()
+    : "";
+if (dispatchRuntimePolicy && !["node", "bun-all", "dual-all"].includes(dispatchRuntimePolicy)) {
+  throw new Error("test_runtime_policy must be empty, node, bun-all, or dual-all");
+}
+if (dispatchRuntimePolicy && !testRuntimePolicy?.resolveCiTestRuntimePolicy) {
+  throw new Error("The selected checkout does not support test_runtime_policy selection");
+}
+if (dispatchRuntimePolicy) {
+  testRuntimePolicy.resolveCiTestRuntimePolicy({
+    OPENCLAW_CI_TEST_RUNTIME_POLICY: dispatchRuntimePolicy,
+  });
+}
+const testRuntimeMode = testRuntimePolicy
+  ? dispatchRuntimePolicy ||
+    (workflowEventName === "workflow_dispatch" && !mainValidation && !ciQualification
+      ? "dual-all"
+      : "bun-all")
+  : "node";
+// Timing readers and the executor must price the same runtime before planning.
+process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
 const nodeSelectionReasons = [];
 let selectedTestTargets;
@@ -687,12 +714,14 @@ const uiWebkitOwners = [
   "ui/vitest.config.ts",
   "ui/src/components/{control-theme*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
   "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
+  "ui/src/components/solid/{menu*.{ts,tsx},overlay.css}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",
   "ui/src/pages/chat/{chat-pane-header,components/chat-pane-header*,components/chat-pane-versions-menu*}.{ts,tsx}",
-  "ui/src/lit/presentation-binding.ts",
+  "ui/src/lib/solid-bridge.ts",
+  "ui/src/lib/presentation.ts",
   "ui/src/pages/new-session/{composer*,draft-composer*}.{ts,tsx}",
   "ui/src/lib/native-overlay-occlusion.{ts,tsx}",
   "ui/src/styles/{base,layout,components,sidebar-menus,select-picker,multi-select,hub-tabs,*tooltip*,modal*,menu*,session-menu*}.css",
@@ -954,9 +983,17 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  "**/*.postgres.test.ts",
+  "src/state/openclaw-agent-*",
+  "src/config/sessions/**",
+  "src/agents/harness/context-engine-turn-outbox*",
   "src/gateway/server*.ts",
   "src/cli/gateway-cli/run.ts",
   "src/commands/*preflight*.ts",
+  "src/commands/doctor-database-*.ts",
+  "src/commands/doctor-schema-migrations.ts",
+  "src/plugins/doctor-*.ts",
+  "src/plugins/manifest-backup-resources.ts",
   "src/state/*worker*.ts",
   "src/state/openclaw-state-ownership.ts",
   "src/state/openclaw-agent-db-registry-listing.ts",
@@ -967,6 +1004,12 @@ const postgresConformancePaths = [
   "src/snapshot/**",
   "src/infra/backup-*.ts",
   "src/infra/update-database-*.ts",
+  "src/infra/update-*.ts",
+  "src/infra/state-migrations*.ts",
+  "src/infra/database-port-recovery*.ts",
+  "src/infra/restart-sentinel*.ts",
+  "src/infra/device-identity*.ts",
+  "src/infra/device-auth-store*.ts",
   "src/cli/update-cli/**",
   "src/commands/backup*.ts",
   "src/state/openclaw-state-snapshot-sanitizer.ts",
@@ -986,13 +1029,47 @@ const postgresConformancePaths = [
   "src/infra/sql-query-compiler.ts",
   "src/infra/kysely-sync*.ts",
   "src/infra/sqlite-transaction.ts",
+  "src/plugin-state/**",
+  "src/transcripts/sqlite-schema.ts",
+  "src/transcripts/store-read*.ts",
+  "src/transcripts/store-sqlite-write*.ts",
   "extensions/workboard/**",
+  "extensions/logbook/src/store*.ts",
+  "extensions/logbook/src/postgres-store.test.ts",
+  "extensions/logbook/src/logbook-postgres-schema.ts",
+  "extensions/logbook/src/logbook-schema.postgres.sql",
+  "extensions/team-reports/src/store*.ts",
+  "extensions/team-reports/src/postgres-store.test.ts",
+  "extensions/team-reports/src/team-reports-schema.postgres.sql",
+  "extensions/matrix/doctor-contract-api.ts",
+  "extensions/matrix/src/storage-paths.ts",
+  "extensions/matrix/src/matrix/client/storage.ts",
+  "extensions/matrix/src/matrix/client/storage-metadata.ts",
+  "extensions/matrix/src/matrix/sqlite-state.ts",
+  "extensions/matrix/src/matrix/crypto-state-store.ts",
+  "extensions/matrix/src/matrix/chunked-state.ts",
+  "extensions/matrix/src/matrix/sdk/idb-persistence.ts",
+  "extensions/matrix/src/matrix/monitor/inbound-dedupe-migration.ts",
+  "extensions/codex/doctor-contract-api.ts",
+  "extensions/codex/src/migration/native-task-assignments.ts",
+  "extensions/codex/src/migration/session-binding-orphans.ts",
+  "extensions/memory-core/src/memory/**",
+  "extensions/memory-core/src/memory-session-tombstones.ts",
+  "extensions/memory-core/src/**",
+  "extensions/memory-core/runtime-api.ts",
+  "extensions/memory-core/cli.ts",
+  "packages/memory-host-sdk/src/host/**",
+  "packages/memory-host-sdk/src/engine-storage.ts",
+  "packages/memory-host-sdk/src/memory-entry-origins.ts",
   "src/config/zod-schema.database.ts",
   "scripts/test-database-conformance*.mjs",
+  "scripts/lib/weighted-test-shards.mts",
+  "config/postgres-conformance-timings.json",
 ];
 const runPostgresConformance =
   existsSync("scripts/test-database-conformance.mjs") &&
   (eventName === "schedule" ||
+    (eventName === "workflow_dispatch" && !releaseGate) ||
     ((eventName === "pull_request" || releaseGate) &&
       !docsOnly &&
       (changedPaths === null ||
@@ -1151,19 +1228,8 @@ const projectNodeTestGroup = ({
   shard_name,
   timing_key,
 });
-const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
-const testRuntimePolicy = existsSync(testRuntimePolicyPath)
-  ? await importTargetPlan(testRuntimePolicyPath)
-  : null;
-const testRuntimeMode = testRuntimePolicy
-  ? eventName === "pull_request" || releaseGate
-    ? "bun-compatible"
-    : eventName === "workflow_dispatch" && !mainValidation
-      ? "dual"
-      : "node"
-  : "node";
 const uiTestRuntimePolicy =
-  !compatibilityTarget &&
+  (!compatibilityTarget || Boolean(dispatchRuntimePolicy)) &&
   testRuntimePolicy?.ciTestShardRequiresBun(
     {
       configs: ["ui/vitest.config.ts"],
@@ -1225,7 +1291,7 @@ const nodeTestShards = targetNodeTestShards
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
     const row = {
       check_name: shard.checkName,
-      test_runtime_policy: testRuntimeMode,
+      test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
         Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
@@ -1239,7 +1305,10 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: shard.runner,
-      timeout_minutes: shard.timeoutMinutes,
+      timeout_minutes:
+        !shard.requiresDist && testRuntimeMode === "dual-all"
+          ? 2 * (shard.timeoutMinutes ?? 60)
+          : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
       predicted_seconds: shard.predictedTestSeconds ?? shard.predictedSeconds,
       targets: shard.targets,
@@ -1827,12 +1896,12 @@ if (hybridHostedEligible) {
     ),
     "check-additional-shard": count(manifest.run_check_additional, hostedAdditionalRows),
     "check-docs": count(manifest.run_check_docs),
-    "postgres-conformance": count(manifest.run_postgres_conformance),
+    "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-shard": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 2),
+    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),

@@ -22,6 +22,7 @@ export function repairLegacySessionExecPolicy(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   targets?: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
 }): void {
   const messages: string[] = [];
   repairCanonicalSessionEntries({

@@ -20,6 +20,14 @@ import {
   WindowsManagementTransportError,
 } from "./extension-windows-management.js";
 import { windowsFixture } from "./extension-windows.test-support.js";
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  return { ...actual, runCommandBuffered: vi.fn(actual.runCommandBuffered) };
+});
+const actualProcess = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
+  "openclaw/plugin-sdk/process-runtime",
+);
 const missing = {
   v: 1,
   ok: true,
@@ -113,6 +121,7 @@ afterAll(async () => {
 });
 const directories: string[] = [];
 afterEach(async () => {
+  vi.mocked(runCommandBuffered).mockReset();
   for (const directory of directories.splice(0)) {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -125,20 +134,21 @@ describe("real child-process management transport (not Windows PE proof)", () =>
     await fs.writeFile(script, body);
     const runner: typeof runCommandBuffered = (argv, options) => {
       expect(argv.slice(1)).toEqual(["--manage"]);
-      return runCommandBuffered([process.execPath, script, ...argv.slice(1)], options);
+      return actualProcess.runCommandBuffered(
+        [process.execPath, script, ...argv.slice(1)],
+        options,
+      );
     };
-    return runner;
+    return vi.mocked(runCommandBuffered).mockImplementation(runner);
   }
   it("sends exactly --manage, closes stdin at EOF and accepts a bounded typed failure on exit1", async () => {
     const response = { ...missing, ok: false, code: "busy", registration: null, store: null };
-    const run = await child(
+    await child(
       'let input=""; for await (const chunk of process.stdin) input+=chunk; JSON.parse(input); if(process.argv[2]!=="--manage")process.exit(2); process.stdout.write(' +
         JSON.stringify(JSON.stringify(response) + "\n") +
         "); process.exitCode=1;",
     );
-    expect(await runWindowsManagement("fixture.exe", windowsFixture().request, { run })).toEqual(
-      response,
-    );
+    expect(await runWindowsManagement("fixture.exe", windowsFixture().request)).toEqual(response);
   });
   it.each(["stderr", "overflow", "exit-mismatch"])("rejects %s without any retry", async (kind) => {
     const body =
@@ -151,10 +161,10 @@ describe("real child-process management transport (not Windows PE proof)", () =>
           : "process.stdout.write(" +
             JSON.stringify(JSON.stringify(missing) + "\n") +
             "); process.exitCode=1;";
-    const run = vi.fn(await child(body));
-    await expect(
-      runWindowsManagement("fixture.exe", windowsFixture().request, { run }),
-    ).rejects.toThrow(WindowsManagementTransportError);
+    const run = await child(body);
+    await expect(runWindowsManagement("fixture.exe", windowsFixture().request)).rejects.toThrow(
+      WindowsManagementTransportError,
+    );
     expect(run).toHaveBeenCalledTimes(1);
   });
   it("joins cancellation after the real child has consumed management EOF", async ({ signal }) => {
@@ -162,7 +172,7 @@ describe("real child-process management transport (not Windows PE proof)", () =>
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-ready-"));
     directories.push(directory);
     const ready = path.join(directory, "ready");
-    const run = await child(
+    await child(
       fixtureReceiptClientSource(receipts.endpoint) +
         '\nimport fs from "node:fs"; for await (const chunk of process.stdin) {} fs.writeFileSync(' +
         JSON.stringify(ready) +
@@ -171,7 +181,6 @@ describe("real child-process management transport (not Windows PE proof)", () =>
         ', "ready"); setInterval(()=>{},1000);',
     );
     const result = runWindowsManagement("fixture.exe", windowsFixture().request, {
-      run,
       signal: controller.signal,
     });
     const rejected = expect(result).rejects.toThrow("outcome is unknown");

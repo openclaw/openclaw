@@ -1,19 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { createMemo, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { requestVideoPoster } from "../../../lib/media/video-poster.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import {
-  releaseChatMediaResourceSubscriber,
-  type AssistantAttachmentItem,
-  type ImageBlock,
-} from "./chat-message-media.ts";
+import type { AssistantAttachmentItem, AttachmentItem, ImageBlock } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
+import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 
 vi.mock("../../../lib/media/video-poster.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/media/video-poster.ts")>()),
@@ -23,6 +22,65 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+it.each(["replacement", "removal"] as const)(
+  "reveals comments independently and cancels stale reads on %s",
+  async (retirement) => {
+    const first = createDeferred<Response>();
+    const second = createDeferred<Response>();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const initialComments: AttachmentItem[] = ["first", "second"].map((name) => ({
+      type: "attachment",
+      attachment: { kind: "document", label: name, url: `https://example.test/${name}.txt` },
+    }));
+    const [comments, setComments] = createSignal(initialComments);
+    const view = mountSolid(() => (
+      <SentCommentAttachments
+        comments={comments()}
+        options={{}}
+        resolve={(item) => ({
+          identity: item.attachment.url,
+          src: item.attachment.url,
+          fallback: () => <span>Unavailable</span>,
+        })}
+      />
+    ));
+    expect(fetchMock).not.toHaveBeenCalled();
+    view.getByRole("button").click();
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    second.resolve(
+      new Response(
+        "Selected text:\nsecond source\n\nSource session: agent:main:fixture\nDOM text UTF-16 range: [0, 13)",
+      ),
+    );
+    await waitForSolid(() => expect(document.body.textContent).toContain("second source"));
+    expect(document.body.textContent).toContain("Loading");
+    const pendingSignal = fetchMock.mock.calls[0]![1]!.signal!;
+    setComments(initialComments.slice());
+    flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(pendingSignal.aborted).toBe(false);
+    if (retirement === "replacement") {
+      setComments([]);
+      flush();
+    } else {
+      view.unmount();
+    }
+    expect(pendingSignal.aborted).toBe(true);
+    first.resolve(
+      new Response(
+        "Selected text:\nfirst source\n\nSource session: agent:main:fixture\nDOM text UTF-16 range: [0, 12)",
+      ),
+    );
+    await first.promise;
+    flush();
+    expect(document.body.textContent).not.toContain("first source");
+  },
+);
 
 it("keeps the focused native image control and decoded node when gallery metadata changes", () => {
   const source = "data:image/png;base64,cG5n";
@@ -42,7 +100,30 @@ it("keeps the focused native image control and decoded node when gallery metadat
   expect(image.width).toBe(1600);
 });
 
-it("cancels an offscreen poster request and releases the visible poster on unmount", async () => {
+it("retries a standalone native image after a failed preview", async () => {
+  const source = `/tmp/standalone-preview-${crypto.randomUUID()}.png`;
+  const retry = createDeferred<Response>();
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ available: true }))
+    .mockImplementationOnce(() => retry.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  await loadAssistantAttachmentAvailability(source);
+  const view = mountSolid(() => <MessageImages images={[{ url: source }]} />);
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
+  const image = view.container.querySelector("img")!;
+  expect(image).not.toBeNull();
+  image.dispatchEvent(new Event("error"));
+  flush();
+  view.getByRole("button", { name: /^Retry$/ }).click();
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  expect(view.container.querySelector("img")).toBeNull();
+  retry.resolve(Response.json({ available: true }));
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it("cancels an offscreen poster request and releases a parked poster without replacing its button", async () => {
   const intersections: ((visible: boolean) => void)[] = [];
   vi.stubGlobal(
     "IntersectionObserver",
@@ -74,16 +155,21 @@ it("cancels an offscreen poster request and releases the visible poster on unmou
   const second = createDeferred<Blob | null>();
   vi.mocked(requestVideoPoster)
     .mockReturnValueOnce(first.promise)
-    .mockReturnValueOnce(second.promise);
+    .mockReturnValueOnce(second.promise)
+    .mockResolvedValueOnce(new Blob(["reopened poster"]));
+  const [presented, setPresented] = createSignal(true);
   const view = mountSolid(() => (
-    <MessageVideoPreview
-      key="video"
-      src="/fixture.mp4"
-      label="Fixture video"
-      onOpen={() => {}}
-      fallback={<p>Preview unavailable</p>}
-    />
+    <ContentPresentation value={presented}>
+      <MessageVideoPreview
+        key="video"
+        src="/fixture.mp4"
+        label="Fixture video"
+        onOpen={() => {}}
+        fallback={<p>Preview unavailable</p>}
+      />
+    </ContentPresentation>
   ));
+  const button = view.getByRole("button");
   expect(requestVideoPoster).not.toHaveBeenCalled();
   intersections[0]!(true);
   const request = vi.mocked(requestVideoPoster).mock.calls[0]![0];
@@ -98,8 +184,18 @@ it("cancels an offscreen poster request and releases the visible poster on unmou
   await waitForSolid(() =>
     expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:video-poster"),
   );
-  view.unmount();
+  setPresented(false);
+  flush();
+  expect(view.container.querySelector("img")).toBeNull();
+  expect(view.getByRole("button")).toBe(button);
   expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:video-poster");
+  setPresented(true);
+  flush();
+  expect(view.getByRole("button")).toBe(button);
+  intersections[1]!(true);
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
+  view.unmount();
+  expect(revokeObjectURL).toHaveBeenCalledTimes(2);
 });
 
 it("preserves the playback element when the same attachment snapshot is refreshed", () => {
@@ -136,19 +232,14 @@ it.each(["document", "audio", "video"] as const)(
     const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const pending = createDeferred<{ url: string }>();
     const resolveArtifactDownload = vi.fn(() => pending.promise);
-    const [revision, setRevision] = createSignal(0);
-    const onRequestUpdate = () => setRevision((value) => value + 1);
-    const options = createMemo(() => {
-      revision();
-      return { resolveArtifactDownload, onRequestUpdate };
-    });
+    const options = { resolveArtifactDownload };
     const view = mountSolid(() => (
       <MessageAttachment
         item={{
           type: "attachment",
           attachment: { kind, label: `${kind} recording`, url, artifactId: `fixture-${kind}` },
         }}
-        options={options()}
+        options={options}
         presentation="card"
       />
     ));
@@ -167,7 +258,6 @@ it.each(["document", "audio", "video"] as const)(
       expect(document.activeElement).toBe(download);
     } finally {
       view.unmount();
-      releaseChatMediaResourceSubscriber(onRequestUpdate);
     }
   },
 );

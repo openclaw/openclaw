@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
+import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
@@ -87,10 +88,6 @@ export function visibleWorkspaceConflictPaths(conflict: WorkspaceResultConflict)
     paths,
     remaining: Math.max(0, workspaceConflictCount(conflict) - paths.length),
   };
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 export function workspaceConflictGitCommands(

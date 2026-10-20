@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -12,35 +12,34 @@ export function ModelAccounts(props: ModelAccountsProps) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ModelAccountsState(context, props, () => setRevision((value) => value + 1));
-  const sync = () => {
-    untrack(() => state.applySnapshot(context.gateway.snapshot));
-    state.publish();
-  };
-  const stopGateway = context.gateway.subscribe(sync);
-  const stopEvents = context.gateway.subscribeEvents((event) => {
-    if (modelAuthEventInvalidates(event)) {
-      void state.loadAccounts();
-    }
+  // Snapshot identity/profile at request admission; target changes retire account reads and auth polls.
+  onSettled(() => {
+    const target = props.target;
+    const sync = () => {
+      state.applySnapshot(target.read());
+      state.publish();
+    };
+    // The profile owner admits both connection authority and its canonical profile.
+    const stopTarget = target.subscribe(sync);
+    const stopEvents = context.gateway.subscribeEvents((event) => {
+      if (modelAuthEventInvalidates(event)) {
+        void state.loadAccounts();
+      }
+    });
+    sync();
+    return () => {
+      stopEvents();
+      stopTarget();
+      state.dispose();
+    };
   });
-  createEffect(() => [props.identityId, props.profileId], sync);
-  sync();
   const readState = () => {
     revision();
     return state;
   };
-  onCleanup(() => {
-    stopEvents();
-    stopGateway();
-    state.dispose();
-  });
   return (
     <openclaw-model-accounts>
-      <Show
-        when={
-          readState().context.gateway.snapshot.phase === "connected" &&
-          readState().context.gateway.snapshot.client
-        }
-      >
+      <Show when={readState().target || readState().context.gateway.snapshot.phase === "connected"}>
         <ModelAccountsSection readState={readState} />
       </Show>
     </openclaw-model-accounts>

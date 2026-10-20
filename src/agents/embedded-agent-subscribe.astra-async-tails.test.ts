@@ -466,7 +466,6 @@ describe("Astra async response tails", () => {
     const { replyPayloads } = await buildReplyPayloads({
       payloads: prepared.payloads,
       isHeartbeat: heartbeat,
-      didLogHeartbeatStrip: false,
       blockStreamingEnabled,
       blockReplyPipeline: pipeline,
       replyToMode: "off",

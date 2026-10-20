@@ -3,7 +3,10 @@
 import { expect, it, vi } from "vitest";
 import { createQuestionPromptState } from "../../app/question-prompt.ts";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
-import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
+import {
+  createAsyncQuestionPresentation,
+  subscribeAsyncQuestionState,
+} from "./components/chat-async-question.ts";
 
 it.each(["session", "connection", "pane"] as const)(
   "does not admit a retained question submission after its %s changes",
@@ -40,7 +43,7 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
   async (changed) => {
     const originalSend = vi.fn(async () => true);
     const nextSend = vi.fn(async () => true);
-    const requestUpdate = vi.fn();
+    const notify = vi.fn();
     const state: Parameters<typeof createAsyncQuestionPresentation>[0] = {
       asyncQuestionDrafts: new Map(),
       asyncQuestionRevision: 0,
@@ -51,8 +54,8 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
       currentAgentId: "main",
       connectionEpoch: 1,
       onAsyncQuestionSubmit: originalSend,
-      onRequestUpdate: requestUpdate,
     };
+    const stop = subscribeAsyncQuestionState(state, notify);
     const retained = createAsyncQuestionPresentation(state, props);
     if (changed === "session") {
       props.sessionKey = "agent:main:two";
@@ -66,9 +69,10 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
     state.transcriptRenderContext.onAsyncQuestionSubmit = nextSend;
     const current = createAsyncQuestionPresentation(state, props);
     retained.onChange();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
     current.onChange();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledOnce();
+    stop();
     expect(await retained.submit?.("> Which audience?\n\nEveryone")).toBe(false);
     expect(originalSend).not.toHaveBeenCalled();
     expect(nextSend).not.toHaveBeenCalled();

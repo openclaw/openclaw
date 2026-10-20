@@ -441,7 +441,7 @@ type NativeSessionBindingLease = { token: string; expiresAt: number };
 export type NativeSessionBindingRecord = { lease?: NativeSessionBindingLease };
 
 /**
- * @deprecated Use NativeSessionBindingStateStoreV2. Supported through 2026-12-31.
+ * @deprecated Use NativeSessionBindingStateStoreV2. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export type NativeSessionBindingStateStore<TRecord extends NativeSessionBindingRecord> = Pick<
   PluginStateSyncKeyedStore<TRecord>,

@@ -51,11 +51,7 @@ function resolveXiaomiTtsConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const providers = asOptionalRecord(rawConfig.providers);
-  return (
-    asOptionalRecord(providers?.xiaomi) ??
-    asOptionalRecord(providers?.mimo) ??
-    asOptionalRecord(rawConfig.xiaomi)
-  );
+  return asOptionalRecord(providers?.xiaomi) ?? asOptionalRecord(providers?.mimo);
 }
 
 function normalizeXiaomiTtsProviderConfig(rawConfig: Record<string, unknown>) {
@@ -82,7 +78,7 @@ function normalizeXiaomiTtsProviderConfig(rawConfig: Record<string, unknown>) {
 }
 
 function resolveXiaomiTtsProviderConfig(config: SpeechProviderConfig) {
-  const providerConfig = normalizeXiaomiTtsProviderConfig({ xiaomi: config });
+  const providerConfig = normalizeXiaomiTtsProviderConfig({ providers: { xiaomi: config } });
   const resolvedKey = resolveSpeechProviderApiKey(
     providerConfig.apiKey,
     process.env.XIAOMI_API_KEY,

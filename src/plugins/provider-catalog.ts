@@ -168,6 +168,7 @@ function buildManifestCatalogModel(
       : {}),
     ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+    ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
     maxTokens: model.maxTokens,
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
@@ -289,6 +290,7 @@ export function buildManifestProviderCatalogFamily(params: {
           reasoning: entry.reasoning,
           input: [...entry.input],
           contextWindow: entry.contextWindow,
+          ...(entry.parameterCount !== undefined ? { parameterCount: entry.parameterCount } : {}),
         })),
       ),
   };

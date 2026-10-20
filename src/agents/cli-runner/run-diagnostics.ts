@@ -227,7 +227,7 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
             : runOutcome === "blocked"
               ? "error"
               : runOutcome,
-        ...(typeof result.meta.yielded === "boolean" ? { yieldDetected: result.meta.yielded } : {}),
+        ...(result.meta.yielded !== undefined ? { yieldDetected: result.meta.yielded } : {}),
       },
       completionPrivateData(
         "harnessContent",

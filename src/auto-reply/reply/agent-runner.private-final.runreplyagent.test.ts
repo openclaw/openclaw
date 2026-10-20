@@ -9,6 +9,8 @@ import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -30,7 +32,6 @@ import { deliverFollowupDecision } from "./followup-delivery.js";
 import { createDefaults, createTurn } from "./followup-delivery.test-helpers.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import type { FollowupRun } from "./queue/types.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { routeReply } from "./route-reply.js";
 import type * as RouteReplyModule from "./route-reply.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -168,7 +169,10 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         workspaceDir: tmp,
         // Carry the canonical tool-only run fact and keep downstream policy aligned,
         // so the private final is never eligible for automatic source delivery.
-        config: { messages: { visibleReplies: "message_tool" } },
+        config: {
+          session: { store: storePath },
+          messages: { visibleReplies: "message_tool" },
+        },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -246,6 +250,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     return {
       ...(await execute(followupRun, createRunResult())),
       followupRun,
+      storePath,
       executeRetry: (queuedRun: FollowupRun, delivered: boolean, retryText?: string) =>
         execute(queuedRun, createRunResult(delivered, retryText)),
     };
@@ -363,7 +368,10 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       });
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[3]).toBe("none");
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
-      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({ position: "front" });
+      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({
+        position: "front",
+        storePath: initial.storePath,
+      });
 
       const retry = await initial.executeRetry(
         retryRun,
@@ -625,7 +633,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
       expect(key).toBe(sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
     });
 
     await runPrivateFinalCase({ onReplyOperationOwned });
@@ -633,7 +641,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     assert(replyOperation);
 
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(getSessionControllerOperation(sessionKey)).toBe(replyOperation);
     expect(scheduleFollowupDrain).not.toHaveBeenCalled();
 
     replyOperation.complete();

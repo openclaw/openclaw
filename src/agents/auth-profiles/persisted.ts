@@ -163,10 +163,8 @@ function findMainStoreOAuthReplacement(params: {
     })
     .filter(([, credential]) => isNewerUsableOAuthCredential(params.legacyCredential, credential))
     .toSorted(([leftId, leftCredential], [rightId, rightCredential]) => {
-      const leftExpires = Number.isFinite(leftCredential.expires) ? leftCredential.expires : 0;
-      const rightExpires = Number.isFinite(rightCredential.expires) ? rightCredential.expires : 0;
-      if (rightExpires !== leftExpires) {
-        return rightExpires - leftExpires;
+      if (rightCredential.expires !== leftCredential.expires) {
+        return rightCredential.expires - leftCredential.expires;
       }
       return leftId.localeCompare(rightId);
     });
@@ -343,14 +341,17 @@ export function mergeAuthProfileStores(
   const order = mergedOrder
     ? Object.fromEntries(
         Object.entries(mergedOrder)
-          .map(([provider, profileIds]) => [
-            provider,
-            profileIds.filter(
-              (profileId) =>
-                profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
-            ),
-          ])
-          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
+          .map(
+            ([provider, profileIds]) =>
+              [
+                provider,
+                profileIds.filter(
+                  (profileId) =>
+                    profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
+                ),
+              ] as const,
+          )
+          .filter(([, profileIds]) => profileIds.length > 0),
       )
     : undefined;
   const lastGood = mergedState.lastGood

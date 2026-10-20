@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
@@ -125,12 +126,7 @@ export async function executeParallelSearchRequest(params: {
     provider: params.provider,
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
+    externalContent: externalContentStamp(params.provider),
     results,
   };
   if (typeof response.search_id === "string") {

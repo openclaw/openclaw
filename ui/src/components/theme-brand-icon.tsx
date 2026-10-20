@@ -3,7 +3,7 @@ import { Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import { Icon } from "./solid/icon.tsx";
 import "./theme-brand-icon.css";
@@ -26,11 +26,7 @@ export const ThemeBrandIcon = defineSolidBridge<{ branding?: ThemeBranding }>(
   { properties: { branding: { default: undefined, attribute: false } } },
 );
 
-export function ThemeBrandingIcon(props: {
-  branding?: ThemeBranding;
-  claw?: SolidJSX.Element;
-  neutral?: SolidJSX.Element;
-}) {
+export function ThemeBrandingIcon(props: { branding?: ThemeBranding; claw?: SolidJSX.Element }) {
   const publishedBranding = projectSource(null, {
     read: currentThemeBranding,
     subscribe: (_source, notify) => subscribeThemeBranding(notify),
@@ -39,7 +35,7 @@ export function ThemeBrandingIcon(props: {
   const branding = () => props.branding ?? publishedBranding.read();
   return (
     <Show when={branding().brandIcon !== "claw"} fallback={props.claw ?? <Icon name="lobster" />}>
-      <Show when={branding().brandIcon !== "mark"} fallback={props.neutral ?? <Icon name="mark" />}>
+      <Show when={branding().brandIcon !== "mark"} fallback={<Icon name="mark" />}>
         <ThemeBrandIcon branding={branding()} />
       </Show>
     </Show>

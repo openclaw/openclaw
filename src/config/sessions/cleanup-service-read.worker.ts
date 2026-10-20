@@ -1,3 +1,4 @@
+import { readDeferredPluginSessionArtifactPaths } from "../../infra/deferred-plugin-session-sources.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { readSessionCleanupSnapshotInDatabase } from "./cleanup-service-read.kernel.js";
 import type {
@@ -19,5 +20,14 @@ export function readSessionCleanupSnapshot(
   if (!result.found && request.expectedIdentity?.key.startsWith("file:")) {
     throw new Error("Session cleanup lost its captured physical owner");
   }
-  return result.found ? result.value : { kind: "session-cleanup", store: {}, missing: [] };
+  return {
+    ...(result.found ? result.value : { kind: "session-cleanup" as const, store: {}, missing: [] }),
+    retainedArtifactPaths: [
+      ...readDeferredPluginSessionArtifactPaths({
+        target: request.target,
+        sqlitePath: request.database.path,
+        env: request.env,
+      }),
+    ],
+  };
 }

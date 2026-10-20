@@ -43,7 +43,7 @@ export function createSessionPermissionProjection(
     }
   >();
   const permissionIdentity = (key: string, agentId?: string | null) => {
-    const identity = resolveUiConversationIdentity(gateway.snapshot, key, agentId ?? undefined);
+    const identity = resolveUiConversationIdentity(gateway.snapshot, key, agentId);
     return `${identity.sessionKey}\0${identity.agentId ?? ""}`;
   };
   const createProjection = (identity: string, sessionId?: string) => {
@@ -133,6 +133,13 @@ export function createSessionPermissionProjection(
       if (observe) {
         permissionProjections.delete(identity);
       }
+      return row;
+    }
+    // These list projections omit permissions; absence cannot supersede a known choice.
+    if (
+      (row.rowMode === "sidebar" || row.rowMode === "dashboard") &&
+      !Object.hasOwn(row, "permissionMode")
+    ) {
       return row;
     }
     const revision = readRevision(row);

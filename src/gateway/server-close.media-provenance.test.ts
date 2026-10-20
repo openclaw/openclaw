@@ -61,7 +61,7 @@ it("settles accepted media provenance cleanup across the close prelude before sh
     });
     kernel.kernel.setMaintenanceHandles(maintenance);
     maintenance.startMediaCleanup();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(130_000);
     await withinTest(pruningEntered.promise, signal);
     expect(acceptedSignal?.aborted).toBe(false);
 

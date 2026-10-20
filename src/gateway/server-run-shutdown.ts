@@ -3,23 +3,31 @@ import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../agents/run-termination.js";
-import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatGatewayDrainCounts, waitForGatewayDrain } from "../infra/gateway-drain.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { startGatewaySessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
+import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
+import { captureGatewaySessionWorkAdmissionInterruption } from "../sessions/session-controller.lifecycle-work.js";
+import { captureGatewaySessionControllerWork } from "../sessions/session-controller.lifecycle.js";
+import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
+import {
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  getRpcSourceProjectSessionActive,
+  isRpcSourceQueued,
+  isRpcSourceRegistered,
+  listRpcSourceEntries,
+  type RpcSourceRef,
+} from "../sessions/session-controller.rpc-sources.js";
+import { activeSessionOperations } from "../sessions/session-controller.state.js";
+import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
 import {
   abortChatRunById,
-  type ChatAbortControllerEntry,
-  isChatAbortControllerEntryAbortable,
-  removeChatAbortControllerEntry,
+  captureChatRunAbortPresentation,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
-import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
-import {
-  createChatAbortMarker,
-  type ChatRunEntry,
-  type ChatRunState,
-} from "./server-chat-state.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
+import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { recordGatewayShutdownWarning } from "./server-shutdown.js";
 
@@ -30,15 +38,12 @@ const RESTART_MARKER_SLOW_WARNING_MS = 1_000;
 
 function inspectRestartReplyDrain(params: {
   getPendingReplyCount: () => number;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatQueuedTurns: QueuedChatTurnMap;
+  resolveGatewayContext: GatewayContextResolver;
 }) {
   const pendingReplyCount = params.getPendingReplyCount();
-  const chatRuns = listRestartDrainRuns(params.chatAbortControllers).length;
-  const queuedTurns = Array.from(
-    params.chatQueuedTurns.values(),
-    (entry) => entry.controller.signal.aborted,
-  ).filter((aborted) => !aborted).length;
+  const entries = listGatewayRpcSourceEntries(params.resolveGatewayContext);
+  const chatRuns = listRestartDrainRuns(entries).length;
+  const queuedTurns = entries.filter(([, entry]) => isRpcSourceQueued(entry)).length;
   const counts = {
     pendingReplies:
       Number.isFinite(pendingReplyCount) && pendingReplyCount > 0
@@ -50,37 +55,44 @@ function inspectRestartReplyDrain(params: {
   return { counts, idle: Object.values(counts).every((count) => count === 0) };
 }
 
+function listGatewayRpcSourceEntries(
+  resolveGatewayContext: GatewayContextResolver,
+): Array<[string, RpcSourceRef]> {
+  return listRpcSourceEntries().filter(([, entry]) =>
+    hasGatewayContextOwner(entry.input, resolveGatewayContext),
+  );
+}
+
 function listUnabortedRuns(
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
-): Array<[string, ChatAbortControllerEntry]> {
-  return Array.from(chatAbortControllers.entries()).filter(
-    ([, entry]) => !entry.controller.signal.aborted,
+  entries: Iterable<readonly [string, RpcSourceRef]>,
+): Array<[string, RpcSourceRef]> {
+  return [...entries].filter(
+    (entry): entry is [string, RpcSourceRef] => !entry[1].input.abortSignal.aborted,
   );
 }
 
 function listRestartDrainRuns(
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
-): Array<[string, ChatAbortControllerEntry]> {
-  return listUnabortedRuns(chatAbortControllers).filter(
-    ([, entry]) => entry.registrationCleanupRequested !== true,
+  entries: Iterable<readonly [string, RpcSourceRef]>,
+): Array<[string, RpcSourceRef]> {
+  return listUnabortedRuns(entries).filter(
+    ([, entry]) => entry.input.phase !== "consumed" && !isRpcSourceQueued(entry),
   );
 }
 
-function isRestartRecoveryRun(entry: ChatAbortControllerEntry): boolean {
-  // A prior restart cancellation can still own an uncommitted terminal write.
+function isRestartRecoveryRun(entry: RpcSourceRef): boolean {
+  // The close prelude may cancel connection work before its restart marker commits.
   return (
-    (!entry.controller.signal.aborted ||
-      entry.abortStopReason === "restart" ||
-      isAgentRunRestartAbortReason(entry.controller.signal.reason)) &&
-    entry.controlUiVisible !== false &&
-    (entry.registrationCleanupRequested !== true || entry.projectSessionTerminalPersisted !== true)
+    (!entry.input.abortSignal.aborted ||
+      entry.adapter.abortStopReason === "restart" ||
+      isAgentRunRestartAbortReason(entry.input.abortSignal.reason)) &&
+    entry.adapter.controlUiVisible !== false &&
+    ((entry.input.claim && !entry.input.claim.released) ||
+      entry.adapter.projectSessionTerminalPersisted !== true)
   );
 }
 
 export type GatewayRunShutdownParams = {
   resolveGatewayContext: GatewayContextResolver;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates?: Map<string, RestartRecoveryCandidate>;
   chatRunState: ChatRunState;
   removeChatRun: (
@@ -94,74 +106,96 @@ export type GatewayRunShutdownParams = {
   markMainSessionsAbortedForRestart?: (params: {
     resolveGatewayContext: GatewayContextResolver;
     activeRuns: RestartRecoveryCandidate[];
+    activeAdmissions: ReturnType<typeof captureGatewaySessionControllerWork>;
     reason: string;
     isActiveRun: (run: RestartRecoveryCandidate) => boolean;
   }) => Promise<void> | void;
-  resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
   /** Cancel received execution and retire its principals only after recovery is recorded. */
   cancelReceivedWork?: (reason?: Error) => void;
 };
 
+type CapturedRestartRun = {
+  run: RestartRecoveryCandidate;
+  source?: RpcSourceRef;
+  recoveryCandidate?: RestartRecoveryCandidate;
+};
+
 function collectActiveRestartSessionRefs(
-  params: Pick<
-    GatewayRunShutdownParams,
-    "chatAbortControllers" | "resolveActiveSessionIdForKey" | "restartRecoveryCandidates"
-  >,
-): RestartRecoveryCandidate[] {
-  const activeRuns = new Map<string, RestartRecoveryCandidate>();
+  params: Pick<GatewayRunShutdownParams, "restartRecoveryCandidates"> & {
+    entries: Iterable<readonly [string, RpcSourceRef]>;
+  },
+): CapturedRestartRun[] {
+  const activeRuns: CapturedRestartRun[] = [];
   const observedAt = Date.now();
-  const addRun = (run: RestartRecoveryCandidate) => {
-    activeRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, {
-      ...run,
-      observedAt: run.observedAt ?? observedAt,
+  const addRun = (
+    run: RestartRecoveryCandidate,
+    source?: RpcSourceRef,
+    recoveryCandidate?: RestartRecoveryCandidate,
+  ) => {
+    activeRuns.push({
+      run: {
+        ...run,
+        observedAt: run.observedAt ?? observedAt,
+      },
+      ...(source ? { source } : {}),
+      ...(recoveryCandidate ? { recoveryCandidate } : {}),
     });
   };
-  for (const [runId, entry] of params.chatAbortControllers) {
-    if (!isRestartRecoveryRun(entry)) {
-      continue;
-    }
-    const sessionKey = entry.sessionKey.trim();
-    // Registration metadata can predate a reset or compaction session-id rotation.
-    const resolvedSessionId =
-      entry.kind === "agent" || !sessionKey
-        ? undefined
-        : params.resolveActiveSessionIdForKey?.(sessionKey);
-    const sessionId = resolvedSessionId || entry.sessionId.trim();
-    if (runId && entry.lifecycleGeneration && sessionKey && sessionId) {
-      addRun({
-        runId,
-        lifecycleGeneration: entry.lifecycleGeneration,
-        sessionKey,
-        sessionId,
-        observedAt: entry.projectSessionTerminalObservedAt,
-      });
+  for (const [runId, entry] of [...params.entries].filter(([, source]) =>
+    isRestartRecoveryRun(source),
+  )) {
+    const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(entry);
+    const target = entry.input.target ?? entry.input.mailbox.owner.target;
+    const lifecycleGeneration = getRpcSourceLifecycleGeneration(entry);
+    if (runId && lifecycleGeneration && sessionKey && sessionId && target) {
+      addRun(
+        {
+          storePath: target.storeScope,
+          agentId: agentId ?? target.agentId,
+          runId,
+          lifecycleGeneration,
+          sessionKey,
+          sessionId,
+          observedAt: entry.adapter.projectSessionTerminalObservedAt,
+        },
+        entry,
+      );
     }
   }
   for (const candidate of params.restartRecoveryCandidates?.values() ?? []) {
-    const resolvedSessionId = params.resolveActiveSessionIdForKey?.(candidate.sessionKey);
-    addRun({
-      ...candidate,
-      sessionId: resolvedSessionId || candidate.sessionId,
-    });
+    const alreadyCaptured = activeRuns.find(
+      ({ run }) =>
+        run.runId === candidate.runId &&
+        run.lifecycleGeneration === candidate.lifecycleGeneration &&
+        run.storePath === candidate.storePath &&
+        run.agentId === candidate.agentId &&
+        run.sessionKey === candidate.sessionKey &&
+        run.sessionId === candidate.sessionId,
+    );
+    if (alreadyCaptured) {
+      alreadyCaptured.recoveryCandidate = candidate;
+    } else {
+      addRun(candidate, undefined, candidate);
+    }
   }
-  return [...activeRuns.values()];
+  return activeRuns;
 }
 
 async function settleTerminalSessionPersistenceForRestart(
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>,
+  entries: Iterable<readonly [string, RpcSourceRef]>,
 ): Promise<void> {
-  const pending = listUnabortedRuns(chatAbortControllers).flatMap(([, entry]) => {
-    const persistence = entry.projectSessionTerminalPersistence;
-    if (entry.projectSessionActive !== false || !persistence) {
+  const pending = listUnabortedRuns(entries).flatMap(([, entry]) => {
+    const persistence = entry.adapter.projectSessionTerminalPersistence;
+    if (getRpcSourceProjectSessionActive(entry) !== false || !persistence) {
       return [];
     }
-    return [{ entry, persistence }];
+    return [persistence];
   });
   if (pending.length === 0) {
     return;
   }
   const results = await raceWithTimeout(
-    () => Promise.allSettled(pending.map(({ persistence }) => persistence)),
+    () => Promise.allSettled(pending),
     RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS,
     () => null,
     { ref: false },
@@ -170,18 +204,6 @@ async function settleTerminalSessionPersistenceForRestart(
     shutdownLog.warn(
       `terminal session persistence did not settle within ${RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS}ms; preserving restart recovery`,
     );
-    return;
-  }
-  for (const [index, result] of results.entries()) {
-    const tracked = pending[index];
-    if (!tracked || tracked.entry.projectSessionTerminalPersistence !== tracked.persistence) {
-      continue;
-    }
-    tracked.entry.projectSessionTerminalPending = false;
-    tracked.entry.projectSessionTerminalPersistence = undefined;
-    if (result.status === "fulfilled") {
-      tracked.entry.projectSessionTerminalPersisted = true;
-    }
   }
 }
 
@@ -189,48 +211,67 @@ async function prepareActiveRunsForRestartRecovery(
   params: GatewayRunShutdownParams & {
     reason: string;
     warnings: string[];
+    capturedSources: ReadonlyArray<readonly [string, RpcSourceRef]>;
+    activeAdmissions: ReturnType<typeof captureGatewaySessionControllerWork>;
+    capturedRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   },
-): Promise<() => number> {
+): Promise<void> {
   if (!params.markMainSessionsAbortedForRestart) {
-    return () => 0;
+    return;
   }
-  await settleTerminalSessionPersistenceForRestart(params.chatAbortControllers);
-  const activeRuns = collectActiveRestartSessionRefs(params);
-  const activeEntries = new Map(params.chatAbortControllers);
-  const recoveryCandidates = new Map(params.restartRecoveryCandidates);
-  const abortReplyRuns = captureGatewayReplyRunRestartAbort(params.resolveGatewayContext);
+  const recoveryCandidates = params.capturedRecoveryCandidates;
+  const capturedRuns = collectActiveRestartSessionRefs({
+    entries: params.capturedSources,
+    restartRecoveryCandidates: recoveryCandidates,
+  });
+  const activeRuns = capturedRuns.map(({ run }) => run);
+  const capturedByRun = new Map(capturedRuns.map((captured) => [captured.run, captured]));
+  await settleTerminalSessionPersistenceForRestart(params.capturedSources);
   try {
-    let markerOutcome: Promise<void>;
+    let markerOutcome!: Promise<void>;
     const timedOut = await raceWithTimeout(
       () => {
         markerOutcome = Promise.resolve(
           params.markMainSessionsAbortedForRestart!({
             resolveGatewayContext: params.resolveGatewayContext,
             activeRuns,
+            activeAdmissions: params.activeAdmissions,
             reason: params.reason,
             isActiveRun: (run) => {
-              const capturedEntry = activeEntries.get(run.runId);
-              // Restart cancellation can retire the registration before the marker commits.
-              // Keep its captured custody only while no replacement owns this session.
-              const entry =
-                params.chatAbortControllers.get(run.runId) ??
-                (capturedEntry?.controller.signal.aborted &&
-                ![...params.chatAbortControllers.values()].some(
-                  (current) =>
-                    current.sessionKey === run.sessionKey && current.sessionId === run.sessionId,
-                )
-                  ? capturedEntry
-                  : undefined);
-              const candidate = params.restartRecoveryCandidates?.get(run.runId);
-              return (
-                (entry &&
-                  entry === capturedEntry &&
-                  isRestartRecoveryRun(entry) &&
-                  entry.lifecycleGeneration === run.lifecycleGeneration) ||
-                (candidate !== undefined &&
-                  candidate === recoveryCandidates.get(run.runId) &&
-                  candidate.lifecycleGeneration === run.lifecycleGeneration)
+              const captured = capturedByRun.get(run);
+              if (!captured) {
+                return false;
+              }
+              const entry = captured.source;
+              const replaced = listGatewayRpcSourceEntries(params.resolveGatewayContext).some(
+                ([, current]) => {
+                  const identity = getRpcSourceIdentity(current);
+                  const target = current.input.target ?? current.input.mailbox.owner.target;
+                  return (
+                    current !== entry &&
+                    target?.storeScope === run.storePath &&
+                    (identity.agentId ?? target?.agentId) === run.agentId &&
+                    identity.sessionKey === run.sessionKey &&
+                    identity.sessionId === run.sessionId
+                  );
+                },
               );
+              const sourceActive =
+                entry !== undefined &&
+                (isRpcSourceRegistered(entry) || !replaced) &&
+                isRestartRecoveryRun(entry) &&
+                ((entry.input.claim && !entry.input.claim.released) ||
+                  entry.adapter.projectSessionTerminalPersisted !== true) &&
+                getRpcSourceLifecycleGeneration(entry) === run.lifecycleGeneration;
+              const candidate = captured.recoveryCandidate;
+              const recoveryCandidateActive =
+                candidate !== undefined &&
+                // A retained terminal receipt cannot override a newer live source.
+                !replaced &&
+                candidate === params.restartRecoveryCandidates?.get(run.runId) &&
+                candidate === recoveryCandidates.get(run.runId) &&
+                candidate.lifecycleGeneration === run.lifecycleGeneration;
+              return sourceActive || recoveryCandidateActive;
             },
           }),
         );
@@ -247,63 +288,19 @@ async function prepareActiveRunsForRestartRecovery(
       recordGatewayShutdownWarning(params.warnings, "restart-main-session-marker");
       await markerOutcome!;
     }
-    for (const run of activeRuns) {
-      if (params.restartRecoveryCandidates?.get(run.runId) === recoveryCandidates.get(run.runId)) {
-        params.restartRecoveryCandidates?.delete(run.runId);
+    for (const captured of capturedRuns) {
+      if (
+        captured.recoveryCandidate &&
+        params.restartRecoveryCandidates?.get(captured.run.runId) === captured.recoveryCandidate &&
+        captured.recoveryCandidate === recoveryCandidates.get(captured.run.runId)
+      ) {
+        params.restartRecoveryCandidates?.delete(captured.run.runId);
       }
     }
   } catch (err) {
     shutdownLog.warn(`failed to mark active main session(s) for restart recovery: ${String(err)}`);
     recordGatewayShutdownWarning(params.warnings, "restart-main-session-marker");
   }
-  // Disposing a tool cell can settle its result and start a finalizer. Cancel its
-  // parent after the marker settles, including failures, before resource teardown.
-  return () =>
-    abortReplyRuns((sessionId, error) => {
-      shutdownLog.warn(
-        `failed to cancel reply for restart: sessionId=${sessionId} error=${String(error)}`,
-      );
-      recordGatewayShutdownWarning(params.warnings, "restart-reply-abort");
-    });
-}
-
-/** Cancels only this Gateway's exact controller registrations. */
-function abortActiveRuns(params: GatewayRunShutdownParams): number {
-  let aborted = 0;
-  for (const [runId, entry] of listUnabortedRuns(params.chatAbortControllers)) {
-    if (!isChatAbortControllerEntryAbortable(entry)) {
-      continue;
-    }
-    if (entry.projectSessionActive === false) {
-      entry.abortStopReason = "restart";
-      entry.controller.abort(createAgentRunRestartAbortError());
-      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      params.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
-      params.chatRunState.clearRun(runId);
-      const removed = params.removeChatRun(runId, runId, entry.sessionKey);
-      params.agentRunSeq.delete(runId);
-      if (removed?.clientRunId) {
-        params.agentRunSeq.delete(removed.clientRunId);
-      }
-      aborted += 1;
-      continue;
-    }
-    const result = abortChatRunById(params, {
-      runId,
-      sessionKey: entry.sessionKey,
-      stopReason: "restart",
-    });
-    if (result.aborted) {
-      aborted += 1;
-    }
-  }
-  return aborted;
-}
-
-/** Abort queued owners before active teardown can promote them into the closing runtime. */
-function abortQueuedTurns(params: GatewayRunShutdownParams): number {
-  const matches = Array.from(params.chatQueuedTurns, ([runId, entry]) => ({ runId, entry }));
-  return abortQueuedChatTurns(params.chatQueuedTurns, matches, "restart").length;
 }
 
 /** Completes grace and requests cancellation before execution joining begins. */
@@ -314,50 +311,146 @@ export async function prepareGatewayRunShutdown(
     warnings: string[];
   } & GatewayRunShutdownParams,
 ): Promise<{ released: Promise<void> }> {
-  const initialSnapshot = inspectRestartReplyDrain(params);
-  let drainResult;
-  if (!initialSnapshot.idle) {
-    if (params.timeoutMs > 0) {
-      shutdownLog.info(
-        `waiting for ${formatGatewayDrainCounts(initialSnapshot)} before restart shutdown (timeout ${params.timeoutMs}ms)`,
+  let drainResult:
+    | Awaited<ReturnType<typeof waitForGatewayDrain<ReturnType<typeof inspectRestartReplyDrain>>>>
+    | undefined;
+  {
+    const initialSnapshot = inspectRestartReplyDrain(params);
+    if (!initialSnapshot.idle) {
+      drainResult = await waitForGatewayDrain(
+        () => inspectRestartReplyDrain(params),
+        params.timeoutMs,
+        { pollMs: RESTART_REPLY_DRAIN_POLL_MS, ref: false },
       );
-    }
-    drainResult = await waitForGatewayDrain(
-      () => inspectRestartReplyDrain(params),
-      params.timeoutMs,
-      {
-        pollMs: RESTART_REPLY_DRAIN_POLL_MS,
-        ref: false,
-      },
-    );
-    if (!drainResult.drained) {
-      shutdownLog.warn(
-        `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatGatewayDrainCounts(drainResult.snapshot)} still active; continuing shutdown`,
-      );
-      recordGatewayShutdownWarning(params.warnings, "restart-reply-drain");
+      if (!drainResult.drained) {
+        shutdownLog.warn(
+          `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatGatewayDrainCounts(drainResult.snapshot)} still active; continuing shutdown`,
+        );
+        recordGatewayShutdownWarning(params.warnings, "restart-reply-drain");
+      }
     }
   }
-
-  // Reply and connection cancellation can release session admissions. The
-  // prelude fences producers and entry; this owner records custody first.
-  const abortReplies = await prepareActiveRunsForRestartRecovery({
+  // Preparation accepted during grace belongs to this cancellation boundary.
+  const capturedSources = listGatewayRpcSourceEntries(params.resolveGatewayContext);
+  // Recovery may retain these owners, but must not adopt a successor admitted while marking.
+  const activeAdmissions = captureGatewaySessionControllerWork(params.resolveGatewayContext);
+  const capturedRecoveryCandidates = new Map(params.restartRecoveryCandidates);
+  const sourceByInput = new Map(
+    capturedSources.map(([runId, entry]) => [
+      entry.input,
+      { runId, entry, presentation: captureChatRunAbortPresentation(params, runId) },
+    ]),
+  );
+  const capture = captureSessionControllerStop({
+    inputs: [
+      ...sourceByInput.keys(),
+      ...[...sessionControllerMailboxes()].flatMap((mailbox) =>
+        mailbox.entries.filter((input) =>
+          hasGatewayContextOwner(input, params.resolveGatewayContext),
+        ),
+      ),
+    ],
+    operations: [...activeSessionOperations()].filter((operation) =>
+      hasGatewayContextOwner(operation, params.resolveGatewayContext),
+    ),
+  });
+  const capturedEffects = captureGatewaySessionWorkAdmissionInterruption(
+    params.resolveGatewayContext,
+  );
+  const pendingInputs = new Set(capture.inputs);
+  const pendingOperations = new Set([
+    ...capture.operations,
+    ...capture.inputs.flatMap((input) => (input.claim?.operation ? [input.claim.operation] : [])),
+  ]);
+  for (const input of pendingInputs) {
+    const released = () => pendingInputs.delete(input);
+    void input.settlement.promise.then(released, released);
+  }
+  for (const operation of pendingOperations) {
+    const released = () => pendingOperations.delete(operation);
+    void operation.ownerSettlement.then(released, released);
+  }
+  const cancelCaptured = (selection = capture) =>
+    stopSession({
+      capture: selection,
+      source: "restart",
+      onError: (_target, error) => {
+        shutdownLog.warn(`failed to cancel captured source during shutdown: ${String(error)}`);
+        recordGatewayShutdownWarning(params.warnings, "restart-reply-abort");
+        return "continue";
+      },
+      cancelInput: (input, cancel) => {
+        const target = sourceByInput.get(input);
+        if (!target) {
+          return hasGatewayContextOwner(input, params.resolveGatewayContext) ? cancel() : false;
+        }
+        const lifecycleGeneration = getRpcSourceLifecycleGeneration(target.entry);
+        if (
+          !isRpcSourceRegistered(target.entry) ||
+          (lifecycleGeneration && !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration))
+        ) {
+          return false;
+        }
+        return abortChatRunById(params, {
+          runId: target.runId,
+          sessionKey: getRpcSourceIdentity(target.entry).sessionKey,
+          expectedEntry: target.entry,
+          presentation: target.presentation,
+          preserveTerminal: getRpcSourceProjectSessionActive(target.entry) === false,
+          cancel,
+          stopReason: "restart",
+        }).aborted;
+      },
+      cancelOperation: (operation, cancel) =>
+        operation.lifecycleGeneration !== undefined &&
+        isAgentEventLifecycleGenerationCurrent(operation.lifecycleGeneration) &&
+        hasGatewayContextOwner(operation, params.resolveGatewayContext)
+          ? cancel()
+          : false,
+    });
+  // Freeze both subsets before queue abort listeners or recovery writes can change claims.
+  const queuedCapture = captureSessionControllerStop({ inputs: capture.queuedInputs });
+  const activeCapture = captureSessionControllerStop({
+    inputs: capture.activeInputs,
+    operations: capture.operations,
+  });
+  await prepareActiveRunsForRestartRecovery({
     ...params,
+    capturedSources,
+    activeAdmissions,
+    capturedRecoveryCandidates,
     reason: "gateway restart shutdown",
   });
-  const abortedQueuedTurns = abortQueuedTurns(params);
+  const abortedQueuedTurns = cancelCaptured(queuedCapture).queuedCancelled;
   if (drainResult?.drained === false && abortedQueuedTurns > 0) {
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
   }
-  const abortedRuns = abortReplies() + abortActiveRuns(params);
-  params.cancelReceivedWork?.(createAgentRunRestartAbortError());
-  const admissions = startGatewaySessionWorkAdmissionInterruption(
-    params.resolveGatewayContext,
-    createAgentRunRestartAbortError(),
-  );
+  const abortedRuns = cancelCaptured(activeCapture).activeCancelled;
   if (drainResult?.drained) {
     shutdownLog.info(`restart reply drain completed after ${drainResult.elapsedMs}ms`);
   } else if (drainResult && abortedRuns > 0) {
     shutdownLog.warn(`aborted ${abortedRuns} active run(s) during restart shutdown`);
   }
-  return admissions;
+  params.cancelReceivedWork?.(createAgentRunRestartAbortError());
+  const effects = capturedEffects.interrupt(createAgentRunRestartAbortError());
+  return {
+    released: Promise.all([
+      measureGatewayCloseStep(
+        "restart.close.session-sources",
+        () => capture.settled,
+        () => {
+          const custody = {
+            sources: pendingInputs.size,
+            operations: pendingOperations.size,
+            sourceWork: 0,
+          };
+          for (const input of pendingInputs) {
+            custody.sourceWork += input.custody.work?.size ?? 0;
+          }
+          return custody;
+        },
+      ),
+      measureGatewayCloseStep("restart.close.session-effects", () => effects.released),
+    ]).then(() => undefined),
+  };
 }

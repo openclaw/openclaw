@@ -29,12 +29,21 @@ export function retainsUserTurnTranscriptMedia(recorder: UserTurnTranscriptRecor
 export async function stageUserTurnPendingInput(
   recorder: UserTurnTranscriptRecorder,
   target: UserTurnTranscriptTarget,
-  options: Parameters<typeof stageSessionPendingInput>[1],
+  options: Parameters<typeof stageSessionPendingInput>[1] & {
+    storageTarget?: Parameters<
+      NonNullable<UserTurnTranscriptRecorder["stageApproved"]>
+    >[0]["storageTarget"];
+  },
 ): ReturnType<typeof stageSessionPendingInput> {
   const config = target.config;
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(target, config);
+  const { storageTarget, ...stageOptions } = options;
+  const runtimeTarget =
+    storageTarget ?? (await resolveSessionTranscriptRuntimeTarget(target, config));
   try {
-    return await stageSessionPendingInput({ ...target, ...runtimeTarget }, { ...options, config });
+    return await stageSessionPendingInput(
+      { ...target, ...runtimeTarget },
+      { ...stageOptions, config },
+    );
   } catch (error) {
     return retainUncertainInputMedia(recorder, error);
   }

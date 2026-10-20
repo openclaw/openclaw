@@ -69,7 +69,6 @@ export function formatCliOutputError(
   ].join(" ");
 }
 
-/** Parses CLI backend output using the configured JSON/JSONL/plain-text mode. */
 export function parseCliOutput(params: {
   raw: string;
   backend: CliBackendConfig;

@@ -379,7 +379,7 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
     });
   });
 
-  it.each(["slow", "not-ready", "generation-change"] as const)(
+  it.each(["slow", "not-ready"] as const)(
     "retained readiness uses current bounded owner: %s",
     async (scenario) => {
       const { rootB, before, mocks } = fixture();
@@ -387,11 +387,7 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
         const initial = mocks.health.getMockImplementation()!;
         mocks.health.mockImplementation(async (params) => {
           expect(params.timeoutMs).toBeGreaterThan(3_000);
-          const result = await initial(params);
-          return {
-            ...result,
-            gatewayBootId: scenario === "generation-change" ? "prior-boot" : undefined,
-          };
+          return initial(params);
         });
         if (scenario === "not-ready") {
           mocks.readiness.mockResolvedValue({ readyz: 503 });

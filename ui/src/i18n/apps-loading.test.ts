@@ -5,7 +5,7 @@ import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-p
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 // mock-isolation: Cold catalog imports test page-owned copy, without registering child elements.
-vi.mock("../components/native-chrome-setup.ts", () => ({}));
+vi.mock("../components/native-chrome-setup.tsx", () => ({}));
 
 const loadI18n = useLazyEnglishTest();
 

@@ -26,6 +26,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
 import {
@@ -138,18 +139,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(
-      req.method,
-      getMethodRegistry,
-      extraHandlers,
-      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
-        ? {
-            clientKind: client.connect.client.id,
-            source: sendResponse === send ? "wire" : "internal",
-            params: req.params,
-          }
-        : undefined,
-    );
+    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
+      clientKind: client.connect.client.id,
+      source: sendResponse === send ? "wire" : "internal",
+      params: req.params,
+    });
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
@@ -222,6 +216,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
+              // Retained source grants must remain reachable by profile/origin revocation after the RPC returns.
+              const releaseSourceClient = clients.retainRequest(client);
               remoteIngress?.signal.addEventListener("abort", onRevoked, { once: true });
               if (remoteIngress?.signal.aborted) {
                 onRevoked();
@@ -248,6 +244,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 releaseClient();
                 releasePolicy();
                 releaseGeneration?.();
+                releaseSourceClient();
               };
             },
           }
@@ -312,6 +309,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           diagnostics?.response(
             sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
             sendResult.kind === "sent" ? sendResult.bytes : undefined,
+            { payload, params: req.params },
           );
           let logMeta = meta;
           if (
@@ -486,6 +484,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   req,
                   respond: respondWithAuthority,
                   acceptsSerializedJson: true,
+                  acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
                   client,
                   isWebchatConnect: params.isWebchatConnect,
                   hasCurrentClientAuthority,
@@ -515,10 +514,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             false,
             undefined,
             staleInstall?.error ??
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                formatForLog(err),
-                err instanceof GatewayClientRequestError
+              errorShapeFromError(ErrorCodes.UNAVAILABLE, err, {
+                message: formatForLog(err),
+                ...(err instanceof GatewayClientRequestError
                   ? {
                       retryable: err.retryable,
                       retryAfterMs: err.retryAfterMs,
@@ -526,8 +524,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                     }
                   : startTimedOut
                     ? { retryable: true, details: { reason: "request-start-timeout" } }
-                    : undefined,
-              ),
+                    : undefined),
+              }),
           );
         } finally {
           settled.resolve();

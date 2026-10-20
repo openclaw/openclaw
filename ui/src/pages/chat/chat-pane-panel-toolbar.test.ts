@@ -2,8 +2,6 @@
 
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -11,17 +9,19 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./components/chat-pane-header.test-support.ts";
+import {
+  mountChatPaneHeader,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
 
-it("keeps content actions and focus in Layout across plugin panel swaps", async () => {
+it("keeps Layout actions available across plugin panel swaps", async () => {
   const { pane, state } = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     sessions: createSessionCapabilityFixture(),
   });
   const slot = "plugin:fixture/notes";
-  const refresh = vi.fn();
   const definitions: SidebarPanelDefinition[] = [
     ...sidebarPanelDefinitions(),
     {
@@ -29,23 +29,16 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
       label: "Fixture notes",
       icon: sidebarPanelDefinitions()[0]!.icon,
       available: true,
-      content: solidContent(() => document.createTextNode("Notes"), {}),
-      loading: solidContent(() => document.createTextNode("Loading notes"), {}),
+      content: "Notes",
+      loading: { variant: "files", label: "Loading notes" },
       empty: { description: "No notes" },
-      headerAction: solidContent(() => {
-        const button = document.createElement("button");
-        button.setAttribute("aria-label", "Refresh notes");
-        button.textContent = "Refresh notes";
-        button.addEventListener("click", refresh);
-        return button;
-      }, {}),
     },
   ];
   state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());
   const paint = () => {
-    renderPaneLegacyContent(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         { key: state.sessionKey, kind: "direct", updatedAt: 0 },
@@ -85,15 +78,11 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
   expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
   expect(action("Swap Fixture notes and Chat")).not.toBeNull();
-  const refreshControl = action("Refresh notes")!;
-  refreshControl.click();
-  expect(refresh).toHaveBeenCalledOnce();
   await activate("Focus");
   expect(state.sidebarLayout.expanded).toBe(true);
   state.connected = false;
   paint();
   expect(container.querySelector(".chat-panel-swap")).toBeNull();
-  expect(action("Refresh notes")).toBe(refreshControl);
   expect(action("Restore split")!.matches(":disabled")).toBe(false);
   await activate("Restore split");
   expect(state.sidebarLayout.expanded).toBe(false);
@@ -102,7 +91,6 @@ it("keeps content actions and focus in Layout across plugin panel swaps", async 
   await activate("Swap Fixture notes and Chat");
   paint();
   expect(action("Swap Chat and Fixture notes")).not.toBeNull();
-  expect(action("Refresh notes")).not.toBeNull();
 
   state.sidebarLayout = setSidebarOpen({ columns: [] }, true);
   paint();

@@ -8,8 +8,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import * as gatewayCallRuntime from "../gateway/call.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -344,6 +346,45 @@ describe("waitForAgentRun", () => {
       expect(terminal.retryableTransportError).toBeUndefined();
     },
   );
+
+  it.each([
+    {
+      name: "a protocol observation refusal",
+      draining: false,
+      cause: new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "agent.wait unavailable during gateway suspension",
+        retryable: true,
+      }),
+      retryable: true,
+    },
+    {
+      name: "a closed instance's refusal during restart drain",
+      draining: true,
+      cause: new GatewayDispatchUnavailableError("agent.wait", false),
+      retryable: true,
+    },
+    {
+      name: "a closed instance's refusal outside restart drain",
+      draining: false,
+      cause: new GatewayDispatchUnavailableError("agent.wait", false),
+      retryable: false,
+    },
+  ])("classifies $name without inferring a terminal run", async (entry) => {
+    resetGatewayWorkAdmission();
+    if (entry.draining) {
+      markGatewayRestartDraining("stop (SIGTERM)");
+    }
+    try {
+      callGatewayMock.mockRejectedValueOnce(entry.cause);
+      const result = await waitForAgentRun({ runId: "run-observed", timeoutMs: 500 });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe(entry.cause.message);
+      expect(result.retryableTransportError).toBe(entry.retryable ? true : undefined);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
 
   it("normalizes blocked ok waits to errors", async () => {
     callGatewayMock.mockResolvedValue({

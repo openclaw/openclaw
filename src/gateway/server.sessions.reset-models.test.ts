@@ -1,6 +1,3 @@
-/**
- * Gateway session reset model-selection tests.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
@@ -21,11 +18,17 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-type ModelResetEntry = Pick<
-  SessionEntry,
-  "providerOverride" | "modelOverride" | "modelOverrideSource" | "modelProvider" | "model"
->;
-type ResolvedSessionModel = { modelProvider: string; model: string };
+async function seedMain(sessionId: string, entry: Partial<SessionEntry>, primary?: string) {
+  const { storePath } = await createSessionStoreDir();
+  if (primary) {
+    testState.agentConfig = { model: { primary } };
+  }
+  await writeSessionStore({ entries: { main: sessionStoreEntry(sessionId, entry) } });
+  return () => loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+}
+
+const resetMain = () =>
+  directSessionReq<{ entry: SessionEntry }>("sessions.reset", { key: "main" });
 
 test("sessions.reset stamps the creator's required sandbox only when materializing a new row", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -134,148 +137,57 @@ const ownedChildMetadata = {
   autoLabel: "Device",
 } satisfies Partial<SessionEntry>;
 
-function expectOwnedChildMetadata(entry: SessionEntry | undefined) {
-  expect(entry).not.toHaveProperty("sessionFile");
-  expect(entry).toMatchObject({
-    ...ownedChildMetadata,
-  });
-}
-
-async function expectMainResetModelFields(params: {
-  defaultPrimary: string;
-  sessionId: string;
-  entry: Partial<SessionEntry>;
-  expected: ModelResetEntry;
-  expectedResolved: ResolvedSessionModel;
-}) {
-  const { storePath } = await createSessionStoreDir();
-  testState.agentConfig = {
-    model: {
-      primary: params.defaultPrimary,
-    },
-  };
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(params.sessionId, params.entry),
-    },
-  });
-
-  const reset = await directSessionReq<{
-    ok: true;
-    key: string;
-    entry: ModelResetEntry;
-    resolved: ResolvedSessionModel;
-  }>("sessions.reset", { key: "main" });
-
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.resolved).toEqual(params.expectedResolved);
-  const selectionKeys: Array<
-    keyof Pick<ModelResetEntry, "providerOverride" | "modelOverride" | "modelOverrideSource">
-  > = ["providerOverride", "modelOverride", "modelOverrideSource"];
-  for (const key of selectionKeys) {
-    expect(reset.payload?.entry?.[key]).toBe(params.expected[key]);
-  }
-  expect(reset.payload?.entry.modelProvider).toBe(params.expectedResolved.modelProvider);
-  expect(reset.payload?.entry.model).toBe(params.expectedResolved.model);
-
-  const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-  for (const key of selectionKeys) {
-    expect(stored?.[key]).toBe(params.expected[key]);
-  }
-  expect(stored?.modelProvider).toBeUndefined();
-  expect(stored?.model).toBeUndefined();
-}
-
 test("sessions.reset rejects a model-locked session without replacing native state", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-model-locked", {
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        pluginExtensions: {
-          codex: { threadId: "codex-thread-1" },
-        },
-      }),
-    },
+  const read = await seedMain("sess-model-locked", {
+    agentHarnessId: "codex",
+    modelSelectionLocked: true,
+    pluginExtensions: { codex: { threadId: "codex-thread-1" } },
   });
-  const before = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-
-  const reset = await directSessionReq("sessions.reset", { key: "main" });
-
-  expect(reset).toMatchObject({
+  const before = read();
+  expect(await resetMain()).toMatchObject({
     ok: false,
     error: { message: MODEL_SELECTION_LOCKED_RESET_MESSAGE },
   });
-  const after = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-  expect(after).toEqual(before);
+  expect(read()).toEqual(before);
 });
 
 test("sessions.reset retains sandbox choice but requires fresh native runtime consent", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sandbox-opt-out", {
-        sandboxMode: "off",
-        nativeRuntimeConsent: "native-fixture",
-      }),
-    },
+  const read = await seedMain("sandbox-opt-out", {
+    sandboxMode: "off",
+    nativeRuntimeConsent: "native-fixture",
   });
-  const reset = await directSessionReq<{ entry: SessionEntry }>("sessions.reset", {
-    key: "main",
-  });
+  const reset = await resetMain();
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sandboxMode).toBe("off");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.sandboxMode).toBe("off");
+  expect(reset.payload?.entry).toMatchObject({ sandboxMode: "off" });
   expect(reset.payload?.entry.nativeRuntimeConsent).toBeUndefined();
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty(
-    "nativeRuntimeConsent",
-  );
+  expect(read()).toMatchObject({ sandboxMode: "off" });
+  expect(read()).not.toHaveProperty("nativeRuntimeConsent");
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.agentConfig = {
-    model: {
-      primary: "openai/gpt-test-a",
+  const read = await seedMain(
+    "sess-stale-skills",
+    {
+      skillsSnapshot: {
+        prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+        skills: [{ name: "stale" }],
+        version: 0,
+      },
     },
-  };
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-stale-skills", {
-        skillsSnapshot: {
-          prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
-          skills: [{ name: "stale" }],
-          version: 0,
-        },
-      }),
-    },
-  });
-
-  const reset = await directSessionReq<{
-    ok: true;
-    key: string;
-    entry: {
-      sessionId: string;
-      skillsSnapshot?: unknown;
-    };
-  }>("sessions.reset", { key: "main" });
-
+    "openai/gpt-test-a",
+  );
+  const reset = await resetMain();
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.sessionId).toBe("sess-stale-skills");
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
 
-  const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-  expect(stored?.skillsSnapshot).toBeUndefined();
+  expect(read()?.skillsSnapshot).toBeUndefined();
 });
 
 test("sessions.reset follows the updated default after an auto fallback pinned an older default", async () => {
-  await expectMainResetModelFields({
-    defaultPrimary: "openai/gpt-test-c",
-    sessionId: "sess-fallback-stale-default",
-    entry: {
+  const read = await seedMain(
+    "sess-fallback-stale-default",
+    {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-1",
       modelOverrideSource: "auto",
@@ -286,12 +198,23 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
         reason: "rate limit",
       },
     },
-    expected: {
-      providerOverride: undefined,
-      modelOverride: undefined,
-    },
-    expectedResolved: { modelProvider: "openai", model: "gpt-test-c" },
-  });
+    "openai/gpt-test-c",
+  );
+  const resolved = { modelProvider: "openai", model: "gpt-test-c" };
+  const reset = await directSessionReq<{ entry: SessionEntry; resolved: typeof resolved }>(
+    "sessions.reset",
+    { key: "main" },
+  );
+  expect(reset).toMatchObject({ ok: true, payload: { entry: resolved } });
+  expect(reset.payload?.resolved).toEqual(resolved);
+  const stored = read();
+  for (const entry of [reset.payload?.entry, stored]) {
+    for (const key of ["providerOverride", "modelOverride", "modelOverrideSource"] as const) {
+      expect(entry?.[key]).toBeUndefined();
+    }
+  }
+  expect(stored?.modelProvider).toBeUndefined();
+  expect(stored?.model).toBeUndefined();
 });
 
 test("sessions.reset preserves spawned session ownership metadata", async () => {
@@ -300,56 +223,38 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     await fs.realpath(path.dirname(storePath)),
     "custom-owned-child-transcript.jsonl",
   );
+  const provenance = {
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+    createdAt: 1_000,
+    forkSource: {
+      sessionKey: "agent:main:root",
+      sessionId: "root-session",
+      entryId: "root-entry",
+    },
+  } satisfies Partial<SessionEntry>;
   await writeSessionStore({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {
         sessionFile: customSessionFile,
         ...ownedChildMetadata,
         forkedFromParent: undefined,
-        createdVia: "spawn",
-        createdActor: { type: "agent", id: "agent:main:main" },
-        createdAt: 1_000,
+        ...provenance,
         inheritedGitContributorProfileIds: ["original-contributor"],
-        forkSource: {
-          sessionKey: "agent:main:root",
-          sessionId: "root-session",
-          entryId: "root-entry",
-        },
       }),
     },
   });
 
-  const reset = await directSessionReq<{
-    ok: true;
-    key: string;
-    entry: SessionEntry;
-  }>("sessions.reset", { key: "subagent:child" });
+  const reset = await directSessionReq<{ entry: SessionEntry }>("sessions.reset", {
+    key: "subagent:child",
+  });
 
   expect(reset.ok).toBe(true);
-  expectOwnedChildMetadata(reset.payload?.entry);
   expect(reset.payload?.entry).not.toHaveProperty("inheritedGitContributorProfileIds");
-  expect(reset.payload?.entry).toMatchObject({
-    createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
-    createdAt: 1_000,
-    forkSource: {
-      sessionKey: "agent:main:root",
-      sessionId: "root-session",
-      entryId: "root-entry",
-    },
-  });
-
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath });
-  expectOwnedChildMetadata(stored);
-  expect(stored).toMatchObject({
-    createdVia: "spawn",
-    createdActor: { type: "agent", id: "agent:main:main" },
-    createdAt: 1_000,
-    inheritedGitContributorProfileIds: ["original-contributor"],
-    forkSource: {
-      sessionKey: "agent:main:root",
-      sessionId: "root-session",
-      entryId: "root-entry",
-    },
-  });
+  for (const entry of [reset.payload?.entry, stored]) {
+    expect(entry).not.toHaveProperty("sessionFile");
+    expect(entry).toMatchObject({ ...ownedChildMetadata, ...provenance });
+  }
+  expect(stored?.inheritedGitContributorProfileIds).toEqual(["original-contributor"]);
 });

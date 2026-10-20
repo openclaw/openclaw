@@ -2,7 +2,10 @@ import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -776,7 +779,10 @@ export async function runComfyWorkflow(params: {
 
   const assets: ComfyGeneratedAsset[] = [];
   const outputKind = params.capability === "music" ? "audio" : params.capability;
-  const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
+  const maxOutputBytes =
+    outputKind === "image"
+      ? resolveGeneratedImageDownloadMaxBytes(params.cfg)
+      : resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile(
       connection,

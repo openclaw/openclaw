@@ -1,68 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
-function registerColdReadCommandFixtures(program: Command, skills: Command): void {
-  const models = expectDefined(
-    program.commands.find((command) => command.name() === "models"),
-    "Expected the models fixture",
-  );
-  const accounts = models.command("accounts");
-  for (const command of ["list", "login", "use", "clear-default"]) {
-    accounts
-      .command(command)
-      .argument("[value]")
-      .option("--json")
-      .action(() => {});
+function command(parent: Command, name: string, options: string[] = []): Command {
+  const child = parent.command(name).action(() => {});
+  for (const option of options) {
+    child.option(option);
   }
-  program
-    .command("node")
-    .command("identity")
-    .option("--json")
-    .action(() => {});
-  program
-    .command("audit")
-    .option("--json")
-    .action(() => {});
-  for (const skillCommand of ["info", "search"]) {
-    skills
-      .command(skillCommand)
-      .argument("[value]")
-      .option("--json")
-      .action(() => {});
-  }
-  const hooks = program
-    .command("hooks")
-    .option("--json")
-    .action(() => {});
-  hooks
-    .command("list")
-    .option("--json")
-    .action(() => {});
-  hooks
-    .command("info")
-    .argument("[name]")
-    .option("--json")
-    .action(() => {});
-  hooks
-    .command("check")
-    .option("--json")
-    .action(() => {});
-  const memory = program.command("memory");
-  memory
-    .command("status")
-    .option("--agent <id>")
-    .option("--index")
-    .option("--fix")
-    .option("--json")
-    .action(() => {});
-  memory
-    .command("search")
-    .argument("[query]")
-    .option("--agent <id>")
-    .option("--json")
-    .action(() => {});
+  return child;
 }
 
 export function registerNativeExecutorPreActionTests(
@@ -100,135 +45,29 @@ export function registerNativeExecutorPreActionTests(
 }
 
 export function registerPreActionCommandFixtures(programLocal: Command): void {
-  const agent = programLocal
-    .command("agent")
-    .argument("[note]")
-    .requiredOption("-m, --message <text>")
-    .option("--agent <id>")
-    .option("--local")
-    .option("--json")
-    .action(() => {});
-  agent
-    .command("exec")
-    .argument("[message]")
-    .option("--json")
-    .action(() => {});
-  programLocal
-    .command("status")
-    .option("--json")
-    .action(() => {});
-  const acp = programLocal
-    .command("acp")
-    .option("--token <token>")
-    .option("--verbose")
-    .action(() => {});
-  acp
-    .command("client")
-    .option("--cwd <dir>")
-    .action(() => {});
-  programLocal
-    .command("mcp")
-    .command("serve")
-    .action(() => {});
-  const gateway = programLocal
-    .command("gateway")
-    .option("--port <port>")
-    .option("--token <token>")
-    .option("--allow-unconfigured")
-    .option("--force")
-    .option("--reset")
-    .action(() => {});
-  gateway
-    .command("run")
-    .option("--allow-unconfigured")
-    .option("--force")
-    .option("--reset")
-    .action(() => {});
-  gateway
-    .command("call")
-    .argument("<method>")
-    .option("--json")
-    .action(() => {});
-  gateway
-    .command("health")
-    .option("--json")
-    .action(() => {});
-  for (const gatewayCommand of ["stability", "usage-cost"]) {
-    gateway
-      .command(gatewayCommand)
-      .option("--json")
-      .action(() => {});
+  command(programLocal, "agent [note]", ["--agent <id>", "--local", "--json"]).requiredOption(
+    "-m, --message <text>",
+  );
+  command(programLocal, "status", ["--json"]);
+  const runOptions = ["--allow-unconfigured", "--force", "--reset"];
+  const gateway = command(programLocal, "gateway", [
+    "--port <port>",
+    "--token <token>",
+    ...runOptions,
+  ]);
+  command(gateway, "run", runOptions);
+  for (const name of ["call <method>", "health"]) {
+    command(gateway, name, ["--json"]);
   }
-  programLocal
-    .command("backup")
-    .command("create")
-    .option("--json")
-    .action(() => {});
-  programLocal
-    .command("doctor")
-    .option("--lint")
-    .action(() => {});
-  programLocal.command("completion").action(() => {});
-  programLocal.command("secrets").action(() => {});
   const modelList = programLocal.command("models").command("aliases").command("list");
   modelList.option("--plain").action(() => {});
-  const skills = programLocal.command("skills");
-  skills.option("--json").action(() => {});
-  for (const skillCommand of ["list", "check"]) {
-    skills
-      .command(skillCommand)
-      .option("--json")
-      .action(() => {});
-  }
-  registerColdReadCommandFixtures(programLocal, skills);
-  for (const skillCommand of ["install", "verify"]) {
-    skills
-      .command(skillCommand)
-      .argument("<skill-ref>")
-      .option("--version <version>")
-      .action(() => {});
-  }
-  programLocal
-    .command("qa")
-    .command("suite")
-    .action(() => {});
   const agents = programLocal.command("agents");
-  agents
-    .command("list")
-    .option("--json")
-    .action(() => {});
-  agents
-    .command("bindings")
-    .option("--json")
-    .action(() => {});
-  programLocal
-    .command("approvals")
-    .command("pending")
-    .option("--json")
-    .action(() => {});
-  programLocal.command("configure").action(() => {});
-  programLocal.command("onboard").action(() => {});
+  command(agents, "list", ["--json"]);
+  command(programLocal, "onboard");
   const channels = programLocal.command("channels");
-  channels.command("add").action(() => {});
-  channels
-    .command("send")
-    .option("--json")
-    .action(() => {});
+  command(channels, "add");
+  command(channels, "send", ["--json"]);
   applyParentDefaultHelpAction(channels);
-  programLocal
-    .command("plugins")
-    .command("install")
-    .argument("<spec>")
-    .option("--marketplace <marketplace>")
-    .action(() => {});
-  programLocal
-    .command("update")
-    .command("status")
-    .option("--json")
-    .action(() => {});
-  programLocal
-    .command("message")
-    .command("send")
-    .option("--json")
-    .action(() => {});
+  command(programLocal.command("plugins"), "install <spec>", ["--marketplace <marketplace>"]);
+  command(programLocal.command("message"), "send", ["--json"]);
 }

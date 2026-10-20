@@ -1,4 +1,3 @@
-// Matrix storage-owned inspection and explicit recovery of failed crypto publication.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "openclaw/plugin-sdk/file-lock";

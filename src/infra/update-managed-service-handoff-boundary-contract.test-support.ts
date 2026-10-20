@@ -9,6 +9,12 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
     run: UpdateRunRecord | undefined,
     env: NodeJS.ProcessEnv,
   ) => void | Promise<void>;
+  prepareState?: (params: {
+    env: NodeJS.ProcessEnv;
+    recoveryModulePath: string;
+    sourceRuntimeImport: string;
+  }) => void | Promise<void>;
+  readSentinel?: (env: NodeJS.ProcessEnv) => unknown;
   relativeInput?: boolean;
   validationResult?: "failed" | "skipped" | "child-result";
   validationClockAdvanceMs?: number;

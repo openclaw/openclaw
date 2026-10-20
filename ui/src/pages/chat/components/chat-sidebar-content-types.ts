@@ -13,7 +13,7 @@ import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
   SessionDiffOwner,
-} from "./session-diff-panel.ts";
+} from "./session-diff-panel.tsx";
 
 type SidebarFullMessageRequest = {
   sessionKey: string;
@@ -98,7 +98,7 @@ type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   /** Authorize and read fresh bytes for each explicit download. */
   download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
-    onRequestUpdate: () => void,
+    onSourceChange: () => void,
     runtime: AttachmentSidebarRuntime,
   ) => AttachmentSidebarState;
   rawText?: string | null;

@@ -112,9 +112,9 @@ function resolveGoogleAuthEnvProxyUrl(protocol: "http" | "https"): string | unde
     normalizeOptionalString(process.env.HTTPS_PROXY) ??
     normalizeOptionalString(process.env.https_proxy);
   if (protocol === "https") {
-    return httpsProxy ?? httpProxy ?? undefined;
+    return httpsProxy ?? httpProxy;
   }
-  return httpProxy ?? undefined;
+  return httpProxy;
 }
 
 function collectGoogleAuthNoProxyRules(noProxy: ProxyRule[] = []): ProxyRule[] {
@@ -276,7 +276,9 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     }
     return parsed;
   } finally {
-    await handle.close().catch(() => {});
+    await handle.close().catch(() => {
+      // Closing this read-only descriptor cannot change the credential read outcome.
+    });
   }
 }
 

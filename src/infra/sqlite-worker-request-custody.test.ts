@@ -36,6 +36,8 @@ it("distinguishes queued cancellation, accepted work, and permanently retired ge
 });
 
 function currentJob(slot: SqliteWorkerSlotCustody): Job {
+  const completion = createDeferredCore<unknown>();
+  void completion.promise.catch(() => {});
   const custody = slot.createRequest();
   custody.activate();
   custody.accept();
@@ -44,8 +46,9 @@ function currentJob(slot: SqliteWorkerSlotCustody): Job {
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
-    resolve: vi.fn(),
-    reject: vi.fn(),
+    result: completion.promise,
+    resolve: vi.fn(completion.resolve),
+    reject: vi.fn(completion.reject),
     detach: vi.fn(),
   };
 }

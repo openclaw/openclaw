@@ -13,7 +13,6 @@ import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
 
 let nextPlacementId = 0;
@@ -119,7 +118,10 @@ export function ChatPanePlacement(props: {
         {
           id: "move",
           visible: placementState === "active" || Boolean(retry),
-          className: `chat-pane__placement-move ${destructiveMove ? "session-menu__item--destructive" : ""}`,
+          className: [
+            "chat-pane__placement-move",
+            { "session-menu__item--destructive": destructiveMove },
+          ],
           destructive: destructiveMove,
           disabledReason: moveDisabledReason,
           icon: "monitor" as const,
@@ -161,7 +163,7 @@ export function ChatPanePlacement(props: {
       .map((action) => ({
         id: action.id,
         label: action.label,
-        class: `session-menu__item ${action.className}`,
+        class: ["session-menu__item", action.className],
         variant: action.destructive ? "danger" : undefined,
         disabled: Boolean(action.disabledReason),
         attributes: { title: action.disabledReason },
@@ -268,6 +270,3 @@ export function ChatPanePlacement(props: {
     </Show>
   );
 }
-
-export const renderChatPanePlacement = (props: Parameters<typeof ChatPanePlacement>[0]) =>
-  solidContent(ChatPanePlacement, props);

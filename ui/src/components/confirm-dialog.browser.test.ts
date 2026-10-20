@@ -1,3 +1,4 @@
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -37,6 +38,56 @@ afterEach(async () => {
 });
 
 describe("promise dialog native focus and dismissal", () => {
+  it.each(["confirmation", "input"] as const)(
+    "retains a %s dialog while live submission is unavailable",
+    async (kind) => {
+      const live = createRoot((dispose) => {
+        const [connected, setConnected] = createSignal(true);
+        return { connected, setConnected, dispose };
+      });
+      try {
+        opener();
+        const result =
+          kind === "input"
+            ? showInputDialog({
+                title: "Rename synthetic device",
+                defaultValue: "Retained device draft",
+                canSubmit: live.connected,
+                signal: owner(),
+              })
+            : showConfirmDialog({
+                title: "Remove synthetic device?",
+                message: "Synthetic confirmation",
+                canConfirm: live.connected,
+                signal: owner(),
+              });
+        const { dialog, modal } = await getRenderedModalDialog(document.body);
+        const submit = button(kind === "input" ? "Save" : "Confirm");
+        expect(submit.disabled).toBe(false);
+        live.setConnected(false);
+        flush();
+        expect(submit.disabled).toBe(true);
+        submit.click();
+        modal
+          .querySelector("form")
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        expect(dialog.open).toBe(true);
+        live.setConnected(true);
+        flush();
+        expect(submit.disabled).toBe(false);
+        if (kind === "input") {
+          expect(modal.querySelector<HTMLInputElement>('input[name="value"]')?.value).toBe(
+            "Retained device draft",
+          );
+        }
+        submit.click();
+        await expect(result).resolves.toBe(kind === "input" ? "Retained device draft" : true);
+      } finally {
+        live.dispose();
+      }
+    },
+  );
+
   it("keeps Cancel focused in a three-way choice and restores its opener", async () => {
     const trigger = opener();
     const pending = showConfirmChoiceDialog({

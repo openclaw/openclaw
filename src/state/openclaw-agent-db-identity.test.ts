@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -127,7 +128,8 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
     closeOpenClawAgentDatabaseByPath(original.path);
     const { database } = retain(original.path);
     const prepared = readOpenClawAgentDatabaseIdentity(database);
-    const nativeLocation = database.db.location();
+    const db = requireNativeSqliteDatabase(database.db);
+    const nativeLocation = db.location();
     const replacement = new DatabaseSync(":memory:");
     try {
       replacement.exec(
@@ -138,16 +140,16 @@ it.runIf(typeof DatabaseSync.prototype.deserialize === "function")(
       database.db.exec("BEGIN");
       try {
         database.db.prepare("SELECT role FROM schema_meta").get();
-        expect(() => database.db.deserialize(bytes)).toThrow();
-        expect(database.db.location()).toBe(nativeLocation);
+        expect(() => db.deserialize(bytes)).toThrow();
+        expect(db.location()).toBe(nativeLocation);
         expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(true);
       } finally {
         database.db.exec("ROLLBACK");
       }
 
-      database.db.deserialize(bytes);
+      db.deserialize(bytes);
       expect(database.db.prepare("SELECT value FROM replacement_value").get()?.value).toBe(42);
-      expect(database.db.location()).toBeNull();
+      expect(db.location()).toBeNull();
       expect(fs.existsSync(original.path)).toBe(true);
       expect(readOpenClawAgentDatabaseIdentity(database)).toBe(prepared);
       expect(isOpenClawAgentDatabasePathCurrent(database)).toBe(false);

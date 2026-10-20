@@ -31,20 +31,20 @@ export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
         </SettingsPage>
       }
     >
-      {packageName() ? (
-        <ClawsCatalogDialog
-          initialPackageName={packageName()!}
-          pageMode
-          onClose={() =>
-            context.navigate("agents-home", {
-              pathname: pathForRoute("agents-home", context.basePath),
-            })
-          }
-          onAdded={() => void context.agents.refreshList()}
-        />
-      ) : (
-        <AgentsHomePage />
-      )}
+      <Show when={packageName()} keyed fallback={<AgentsHomePage />}>
+        {(selectedPackage) => (
+          <ClawsCatalogDialog
+            initialPackageName={selectedPackage}
+            pageMode
+            onClose={() =>
+              context.navigate("agents-home", {
+                pathname: pathForRoute("agents-home", context.basePath),
+              })
+            }
+            onAdded={() => void context.agents.refreshList()}
+          />
+        )}
+      </Show>
     </Show>
   );
 }

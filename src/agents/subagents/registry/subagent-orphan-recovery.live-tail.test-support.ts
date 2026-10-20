@@ -5,7 +5,10 @@ import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   initSubagentRegistry,
@@ -35,15 +38,15 @@ export function registerRecoveredTerminalTailTest(
       lifecycleRevision,
       abortedLastRun: true,
     });
-    await addSubagentRunForTests(
-      makeRunRecord({
-        runId,
-        childSessionKey,
-        childSessionIdentity: { sessionId, lifecycleRevision },
-        expectsCompletionMessage: true,
-        execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
-      }),
-    );
+    const recovered = makeRunRecord({
+      runId,
+      childSessionKey,
+      childSessionIdentity: { sessionId, lifecycleRevision },
+      expectsCompletionMessage: true,
+      execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
+    });
+    await prepareSubagentRecoveryFixture(recovered, { stateDir: fixture.stateDir });
+    await addSubagentRunForTests(recovered);
     const announcing = createDeferred();
     const delivered = createDeferred<"delivered">();
     const announce = vi.mocked(runSubagentAnnounceFlow).mockImplementation(async () => {

@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -10,6 +12,7 @@ import {
   resolveAuthenticatedDeviceTokenIdentity,
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
@@ -20,6 +23,7 @@ import {
 import {
   ensureDeviceToken,
   rotateDeviceToken,
+  revokeDeviceToken,
   verifyDeviceToken,
 } from "./device-pairing-tokens.js";
 import {
@@ -51,7 +55,8 @@ beforeAll(() => {
   });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await withDevicePairingLock(async () => {});
   const now = Date.now();
   const state: DevicePairingStoreState = {
     pendingById: {
@@ -252,6 +257,7 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
+    await withDevicePairingLock(async () => {});
     const verified = await getPairedDevice("paired-rich", baseDir);
     expect(verified?.tokens?.operator?.lastUsedAtMs).toBeGreaterThan(3);
     expect(verified?.lastSeenAtMs).toBe(verified?.tokens?.operator?.lastUsedAtMs);
@@ -332,6 +338,7 @@ test("reconnect receipts ignore pending rows and leave sibling pairing changes t
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(currentBinding);
   } finally {
+    await withDevicePairingLock(async () => {});
     database.db
       .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
       .run("[]", "refreshed");
@@ -552,5 +559,96 @@ test("rechecks the original operator generation through reopened read-only pairi
     expect(isPairedDeviceTokenIdentityCurrent(rotated, "operator", identity, scopes)).toBe(false);
   } finally {
     await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
+  }
+});
+
+test("reuses and verifies committed tokens while writes wait, then rejects committed revocation", async ({
+  signal,
+}) => {
+  await listDevicePairing(baseDir);
+  const params = { deviceId: "paired-rich", role: "operator", scopes: ["operator.read"], baseDir };
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const holding = withDevicePairingLock(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  try {
+    const reusable = await withinTest(
+      awaitGateBeforeSettlement(ensureDeviceToken(params), holding, "reuse waited for writer"),
+      signal,
+    );
+    expect(reusable?.token).toBe("synthetic-operator-token");
+    await expect(
+      withinTest(
+        awaitGateBeforeSettlement(
+          verifyDeviceToken({ ...params, token: reusable!.token }),
+          holding,
+          "verification waited for writer",
+        ),
+        signal,
+      ),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      ensureDeviceToken({ ...params, isIssuanceCurrent: () => false }),
+    ).resolves.toBeNull();
+    expect((await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs).toBe(3);
+  } finally {
+    release.resolve();
+    await holding;
+    await withDevicePairingLock(async () => {});
+  }
+  expect(
+    (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs,
+  ).toBeGreaterThan(3);
+  await revokeDeviceToken(params);
+  await expect(
+    verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+  ).resolves.toEqual({ ok: false, reason: "token-revoked" });
+});
+
+test("admits revocation between coalesced token last-use writes", async ({ signal }) => {
+  await listDevicePairing(baseDir);
+  const params = { deviceId: "paired-rich", role: "operator", scopes: ["operator.read"], baseDir };
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const revokedBeforeRecord: boolean[] = [];
+  let records = 0;
+  const writer = probe.command(stateWorker, async (command, options, scope) => {
+    if (command.type === "devicePairing.verifyToken") {
+      records++;
+      if (records === 1) {
+        entered.resolve();
+        await release.promise;
+      } else {
+        const device = await getPairedDevice(params.deviceId, baseDir);
+        revokedBeforeRecord.push(Boolean(device?.tokens?.operator?.revokedAtMs));
+      }
+    }
+    return scope.execute(command, options);
+  });
+  let revoking: Promise<unknown> | undefined;
+  try {
+    await expect(
+      verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: true });
+    await withinTest(entered.promise, signal);
+    revoking = revokeDeviceToken(params);
+    await expect(
+      verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: true });
+    release.resolve();
+    await withinTest(revoking, signal);
+    await withDevicePairingLock(async () => {});
+    expect(revokedBeforeRecord).toEqual([true]);
+    await expect(
+      verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: false, reason: "token-revoked" });
+  } finally {
+    release.resolve();
+    await revoking;
+    await withDevicePairingLock(async () => {});
+    writer.mockRestore();
   }
 });

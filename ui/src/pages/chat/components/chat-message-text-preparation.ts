@@ -1,5 +1,10 @@
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
+import {
+  partitionMarkdownHtml,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownParts,
+} from "../../../components/markdown.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type DuplicateSuffix = {
   count: number;
@@ -10,6 +15,7 @@ export type MessageTextOptions = {
   role: string;
   isStreaming: boolean;
   isForwarded?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
   assistantMessageDisclosure?: AssistantMessageDisclosure;
@@ -41,7 +47,7 @@ export function prepareMessageMarkdown(
     : markdownRenderOptions;
   const parts: [string, string] = opts.isStreaming
     ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
-    : [toSanitizedMarkdownHtml(source, options), ""];
+    : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
   if (duplicateSuffix) {
     const terminalPart = parts[1].trim() ? 1 : 0;
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);

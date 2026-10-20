@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { describe } from "node:test";
@@ -119,6 +120,83 @@ describe("release load acceptance", () => {
     }
   });
 });
+
+for (const scenario of ["released", "timeout", "error"]) {
+  test(`ordinary deployment lock contention: ${scenario}`, t => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-lock-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const lock = join(root, "deploy.lock");
+    const library = join(root, "proof.mjs");
+    writeFileSync(library, `
+import assert from 'node:assert/strict';
+assert.equal(process.argv[2], 'maintenance-idle');
+console.error('ADMISSION_REACHED');
+process.exit(42);
+`);
+    // Python supplies flock(2) on macOS too. Only the wait clock is shortened;
+    // both processes contend on the real kernel lock and the original inode.
+    const flock = join(root, "flock.py");
+    writeFileSync(flock, `
+import fcntl, os, signal, sys
+args = sys.argv[1:]
+if args == ['-n', '9']:
+    try:
+        fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(1)
+else:
+    assert args == ['-w', '180', '-E', '75', '9'], args
+    if os.environ['LOCK_SCENARIO'] == 'error':
+        sys.exit(64)
+    signal.signal(signal.SIGALRM, lambda *_: sys.exit(75))
+    signal.setitimer(signal.ITIMER_REAL, 2 if os.environ['LOCK_SCENARIO'] == 'released' else 0.05)
+    fcntl.flock(9, fcntl.LOCK_EX)
+`);
+    writeFileSync(join(root, "flock"), '#!/usr/bin/env bash\nexec python3 "$LOCK_FLOCK" "$@"\n', { mode: 0o755 });
+    const result = spawnSync("python3", ["-c", `
+import fcntl, os, subprocess, sys
+with open(os.environ['OPENCLAW_TEAM_LOCK_FILE'], 'w') as held:
+    fcntl.flock(held, fcntl.LOCK_SH)
+    child = subprocess.Popen(['bash', sys.argv[1]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        first = child.stdout.readline()
+        print(first, end='')
+        if os.environ['LOCK_SCENARIO'] == 'released' and first.startswith('DEPLOY_LOCK_WAIT'):
+            fcntl.flock(held, fcntl.LOCK_UN)
+        output, error = child.communicate(timeout=5)
+        print(output, end='')
+        print(error, end='', file=sys.stderr)
+        sys.exit(child.returncode)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+`, join(owner, "openclaw-release-deploy")], {
+      encoding: "utf8", timeout: 10_000,
+      env: {
+        ...process.env,
+        PATH: `${root}:${process.env.PATH}`,
+        LOCK_FLOCK: flock,
+        LOCK_SCENARIO: scenario,
+        OPENCLAW_TEAM_LOCK_FILE: lock,
+        OPENCLAW_TEAM_RELEASE_LIB: library,
+        OPENCLAW_TEAM_NODE_BIN: process.execPath,
+        OPENCLAW_TEAM_RUNTIME_UID: "1000",
+        OPENCLAW_TEAM_DEPLOY_UID: "2000",
+        OPENCLAW_TEAM_DEPLOY_GID: "2000",
+      },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, scenario === "released" ? 1 : scenario === "timeout" ? 75 : 64, result.stderr + result.stdout);
+    assert.match(result.stdout, /DEPLOY_LOCK_WAIT/);
+    assert.doesNotMatch(result.stdout, /SKIP/);
+    if (scenario === "released") {
+      assert.match(result.stderr, /ADMISSION_REACHED/);
+    } else {
+      assert.doesNotMatch(result.stderr, /ADMISSION_REACHED/);
+    }
+  });
+}
 
 for (const unit of ["openclaw-disk-maintenance.service", "openclaw-hourly-health-check.service"]) {
   for (const [population, reason] of [

@@ -95,7 +95,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         now,
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
-      const guarded = await this.promoteDependencyReady(id, now);
+      const guarded = await this.promoteDependencyReady(await this.requireCard(id), now);
       if (guarded.metadata?.archivedAt) {
         throw new Error("card is archived.");
       }
@@ -420,7 +420,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         },
         { enforceStatusHolds: true },
       );
-      return await this.promoteDependencyReady(reclaimed.id, now);
+      return await this.promoteDependencyReady(reclaimed, now);
     });
   }
 

@@ -10,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -23,8 +24,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   prepareSqliteScope,
-  resolveSqliteWriteAdmissionScope,
-  runExclusiveSqliteSessionWrite,
+  withPreparedSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -287,16 +287,7 @@ export function prepareSessionEntryMutationDatabases(
           const identity = target.identity;
           const execution = captureOpenClawAgentDatabaseExecution(
             target.options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
+            toAgentExecutionConstraints(identity),
           );
           // One physical execution serves the cohort; caller guards still authorize preparation.
           for (const member of members) {
@@ -383,22 +374,13 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveSessionStorePathForScope(captured);
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
-  // Preserve earlier queued writes for existing-key adoption and protect shared-store
-  // discovery from sibling cold registration. Commit custody is acquired separately.
-  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
-  const prepare = () => prepareSqliteScope(target);
-  const resolved = captureLifecycleDatabaseScope(
-    isMainThread
-      ? admission
-        ? await runExclusiveSqliteSessionWrite(
-            admission,
-            prepare,
-            "session.entry.create-with-transcript",
-          )
-        : await prepare()
-      : resolveSqliteScope(target),
+  return withPreparedSqliteScope(target, (prepared) =>
+    createSessionEntryWithTranscriptInScope(
+      captureLifecycleDatabaseScope(prepared),
+      createEntry,
+      options,
+    ),
   );
-  return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
 }
 
 export function cloneSessionEntries(

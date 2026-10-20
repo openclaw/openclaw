@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { AgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -27,6 +28,7 @@ export type CronRunExecutionParams = Pick<
   | "deliverySystemPrompt"
   | "messageToolFormatPrompt"
   | "sourceDelivery"
+  | "cliSessionBindingFacts"
   | "skillsSnapshot"
   | "agentPayload"
   | "useSubagentFallbacks"
@@ -51,6 +53,7 @@ export type CronRunExecutionParams = Pick<
     | "deliveryAttemptFence"
   > & {
     runId: string;
+    operatorAuthority?: AdmittedRunOperatorAuthority;
     agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
     immutableThinkLevel: ThinkLevel | undefined;
     thinkingCatalog?: ModelCatalogEntry[];

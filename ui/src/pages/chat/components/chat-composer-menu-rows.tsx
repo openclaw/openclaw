@@ -54,7 +54,12 @@ export function renderCapabilityToggleRow(options: {
     type: "checkbox",
     checked: options.checked,
     disabled: options.disabled,
-    class: `agent-chat__capability-menu-item agent-chat__capability-menu-toggle${options.checkbox ? "" : " agent-chat__capability-menu-toggle--switch"}`,
+    class: [
+      "agent-chat__capability-menu-item agent-chat__capability-menu-toggle",
+      {
+        "agent-chat__capability-menu-toggle--switch": !options.checkbox,
+      },
+    ],
     attributes: { title: options.title ?? "" },
     icon: options.icon ? <Icon name={options.icon} /> : undefined,
     content: (
@@ -72,7 +77,12 @@ export function renderCapabilityToggleRow(options: {
     ),
     details: options.checkbox ? undefined : (
       <span
-        class={`agent-chat__capability-menu-switch chat-controls__speed-toggle ${options.checked ? "chat-controls__speed-toggle--active" : ""}`}
+        class={[
+          "agent-chat__capability-menu-switch chat-controls__speed-toggle",
+          {
+            "chat-controls__speed-toggle--active": options.checked,
+          },
+        ]}
         aria-hidden="true"
       >
         <span class="chat-controls__speed-toggle-thumb" />

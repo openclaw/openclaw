@@ -1,6 +1,7 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
 import { intersectSessionEventToolsAllow } from "../../auto-reply/reply/session-event-target.js";
+import { readSessionControllerOperationState } from "../../sessions/session-controller.state.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -103,15 +104,27 @@ export function captureCliRunToolAuthority(
   params: RunCliAgentParams,
   workspace: Parameters<typeof prepareCliReplyToolAuthority>[1],
 ) {
-  const operation = params.toolAuthorityFingerprint ? params.replyOperation : undefined;
+  const directOperation =
+    readSessionControllerOperationState(params.replyOperation)?.turnKind === "direct" &&
+    params.trigger !== "memory" &&
+    !params.controlOperation
+      ? params.replyOperation
+      : undefined;
+  let operation =
+    params.toolAuthorityFingerprint || directOperation?.toolAuthorityFingerprint
+      ? params.replyOperation
+      : undefined;
   const snapshot = operation ? undefined : prepareCliReplyToolAuthority(params, workspace);
+  let snapshotTransferred = false;
   const sessionKey = params.sessionKey ?? params.sessionId;
   const signal = params.abortSignal;
   const assertSourceCurrent = params.assertCurrent;
   const sourcePolicy = captureCliSessionEventSourcePolicy(params);
   return {
     [Symbol.dispose]() {
-      snapshot?.close();
+      if (!snapshotTransferred) {
+        snapshot?.close();
+      }
     },
     finalizeSessionEventSourcePolicy(run: RunCliAgentParams, promptToolsAllow?: readonly string[]) {
       return Object.freeze({
@@ -127,11 +140,18 @@ export function captureCliRunToolAuthority(
         ),
       });
     },
-    hasReplyOperation: Boolean(operation),
+    get hasReplyOperation() {
+      return Boolean(operation);
+    },
     async bindQuestions(
       route: { provider: string; model: string },
       readSource: () => AdmittedRunOperatorAuthority | undefined,
     ) {
+      if (directOperation && !operation && snapshot) {
+        await directOperation.bindToolAuthoritySnapshotAsync(snapshot);
+        snapshotTransferred = true;
+        operation = directOperation;
+      }
       const fingerprint = operation
         ? await operation.bindToolAuthorityRouteAsync(route)
         : await snapshot?.fingerprintAsync(route);

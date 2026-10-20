@@ -4,6 +4,7 @@ import {
   type NodePermissionRequest,
 } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   nativeChromeExtensionSetupActionSchema,
   nativeChromeExtensionSetupResultSchema,
@@ -362,8 +363,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   };
   // System Settings can change permissions while the app is backgrounded.
   const refresh = () => void send({ type: "status" });
-  window.addEventListener(CHANGE_EVENT, onChange);
-  window.addEventListener("focus", refresh);
+  const stops = [listen(window, CHANGE_EVENT, onChange), listen(window, "focus", refresh)];
   refresh();
   const legacyChromeRequest = async (
     type: "chrome-extension-status" | "install-chrome-extension",
@@ -442,8 +442,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     refresh,
     dispose() {
       disposed = true;
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener("focus", refresh);
+      stops.forEach((stop) => stop());
       listeners.clear();
     },
   };

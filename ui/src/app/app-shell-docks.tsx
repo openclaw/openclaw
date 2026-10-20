@@ -1,6 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
+import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { availableLinkReaders } from "./link-reader-routing.ts";
@@ -11,6 +11,7 @@ import {
 } from "./panel-availability.ts";
 
 type ShellDocksProps = {
+  elements: Pick<ShellOwnedElements, "browserPanel" | "desktopPanel" | "linkReaderPanel">;
   context: ApplicationContext;
   revision: number;
   navDrawerOpen: boolean;
@@ -20,15 +21,15 @@ type ShellDocksProps = {
 };
 
 export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
-  const snapshot = createMemo(() => ({
-    revision: props.revision,
-    value: props.context.gateway.snapshot,
-  }));
-  const gateway = () => snapshot().value;
+  const gateway = () => {
+    void props.revision;
+    return props.context.gateway.snapshot;
+  };
   const client = () => (gateway().phase === "connected" ? gateway().client : null);
   return (
     <>
       <openclaw-browser-panel
+        ref={(element) => (props.elements.browserPanel = element)}
         inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
         prop:client={client()}
@@ -43,6 +44,7 @@ export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
         })}
       />
       <openclaw-desktop-panel
+        ref={(element) => (props.elements.desktopPanel = element)}
         inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
         prop:client={client()}
@@ -51,9 +53,10 @@ export function ShellDocks(props: ShellDocksProps): SolidJSX.Element {
         prop:basePath={props.context.basePath}
       />
       <openclaw-link-reader-panel
+        ref={(element) => (props.elements.linkReaderPanel = element)}
         inert={props.navDrawerOpen}
         data-chat-autotype-exempt=""
-        prop:client={client()}
+        prop:client={gateway().client}
         prop:available={gateway().phase === "connected"}
         prop:readers={availableLinkReaders(gateway())}
         prop:agentId={props.selectedAgentId}

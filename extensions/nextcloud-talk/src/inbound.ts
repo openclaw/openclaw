@@ -354,13 +354,6 @@ export async function handleNextcloudTalkInbound(params: {
       });
     }
   };
-  const cleanupAndThrowIfIngressAborted = async () => {
-    if (!ingressAbortSignal?.aborted) {
-      return;
-    }
-    await deleteStagedMedia();
-    ingressAbortSignal.throwIfAborted();
-  };
   const throwIfIngressAborted = () => ingressAbortSignal?.throwIfAborted();
   const mediaSenderAllowed =
     hasInboundMedia &&
@@ -511,14 +504,10 @@ export async function handleNextcloudTalkInbound(params: {
                   sourceModality = "audio";
                 }
               }
-              if (ingressAbortSignal?.aborted) {
-                await cleanupAndThrowIfIngressAborted();
-              }
+              throwIfIngressAborted();
             } catch (error) {
               await deleteStagedMedia();
-              if (ingressAbortSignal?.aborted) {
-                await cleanupAndThrowIfIngressAborted();
-              }
+              throwIfIngressAborted();
               authorizedMediaUnavailable = true;
               const failure = classifyNextcloudTalkMediaFailure(error);
               logNextcloudTalkMediaNonOutcome({
@@ -539,13 +528,9 @@ export async function handleNextcloudTalkInbound(params: {
     }
 
     if (performedAsyncMediaWork) {
-      if (ingressAbortSignal?.aborted) {
-        await cleanupAndThrowIfIngressAborted();
-      }
+      throwIfIngressAborted();
       access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
-      if (ingressAbortSignal?.aborted) {
-        await cleanupAndThrowIfIngressAborted();
-      }
+      throwIfIngressAborted();
       if (access.ingress.admission !== "dispatch") {
         await deleteStagedMedia();
         runtime.log?.(
@@ -557,9 +542,7 @@ export async function handleNextcloudTalkInbound(params: {
       }
     }
 
-    if (ingressAbortSignal?.aborted) {
-      await cleanupAndThrowIfIngressAborted();
-    }
+    throwIfIngressAborted();
     const agentBody = authorizedMediaUnavailable
       ? formatInboundMediaUnavailableText({
           body: rawBody,
@@ -615,9 +598,7 @@ export async function handleNextcloudTalkInbound(params: {
       },
     });
 
-    if (ingressAbortSignal?.aborted) {
-      await cleanupAndThrowIfIngressAborted();
-    }
+    throwIfIngressAborted();
     const dispatchParams = {
       cfg: config as OpenClawConfig,
       channel: CHANNEL_ID,

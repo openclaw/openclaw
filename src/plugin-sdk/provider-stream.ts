@@ -1,4 +1,3 @@
-import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import {
@@ -23,6 +22,7 @@ import {
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
+  createGoogleThinkingPayloadWrapper,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
   resolveMoonshotThinkingType,
@@ -178,13 +178,11 @@ export function buildProviderStreamFamilyHooks(
 /** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
 
-// Public stream-wrapper helpers for provider plugins.
-
 export {
   createAnthropicToolPayloadCompatibilityWrapper,
   createOpenAIAnthropicToolPayloadCompatibilityWrapper,
 } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
-export { sanitizeGoogleThinkingPayload } from "../llm/providers/stream-wrappers/google.js";
+export { sanitizeGoogleThinkingPayload } from "../llm/providers/stream-wrappers/google-thinking-payload.js";
 export {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,

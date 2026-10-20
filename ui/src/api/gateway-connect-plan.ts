@@ -28,6 +28,8 @@ import { i18n } from "../i18n/index.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "../lib/nodes/index.ts";
 
 export type GatewayBrowserConnectOptions = {
+  /** Keep complete roster messages for event listeners already present at connect. */
+  includeSessionMessageBodies?: boolean;
   url: string;
   nativeConnectAuth?: NativeGatewayConnectAuth;
   token?: string;
@@ -202,9 +204,15 @@ export async function buildBrowserGatewayConnectPlan({
       role,
       scopes,
       device,
+      ...(!nativeAuth && opts.includeSessionMessageBodies
+        ? { includeSessionMessageBodies: true }
+        : {}),
       // Tests bind these compact wire literals to the canonical capability registry.
       ...resolveModelCatalogConnect({
-        modelCatalog: opts.modelCatalog,
+        // Reading the target reserves its bootstrap wait, so negotiate support first.
+        get modelCatalog() {
+          return opts.modelCatalog;
+        },
         serverCapabilities,
         caps: [
           "agent-kind",
@@ -215,7 +223,12 @@ export async function buildBrowserGatewayConnectPlan({
           "terminal-upload-path-style",
           "tool-events",
           "chat-only-assistant-text",
+          "hello-health-on-demand",
           "session-scoped-events",
+          "presence-deltas",
+          ...(!nativeAuth
+            ? ["session-row-deltas", "session-event-field-refs", "roster-message-bodies-optional"]
+            : []),
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",

@@ -9,12 +9,15 @@ import { projectCronRunHistoryPage } from "../run-history.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronRunRecords } from "../store/read-only.js";
+import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "../store/read-only.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { createCronScheduledRunId } from "../store/run-request-id.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { recoverCronRuns } from "./run-recovery.js";
+import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
+import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
 const now = 1_800_000_000_000;
@@ -73,8 +76,16 @@ async function recoveryStore(jobs: CronJob[]) {
           ],
         },
       }),
-    history: async () =>
-      projectCronRunHistoryPage(await readCronRunRecords(storeKey), { storeKey }).entries,
+    history: async () => {
+      const { records } = await readCronRunHistoryCandidates(storeKey);
+      return projectCronRunHistoryPage(
+        await readCronRunHistoryRecords(
+          storeKey,
+          records.map((row) => row.id),
+        ),
+        { storeKey },
+      ).entries;
+    },
   };
 }
 
@@ -144,6 +155,33 @@ async function record(
 }
 
 describe("worker-owned startup recovery", () => {
+  it("keeps recovered rows resident and observes a later in-process write", async () => {
+    const entry = job("resident-recovery");
+    const store = await recoveryStore([entry]);
+    await activateManual(store, entry);
+    const state = makeCronRecoveryState(logger, store.storePath, now + 1_000);
+    await ensureLoaded(state);
+    await recoverCronRuns(state);
+
+    const resident = state.store;
+    expect(resident?.jobs[0]?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: "cron: job interrupted by gateway restart",
+    });
+    expect(resident?.jobs[0]?.state.runningAtMs).toBeUndefined();
+    await ensureLoaded(state);
+    expect(state.store).toBe(resident);
+
+    const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [{ ...recovered, name: "updated after recovery" }],
+    });
+    await ensureLoaded(state);
+    expect(state.store?.jobs[0]?.name).toBe("updated after recovery");
+    expect(state.store?.jobs[0]?.state).toEqual(recovered.state);
+  });
+
   it.each(["at", "every"] as const)(
     "records an interrupted %s run without counting a failure or replaying its uncertain payload",
     async (kind) => {
@@ -220,12 +258,12 @@ describe("worker-owned startup recovery", () => {
         "UPDATE task_runs SET status = 'running', ended_at = NULL, detail_json = ? WHERE runtime = 'cron' AND run_id = ?",
       )
       .run(JSON.stringify({ storeKey: store.storeKey }), internalRunId);
-    const previous = (await readCronRunRecords(store.storeKey)).find(
+    const previous = (await readCronRunHistoryCandidates(store.storeKey)).records.find(
       (row) => row.runId === internalRunId,
     )!;
     expect(previous.endedAt).toBeUndefined();
     await store.recover();
-    const rows = (await readCronRunRecords(store.storeKey)).filter((row) => row.jobId === entry.id);
+    const { records: rows } = await readCronRunHistoryCandidates(store.storeKey, entry.id);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: previous.id, runId: internalRunId, status: "failed" });
     expect(

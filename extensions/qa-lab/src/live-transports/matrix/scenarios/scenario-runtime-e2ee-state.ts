@@ -141,7 +141,6 @@ export async function deleteMatrixQaServerRoomKeyBackup(params: {
     accessToken: params.accessToken,
     baseUrl: params.baseUrl,
     endpoint: `/_matrix/client/v3/room_keys/version/${encodeURIComponent(params.version)}`,
-    fetchImpl: fetch,
     method: "DELETE",
     okStatuses: [200, 404],
   });

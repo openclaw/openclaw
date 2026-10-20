@@ -21,6 +21,7 @@ import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -169,6 +170,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   favicon.type = "image/svg+xml";
   favicon.setAttribute("href", "/favicon.svg");
   document.head.append(favicon);
+  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -183,7 +185,9 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   });
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "profile-alias" } }] },
+    snapshot: {
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "profile-alias" } }],
+    },
   });
   try {
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
@@ -294,6 +298,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   } finally {
     applicationTheme.dispose();
     gateway.stop();
+    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     favicon.remove();
   }
 });
@@ -378,7 +383,9 @@ it("does not report a previous palette failure after a local theme switch", asyn
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     auth: { role: "operator", scopes: ["operator.read"] },
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "read-only" } }] },
+    snapshot: {
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "read-only" } }],
+    },
   });
   try {
     await vi.waitFor(() =>
@@ -523,7 +530,7 @@ it.each([
     const hello = () => ({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
-      snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
+      snapshot: { presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "first" } }] },
     });
     current().opts.onHello?.(hello());
     try {

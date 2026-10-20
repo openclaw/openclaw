@@ -14,7 +14,6 @@ import {
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-/** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,

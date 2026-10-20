@@ -51,6 +51,13 @@ operation. With the GitHub CLI:
 gh workflow run ios-store-release.yml --ref main
 ```
 
+The same store release runs automatically every **Monday at 11:00 AM Pacific**,
+using `America/Los_Angeles` for daylight saving time. Weekly releases require
+native qualification and use `ios-store-release`; they are independent of the
+daily TestFlight enable switch. Only weekly store runs send Discord results.
+See [weekly mobile releases](https://docs.openclaw.ai/ci/scheduled-workflows#weekly-mobile-store-releases)
+for notification setup and scheduling behavior.
+
 Or use the same release entry point from a clean local `main` checkout that matches
 `origin/main`:
 
@@ -97,7 +104,7 @@ The same local entry point accepts the destination explicitly:
 OPENCLAW_TESTFLIGHT_GROUP_ID="<EXTERNAL_GROUP_ID>" pnpm ios:release:upload -- --destination testflight
 ```
 
-The scheduled operation runs daily at **7:00 AM America/Los_Angeles**, including
+The TestFlight schedule runs daily at **7:00 AM America/Los_Angeles**, including
 daylight saving time. GitHub may delay scheduled jobs. Both release destinations
 share the `ios-release` concurrency lock. Manual and scheduled TestFlight runs
 skip native release qualification; App Store releases require it to pass.

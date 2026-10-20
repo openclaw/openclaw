@@ -10,9 +10,14 @@ import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-coordination-fallback-");
 
-it.each(["CLI", "ACP"] as const)(
-  "keeps the %s coordination fallback hidden after runtime persistence is unavailable",
-  async (runtime) => {
+it.each([
+  { runtime: "CLI", sourceTool: "sessions_send" },
+  { runtime: "ACP", sourceTool: "sessions_send" },
+  { runtime: "CLI", sourceTool: "subagent_settle", privateCompletion: true as const },
+  { runtime: "ACP", sourceTool: "subagent_settle", privateCompletion: true as const },
+])(
+  "keeps the $runtime $sourceTool fallback hidden after runtime persistence is unavailable",
+  async ({ runtime, sourceTool, privateCompletion }) => {
     const cwd = sessionDirs.make();
     const target = {
       agentId: "main",
@@ -25,9 +30,10 @@ it.each(["CLI", "ACP"] as const)(
     const common = {
       ...target,
       body: "Review the worker result",
+      privateCompletion,
       inputProvenance: {
         kind: "inter_session" as const,
-        sourceTool: "sessions_send",
+        sourceTool,
         sourceRole: "subagent" as const,
       },
       sessionEntry,

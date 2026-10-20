@@ -19,6 +19,7 @@ import {
   normalizeStringifiedOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { startCrablineDiscordReplies } from "./crabline-discord-replies.js";
 import {
@@ -28,6 +29,7 @@ import {
   resolveCrablineStateConversation,
   resolveDiscordQaId,
 } from "./crabline-provider-targets.js";
+import { cleanupCrablineResources } from "./crabline-resource-cleanup.js";
 import { createCrablineSlackIngress } from "./crabline-slack-ingress.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
 import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
@@ -371,6 +373,7 @@ function createQaCrablineTransport(params: {
   transportPolicy?: QaTransportPolicy;
   selection: OpenClawCrablineChannelDriverSelection;
   state: QaCrablineTransportState;
+  whatsappAuthDir?: string;
 }) {
   const { adapter, readiness, selection, transportPolicy, state } = params;
   const stateMethods = createQaTransportStateMethods({ state, accountId: adapter.accountId });
@@ -454,6 +457,21 @@ function createQaCrablineTransport(params: {
         selection.channel === "signal"
           ? normalizeCrablineSignalGatewayConfig(rawConfig)
           : rawConfig;
+      if (params.whatsappAuthDir) {
+        const whatsapp = config.channels?.whatsapp;
+        const accounts = { ...whatsapp?.accounts };
+        accounts[adapter.accountId] = {
+          ...accounts[adapter.accountId],
+          authDir: params.whatsappAuthDir,
+        };
+        return {
+          ...config,
+          channels: {
+            ...config.channels,
+            whatsapp: { ...whatsapp, accounts },
+          },
+        };
+      }
       let channels: OpenClawConfig["channels"];
       if (selection.channel === "discord") {
         const discord = config.channels?.discord;
@@ -619,7 +637,8 @@ function createQaCrablineTransport(params: {
 
     async cleanupAfterGatewayStop() {
       releaseDiscordQaApiBase?.();
-      await state.cleanup();
+      // The same auth state must survive Gateway restarts and its final credential flush.
+      await cleanupCrablineResources(() => state.cleanup(), params.whatsappAuthDir);
     },
   } satisfies QaTransportAdapter & { resetTransport: () => void };
 }
@@ -656,6 +675,7 @@ export async function createQaCrablineTransportAdapter(params: {
     openclawConfig: {},
     recorderPath,
   });
+  let whatsappAuthDir: string | undefined;
   // Readiness owns the startup probe; runtime transcripts may contain provider-specific API records.
   try {
     const readiness = await runOpenClawCrablineProviderReadiness({
@@ -663,10 +683,15 @@ export async function createQaCrablineTransportAdapter(params: {
       outputDir: params.outputDir,
       selection: params.selection,
     });
-    const state = await createCrablineState({
-      adapter,
-      state: params.state ?? createQaBusState(),
-    });
+    if (adapter.manifest.provider === "whatsapp") {
+      const { createWhatsAppQaAuthState } = await import("@openclaw/whatsapp/api.js");
+      whatsappAuthDir = await createWhatsAppQaAuthState({
+        parentDir: resolvePreferredOpenClawTmpDir(),
+        selfJid: adapter.manifest.selfJid,
+        name: "OpenClaw QA",
+      });
+    }
+    const state = await createCrablineState({ adapter, state: params.state ?? createQaBusState() });
     observeEvent = state.observeEvent;
     return createQaCrablineTransport({
       adapter,
@@ -674,10 +699,11 @@ export async function createQaCrablineTransportAdapter(params: {
       transportPolicy: params.transportPolicy,
       selection: params.selection,
       state,
+      whatsappAuthDir,
     });
   } catch (error) {
     try {
-      await adapter.close();
+      await cleanupCrablineResources(() => adapter.close(), whatsappAuthDir);
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "Crabline startup and cleanup failed", {
         cause: cleanupError,

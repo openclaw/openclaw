@@ -11,7 +11,6 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     sessionId: "selected-session",
     thinkingLevel: null,
   });
-  const requestUpdate = overrides.requestUpdate ?? vi.fn();
   const host = makeChatHost({
     client: createTestGatewayClient(request),
     connectionEpoch: 1,
@@ -26,11 +25,8 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     ...host,
     currentSessionId: "selected-session",
     chatMessagesBySession: new Map(),
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
-    renderLifecycle: { invalidate: requestUpdate },
-    requestUpdate,
     ...overrides,
   } as unknown as ChatPageHost;
   return { request, state };

@@ -247,7 +247,6 @@ async function runBoundTurn(params: {
                   ...options,
                   withCurrent: async (write: () => void) => {
                     await assertCurrent();
-                    options.assertCurrent();
                     write();
                   },
                 };

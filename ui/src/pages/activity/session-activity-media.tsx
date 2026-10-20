@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -13,7 +13,7 @@ import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.t
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import {
   assistantMediaPolicyKey,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
@@ -93,7 +93,19 @@ export type ActivitySessionMediaProps = {
 };
 
 export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
+  return (
+    <Show when={props.context.gateway} keyed>
+      {(gateway) => SessionMedia(gateway, props)}
+    </Show>
+  );
+}
+
+function SessionMedia(
+  sourceGateway: ApplicationContext["gateway"],
+  props: ActivitySessionMediaProps,
+) {
   let host!: HTMLElement;
+  const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
   let observer: IntersectionObserver | undefined;
@@ -116,29 +128,6 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       setRevision((value) => value + 1);
     }
   };
-
-  function connect() {
-    // Visibility is required before transcript discovery; never fall back to an eager scan.
-    if (typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    observer = new IntersectionObserver(
-      (entries) => {
-        visible = entries.some((observation) => observation.isIntersecting);
-        refresh();
-      },
-      { rootMargin: "200px" },
-    );
-    observer.observe(host);
-  }
-
-  function dispose() {
-    disposed = true;
-    observer?.disconnect();
-    visible = false;
-    closeImage(false);
-    releaseChatMediaResourceSubscriber(refresh);
-  }
 
   const closeImage = (notify = true) => {
     imageRequest++;
@@ -167,7 +156,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       settledEntry = undefined;
       displayedImages = [];
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
       boundImageIdentity = identity;
     }
     if (nextOwner !== owner || nextKey !== key) {
@@ -314,7 +303,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       }),
-      onRequestUpdate: refresh,
+      mediaOwner,
       onRequestOpenImage: () => ++imageRequest,
       onOpenImage: (item: ImageLightboxItem, version?: number) => {
         if (
@@ -350,12 +339,8 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         ),
     };
   }
-  // The projection is seeded once; its source follows the tracked effect below.
-  const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
-  createEffect(
-    () => props.context.gateway,
-    (source) => gatewayProjection.replaceSource(source),
-  );
+  const gatewayProjection = projectGateway(sourceGateway);
+  // Synchronize the viewport-gated artifact requests with their Gateway/session scope.
   createEffect(
     () => [
       gatewayProjection.read(),
@@ -364,10 +349,28 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       props.revision,
       props.session,
     ],
-    () => untrack(refresh),
+    refresh,
   );
-  onSettled(connect);
-  onCleanup(dispose);
+  onSettled(() => {
+    // Visibility is required before transcript discovery; never fall back to an eager scan.
+    if (typeof IntersectionObserver !== "undefined") {
+      observer = new IntersectionObserver(
+        (entries) => {
+          visible = entries.some((observation) => observation.isIntersecting);
+          refresh();
+        },
+        { rootMargin: "200px" },
+      );
+      observer.observe(host);
+    }
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      visible = false;
+      closeImage(false);
+      releaseChatMediaResourceOwner(mediaOwner);
+    };
+  });
   const displayEntry = () => {
     revision();
     return owner && props.context.gateway.snapshot.client ? (settledEntry ?? entry) : undefined;

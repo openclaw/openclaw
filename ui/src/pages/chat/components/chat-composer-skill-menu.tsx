@@ -1,5 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { createStore, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
   getSkillCommandCompletions,
@@ -13,7 +12,7 @@ import { paneDomId } from "./chat-composer-dom.ts";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
-  renderComposerMenuOption,
+  renderComposerMenuOption as ComposerMenuOption,
 } from "./chat-composer-menu.tsx";
 import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.tsx";
 
@@ -31,8 +30,6 @@ export type SkillMenuState = {
   skillMenuIndex: number;
   skillMenuTarget: SkillMentionTarget | null;
   skillCommandRefreshPending: boolean;
-  skillCommandRefreshGeneration: number;
-  skillCommandRefreshTargetStart: number | null;
 };
 
 export type SkillMenuHost = {
@@ -42,18 +39,6 @@ export type SkillMenuHost = {
   getTextarea: () => HTMLTextAreaElement | null;
   refreshCommands?: () => void | Promise<void>;
 };
-
-export function createSkillMenuState(): SkillMenuState {
-  return {
-    skillMenuOpen: false,
-    skillMenuItems: [],
-    skillMenuIndex: 0,
-    skillMenuTarget: null,
-    skillCommandRefreshPending: false,
-    skillCommandRefreshGeneration: 0,
-    skillCommandRefreshTargetStart: null,
-  };
-}
 
 function isEscapedReference(value: string, dollar: number): boolean {
   let backslashes = 0;
@@ -91,81 +76,6 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
   return { start: dollar, end: referenceEnd, query };
 }
 
-export function resetSkillMenuState(state: SkillMenuState): void {
-  state.skillCommandRefreshGeneration += 1;
-  state.skillCommandRefreshPending = false;
-  state.skillCommandRefreshTargetStart = null;
-  state.skillMenuOpen = false;
-  state.skillMenuItems = [];
-  state.skillMenuIndex = 0;
-  state.skillMenuTarget = null;
-}
-
-function closeSkillMenuIfNeeded(state: SkillMenuState, requestUpdate: () => void): void {
-  if (
-    state.skillMenuOpen ||
-    state.skillMenuItems.length > 0 ||
-    state.skillMenuTarget !== null ||
-    state.skillCommandRefreshPending
-  ) {
-    resetSkillMenuState(state);
-    requestUpdate();
-  }
-}
-
-function requestSkillCommandRefresh(
-  state: SkillMenuState,
-  host: SkillMenuHost,
-  requestUpdate: () => void,
-): void {
-  if (!host.refreshCommands || state.skillCommandRefreshPending) {
-    return;
-  }
-  const refresh = host.refreshCommands();
-  if (!refresh) {
-    return;
-  }
-  const generation = state.skillCommandRefreshGeneration + 1;
-  state.skillCommandRefreshGeneration = generation;
-  state.skillCommandRefreshPending = true;
-  void refresh
-    .catch(() => undefined)
-    .finally(() => {
-      if (state.skillCommandRefreshGeneration !== generation) {
-        return;
-      }
-      state.skillCommandRefreshPending = false;
-      const value = host.getDraft();
-      const caret = host.getTextarea()?.selectionStart ?? value.length;
-      updateSkillMenu(value, caret, state, host, requestUpdate, { skipRefresh: true });
-    });
-}
-
-export function updateSkillMenu(
-  value: string,
-  caret: number,
-  state: SkillMenuState,
-  host: SkillMenuHost,
-  requestUpdate: () => void,
-  opts: { skipRefresh?: boolean } = {},
-): void {
-  const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
-  if (!target) {
-    closeSkillMenuIfNeeded(state, requestUpdate);
-    return;
-  }
-  if (!opts.skipRefresh && state.skillCommandRefreshTargetStart !== target.start) {
-    state.skillCommandRefreshTargetStart = target.start;
-    requestSkillCommandRefresh(state, host, requestUpdate);
-  }
-  const items = getSkillCommandCompletions(target.query);
-  state.skillMenuTarget = target;
-  state.skillMenuItems = items;
-  state.skillMenuIndex = Math.min(state.skillMenuIndex, Math.max(0, items.length - 1));
-  state.skillMenuOpen = items.length > 0 || state.skillCommandRefreshPending;
-  requestUpdate();
-}
-
 function skillOptionId(paneId: string, command: SlashCommandDef): string {
   const name = command.name.replace(/[^a-z0-9_-]+/giu, "-").replace(/^-+|-+$/gu, "");
   return paneDomId(paneId, `skill-option-${name || "skill"}`);
@@ -193,125 +103,211 @@ export function getActiveSkillMenuOptionLabel(state: SkillMenuState): string {
   return command ? `${getSkillDisplayName(command)} ${getSlashCommandDescription(command)}` : "";
 }
 
-function selectSkillMention(
-  command: SlashCommandDef,
-  state: SkillMenuState,
-  host: SkillMenuHost,
-  requestUpdate: () => void,
-): void {
-  if (state.skillCommandRefreshPending) {
-    return;
+export function createSkillMenu() {
+  let generation = 0;
+  let refreshTargetStart: number | null = null;
+  const [presentation, setState] = createStore<SkillMenuState>({
+    skillMenuOpen: false,
+    skillMenuItems: [],
+    skillMenuIndex: 0,
+    skillMenuTarget: null,
+    skillCommandRefreshPending: false,
+  });
+
+  function resetSkillMenuState(state: SkillMenuState): void {
+    generation += 1;
+    state.skillCommandRefreshPending = false;
+    refreshTargetStart = null;
+    state.skillMenuOpen = false;
+    state.skillMenuItems = [];
+    state.skillMenuIndex = 0;
+    state.skillMenuTarget = null;
   }
-  const textarea = host.getTextarea();
-  const current = textarea?.value ?? host.getDraft();
-  const currentCaret = textarea?.selectionStart ?? state.skillMenuTarget?.end ?? current.length;
-  const target = findSkillMentionTarget(current, currentCaret);
-  if (!target) {
-    resetSkillMenuState(state);
-    requestUpdate();
-    return;
-  }
-  const suffix = target.end === current.length ? " " : "";
-  const replacement = `$${command.name}${suffix}`;
-  const next = `${current.slice(0, target.start)}${replacement}${current.slice(target.end)}`;
-  const retainedBeforeCaret = Math.max(0, currentCaret - target.end);
-  const nextCaret = target.start + replacement.length + retainedBeforeCaret;
-  host.commitDraft(next);
-  resetSkillMenuState(state);
-  requestUpdate();
-  queueMicrotask(() => {
-    const currentTextarea = host.getTextarea();
-    if (!currentTextarea) {
+
+  function requestSkillCommandRefresh(state: SkillMenuState, host: SkillMenuHost): void {
+    if (!host.refreshCommands || state.skillCommandRefreshPending) {
       return;
     }
-    currentTextarea.focus({ preventScroll: true });
-    currentTextarea.setSelectionRange(nextCaret, nextCaret);
-  });
-}
-
-export function handleSkillMenuKeydown(
-  event: KeyboardEvent,
-  state: SkillMenuState,
-  host: SkillMenuHost,
-  requestUpdate: () => void,
-): boolean {
-  if (!state.skillMenuOpen) {
-    return false;
+    const refresh = host.refreshCommands();
+    if (!refresh) {
+      return;
+    }
+    const requestGeneration = ++generation;
+    state.skillCommandRefreshPending = true;
+    void refresh
+      .catch(() => undefined)
+      .finally(() => {
+        if (generation !== requestGeneration) {
+          return;
+        }
+        setState((draft) => {
+          draft.skillCommandRefreshPending = false;
+          const value = host.getDraft();
+          const caret = host.getTextarea()?.selectionStart ?? value.length;
+          updateSkillMenu(value, caret, draft, host, { skipRefresh: true });
+        });
+      });
   }
-  const items = state.skillCommandRefreshPending ? [] : state.skillMenuItems;
-  return handleComposerMenuKeydown(event, {
-    count: items.length,
-    index: state.skillMenuIndex,
-    consumeEmpty: true,
-    close: () => {
-      resetSkillMenuState(state);
-      requestUpdate();
-    },
-    move: (index) => {
-      state.skillMenuIndex = index;
-      requestUpdate();
-      return getActiveSkillMenuOptionId(state, host.paneId);
-    },
-    select: () => {
-      const command = items[state.skillMenuIndex];
-      if (command) {
-        selectSkillMention(command, state, host, requestUpdate);
+
+  function updateSkillMenu(
+    value: string,
+    caret: number,
+    state: SkillMenuState,
+    host: SkillMenuHost,
+    opts: { skipRefresh?: boolean } = {},
+  ): void {
+    const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
+    if (!target) {
+      if (state.skillMenuTarget !== null) {
+        resetSkillMenuState(state);
       }
-    },
-  });
-}
-
-function renderSkillMenuContents(
-  state: SkillMenuState,
-  host: SkillMenuHost,
-  requestUpdate: () => void,
-): JSX.Element | null {
-  if (!isSkillMenuVisible(state)) {
-    return null;
+      return;
+    }
+    if (!opts.skipRefresh && refreshTargetStart !== target.start) {
+      refreshTargetStart = target.start;
+      requestSkillCommandRefresh(state, host);
+    }
+    const items = getSkillCommandCompletions(target.query);
+    state.skillMenuTarget = target;
+    state.skillMenuItems = items;
+    state.skillMenuIndex = Math.min(state.skillMenuIndex, Math.max(0, items.length - 1));
+    state.skillMenuOpen = items.length > 0 || state.skillCommandRefreshPending;
   }
-  const loading = state.skillCommandRefreshPending || state.skillMenuItems.length === 0;
-  return (
-    <div class="slash-menu-group">
-      <div class="slash-menu-group__label">
-        {t(loading ? "chat.skills.loading" : "chat.skills.label")}
-      </div>
-      {loading
-        ? null
-        : state.skillMenuItems.map((command, index) =>
-            renderComposerMenuOption({
-              id: skillOptionId(host.paneId, command),
-              active: index === state.skillMenuIndex,
-              select: () => selectSkillMention(command, state, host, requestUpdate),
-              hover: () => {
-                state.skillMenuIndex = index;
-                requestUpdate();
-              },
-              icon: (
-                <ComposerContent>
-                  <Icon name="pencilSparkles" />
-                </ComposerContent>
-              ),
-              name: renderSlashMatchedName(
-                getSkillDisplayName(command),
-                state.skillMenuTarget?.query ?? "",
-              ),
-              description: getSlashCommandDescription(command),
-            }),
-          )}
-    </div>
-  );
+
+  function selectSkillMention(
+    command: SlashCommandDef,
+    state: SkillMenuState,
+    host: SkillMenuHost,
+  ): void {
+    if (state.skillCommandRefreshPending) {
+      return;
+    }
+    const textarea = host.getTextarea();
+    const current = textarea?.value ?? host.getDraft();
+    const currentCaret = textarea?.selectionStart ?? state.skillMenuTarget?.end ?? current.length;
+    const target = findSkillMentionTarget(current, currentCaret);
+    if (!target) {
+      resetSkillMenuState(state);
+      return;
+    }
+    const suffix = target.end === current.length ? " " : "";
+    const replacement = `$${command.name}${suffix}`;
+    const next = `${current.slice(0, target.start)}${replacement}${current.slice(target.end)}`;
+    const retainedBeforeCaret = Math.max(0, currentCaret - target.end);
+    const nextCaret = target.start + replacement.length + retainedBeforeCaret;
+    resetSkillMenuState(state);
+    host.commitDraft(next);
+    queueMicrotask(() => {
+      const currentTextarea = host.getTextarea();
+      if (!currentTextarea) {
+        return;
+      }
+      currentTextarea.focus({ preventScroll: true });
+      currentTextarea.setSelectionRange(nextCaret, nextCaret);
+    });
+  }
+
+  function handleSkillMenuKeydown(
+    event: KeyboardEvent,
+    state: SkillMenuState,
+    host: SkillMenuHost,
+  ): boolean {
+    if (!state.skillMenuOpen) {
+      return false;
+    }
+    const items = state.skillCommandRefreshPending ? [] : state.skillMenuItems;
+    return handleComposerMenuKeydown(event, {
+      count: items.length,
+      index: state.skillMenuIndex,
+      consumeEmpty: true,
+      close: () => {
+        resetSkillMenuState(state);
+      },
+      move: (index) => {
+        state.skillMenuIndex = index;
+        return getActiveSkillMenuOptionId(state, host.paneId);
+      },
+      select: () => {
+        const command = items[state.skillMenuIndex];
+        if (command) {
+          selectSkillMention(command, state, host);
+        }
+      },
+    });
+  }
+
+  return {
+    state: presentation,
+    update(value: string, caret: number, host: SkillMenuHost) {
+      let open = false;
+      setState((draft) => {
+        updateSkillMenu(value, caret, draft, host);
+        open = draft.skillMenuOpen;
+      });
+      return open;
+    },
+    reset: () => setState(resetSkillMenuState),
+    dispose: () => {
+      generation += 1;
+    },
+    handleKeydown(event: KeyboardEvent, host: SkillMenuHost) {
+      let handled = false;
+      setState((draft) => {
+        handled = handleSkillMenuKeydown(event, draft, host);
+      });
+      return handled;
+    },
+    select: (command: SlashCommandDef, host: SkillMenuHost) =>
+      setState((draft) => selectSkillMention(command, draft, host)),
+    hover: (index: number) =>
+      setState((draft) => {
+        draft.skillMenuIndex = index;
+      }),
+  };
 }
 
-export function SkillMenu(props: { args: Parameters<typeof renderSkillMenuContents> }) {
+export type SkillMenu = ReturnType<typeof createSkillMenu>;
+
+export function SkillMenu(props: { menu: SkillMenu; host: SkillMenuHost }) {
+  const state = () => props.menu.state;
+  const loading = () => state().skillCommandRefreshPending || state().skillMenuItems.length === 0;
   return (
-    <Show when={isSkillMenuVisible(props.args[0])}>
+    <Show when={isSkillMenuVisible(state())}>
       <ComposerMenu
-        id={paneDomId(props.args[1].paneId, "skill-menu-listbox")}
+        getTextarea={() => props.host.getTextarea()}
+        id={paneDomId(props.host.paneId, "skill-menu-listbox")}
         class="skill-menu"
         label={t("chat.skills.menu")}
-        revision={props.args}
+        revision={state().skillMenuItems}
+        activeId={getActiveSkillMenuOptionId(state(), props.host.paneId)}
       >
-        {renderSkillMenuContents(...props.args)}
+        <div class="slash-menu-group">
+          <div class="slash-menu-group__label">
+            {t(loading() ? "chat.skills.loading" : "chat.skills.label")}
+          </div>
+          <Show when={!loading()}>
+            <For each={state().skillMenuItems}>
+              {(command, index) => (
+                <ComposerMenuOption
+                  id={skillOptionId(props.host.paneId, command)}
+                  active={index() === state().skillMenuIndex}
+                  select={() => props.menu.select(command, props.host)}
+                  hover={() => props.menu.hover(index())}
+                  icon={
+                    <ComposerContent>
+                      <Icon name="pencilSparkles" />
+                    </ComposerContent>
+                  }
+                  name={renderSlashMatchedName(
+                    getSkillDisplayName(command),
+                    state().skillMenuTarget?.query ?? "",
+                  )}
+                  description={getSlashCommandDescription(command)}
+                />
+              )}
+            </For>
+          </Show>
+        </div>
       </ComposerMenu>
     </Show>
   );

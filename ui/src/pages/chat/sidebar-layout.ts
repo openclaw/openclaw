@@ -145,11 +145,7 @@ function selectPanel(layout: SidebarLayout, column: SidebarColumn, panelId: stri
   }
 }
 
-export function openSlot(
-  layout: SidebarLayout,
-  slot: SidebarSlotId,
-  options?: { activate?: boolean },
-): SidebarLayout {
+export function openSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLayout {
   const next = structuredClone(layout);
   if ((sidebarMainPanel(next)?.slot ?? "conversation") === slot) {
     return next.expandedSide ? setSidebarExpanded(next, false) : next;
@@ -160,9 +156,7 @@ export function openSlot(
     panel = { id: nextPanelId(next, slot), slot };
     column.panels.push(panel);
   }
-  if (options?.activate !== false) {
-    selectPanel(next, column, panel.id);
-  }
+  selectPanel(next, column, panel.id);
   return next;
 }
 
@@ -278,12 +272,8 @@ export function presentNarrowSidebarLayout(
 ): SidebarLayout {
   const slot =
     layout.open === true && !layout.expanded ? sidebarActivePanel(layout)?.slot : undefined;
-  // A retained Conversation beside a promoted main view is not a selected tool.
-  if (
-    !slot ||
-    slot === "conversation" ||
-    (!options?.allPanels && slot !== "subagents" && slot !== "processes")
-  ) {
+  // Phone layouts show the selected side view, including Chat beside a page.
+  if (!slot || (!options?.allPanels && slot !== "subagents" && slot !== "processes")) {
     return layout;
   }
   let presented = narrowPresentations.get(layout);

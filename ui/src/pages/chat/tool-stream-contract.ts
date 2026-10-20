@@ -93,7 +93,7 @@ export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
   agentsList?: UiSessionDefaultsHost["agentsList"];
-  hello?: { snapshot?: unknown } | null;
+  hello?: UiSessionDefaultsHost["hello"];
   chatRunId: string | null;
   chatQueue?: readonly ChatQueueItem[];
   chatMessages?: unknown[];
@@ -117,10 +117,18 @@ export type ToolStreamHost = {
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
-  requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
 
-export type LiveToolStreamState = Partial<
-  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">
->;
+export type LiveToolStreamState = Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">;
+
+export type ToolStreamState = Pick<
+  ToolStreamHost,
+  | "toolStreamById"
+  | "toolStreamOrder"
+  | "chatToolMessages"
+  | "chatStreamSegments"
+  | "activityEventSeqById"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+> & { toolStreamSyncTimer?: number | null };

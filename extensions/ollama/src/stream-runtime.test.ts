@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -31,10 +31,10 @@ type GuardedFetchCall = Parameters<typeof fetchWithSsrFGuard>[0];
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function convertAssistantContent(
-  content: Array<Record<string, unknown>>,
+  content: AssistantMessage["content"],
   options?: Parameters<typeof convertToOllamaMessages>[2],
 ) {
-  return convertToOllamaMessages([{ role: "assistant", content }] as never, undefined, options);
+  return convertToOllamaMessages([makeAgentAssistantMessage({ content })], undefined, options);
 }
 
 type AssistantResponse = Parameters<typeof buildAssistantMessage>[0];
@@ -181,12 +181,6 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
 });
 
 describe("convertToOllamaMessages", () => {
-  it("converts legacy tool text without inventing metadata", () => {
-    expect(convertToOllamaMessages([{ role: "tool", content: "output" }])).toEqual([
-      { role: "tool", content: "output" },
-    ]);
-  });
-
   it.each([
     {
       name: "thinking alongside text",
@@ -196,7 +190,7 @@ describe("convertToOllamaMessages", () => {
         { type: "thinking", thinking: "redacted reasoning", redacted: true },
         { type: "text", text: "Let me check." },
         { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
-      ],
+      ] satisfies AssistantMessage["content"],
       text: "Let me check.",
       thinking: "Check the directory.\nThen report its contents.",
       expected: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
@@ -205,10 +199,10 @@ describe("convertToOllamaMessages", () => {
       name: "allowlisted underscore and dash suffixes",
       content: [
         { type: "toolCall", id: "call_1", name: "tools_exec", arguments: { command: "pwd" } },
-        { type: "tool_use", id: "call_2", name: "function-read", input: { path: "." } },
+        { type: "toolCall", id: "call_2", name: "function-read", arguments: { path: "." } },
         { type: "toolCall", id: "call_3", name: "tool_missing", arguments: {} },
         { type: "toolCall", id: "call_4", name: "tool_a", arguments: {} },
-      ],
+      ] satisfies AssistantMessage["content"],
       options: { availableToolNames: new Set(["exec", "read", "tool_a"]) },
       expected: [
         { id: "call_1", function: { name: "exec", arguments: { command: "pwd" } } },
@@ -653,23 +647,31 @@ describe("createOllamaStreamFn streaming events", () => {
     });
   });
 
-  it("emits text_end as soon as Ollama switches from text to tool calls", async () => {
+  it.each([
+    { name: "ordinary text", chunks: ["Let me check."] },
+    { name: "split Unicode text", chunks: ["Let me check. \ud83e", "\udd8a e", "\u0301"] },
+  ])("ends $name as soon as Ollama switches to tool calls", async ({ chunks }) => {
     const source = createControlledNdjsonFetch();
     fetchWithSsrFGuardMock.mockImplementation(source.fetchImpl);
     const stream = await createOllamaTestStream({});
     const iterator = stream[Symbol.asyncIterator]();
-    source.pushLine(ndjson({ content: "Let me check." }));
+    const text = chunks.join("");
+    source.pushLine(ndjson({ content: chunks[0] }));
     await expectNext(iterator, { type: "start", partial: { content: [] } });
-    await expectNext(iterator, { type: "text_start", partial: { content: [] } });
-    await expectNext(iterator, { type: "text_delta", delta: "Let me check." });
+    await expectNext(iterator, { type: "text_start", contentIndex: 0, partial: { content: [] } });
+    await expectNext(iterator, { type: "text_delta", contentIndex: 0, delta: chunks[0] });
+    for (const content of chunks.slice(1)) {
+      source.pushLine(ndjson({ content }));
+      await expectNext(iterator, { type: "text_delta", contentIndex: 0, delta: content });
+    }
     source.pushLine(
       ndjson({ tool_calls: [{ function: { name: "bash", arguments: { command: "ls" } } }] }),
     );
     await expectNext(iterator, {
       type: "text_end",
       contentIndex: 0,
-      content: "Let me check.",
-      partial: { content: [{ type: "text", text: "Let me check." }] },
+      content: text,
+      partial: { content: [{ type: "text", text }] },
     });
     source.pushLine(ndjson({}, { done: true }));
     source.close();
@@ -680,9 +682,25 @@ describe("createOllamaStreamFn streaming events", () => {
       "toolcall_end",
       "done",
     ]);
-    expect(remaining[1]).toMatchObject({ type: "toolcall_delta", delta: '{"command":"ls"}' });
-    expect(remaining.at(-1)).toMatchObject({ type: "done", reason: "toolUse" });
+    expect(remaining[0]).toMatchObject({ type: "toolcall_start", contentIndex: 1 });
+    expect(remaining[1]).toMatchObject({
+      type: "toolcall_delta",
+      contentIndex: 1,
+      delta: '{"command":"ls"}',
+    });
+    expect(remaining[2]).toMatchObject({ type: "toolcall_end", contentIndex: 1 });
+    expect(remaining.at(-1)).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        content: [
+          { type: "text", text },
+          { type: "toolCall", name: "bash", arguments: { command: "ls" } },
+        ],
+      },
+    });
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(source.release).toHaveBeenCalledOnce();
   });
   it("emits an error instead of accepting garbled Kimi visible text", async () => {
     const garbled =
@@ -1077,6 +1095,8 @@ describe("createConfiguredOllamaStreamFn", () => {
     expect(request.url).toBe("https://remote-ollama.example.test/api/chat");
   });
 
+  // Hold async payload preparation open to prove acquisition order. Record
+  // readiness when acquisition starts; the mock must not enforce the order.
   it("acquires the exact provider service after final payload and headers, before fetch", async () => {
     const signal = new AbortController().signal;
     const leaseRelease = vi.fn();

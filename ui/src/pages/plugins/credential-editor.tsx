@@ -1,4 +1,4 @@
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { For, createEffect, createSignal, onCleanup } from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -28,7 +28,7 @@ const credentialSources = ["env", "file", "exec", "store"] as const;
 export type PluginCredentialEditorContext = {
   pluginId: string;
   baseHash: string | null;
-  gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected">;
+  gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
   canInspect: boolean;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
@@ -66,7 +66,10 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   let connection: GatewayConnectionScope | null = null;
   let active = true;
   let pending = false;
+  let literalInput: HTMLInputElement | undefined;
+  let referenceSourceSelect: HTMLSelectElement | undefined;
 
+  // Reinspect the Gateway credential when its field, revision, or connection changes.
   createEffect(
     () => {
       const { pluginId, baseHash, gateway, canInspect } = props.context;
@@ -74,39 +77,57 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       return {
         field,
         gateway,
+        client: gateway.client,
+        epoch: gateway.epoch,
+        baseHash,
+        connected: gateway.connected,
         canInspect,
         identity: JSON.stringify([field, baseHash, gateway.epoch, canInspect]),
       };
     },
     (next, previous) => {
-      if (next.identity === previous?.identity && next.gateway === previous?.gateway) {
+      if (
+        next.identity === previous?.identity &&
+        next.gateway === previous?.gateway &&
+        next.client === previous?.client
+      ) {
         return;
       }
       const sourceChanged =
         next.gateway !== previous?.gateway ||
+        next.client !== previous?.client ||
         next.field !== previous?.field ||
-        !next.canInspect ||
-        (connection && !next.gateway.isCurrent(connection));
-      const wasOpen = untrack(dialogOpen);
+        (next.connected && !next.canInspect);
+      // Snapshot this revision's editing intent and error copy; neither retriggers inspection.
+      const [wasOpen, wasSaving, staleMessage] = [
+        dialogOpen(),
+        saving(),
+        t("pluginsPage.credentials.stale"),
+      ] as const;
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
-      // Only retiring the field or connection may discard its uncommitted key.
+      // Only retiring the field's identity or access may discard its uncommitted key.
       if (sourceChanged) {
         setLiteral("");
         setDialogOpen(false);
-        pending = false;
-        setOperation(undefined);
         referenceSubmitted = false;
         setReference({ source: "env", provider: "default", id: "" });
       }
-      setInspection(null);
+      if (sourceChanged || next.epoch !== previous?.epoch) {
+        pending = false;
+        setOperation(undefined);
+      }
+      setLoading(false);
+      setInspection((current) =>
+        sourceChanged ? null : current?.kind === "literal" ? { kind: "literal" } : current,
+      );
       generation++;
-      if (wasOpen && !untrack(saving) && !sourceChanged) {
-        setError(untrack(() => t("pluginsPage.credentials.stale")));
-        setLoading(false);
+      if (wasOpen && !wasSaving && !sourceChanged && next.baseHash !== previous?.baseHash) {
+        setInspection(null);
+        setError(staleMessage);
         return;
       }
-      void untrack(inspect);
+      void inspect();
     },
   );
 
@@ -146,9 +167,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       setRevealed(
         reveal && result.credential.kind === "literal" && result.credential.value !== undefined,
       );
-      if (dialogOpen() && result.credential.kind === "reference") {
-        setReference({ ...result.credential.ref });
-      }
     } catch (cause) {
       if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
         setError(formatUiError(cause));
@@ -272,7 +290,13 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     return credential?.kind === "environment" ? credential.envVar : null;
   };
   const blocked = () =>
-    props.field.disabled || loading() || saving() || cancelling() || !inspection();
+    props.field.disabled ||
+    !props.context.gateway.connected ||
+    !props.context.canInspect ||
+    loading() ||
+    saving() ||
+    cancelling() ||
+    !inspection();
   const failure = () => error() || props.context.saveError;
   const configured = () =>
     props.field.value === REDACTED_SENTINEL || inspection()?.kind === "literal";
@@ -342,14 +366,14 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 ) {
                   return;
                 }
-                const input = event.currentTarget.querySelector("input");
-                const value = input ? enteredLiteral(input) : "";
+                const value = literalInput ? enteredLiteral(literalInput) : "";
                 if (value) {
                   void patch(value);
                 }
               }}
             >
               <input
+                ref={(input) => (literalInput = input)}
                 class="settings-input"
                 aria-label={props.descriptor.label}
                 aria-describedby={props.field.descriptionId}
@@ -426,6 +450,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         ) : null}
         {dialogOpen() ? (
           <openclaw-modal-dialog
+            prop:initialFocus={() =>
+              referenceSourceSelect?.isConnected ? referenceSourceSelect : null
+            }
             ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
             label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
             onModal-cancel={(event: Event) => {
@@ -443,6 +470,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                   <label>
                     {t("pluginsPage.credentials.source")}
                     <select
+                      ref={(element) => {
+                        referenceSourceSelect = element;
+                      }}
                       autofocus
                       class="settings-input"
                       aria-label={t("pluginsPage.credentials.source")}

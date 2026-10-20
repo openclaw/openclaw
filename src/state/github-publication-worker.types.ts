@@ -15,6 +15,7 @@ export type SharedGitHubPublicationInsert = {
     idempotencyKey: string;
     title?: string;
     body?: string;
+    draft?: boolean;
   };
   requestId: string;
   requestDigest: string;

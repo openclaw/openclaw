@@ -68,7 +68,7 @@ For connections bound to an authenticated Gateway profile, the profile's `ui.acc
 | `--info`        | `#60a5fa`  | `#1d4ed8`   | ~7.5:1 ✅               | Informational, token meter mid                 |
 | `--destructive` | `#d32f2f`  | `#dc2626`   | ~3.8:1 (fill only)      | Destructive button fills (with `#fafafa` text) |
 
-Each `--x` has `-muted` (0.75 alpha) and `-subtle` (0.08 alpha) rgba siblings that must stay in sync with the base hex — the base doubles as label text on its own subtle tint, and re-tinting one without the other silently drops the pair below AA. Bases stay literal hex because `widget-theme.ts` publishes them to MCP app guest documents where `color-mix()` would not resolve. See the audit comments in `base.css` for the per-theme measurements.
+Where defined, `-muted` (0.75 alpha) and `-subtle` (0.08 alpha) rgba siblings must stay in sync with the base hex — the base doubles as label text on its own subtle tint, and re-tinting one without the other silently drops the pair below AA. Bases stay literal hex because `widget-theme.ts` publishes them to MCP app guest documents where `color-mix()` would not resolve. See the audit comments in `base.css` for the per-theme measurements.
 
 The dark `--destructive` value is the claw-family override (`:root[data-theme="dark"]`); the shared `:root` fallback is `#ef4444`.
 

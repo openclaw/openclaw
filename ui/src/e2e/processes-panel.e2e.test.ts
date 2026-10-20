@@ -106,11 +106,21 @@ suite.define(() => {
         expect(await finishedToggle.getAttribute("aria-expanded")).toBe("false");
         await panel.getByText(process.name, { exact: true }).click();
         await panel.getByText(process.tail, { exact: true }).waitFor();
+        const updatedTail = "Compiled 84 modules. Waiting for the next file change.";
+        await gateway.setMethodResponse("sessions.processes.list", {
+          ...result,
+          processes: [{ ...process, tail: updatedTail }, finishedProcess],
+        });
+        await gateway.emitGatewayEvent("sessions.processes.changed", {
+          sessionKey: key,
+          agentId: "main",
+        });
+        await panel.getByText(updatedTail, { exact: true }).waitFor();
         await openChatSidePanelType(page, "Subagents");
         const selectTab = (label: string) =>
           pane.locator(".side-panel__header .tabstrip-tab").filter({ hasText: label }).click();
         await selectTab("Processes");
-        await panel.getByText(process.tail, { exact: true }).waitFor();
+        await panel.getByText(updatedTail, { exact: true }).waitFor();
         if (capture) {
           await page.screenshot({
             animations: "disabled",

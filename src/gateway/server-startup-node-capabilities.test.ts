@@ -124,7 +124,11 @@ describe("Gateway startup node capabilities", () => {
         expect(databaseReady).toBe(false);
         await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
         await params.startWorkerEnvironmentRuntime?.();
-        return { stopGatewayUpdateCheck: async () => {}, startupSettled: Promise.resolve() };
+        return {
+          stopGatewayUpdateCheck: async () => {},
+          startupSettled: Promise.resolve(),
+          subagentRecoverySettled: Promise.resolve(),
+        };
       });
     try {
       const token = "startup-node-capability-token";

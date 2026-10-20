@@ -1,15 +1,17 @@
 // TTS config tests cover text-to-speech config loading and overrides.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  readTtsPrefs,
   resolveConfiguredTtsMode,
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
+import { setTtsMaxLength } from "./tts-settings-writes.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -37,8 +39,45 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot?.restore();
     envSnapshot = undefined;
+  });
+
+  it("warns for malformed optional preferences but keeps missing files quiet", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(readTtsPrefs(prefsPath)).toEqual({});
+    expect(warn).not.toHaveBeenCalled();
+
+    writeFileSync(prefsPath, '{"tts":');
+    expect(
+      shouldAttemptTtsPayload({
+        preparedTtsPreferences: {},
+        cfg: { tts: { auto: "always" } },
+      }),
+    ).toBe(true);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain(prefsPath);
+    expect(warn.mock.calls[0]?.[0]).toContain("Repair the file or its permissions");
+  });
+
+  it("refuses a preference update without overwriting unread existing settings", () => {
+    const malformed = '{"tts":{"provider":"custom",';
+    writeFileSync(prefsPath, malformed);
+
+    expect(() => setTtsMaxLength(prefsPath, 2000)).toThrow("Repair the file or its permissions");
+    expect(readFileSync(prefsPath, "utf8")).toBe(malformed);
+  });
+
+  it("creates missing preferences and preserves settings during ordinary updates", () => {
+    setTtsMaxLength(prefsPath, 1800);
+    expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({ tts: { maxLength: 1800 } });
+
+    writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "custom", summarize: false } }));
+    setTtsMaxLength(prefsPath, 2000);
+    expect(JSON.parse(readFileSync(prefsPath, "utf8"))).toEqual({
+      tts: { provider: "custom", summarize: false, maxLength: 2000 },
+    });
   });
 
   it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {

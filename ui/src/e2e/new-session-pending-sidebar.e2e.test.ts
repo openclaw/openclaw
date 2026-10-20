@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -14,7 +15,7 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it.each(["named", "failed"])(
-    "replaces the naming blob when title generation is %s",
+    "replaces the title placeholder when title generation is %s",
     async (outcome) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const key = "agent:main:dashboard:title-settlement";
@@ -59,72 +60,142 @@ suite.define(() => {
     },
   );
 
-  it("selects a visible provisional row without admitting it and removes it on rejection", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const old = {
-        key: "agent:main:planning",
-        sessionId: "planning",
-        kind: "direct",
-        label: "Weekly planning",
-        updatedAt: 1,
-      };
-      const gateway = await installMockGateway(page, { sessionKey: old.key, sessions: [old] });
-      await page.goto(new URL(controlUiSessionPath(old.key), suite.server.baseUrl).href);
-      await page
-        .locator(
-          '[data-session-key="' + old.key + '"] .sidebar-recent-session__link[aria-current="page"]',
-        )
-        .waitFor();
-      await navigateInApp(page, "new-session", "?agent=main");
-      await page
-        .locator(".new-session-page__message")
-        .fill("Review release readiness and outstanding fixes");
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session", exact: true }).click();
-      await gateway.waitForRequest("sessions.create");
-      await page.locator("openclaw-pending-session-create .chat-pane__header").waitFor();
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator("body"),
-          [page.locator(".sidebar"), page.locator(".chat-pane__header")],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "pending-session.png"), frame.png);
-      }
-      const provisional = page.locator(".sidebar-recent-session--creating");
-      await expect.poll(() => provisional.count()).toBe(1);
-      expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
-      expect(
-        await page.locator('[data-session-key="' + old.key + '"] [aria-current="page"]').count(),
-      ).toBe(0);
-      expect(await provisional.locator("button, a[href]").count()).toBe(0);
-      expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
-      const blob = provisional.locator(".session-title-placeholder > span");
-      expect(await blob.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        "rgba(0, 0, 0, 0)",
+  it.each([
+    { destination: "chip", mode: "chip", pinned: false },
+    { destination: "roster", mode: "roster", pinned: false },
+    { destination: "pinned agent", mode: "roster", pinned: true },
+  ] as const)(
+    "selects a visible provisional row in the $destination area without admitting it and removes it on rejection",
+    async ({ destination, mode, pinned }) => {
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
+        async ({ page }) => {
+          await page.addInitScript(
+            ({ key, sidebarAgentsMode, pinnedAgentIds }) =>
+              localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode, pinnedAgentIds })),
+            {
+              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              sidebarAgentsMode: mode,
+              pinnedAgentIds: pinned ? ["main"] : [],
+            },
+          );
+          const old = {
+            key: "agent:main:planning",
+            sessionId: "planning",
+            kind: "direct",
+            label: "Weekly planning",
+            updatedAt: 1,
+          };
+          const gateway = await installMockGateway(page, { sessionKey: old.key, sessions: [old] });
+          await page.goto(new URL(controlUiSessionPath(old.key), suite.server.baseUrl).href);
+          const oldRow = page.locator('[data-session-key="' + old.key + '"]');
+          if (mode === "chip") {
+            await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          } else if (pinned) {
+            await page.locator('[data-pinned-agent="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          } else {
+            await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          }
+          await navigateInApp(page, "new-session", "?agent=main");
+          await page
+            .locator(".new-session-page__message")
+            .fill("Review release readiness and outstanding fixes");
+          await gateway.deferNext("sessions.create");
+          await page.getByRole("button", { name: "Start session", exact: true }).click();
+          await gateway.waitForRequest("sessions.create");
+          await page.locator("openclaw-pending-session-create .chat-pane__header").waitFor();
+          const provisional = page.locator(".sidebar-recent-session--creating");
+          await expect.poll(() => provisional.count()).toBe(1);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const sessions = page.locator(".sidebar-shell__body");
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator("body"),
+              [sessions, provisional, page.locator(".chat-pane__header")],
+              { animations: "disabled", elements: [sessions] },
+            );
+            await writeFile(
+              path.join(suite.artifactDir, `pending-session-${destination.replace(" ", "-")}.png`),
+              frame.elements[0]!.png,
+            );
+          }
+          // The handoff occupies the slot its admitted row will take, not a detached
+          // row above the list and its agent header.
+          const rowDestination = pinned
+            ? ".sidebar-agent-roster"
+            : mode === "roster"
+              ? '.sidebar-sessions [data-agent-group="main"]'
+              : ".sidebar-sessions .sidebar-recent-sessions";
+          const pendingSelector = pinned
+            ? `${rowDestination} > .sidebar-recent-session--creating`
+            : `${rowDestination} .sidebar-recent-session--creating`;
+          expect(await page.locator(pendingSelector).count()).toBe(1);
+          const titleInset = (row: typeof provisional) =>
+            row
+              .locator(".sidebar-recent-session__text")
+              .evaluate((element) => Math.round(element.getBoundingClientRect().left));
+          if (mode === "chip") {
+            expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+          }
+          expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
+          if (mode === "chip") {
+            expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
+          }
+          expect(await provisional.locator("button, a[href]").count()).toBe(0);
+          expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
+          const bars = page.locator(".session-title-placeholder > span");
+          expect(await bars.count()).toBe(2);
+          for (const bar of await bars.all()) {
+            const style = await bar.evaluate((element) => {
+              const computed = getComputedStyle(element);
+              return {
+                radius: computed.borderRadius,
+                transform: computed.transform,
+                background: computed.backgroundColor,
+                animation: getComputedStyle(element, "::after").animationName,
+              };
+            });
+            expect(style.radius).toBe("3px");
+            expect(style.transform).toBe("none");
+            expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+            expect(style.animation).toBe("shimmer");
+          }
+          await page.emulateMedia({ reducedMotion: "reduce" });
+          for (const bar of await bars.all()) {
+            expect(
+              await bar.evaluate((element) => getComputedStyle(element, "::after").animationName),
+            ).toBe("none");
+          }
+          expect(await page.locator(".chat-pane__header .session-title-placeholder").count()).toBe(
+            1,
+          );
+          expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
+          await gateway.rejectDeferred("sessions.create", {
+            code: "UNAVAILABLE",
+            message: "Synthetic admission refused",
+          });
+          await expect
+            .poll(() => page.locator(".new-session-page__message").inputValue())
+            .toBe("Review release readiness and outstanding fixes");
+          expect(await provisional.count()).toBe(0);
+          expect(await page.locator('.sidebar-recent-session [aria-current="page"]').count()).toBe(
+            0,
+          );
+          await navigateInApp(page, "chat");
+          await waitForCommittedChatRoute(page);
+          if (mode === "chip") {
+            await oldRow.locator('[aria-current="page"]').waitFor();
+          } else if (pinned) {
+            expect(await page.locator('[data-pinned-agent="main"]').count()).toBe(1);
+          } else {
+            expect(
+              await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').count(),
+            ).toBe(1);
+          }
+        },
       );
-      expect(await blob.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-        "session-title-wave",
-      );
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      expect(await blob.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-        "none",
-      );
-      expect(await page.locator(".chat-pane__header .session-title-placeholder").count()).toBe(1);
-      expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      await gateway.rejectDeferred("sessions.create", {
-        code: "UNAVAILABLE",
-        message: "Synthetic admission refused",
-      });
-      await expect
-        .poll(() => page.locator(".new-session-page__message").inputValue())
-        .toBe("Review release readiness and outstanding fixes");
-      expect(await provisional.count()).toBe(0);
-      expect(await page.locator('.sidebar-recent-session [aria-current="page"]').count()).toBe(0);
-      await navigateInApp(page, "chat");
-      await waitForCommittedChatRoute(page);
-      await page.locator('[data-session-key="' + old.key + '"] [aria-current="page"]').waitFor();
-    });
-  });
+    },
+  );
 });

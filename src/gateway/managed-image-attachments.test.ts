@@ -44,6 +44,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createManagedArtifactDownload } from "./artifact-download-grants.js";
 import {
   createFixture,
   createManagedOutgoingImageBlocks,
@@ -67,6 +68,8 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { createSessionFileDownloadClient } from "./server-methods/sessions-files.test-support.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 type PlaybackTranscodeResolution = Awaited<
@@ -221,6 +224,7 @@ async function requestManagedImage(params: {
   headers?: http.ClientRequestArgs["headers"];
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
+  clients?: ReadonlySet<GatewayClient>;
 }) {
   authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
     if (params.denyAuth) {
@@ -259,6 +263,7 @@ async function requestManagedImage(params: {
         trustedProxies: ["127.0.0.1/32"],
         allowRealIpFallback: false,
         stateDir: params.stateDir,
+        clients: params.clients,
       });
       if (!handled) {
         res.statusCode = 404;
@@ -441,21 +446,31 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     ];
     mockSessionEntry(path.join(stateDir, "gateway-sessions.json"));
     readSessionMessagesMock.mockResolvedValue(transcriptMessages);
-    const download = await resolveManagedOutgoingImageArtifactDownload({
+    const preparedSource = await resolveManagedOutgoingImageArtifactDownload({
       sessionKey,
       artifactId: `${MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX}${attachmentId}`,
       stateDir,
     });
+    using connection = createSessionFileDownloadClient();
+    expect(preparedSource).not.toBeNull();
+    const download = createManagedArtifactDownload({
+      client: connection.client,
+      path: preparedSource!.url,
+      assertCurrent() {},
+      release() {},
+    });
+    const clients = new Set([connection.client]);
 
     const { result } = await requestManagedImage({
       stateDir,
       pathName: download?.url ?? "",
       denyAuth: true,
+      clients,
       headers: { range: "bytes=9-13" },
       transcriptMessages,
     });
 
-    expect(download).toMatchObject({ type: "audio", title: "音声%20.mp3" });
+    expect(preparedSource).toMatchObject({ type: "audio", title: "音声%20.mp3" });
     expect(result.headers["content-disposition"]).toContain(
       "filename*=UTF-8''%E9%9F%B3%E5%A3%B0%2520.mp3",
     );
@@ -468,9 +483,10 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
       pathName: (download?.url ?? "").replace(attachmentId, wrongAttachmentId),
       denyAuth: true,
+      clients,
     });
-    expect(wrong.result.statusCode).toBe(401);
-    expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
+    expect(wrong.result.statusCode).toBe(404);
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
 
   it("returns 202 while a managed playback transcode is preparing", async () => {
@@ -596,11 +612,21 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     ];
     mockSessionEntry(path.join(stateDir, "sessions.sqlite"));
     readSessionMessagesMock.mockResolvedValue(transcriptMessages);
-    const download = await resolveManagedOutgoingImageArtifactDownload({
+    const preparedSource = await resolveManagedOutgoingImageArtifactDownload({
       sessionKey,
       artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
       stateDir,
     });
+    using connection = createSessionFileDownloadClient();
+    expect(preparedSource).not.toBeNull();
+    const download = createManagedArtifactDownload({
+      client: connection.client,
+      path: preparedSource!.url,
+      assertCurrent() {},
+      release() {},
+    });
+    const clients = new Set([connection.client]);
+
     const thumbnailUrl = `${download?.url.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`;
     const localRequest = {
       sessionKey,
@@ -627,6 +653,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
       pathName: thumbnailUrl,
       denyAuth: true,
+      clients,
       transcriptMessages,
     });
 
@@ -643,6 +670,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
       pathName: `${thumbnailUrl}&width=480`,
       denyAuth: true,
+      clients,
       transcriptMessages,
     });
     expect(readImageProbeFromHeader(small.result.body)).toMatchObject({

@@ -33,11 +33,13 @@ An `on-exit` job disables itself when its payload is queued to run. Re-enable th
 
 The Gateway owns the watched command's process tree, including cleanup after failed startup. Cleanup must finish before its payload fires or a replacement command starts. If cleanup cannot be confirmed, the Gateway reports the failure, keeps a suspension blocker, and refuses to rearm that watch in the same process. Inspect and stop any remaining command processes, then restart the Gateway; disabling and re-enabling the job does not clear uncertain cleanup.
 
+Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its inherited `deleteAfterRun` setting. An explicit `deleteAfterRun` value in the same update takes precedence.
+
 ### Heartbeat task migration
 
 Heartbeat scratch supported a structured `tasks:` block before v2026.8.1. If you are upgrading from an earlier release, run `openclaw doctor --fix` to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
 
-These migrated jobs carry public `systemEvent` payloads, so `openclaw automations list`, `get`, `edit`, and `remove` plus the `automations` agent tool manage them like other jobs (the tool still accepts its legacy `cron` name as a compatibility alias). Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and busy retries still apply, while the scheduler owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
+These migrated jobs carry public `systemEvent` payloads, so `openclaw automations list`, `get`, `edit`, and `remove` plus the `automations` agent tool manage them like other jobs (the tool still accepts its legacy `cron` name as a compatibility alias). Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and retries while the target session is busy still apply, while the scheduler owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
 
 Heartbeat scratch is monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work as automations.
 

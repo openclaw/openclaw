@@ -181,9 +181,6 @@ export function dropStaleOpenAIReasoning(
     }
 
     const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-    if (!Array.isArray(assistantMsg.content)) {
-      return msg;
-    }
     const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.

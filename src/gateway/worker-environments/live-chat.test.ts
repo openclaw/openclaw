@@ -125,9 +125,15 @@ describe("worker live Gateway chat projection", () => {
     const live = await liveProjection();
     live.start();
     let text = "";
-    for (const chunk of scenario.chunks) {
-      text += chunk;
-      live.preview(message(text), 0, chunk);
+    {
+      using clock = vi.spyOn(Date, "now");
+      const startedAt = Date.now();
+      for (const [index, chunk] of scenario.chunks.entries()) {
+        // Exercise each protocol snapshot independently of worker preview pacing.
+        clock.mockReturnValue(startedAt + index * 100);
+        text += chunk;
+        live.preview(message(text), 0, chunk);
+      }
     }
     live.end(message(text));
     await live.finish();

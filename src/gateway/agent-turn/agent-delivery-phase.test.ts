@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import type { GatewayContextResolver } from "../server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentDeliveryPlanWithSessionRoute: vi.fn(),
@@ -23,6 +30,84 @@ describe("resolveAgentDeliveryPhase", () => {
     mocks.resolveAgentOutboundTarget.mockReset();
     mocks.resolveMessageChannelSelection.mockReset();
   });
+
+  for (const scope of ["local", "foreign Gateway", "foreign store"] as const) {
+    it(`observes active session runs only in the selected scope: ${scope}`, async ({ signal }) => {
+      const localResolver: GatewayContextResolver = () => undefined;
+      const foreignResolver: GatewayContextResolver = () => undefined;
+      const storePath = "/synthetic/agent-delivery/local/sessions.db";
+      const sessionKey = "agent:main:delivery-scope";
+      const sessionId = "delivery-scope-session";
+      const target = captureSessionTarget({
+        storeScope:
+          scope === "foreign store" ? "/synthetic/agent-delivery/other/sessions.db" : storePath,
+        sessionKey,
+        incarnation: sessionId,
+        agentId: "main",
+      });
+      const source = withPluginRuntimeGatewayContextResolver(
+        scope === "foreign Gateway" ? foreignResolver : localResolver,
+        () =>
+          registerChatAbortController({
+            runId: "active-delivery-run",
+            sessionKey,
+            sessionId,
+            agentId: "main",
+            timeoutMs: 60_000,
+            target,
+          }),
+      );
+      if (!source.entry) {
+        throw new Error("Expected fresh delivery source admission");
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      const active = withSessionTurn(
+        { sessionKey, sessionId, target, controllerInput: source.entry.input },
+        async (operation) => {
+          if (!operation) {
+            throw new Error("Expected admitted delivery turn");
+          }
+          markReplyOperationExecutionStarted(operation);
+          operation.setPhase("running");
+          entered.resolve();
+          await release.promise;
+        },
+      );
+      const context = { resolveGatewayContext: localResolver } as Parameters<
+        typeof resolveAgentDeliveryPhase
+      >[0]["context"];
+      const onRunObserved = vi.fn();
+      mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({ baseDelivery: {} });
+      try {
+        await withinTest(entered.promise, signal);
+        await resolveAgentDeliveryPhase({
+          request: { message: "observe", idempotencyKey: "new-delivery-run" },
+          cfg: {},
+          resolvedSessionKey: sessionKey,
+          resolvedSessionAgentId: "main",
+          storePath,
+          replyTo: "",
+          to: "",
+          bestEffortDeliver: false,
+          runId: "new-delivery-run",
+          client: null,
+          context,
+          respond: vi.fn(),
+          isWebchatConnect: () => false,
+          onRunObserved,
+        });
+        expect(onRunObserved.mock.calls.map(([runId]) => runId)).toEqual(
+          scope === "local" ? ["new-delivery-run", "active-delivery-run"] : ["new-delivery-run"],
+        );
+      } finally {
+        release.resolve();
+        await active;
+        source.cleanup();
+        await source.entry.input.settlement.promise;
+      }
+    });
+  }
 
   it("renders a strict target-resolution failure without its Error class", async () => {
     const targetError = Object.assign(new Error('Reserved target "current" for Telegram'), {
@@ -50,7 +135,7 @@ describe("resolveAgentDeliveryPhase", () => {
       bestEffortDeliver: false,
       runId: "strict-target-resolution",
       client: null,
-      context: { chatAbortControllers: new Map() } as never,
+      context: {} as never,
       respond,
       isWebchatConnect: () => false,
     });
@@ -105,7 +190,7 @@ describe("resolveAgentDeliveryPhase", () => {
           bestEffortDeliver: false,
           runId: "private-delivery",
           client: null,
-          context: { chatAbortControllers: new Map(), logGateway: { info } } as never,
+          context: { logGateway: { info } } as never,
           respond,
           isWebchatConnect: () => false,
         };

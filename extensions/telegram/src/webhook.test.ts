@@ -45,6 +45,7 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";
+import { createTelegramWebhookIdleAdmissionFixture } from "./test-support/webhook-admission.js";
 import {
   createNearLimitTelegramPayload,
   createTelegramPrivateTopicCallback,
@@ -987,35 +988,14 @@ describe("startTelegramWebhook", () => {
   );
 
   it("retains the registered HTTP invocation until durable admission and acknowledgment", async () => {
-    let releaseEnqueue: (() => void) | undefined;
-    let markEnqueueStarted: (() => void) | undefined;
-    const enqueueGate = new Promise<void>((resolve) => {
-      releaseEnqueue = resolve;
-    });
-    const enqueueStarted = new Promise<void>((resolve) => {
-      markEnqueueStarted = resolve;
-    });
-    setTelegramRuntime({
-      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
-      state: {
-        resolveStateDir: () => webhookStateDir ?? os.tmpdir(),
-        openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-        ) => {
-          const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
-          return {
-            ...queue,
-            enqueue: async (...args: Parameters<typeof queue.enqueue>) => {
-              markEnqueueStarted?.();
-              await enqueueGate;
-              return await queue.enqueue(...args);
-            },
-          };
-        },
-      },
-    } as TelegramRuntime);
+    const { runtime, enqueueGate, enqueueStarted } = createTelegramWebhookIdleAdmissionFixture(
+      () => webhookStateDir ?? os.tmpdir(),
+    );
+    setTelegramRuntime(runtime);
 
-    await withStartedWebhook(webhookOptions, async ({ port }) => {
+    await withStartedWebhook(webhookOptions, async ({ port, ingress }) => {
+      // The idle singleton path must hit the real atomic enqueue-and-claim operation.
+      await ingress.waitForIdle();
       let responseSettled = false;
       const responseTask = postWebhookJson({
         url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
@@ -1027,19 +1007,24 @@ describe("startTelegramWebhook", () => {
       });
 
       try {
-        await enqueueStarted;
+        await Promise.race([
+          enqueueStarted.promise,
+          responseTask.then(() => {
+            throw new Error("Webhook responded before reaching the held durable admission");
+          }),
+        ]);
         await yieldWebhookTask();
         expect(responseSettled).toBe(false);
         expect(pendingRouteRequests.size).toBe(1);
 
-        releaseEnqueue?.();
+        enqueueGate.resolve();
         const response = await responseTask;
         expect(response.status).toBe(200);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
         expect(await response.text()).toBe("");
         expect(pendingRouteRequests.size).toBe(0);
       } finally {
-        releaseEnqueue?.();
+        enqueueGate.resolve();
       }
     });
   });

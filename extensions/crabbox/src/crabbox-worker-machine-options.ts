@@ -5,7 +5,7 @@ import {
   isRecord,
   normalizeOptionalString as nonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
 import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
@@ -24,7 +24,6 @@ type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 
 type CrabboxMachineOptionsResolverDependencies = {
   resolveBinary: (explicit?: string) => Promise<string>;
-  runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
 };
 
@@ -89,7 +88,7 @@ export function createCrabboxMachineCatalogResolver(
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
     // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
     // Keep catalog JSON intact or every provider loses its machine shapes.
-    const result = await dependencies.runCommand([binary, "providers", "--json"], {
+    const result = await runCrabboxProcess([binary, "providers", "--json"], {
       maxOutputBytes: 1024 * 1024,
       killProcessTree: true,
       timeoutMs: CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,

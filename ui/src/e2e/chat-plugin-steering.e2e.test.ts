@@ -112,20 +112,21 @@ suite.define(() => {
             .toBe(colorScheme);
           expect(await gateway.getRequests("chat.startup")).not.toHaveLength(0);
 
-          const notice = pane.locator(".chat-notice").filter({ hasText: "Advisor guidance" });
+          expect(await pane.locator("details.chat-system-events").count()).toBe(0);
+          const notice = pane
+            .locator("details.chat-notice-inline")
+            .filter({ hasText: "Advisor guidance" });
           await notice.waitFor();
           expect(await notice.count()).toBe(1);
-          expect(await notice.locator(".chat-divider__title").textContent()).toBe(
+          expect(await notice.locator(".chat-notice-inline__label").textContent()).toBe(
             "Advisor guidance",
           );
-          expect(await notice.locator(".chat-divider__metric").textContent()).toMatch(
+          expect(await notice.locator(".chat-notice-inline__time").textContent()).toMatch(
             /^2:05\s*PM$/u,
           );
-          const disclosure = notice.locator("details.chat-notice__collapse");
-          const toggle = disclosure.locator("summary");
-          const body = disclosure.locator(".chat-notice__body");
-          expect(await toggle.textContent()).toBe("Show content");
-          expect(await disclosure.getAttribute("open")).toBeNull();
+          const toggle = notice.locator("summary");
+          const body = notice.locator(".chat-notice__body");
+          expect(await notice.getAttribute("open")).toBeNull();
           expect(await body.count()).toBe(1);
           expect(await body.isVisible()).toBe(false);
           expect(await pane.getByText(rawSteeringText, { exact: true }).count()).toBe(0);
@@ -135,8 +136,7 @@ suite.define(() => {
 
           await toggle.click();
           await body.waitFor();
-          expect(await disclosure.getAttribute("open")).not.toBeNull();
-          await expect.poll(() => toggle.textContent()).toBe("Hide content");
+          expect(await notice.getAttribute("open")).not.toBeNull();
           expect((await body.textContent())?.trim()).toBe(displayText);
           expect(await userBubbles.count()).toBe(1);
           await expect
@@ -154,24 +154,21 @@ suite.define(() => {
             .toBe(true);
           expect(
             await notice.evaluate((element) => {
-              const noticeBody = element.querySelector(".chat-notice__body");
-              const label = element.querySelector(".chat-divider__label");
-              if (!noticeBody || !label) {
-                throw new Error("Expected a notice body and label");
+              const label = element.querySelector(".chat-notice-inline__label");
+              const assistant = document.querySelector(
+                ".chat-group:not(.user):not(.tool) .chat-group-messages",
+              );
+              if (!label || !assistant) {
+                throw new Error("Expected a guidance label and an assistant column");
               }
-              const text = document.createRange();
-              text.selectNodeContents(noticeBody.querySelector("p") ?? noticeBody);
-              const bodyBounds = text.getBoundingClientRect();
-              const labelBounds = label.getBoundingClientRect();
               return Math.abs(
-                bodyBounds.left + bodyBounds.width / 2 - labelBounds.left - labelBounds.width / 2,
+                element.getBoundingClientRect().left - assistant.getBoundingClientRect().left,
               );
             }),
-          ).toBeLessThanOrEqual(1);
+          ).toBeLessThanOrEqual(2);
           await toggle.click();
           await body.waitFor({ state: "hidden" });
-          expect(await disclosure.getAttribute("open")).toBeNull();
-          await expect.poll(() => toggle.textContent()).toBe("Show content");
+          expect(await notice.getAttribute("open")).toBeNull();
 
           const workSummaries = pane.locator(
             ".chat-activity-group > .chat-activity-group__summary",

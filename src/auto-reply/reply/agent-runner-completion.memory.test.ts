@@ -4,9 +4,13 @@ import { memorySessionActorOwners } from "../../config/sessions/session-actor-me
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import {
+  createReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -29,11 +33,12 @@ const scope = {
     env: { OPENCLAW_STATE_DIR: "/synthetic/turn-completion" },
   }),
 };
+const target = captureSessionTarget({ ...scope, storeScope: scope.storePath });
 const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
 afterEach(() => {
-  replyRunRegistry.get(scope.sessionKey)?.complete();
+  getSessionControllerOperation(scope.sessionKey, target)?.complete();
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
@@ -67,6 +72,7 @@ it("settles unbound memory usage and final custody without losing an intervening
     ...scope,
     sessionId: entry.sessionId,
     resetTriggered: false,
+    target,
   });
   operation.setPhase("running");
   const pendingFinal: SessionActorPendingFinalDelivery = {

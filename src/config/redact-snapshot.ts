@@ -97,7 +97,7 @@ function isSecretRefWithProvider(
 // records are handled by the lookup, but arrays need two entries in
 // the Set, as their first lookup is done before the code knows it's
 // an array.
-function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
+function buildRedactionLookup(hints: ConfigUiHints): ReadonlySet<string> | undefined {
   const result = new Set<string>();
 
   for (const [path, hint] of Object.entries(hints)) {
@@ -120,11 +120,16 @@ function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
       result.add(joinedPath);
     }
   }
-  if (result.size !== 0) {
-    result.add("");
+  if (result.size === 0) {
+    return undefined;
   }
+  result.add("");
   return result;
 }
+
+// Schema hints are immutable once published and the Gateway reuses one response
+// per config, so request paths (Control UI bootstrap, config.get) share a lookup.
+const redactionLookups = new WeakMap<ConfigUiHints, ReadonlySet<string> | undefined>();
 
 type RedactionContext = {
   hints: ConfigUiHints | undefined;
@@ -133,8 +138,16 @@ type RedactionContext = {
 };
 
 function createRedactionContext(hints?: ConfigUiHints): RedactionContext {
-  const lookup = hints ? buildRedactionLookup(hints) : undefined;
-  return { hints, lookup: lookup?.has("") ? lookup : undefined, warnOnMissingOriginal: true };
+  let lookup: ReadonlySet<string> | undefined;
+  if (hints) {
+    if (redactionLookups.has(hints)) {
+      lookup = redactionLookups.get(hints);
+    } else {
+      lookup = buildRedactionLookup(hints);
+      redactionLookups.set(hints, lookup);
+    }
+  }
+  return { hints, lookup, warnOnMissingOriginal: true };
 }
 
 // Schema lookup coverage is prefix-scoped. After a path misses, heuristic detection must own the

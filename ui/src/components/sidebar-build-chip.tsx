@@ -1,4 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import { createMemo, Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -6,7 +7,6 @@ import { formatDateTimeMs } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import {
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
@@ -20,78 +20,59 @@ export type SidebarBuildChipProps = {
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
+  copyButtonRef?: (element: HTMLButtonElement) => void;
 };
 
-function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement) {
-  host.style.display = "contents";
-  function renderContent() {
-    const text =
-      props.variant === "settings"
-        ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, props.gatewayVersion)
-        : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
-    if (!text) {
-      return null;
-    }
-    return (
-      <openclaw-tooltip class="sidebar-hover-tooltip" prop:delay={600} prop:closeDelay={300}>
-        <a
-          {...props.menuAttributes}
-          class="sidebar-footer-build"
-          href={pathForRoute("about", props.basePath)}
-          role={props.variant === "identity" ? "menuitem" : undefined}
-          aria-label={t("aboutPage.artifactDetails")}
-          onClick={(event) => {
-            const onClick = props.menuAttributes?.onClick;
-            if (onClick) {
-              onClick(event);
-              return;
-            }
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            props.onNavigate?.("about");
-          }}
-        >
-          {text ? <span class="sidebar-footer-build__text">{text}</span> : null}
-        </a>
-        <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
-          {renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, props.gatewayVersion)}
-        </div>
-      </openclaw-tooltip>
-    );
-  }
-  return <>{renderContent()}</>;
-}
-
-export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
-  "openclaw-sidebar-build-chip",
-  SidebarBuildChipContent,
-  {
-    properties: {
-      basePath: { default: "", attribute: false },
-      gatewayVersion: { default: null, attribute: false },
-      onNavigate: { default: undefined, attribute: false },
-      variant: { default: "identity", attribute: false },
-      menuAttributes: { default: undefined, attribute: false },
-    },
-  },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-sidebar-build-chip": SolidBridgeElement<SidebarBuildChipProps>;
-  }
+export function SidebarBuildChip(props: SidebarBuildChipProps) {
+  const text = createMemo(() =>
+    props.variant === "settings"
+      ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, props.gatewayVersion)
+      : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO),
+  );
+  return (
+    <openclaw-sidebar-build-chip style={{ display: "contents" }}>
+      <Show when={text()}>
+        {(label) => (
+          <openclaw-tooltip class="sidebar-hover-tooltip" prop:delay={600} prop:closeDelay={300}>
+            <a
+              {...props.menuAttributes}
+              class="sidebar-footer-build"
+              href={pathForRoute("about", props.basePath)}
+              role={props.variant === "identity" ? "menuitem" : undefined}
+              aria-label={t("aboutPage.artifactDetails")}
+              onClick={(event) => {
+                const onClick = props.menuAttributes?.onClick;
+                if (onClick) {
+                  onClick(event);
+                  return;
+                }
+                if (!shouldHandleNavigationClick(event)) {
+                  return;
+                }
+                event.preventDefault();
+                props.onNavigate?.("about");
+              }}
+            >
+              <span class="sidebar-footer-build__text">{label()}</span>
+            </a>
+            <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
+              {renderSidebarServerDetails(
+                CONTROL_UI_BUILD_INFO,
+                props.gatewayVersion,
+                props.copyButtonRef,
+              )}
+            </div>
+          </openclaw-tooltip>
+        )}
+      </Show>
+    </openclaw-sidebar-build-chip>
+  );
 }
 
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sidebar-build-chip": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-sidebar-build-chip"]
-      > & {
-        [K in keyof SidebarBuildChipProps as `prop:${K}`]?: SidebarBuildChipProps[K];
-      };
+      "openclaw-sidebar-build-chip": HTMLAttributes<HTMLElement>;
     }
   }
 }
@@ -114,6 +95,7 @@ async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLa
 function renderSidebarServerDetails(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
+  copyButtonRef?: (element: HTMLButtonElement) => void,
 ): SolidJSX.Element {
   const commit = info.commit?.slice(0, 12) ?? null;
   const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
@@ -142,6 +124,7 @@ function renderSidebarServerDetails(
             <span>{commit ?? unavailable}</span>
             {commit ? (
               <button
+                ref={copyButtonRef}
                 type="button"
                 class="sidebar-build-hover-card__copy"
                 aria-label={copyLabel}

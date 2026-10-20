@@ -130,14 +130,18 @@ export async function confirmSessionArchive(
           }),
         },
       }));
+      // Only direct children move to the top level; deeper sessions stay under them.
+      const directChildCount = rows.filter(
+        (row) => ancestorsByKey.get(row.key)?.length === 1,
+      ).length;
       const choice = await showConfirmChoiceDialog({
         title: t("sessionsView.archiveSessionTitle"),
         message:
           t(
-            rows.length === 2
+            directChildCount === 1
               ? "sessionsView.archiveSessionNestedOne"
               : "sessionsView.archiveSessionNestedOther",
-            { count: String(rows.length - 1), session: session.label },
+            { count: String(directChildCount), session: session.label },
           ) +
           (rows.some(hasActiveArchiveWork)
             ? "\n\n" + t("sessionsView.archiveRunningSessions")

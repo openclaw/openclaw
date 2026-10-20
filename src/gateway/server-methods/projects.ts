@@ -97,8 +97,7 @@ function findSessionCheckoutReference(
     const cwd = entry.spawnedCwd;
     if (
       (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) ||
-      (cwd &&
-        (path.resolve(cwd) === normalizedRoot || isPathInside(normalizedRoot, path.resolve(cwd))))
+      (cwd && isPathInside(normalizedRoot, cwd))
     ) {
       return key;
     }

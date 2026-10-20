@@ -1,4 +1,3 @@
-/** Doctor repairs for stale plugin registry entries, managed npm shadows, and peer links. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { writeJsonTarget } from "../infra/json-file.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
+import { tryReadJsonObjectSync as readJsonObject } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -33,6 +32,7 @@ import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
+import { normalizeOptionalTrimmedStringRecord } from "../shared/collection-input.js";
 import { shortenHomePath } from "../utils.js";
 import {
   listStaleManagedNpmInstallGenerations,
@@ -96,22 +96,8 @@ type PluginRegistryHealthIssue =
     }
   | StaleManagedNpmInstallGenerationIssue;
 
-function readJsonObject(filePath: string): Record<string, unknown> | null {
-  const parsed = tryReadJsonSync(filePath);
-  return isRecord(parsed) ? parsed : null;
-}
-
 function readStringMap(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const result: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === "string" && raw.trim()) {
-      result[key] = raw.trim();
-    }
-  }
-  return result;
+  return (isRecord(value) ? normalizeOptionalTrimmedStringRecord(value) : undefined) ?? {};
 }
 
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {

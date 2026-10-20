@@ -32,11 +32,15 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   const root = tempDirs.make("openclaw-cache-prewarm-");
   const launcher = path.join(root, "gateway-prewarm.mjs");
   const cache = path.join(root, "cache");
-  await fs.copyFile(new URL("../../gateway-prewarm.mjs", import.meta.url), launcher);
-  await fs.copyFile(
-    new URL("../../node-compile-cache.mjs", import.meta.url),
-    path.join(root, "node-compile-cache.mjs"),
-  );
+  for (const name of [
+    "gateway-prewarm.mjs",
+    "node-compile-cache.mjs",
+    "cli-invocation.mjs",
+    "cli-parent-lifetime.mjs",
+    "gateway-shutdown-budget.mjs",
+  ]) {
+    await fs.copyFile(new URL(`../../${name}`, import.meta.url), path.join(root, name));
+  }
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "package.json"), '{"type":"module","version":"2026.10.1"}');
   await fs.writeFile(path.join(root, "dist", "build-info.json"), '{"buildId":"prewarm-release"}');

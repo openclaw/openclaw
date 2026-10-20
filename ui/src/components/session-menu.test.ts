@@ -23,7 +23,7 @@ import {
 } from "../test-helpers/session-owner-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { SessionMenuAction } from "./session-menu.ts";
+import type { SessionMenuAction } from "./session-menu-solid.tsx";
 
 function press(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options });

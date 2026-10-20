@@ -13,13 +13,17 @@ it("counts overlapping commands once and keeps unknown outcomes distinct from co
     const unknown = observeSessionActorCommand("completeTurn");
     const read = observeSessionActorCommand("read");
     const rejected = observeSessionActorCommand("patch");
-    expect(events).toEqual([
-      { event: "begin", sequence: expect.any(Number), phase: "acceptInput" },
-      { event: "begin", sequence: expect.any(Number), phase: "appendToolResult" },
-      { event: "begin", sequence: expect.any(Number), phase: "completeTurn" },
-      { event: "begin", sequence: expect.any(Number), phase: "read" },
-      { event: "begin", sequence: expect.any(Number), phase: "patch" },
-    ]);
+    const event = (phase: string, outcome?: string) => ({
+      event: outcome ? "settled" : "begin",
+      sequence: expect.any(Number),
+      phase,
+      ...(outcome ? { outcome } : {}),
+    });
+    expect(events).toEqual(
+      ["acceptInput", "appendToolResult", "completeTurn", "read", "patch"].map((phase) =>
+        event(phase),
+      ),
+    );
     unknown.settled("unknown");
     read.settled("read");
     accepted.settled("committed");
@@ -29,26 +33,11 @@ it("counts overlapping commands once and keeps unknown outcomes distinct from co
     accepted.settled("committed");
 
     expect(events.slice(5)).toEqual([
-      {
-        event: "settled",
-        sequence: expect.any(Number),
-        phase: "completeTurn",
-        outcome: "unknown",
-      },
-      { event: "settled", sequence: expect.any(Number), phase: "read", outcome: "read" },
-      {
-        event: "settled",
-        sequence: expect.any(Number),
-        phase: "acceptInput",
-        outcome: "committed",
-      },
-      {
-        event: "settled",
-        sequence: expect.any(Number),
-        phase: "appendToolResult",
-        outcome: "rolled-back",
-      },
-      { event: "settled", sequence: expect.any(Number), phase: "patch", outcome: "rejected" },
+      event("completeTurn", "unknown"),
+      event("read", "read"),
+      event("acceptInput", "committed"),
+      event("appendToolResult", "rolled-back"),
+      event("patch", "rejected"),
     ]);
   } finally {
     commands.unsubscribe(collect);

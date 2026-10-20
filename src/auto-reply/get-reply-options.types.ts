@@ -143,9 +143,9 @@ export type TurnAdoptionLifecycle = {
   /** Requested cadence for pre-adoption heartbeats. */
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void;
+  onAbandoned?: () => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
-  onSettled?: () => void;
+  onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
   /** Stable cancellation owner for collect-mode batches. */
@@ -207,7 +207,7 @@ export type GetReplyOptions = {
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
   /**
-   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31.
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
    * completion ownership offered in options; all other legacy callback results are ignored.
    */
@@ -239,7 +239,11 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Gateway-owned start-or-steer decision for this turn. */
-  messageInjectionDisposition?: "none" | "accepted" | "rejected";
+  messageInjectionDisposition?:
+    | "none"
+    | "accepted"
+    | "rejected"
+    | "collaborative-steering-disabled";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -302,7 +306,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */

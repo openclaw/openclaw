@@ -2,11 +2,14 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "./avatar-image.ts";
 import type { AgentIdentityDraft } from "./panels-overview.tsx";
+
+registerSettingsEnglish();
 
 const AVATAR_REJECTION_MESSAGE_KEYS = {
   unusable: "agents.identity.imageUnusable",
@@ -41,6 +44,7 @@ export function selectIdentityAvatar(
   host: AgentIdentityEditorHost,
   file: File,
   config?: ApplicationConfigCapability,
+  onSelected?: () => void,
 ) {
   const selection = Symbol("avatar-selection");
   avatarSelections.set(host, selection);
@@ -58,8 +62,8 @@ export function selectIdentityAvatar(
         return;
       }
       if (result.ok) {
-        host.identityDraft = { ...host.identityDraft, avatar: result.dataUrl };
-        host.identityError = null;
+        setIdentityAvatar(host, result.dataUrl, config);
+        onSelected?.();
       } else {
         host.identityError = t(AVATAR_REJECTION_MESSAGE_KEYS[result.reason]);
       }
@@ -69,6 +73,18 @@ export function selectIdentityAvatar(
         host.identityError = formatUiError(error);
       }
     });
+}
+
+/** A rendered preset or accepted generated candidate is already size-bounded. */
+export function setIdentityAvatar(
+  host: AgentIdentityEditorHost,
+  dataUrl: string,
+  config?: ApplicationConfigCapability,
+) {
+  avatarSelections.delete(host);
+  assertUploadsEnabled(config);
+  host.identityDraft = { ...host.identityDraft, avatar: dataUrl };
+  host.identityError = null;
 }
 
 /** Persist the draft via agents.update, then refresh the roster and the
@@ -138,7 +154,11 @@ export async function saveIdentityDraft(params: {
       }
     }
     if (params.isCurrent()) {
-      resetIdentityDraft(host);
+      host.identityDraft = {
+        name: host.identityDraft.name === draft.name ? null : host.identityDraft.name,
+        emoji: host.identityDraft.emoji === draft.emoji ? null : host.identityDraft.emoji,
+        avatar: host.identityDraft.avatar === draft.avatar ? null : host.identityDraft.avatar,
+      };
       params.onSaved();
       host.identityError = refreshErrors.length > 0 ? refreshErrors.join(" ") : null;
     }

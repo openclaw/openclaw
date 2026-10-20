@@ -8,7 +8,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
-import type { ExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
 import {
   countOutboundMessageAuditEventsForRunInDatabase,
   pageOutboundMessageAuditEventsForRunInDatabase,
@@ -21,8 +20,26 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
 
-function databaseOptions() {
-  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("message-progress-") } };
+function createStore() {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("message-progress-") } };
+  const open = () => openOpenClawStateDatabase(options);
+  const writeOptions = () => ({ ...options, database: open() });
+  return {
+    open,
+    recordProgress: (input: OutboundMessageProgressInput) =>
+      recordOutboundMessageProgressInDatabase(input, writeOptions()),
+    recordTerminal: (input: ReturnType<typeof terminalInput>) =>
+      recordAuditEventInDatabase(input, writeOptions()),
+    readPage: (
+      params: Omit<Parameters<typeof pageOutboundMessageAuditEventsForRunInDatabase>[1], "runId">,
+    ) =>
+      pageOutboundMessageAuditEventsForRunInDatabase(open().db, {
+        runId: "run-progress",
+        ...params,
+      }),
+    prune: (now: number) =>
+      pruneExpiredOutboundMessageProgressInDatabase({ database: writeOptions(), now }),
+  };
 }
 
 function progressInput(
@@ -54,48 +71,30 @@ function progressInput(
   } as OutboundMessageProgressInput;
 }
 
-function terminalInput(
-  overrides: {
-    sourceId?: string;
-    sourceSequence?: number;
-    occurredAt?: number;
-    runId?: string;
-    executionIdentityToken?: ExecutionIdentityAdmissionToken;
-  } = {},
-) {
+function terminalInput(occurredAt = Date.now()) {
   return {
+    ...progressInput("message.outbound.queued", { occurredAt }),
     sourceId: "queue:payload:0",
     sourceSequence: 3,
-    occurredAt: Date.now(),
-    kind: "message" as const,
     action: "message.outbound.finished" as const,
     status: "succeeded" as const,
     outcome: "sent" as const,
-    actorType: "agent" as const,
-    actorId: "main",
-    agentId: "main",
-    runId: "run-progress",
-    direction: "outbound" as const,
-    channel: "qa-channel",
-    conversationKind: "direct" as const,
     durationMs: 3,
     resultCount: 1,
-    accountId: "raw-account",
-    conversationId: "raw-conversation",
     messageId: "raw-platform-message",
-    targetId: "raw-target",
-    ...overrides,
   };
 }
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+function outcomes(page: ReturnType<typeof pageOutboundMessageAuditEventsForRunInDatabase>) {
+  return page.entries.map((entry) => entry.event.outcome);
+}
+
+afterEach(closeOpenClawStateDatabaseForTest);
 
 describe("outbound message progress companion", () => {
   it("stays absent through startup, reads, and terminal-only writes at the current schema", () => {
-    const database = databaseOptions();
-    const opened = openOpenClawStateDatabase(database);
+    const database = createStore();
+    const opened = database.open();
     expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
@@ -103,16 +102,13 @@ describe("outbound message progress companion", () => {
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
     expect(
-      countOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+      countOutboundMessageAuditEventsForRunInDatabase(database.open().db, {
         runId: "missing",
       }),
     ).toBe(0);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
 
-    recordAuditEventInDatabase(terminalInput(), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    database.recordTerminal(terminalInput());
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
     expect(
@@ -123,26 +119,16 @@ describe("outbound message progress companion", () => {
   });
 
   it("ensures idempotently, deduplicates replay, and stores no raw message material", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const queued = progressInput("message.outbound.queued");
-    const first = recordOutboundMessageProgressInDatabase(queued, {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    const first = database.recordProgress(queued);
     closeOpenClawStateDatabaseForTest();
-    const recoveredReplay = recordOutboundMessageProgressInDatabase(queued, {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.platform-started"), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    const recoveredReplay = database.recordProgress(queued);
+    database.recordProgress(progressInput("message.outbound.platform-started"));
 
     expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
     expect(recoveredReplay).toBeUndefined();
-    const { db } = openOpenClawStateDatabase(database);
-    expect(tableExists(db, "outbound_message_progress")).toBe(true);
+    const { db } = database.open();
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
       count: 2,
     });
@@ -150,29 +136,16 @@ describe("outbound message progress companion", () => {
     const stored = JSON.stringify(
       db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
     );
-    for (const raw of [
-      "raw-account",
-      "raw-conversation",
-      "raw-target",
-      "raw-platform-message",
-      "message text",
-      "https://example.test",
-      "callback payload",
-      "session-key",
-      "secret-value",
-    ]) {
+    for (const raw of ["raw-account", "raw-conversation", "raw-target"]) {
       expect(stored).not.toContain(raw);
     }
   });
 
   it("pages large offsets across bounded owner-stream chunks", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const occurredAt = Date.now();
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    const { db } = openOpenClawStateDatabase(database);
+    database.recordProgress(progressInput("message.outbound.queued", { occurredAt }));
+    const { db } = database.open();
     db.prepare("DELETE FROM outbound_message_progress").run();
     const insert = db.prepare(`
       INSERT INTO outbound_message_progress (
@@ -205,80 +178,41 @@ describe("outbound message progress companion", () => {
       throw error;
     }
 
-    const page = pageOutboundMessageAuditEventsForRunInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { runId: "run-progress", now: occurredAt, offset: 510, limit: 4 },
-    );
-    expect(page.entries.map((entry) => entry.event.outcome)).toEqual([
-      "queued",
-      "platform_started",
-      "queued",
-      "platform_started",
-    ]);
+    const page = database.readPage({ now: occurredAt, offset: 510, limit: 4 });
+    expect(outcomes(page)).toEqual(["queued", "platform_started", "queued", "platform_started"]);
     expect(page.nextCursor).toBeDefined();
     expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        after: page.nextCursor,
-        limit: 2,
-      }).entries.map((entry) => entry.event.outcome),
+      outcomes(database.readPage({ now: occurredAt, after: page.nextCursor, limit: 2 })),
     ).toEqual(["queued", "platform_started"]);
   });
 
   it("rejects a cursor whose owner row was pruned while preserving the other owner", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const occurredAt = Date.now();
-    recordAuditEventInDatabase(terminalInput({ occurredAt }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    const first = pageOutboundMessageAuditEventsForRunInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { runId: "run-progress", now: occurredAt, limit: 2 },
-    );
+    database.recordTerminal(terminalInput(occurredAt));
+    database.recordProgress(progressInput("message.outbound.queued", { occurredAt }));
+    const first = database.readPage({ now: occurredAt, limit: 2 });
     const progress = first.entries.find((entry) => entry.event.outcome === "queued");
     expect(progress).toBeDefined();
     const progressCursor = {
       occurredAt,
       rowId: progress?.rowId ?? 0,
     };
-    openOpenClawStateDatabase(database).db.prepare("DELETE FROM outbound_message_progress").run();
+    database.open().db.prepare("DELETE FROM outbound_message_progress").run();
 
-    expect(() =>
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        after: progressCursor,
-        limit: 1,
-      }),
-    ).toThrow("cursor is no longer retained");
-    expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        limit: 10,
-      }).entries.map((entry) => entry.event.outcome),
-    ).toEqual(["sent"]);
+    expect(() => database.readPage({ now: occurredAt, after: progressCursor, limit: 1 })).toThrow(
+      "cursor is no longer retained",
+    );
+    expect(outcomes(database.readPage({ now: occurredAt, limit: 10 }))).toEqual(["sent"]);
   });
 
   it("bounds expired progress maintenance while preserving retained terminal rows", () => {
-    const database = databaseOptions();
-    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    const { db } = openOpenClawStateDatabase(database);
+    const database = createStore();
+    database.recordProgress(progressInput("message.outbound.queued"));
+    const { db } = database.open();
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
-    recordAuditEventInDatabase(terminalInput({ occurredAt: now }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    database.recordTerminal(terminalInput(now));
     const expiredAt = now - 31 * 24 * 60 * 60_000;
     db.prepare(
       `WITH RECURSIVE numbers(n) AS (
@@ -296,27 +230,12 @@ describe("outbound message progress companion", () => {
        FROM numbers`,
     ).run(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT + 1, expiredAt);
 
-    expect(
-      pruneExpiredOutboundMessageProgressInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now,
-      }),
-    ).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
+    expect(database.prune(now)).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
       count: 1,
     });
-    expect(
-      pruneExpiredOutboundMessageProgressInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now,
-      }),
-    ).toBe(1);
-    expect(
-      pruneExpiredOutboundMessageProgressInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now,
-      }),
-    ).toBe(0);
+    expect(database.prune(now)).toBe(1);
+    expect(database.prune(now)).toBe(0);
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
   });
 });

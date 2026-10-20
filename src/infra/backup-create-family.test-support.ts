@@ -1,12 +1,84 @@
 import fs from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
+import { backupRestoreCommand } from "../commands/backup-restore.js";
+import { backupCreateCommand } from "../commands/backup.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import {
   createColdPluginConfig,
   createColdPluginFixture,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import type { BackupCreateOptions, BackupCreateResult } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+
+export function withDatabase<T>(pathname: string, run: (db: DatabaseSync) => T): T {
+  const db = new (requireNodeSqlite().DatabaseSync)(pathname);
+  try {
+    return run(db);
+  } finally {
+    db.close();
+  }
+}
+
+export async function mkdirs(...directories: string[]) {
+  for (const directory of directories) {
+    await fs.mkdir(directory, { recursive: true });
+  }
+}
+
+export function withBackupFixture<T>(
+  options: Parameters<typeof withOpenClawTestState>[0],
+  run: (state: OpenClawTestState) => Promise<T>,
+) {
+  return withOpenClawTestState({ layout: "state-only", scenario: "minimal", ...options }, run);
+}
+
+export function backupCase(options: Parameters<typeof withOpenClawTestState>[0]) {
+  return <Args extends unknown[]>(
+    run: (state: OpenClawTestState, ...args: Args) => Promise<void>,
+  ) =>
+    (...args: Args) =>
+      withBackupFixture(options, (state) => run(state, ...args));
+}
+
+export async function isolateBackupScratch(state: OpenClawTestState) {
+  const scratchRoot = state.path("scratch");
+  await fs.mkdir(scratchRoot);
+  Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
+  state.applyEnv();
+}
+
+export function createVerifiedBackup(
+  state: OpenClawTestState,
+  options: BackupCreateOptions = {},
+  runtime = createTestRuntime(),
+) {
+  return backupCreateCommand(runtime, {
+    output: state.path("backup.tar.gz"),
+    includeWorkspace: false,
+    verify: true,
+    ...options,
+  });
+}
+
+export function restoreBackup(
+  state: OpenClawTestState,
+  archive: BackupCreateResult,
+  runtime = createTestRuntime(),
+) {
+  return backupRestoreCommand(runtime, {
+    archive: archive.archivePath,
+    target: state.path("restored"),
+  });
+}
+
+export async function expectAbsent(file: string) {
+  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+}
 
 export async function declarePluginSqliteResources(
   state: OpenClawTestState,

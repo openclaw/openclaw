@@ -1,7 +1,10 @@
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, expect, it, vi, describe } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -20,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
@@ -31,6 +35,7 @@ import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   measureSessionSchemaProbes,
@@ -97,7 +102,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
         admission: createSqliteWorkerOperationAdmission((_request, grant) => {
           setCanonicalSqliteSessionMainKey(writer, "configured-during-read");
           writer.db.exec("CREATE TABLE main_key_race_unrelated (value TEXT)");
-          admitSqliteSchema(writer.db);
+          admitSqliteSchema(requireNativeSqliteDatabase(writer.db));
           grant();
         }),
       }),
@@ -185,7 +190,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
                 expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
               }, options);
             },
-            writer.db,
+            requireNativeSqliteDatabase(writer.db),
           );
           expect(fixtureWriteStarted).toBe(false);
         },
@@ -209,7 +214,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
           }, options),
         ).toThrow("rollback main key");
       },
-      writer.db,
+      requireNativeSqliteDatabase(writer.db),
     );
     expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
       "configured",
@@ -218,19 +223,20 @@ it("refreshes admitted session readers after worker commits without schema or fr
       mainKey: "configured",
       statements: 0,
     });
+    const nativeWriter = requireNativeSqliteDatabase(writer.db);
     // Exercise both native execution paths with statements retained before observation.
     const probeGroups = [
       ["schema_version", "user_version", "data_version"].map((name) =>
-        writer.db.prepare(`PRAGMA ${name}`),
+        nativeWriter.prepare(`PRAGMA ${name}`),
       ),
       [
-        writer.db.prepare(`SELECT schema_version, user_version, data_version
+        nativeWriter.prepare(`SELECT schema_version, user_version, data_version
           FROM main.pragma_schema_version(), main.pragma_user_version(), main.pragma_data_version()`),
       ],
     ];
     for (const statements of probeGroups) {
       for (const method of ["get", "all", "iterate"] as const) {
-        const probes = measureSqliteSchemaProbes(writer.db, () => {
+        const probes = measureSqliteSchemaProbes(nativeWriter, () => {
           for (const statement of statements) {
             if (method === "iterate") {
               Array.from(statement.iterate());
@@ -243,9 +249,9 @@ it("refreshes admitted session readers after worker commits without schema or fr
         expect(probes).toMatchObject({ schemaVersion: 100, userVersion: 100, dataVersion: 100 });
       }
     }
-    if (typeof writer.db.setAuthorizer === "function") {
+    if (typeof nativeWriter.setAuthorizer === "function") {
       let allowed = true;
-      writer.db.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      nativeWriter.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
       const read = () =>
         entryCache.readSessionEntryCache(writer, { cache: true }).entries.get("agent:main:probe");
       const publications: Array<{
@@ -270,7 +276,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
               updatedAt: 1,
               label: "current",
             }),
-          writer.db,
+          requireNativeSqliteDatabase(writer.db),
         );
         expect(publications).toEqual([
           {
@@ -286,7 +292,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
         expect(read).toThrow(/not authorized/i);
       } finally {
         stop();
-        writer.db.setAuthorizer(null);
+        nativeWriter.setAuthorizer(null);
       }
       expect(read()?.label).toBe("current");
     }
@@ -345,8 +351,9 @@ it.each<{
     read();
     const materialized: string[] = [];
     let hotPayloadBytes = 0;
-    const prepare = database.db.prepare.bind(database.db);
-    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    const prepare = nativeDb.prepare.bind(nativeDb);
+    vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       const observe = (row: Record<string, unknown>) => {
         if (typeof row.entry_json === "string") {
@@ -434,6 +441,60 @@ function fixture(list: typeof listSessionEntriesReadOnly) {
     });
   return { database, hidden, options, read };
 }
+
+it("reads cron participants only after expiry selection and includes committed changes", () => {
+  const { database, options } = fixture(listSessionEntriesReadOnly);
+  const sessionKey = "agent:main:cron:job:run:selected";
+  const scope = {
+    agentId: options.agentId,
+    storePath: options.path,
+    env: options.env,
+    sessionKey,
+  };
+  const entry = {
+    sessionId: "selected",
+    updatedAt: 2,
+    skillsSnapshot: { prompt: "retained deletion candidate", skills: [] },
+  };
+  runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
+  recordSessionParticipant(scope, { identity: { type: "agent", id: "before" }, promptedAt: 1 });
+  const readExpired = () =>
+    listSessionEntriesReadOnly({
+      ...scope,
+      expiredCronRuns: { agentId: "main", updatedBefore: 2 },
+    });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["participants"],
+    (sql) => (/^select\b.*\bfrom "session_participants"/isu.test(sql) ? "participants" : null),
+  );
+  try {
+    expect(readExpired()).toEqual([]);
+    expect(statements.counts.participants).toBe(0);
+  } finally {
+    statements.restore();
+  }
+  runOpenClawAgentWriteTransaction(
+    (db) => writeSessionEntry(db, sessionKey, { ...entry, updatedAt: 1 }),
+    options,
+  );
+  recordSessionParticipant(scope, { identity: { type: "agent", id: "after" }, promptedAt: 2 });
+  expect(readExpired()).toEqual([
+    {
+      sessionKey,
+      entry: {
+        ...entry,
+        updatedAt: 1,
+        delivery: { kind: "none" },
+        participants: [
+          { identity: { type: "agent", id: "before" } },
+          { identity: { type: "agent", id: "after" } },
+        ],
+        participantCount: 2,
+      },
+    },
+  ]);
+});
 
 it("retains unsplit snapshots on selected cron rows", () => {
   const { database, options, read } = fixture(listSessionEntriesReadOnly);

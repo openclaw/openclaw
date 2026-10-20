@@ -12,29 +12,22 @@ name: github
 description: old desc
 ---
 Body ${REDACTED_SENTINEL}.`;
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/description"), "new desc");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toBe(
-        `---\nname: github\ndescription: new desc\n---\nBody ${REDACTED_SENTINEL}.`,
-      );
-    }
+    expect(r.raw).toBe(`---\nname: github\ndescription: new desc\n---\nBody ${REDACTED_SENTINEL}.`);
   });
 
   it("reports unresolved when the key is missing", () => {
-    const { ast } = parseMd("---\nname: x\n---\n");
-    const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/nope"), "x");
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
+    const ast = parseMd("---\nname: x\n---\n");
+    expect(() => setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/nope"), "x")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
+    );
   });
 
   it("quotes frontmatter values containing structural chars", () => {
-    const { ast } = parseMd("---\nx: a\n---\n");
+    const ast = parseMd("---\nx: a\n---\n");
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/x"), "has: colon");
-    expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.ast.raw).toContain('x: "has: colon"');
-    }
+    expect(r.raw).toContain('x: "has: colon"');
   });
 });
 
@@ -42,16 +35,13 @@ describe("setOcPath — item kv field", () => {
   it.each([["$first", "changed", "second"]])(
     "edits only the duplicate-key item selected by %s",
     (selector, first, second) => {
-      const { ast } = parseMd("## Tools\n- name: first\n- name: second\n");
+      const ast = parseMd("## Tools\n- name: first\n- name: second\n");
       const result = setOcPath(
         ast,
         parseOcPath(`oc://AGENTS.md/tools/${selector}/name`),
         "changed",
       );
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.ast.raw).toBe(`## Tools\n- name: ${first}\n- name: ${second}\n`);
-      }
+      expect(result.raw).toBe(`## Tools\n- name: ${first}\n- name: ${second}\n`);
       expect(ast.raw).toBe("## Tools\n- name: first\n- name: second\n");
     },
   );
@@ -59,7 +49,7 @@ describe("setOcPath — item kv field", () => {
   it("keeps item positions and explicit values through multiline edits and insertion", () => {
     let ast = parseMd(
       "---\ndescription: |\n  old\n  text\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: second\n",
-    ).ast;
+    );
     for (const [address, value] of [
       ["[frontmatter]/description", "short"],
       ["tools/#0/name", "first\n- name: literal"],
@@ -69,10 +59,10 @@ describe("setOcPath — item kv field", () => {
       ["tools/#2/name", "appended changed"],
     ] as const) {
       const result = setOcPath(ast, parseOcPath(`oc://AGENTS.md/${address}`), value);
-      if (!result.ok || result.ast.kind !== "md") {
+      if (result.kind !== "md") {
         throw new Error(`expected Markdown edit at ${address} to succeed`);
       }
-      ast = result.ast;
+      ast = result;
     }
     expect(ast.raw).toBe(
       "---\ndescription: short\nadded: value\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: literal\n- name: second changed\n- name: appended changed\n",
@@ -86,14 +76,11 @@ describe("setOcPath — item kv field", () => {
 
   it.each(["$&"])("preserves literal dollar replacement text %s", (token) => {
     const raw = "## Tools\n\n- command: old\n- keep: stable\n";
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     const before = structuredClone(ast);
     const value = `literal ${token}`;
     const result = setOcPath(ast, parseOcPath("oc://X.md/tools/command/command"), value);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.ast.raw).toBe(`## Tools\n\n- command: ${value}\n- keep: stable\n`);
-    }
+    expect(result.raw).toBe(`## Tools\n\n- command: ${value}\n- keep: stable\n`);
     expect(ast).toEqual(before);
   });
 
@@ -102,31 +89,30 @@ describe("setOcPath — item kv field", () => {
 
 - plain bullet
 `;
-    const { ast } = parseMd(raw);
-    const r = setOcPath(
-      ast,
-      parseOcPath("oc://AGENTS.md/boundaries/plain-bullet/plain-bullet"),
-      "x",
-    );
-    expect(r).toEqual({ ok: false, reason: "no-item-kv" });
+    const ast = parseMd(raw);
+    expect(() =>
+      setOcPath(ast, parseOcPath("oc://AGENTS.md/boundaries/plain-bullet/plain-bullet"), "x"),
+    ).toThrow(expect.objectContaining({ reason: "no-item-kv" }));
   });
 
   it("reports unresolved when section/item is missing", () => {
-    const { ast } = parseMd("## Other\n\n- foo: bar\n");
-    const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/missing/foo/foo"), "x");
-    expect(r).toEqual({ ok: false, reason: "unresolved" });
+    const ast = parseMd("## Other\n\n- foo: bar\n");
+    expect(() => setOcPath(ast, parseOcPath("oc://AGENTS.md/missing/foo/foo"), "x")).toThrow(
+      expect.objectContaining({ reason: "unresolved" }),
+    );
   });
 
   it("reports not-writable for section-only addresses", () => {
-    const { ast } = parseMd("## Boundaries\n\n- enabled: true\n");
-    const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/boundaries"), "x");
-    expect(r).toEqual({ ok: false, reason: "not-writable" });
+    const ast = parseMd("## Boundaries\n\n- enabled: true\n");
+    expect(() => setOcPath(ast, parseOcPath("oc://AGENTS.md/boundaries"), "x")).toThrow(
+      expect.objectContaining({ reason: "not-writable" }),
+    );
   });
 });
 
 describe("setOcPath — sentinel guard (defense-in-depth)", () => {
   it("rejects substring-embedded sentinel on item kv", () => {
-    const { ast } = parseMd("## Boundaries\n\n- enabled: true\n");
+    const ast = parseMd("## Boundaries\n\n- enabled: true\n");
     expect(() =>
       setOcPath(
         ast,

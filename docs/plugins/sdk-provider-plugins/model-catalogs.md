@@ -44,6 +44,14 @@ provider requests.
 
 ## Live model discovery
 
+For interactive setup of an OpenAI-compatible custom endpoint, reuse
+`discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
+Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`
+to list models without updating the runtime catalog. The optional
+`configuredProvider: { config, id }` resolves only that provider row's header and
+transport SecretRefs and applies its existing private-network, proxy, and TLS policy.
+The authored configuration keeps its original secret references.
+
 If your provider exposes an OpenAI-compatible `/models` API, opt the
 single-provider helper into shared discovery:
 

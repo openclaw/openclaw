@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -14,12 +13,10 @@ import {
   clearDiscussionBindingGeneration,
   getPendingDiscussionOpen,
   listPendingDiscussionOpens,
-  type PendingDiscussionOpen,
 } from "./binding-generation.js";
 import { DetachedDiscussionBindingRetention } from "./binding-retention.js";
 import {
   attachBindingToCurrentActiveSession,
-  bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
   readDiscussionSessionEntry,
@@ -33,7 +30,6 @@ import {
   resolveDiscussionBindingAccount,
   type DiscussionBindingAccountResolution,
 } from "./eligibility.js";
-import { formatDiscussionHistory } from "./history-format.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
 import {
   fallbackDiscussionLabel,
@@ -42,25 +38,21 @@ import {
 } from "./naming.js";
 import { DiscussionReconcileScheduler } from "./reconcile-scheduler.js";
 import {
-  clearClickClackDiscussionChannelRevoked,
-  isClickClackDiscussionChannelRevoked,
   isClickClackDiscussionChannelRevokedAsync,
   markClickClackDiscussionChannelRevoked,
+  prepareClickClackDiscussionChannelRevocation,
 } from "./revoked-channel-store.js";
+import { readDiscussionHistory } from "./service-history.js";
 import {
   assertChannelPatch,
+  finalizePendingDiscussionBinding,
   reconcilePendingDiscussionOpen,
   openClickClackDiscussionBinding,
   renameDiscussionChannel,
 } from "./service-open.js";
+import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 const RECONCILE_INTERVAL_MS = 60_000;
-type DiscussionServiceOptions = {
-  clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
-  installationId?: string;
-  bindingGenerationFactory?: () => string;
-  maxRetainedDetachedBindings?: number;
-};
 
 type DiscussionBindingUseResolution = DiscussionBindingAccountResolution | { state: "retargeted" };
 
@@ -70,7 +62,6 @@ export class ClickClackDiscussionService {
   readonly #store: ClickClackDiscussionBindingStore;
   readonly #clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
   #installationId: string | undefined;
-  readonly #bindingGenerationFactory: () => string;
   readonly #detachedBindings: DetachedDiscussionBindingRetention;
   readonly #sessionQueue = new KeyedAsyncQueue();
   #scheduler: PluginServiceSchedulerV1 | undefined;
@@ -84,18 +75,15 @@ export class ClickClackDiscussionService {
   #cleanupPromise: Promise<void> | undefined;
   readonly #operations = new Set<Promise<unknown>>();
 
-  constructor(runtime: PluginRuntime, options: DiscussionServiceOptions = {}) {
+  constructor(runtime: PluginRuntime) {
     this.#runtime = runtime;
     this.#store = getClickClackDiscussionBindingStore(runtime);
-    this.#clientFactory =
-      options.clientFactory ??
-      ((account) => createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }));
-    this.#installationId = options.installationId;
-    this.#bindingGenerationFactory = options.bindingGenerationFactory ?? randomUUID;
+    this.#clientFactory = (account) =>
+      createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token });
     this.#detachedBindings = new DetachedDiscussionBindingRetention({
       runtime,
       store: this.#store,
-      maxRetained: options.maxRetainedDetachedBindings ?? MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
+      maxRetained: MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
     });
     this.provider = {
       id: "clickclack",
@@ -157,6 +145,10 @@ export class ClickClackDiscussionService {
 
   hasEnabledAccount(): boolean {
     return discussionAccounts(this.#currentConfig()).length === 1;
+  }
+
+  resolveBindingAccount(binding: ClickClackDiscussionBinding): DiscussionBindingAccountResolution {
+    return resolveDiscussionBindingAccount(this.#currentConfig(), binding);
   }
 
   async info(sessionKey: string): Promise<SessionDiscussionInfo> {
@@ -239,15 +231,10 @@ export class ClickClackDiscussionService {
         account,
         clientFactory: this.#clientFactory,
         installationId: this.#installationId,
-        bindingGenerationFactory: this.#bindingGenerationFactory,
         sessionKey,
         ensureTimer: () => this.#ensureTimer(),
-        reconcilePendingOpen: (pending) =>
-          this.#reconcilePendingOpen(pending, { allowRetry: false }),
         withChannelMutationLock: (run) => this.#withChannelMutationLock(run),
         ensureBindingCapacity: (key) => this.#detachedBindings.ensureCapacity(key),
-        finalizePendingBinding: (key, nextBinding) =>
-          this.#finalizePendingBinding(key, nextBinding),
         warn: (message) => this.#logger().warn(message),
       });
     } finally {
@@ -273,7 +260,15 @@ export class ClickClackDiscussionService {
         }
         const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
         if (pending) {
-          await this.#reconcilePendingOpen(pending);
+          const shouldRetry = await reconcilePendingDiscussionOpen({
+            runtime: this.#runtime,
+            store: this.#store,
+            clientFactory: this.#clientFactory,
+            pending,
+          });
+          if (shouldRetry) {
+            await this.#open(sessionKey);
+          }
         }
       });
     } finally {
@@ -326,27 +321,14 @@ export class ClickClackDiscussionService {
         if (!attached) {
           return { text: "No discussion is bound to this session." };
         }
-        if (
-          !bindingMatchesActiveSessionIncarnation(this.#runtime, sessionKey, attached) ||
-          resolveDiscussionBindingAccount(this.#currentConfig(), attached).state !== "active" ||
-          isClickClackDiscussionChannelRevoked({
-            runtime: this.#runtime,
-            serverBaseUrl: binding.serverBaseUrl,
-            channelId: binding.channelId,
-            binding: attached,
-          })
-        ) {
-          return { text: "No discussion is bound to this session." };
-        }
-        const history = await this.#clientFactory(resolved.account).latestChannelMessages(
-          attached.channelId,
-          limit,
-        );
-        const text = formatDiscussionHistory(history);
-        return {
+        return await readDiscussionHistory({
+          runtime: this.#runtime,
+          store: this.#store,
+          sessionKey,
           binding: attached,
-          text: text || "The bound discussion has no messages yet.",
-        };
+          client: this.#clientFactory(resolved.account),
+          limit,
+        });
       }),
     );
   }
@@ -370,7 +352,7 @@ export class ClickClackDiscussionService {
     binding: ClickClackDiscussionBinding,
     resolvedAccount?: ResolvedClickClackAccount,
   ): Promise<void> {
-    await this.#finalizePendingBinding(sessionKey, binding);
+    await finalizePendingDiscussionBinding(this.#runtime, sessionKey, binding);
     if (
       await isClickClackDiscussionChannelRevokedAsync({
         runtime: this.#runtime,
@@ -392,7 +374,7 @@ export class ClickClackDiscussionService {
       return;
     }
     const resolved = resolvedAccount
-      ? resolveDiscussionBindingAccount(this.#currentConfig(), activeBinding)
+      ? this.resolveBindingAccount(activeBinding)
       : await this.#resolveBindingForUse(activeBinding);
     if (resolved.state === "retargeted") {
       await this.#revokeAndDeleteBinding(sessionKey, activeBinding);
@@ -454,7 +436,7 @@ export class ClickClackDiscussionService {
           candidate.accountId === freshBinding.accountId,
       );
     }
-    const current = resolveDiscussionBindingAccount(this.#currentConfig(), bindingForAttachment);
+    const current = this.resolveBindingAccount(bindingForAttachment);
     if (current.state !== "active") {
       return;
     }
@@ -501,58 +483,73 @@ export class ClickClackDiscussionService {
     if (Object.keys(patch).length === 0 && !labelChanged) {
       return;
     }
-    const client = this.#clientFactory(account);
-    const assertCurrentAuthority = () => {
-      const bound = this.#store.get(sessionKey);
-      if (
-        !bound ||
-        bound.externalRef !== currentBinding.externalRef ||
-        bound.serverBaseUrl !== currentBinding.serverBaseUrl ||
-        bound.channelId !== currentBinding.channelId ||
-        !bindingMatchesActiveSessionIncarnation(this.#runtime, sessionKey, currentBinding) ||
-        resolveDiscussionBindingAccount(this.#currentConfig(), currentBinding).state !== "active" ||
-        isClickClackDiscussionChannelRevoked({
-          runtime: this.#runtime,
-          serverBaseUrl: currentBinding.serverBaseUrl,
-          channelId: currentBinding.channelId,
-          binding: bound,
-        })
-      ) {
-        throw new Error("ClickClack discussion authority changed before channel update");
+    const bindingFacts = await this.#store.prepareRead(sessionKey);
+    let revocation:
+      | Awaited<ReturnType<typeof prepareClickClackDiscussionChannelRevocation>>
+      | undefined;
+    let session: Awaited<ReturnType<typeof prepareDiscussionSessionEntry>> | undefined;
+    try {
+      revocation = await prepareClickClackDiscussionChannelRevocation({
+        runtime: this.#runtime,
+        serverBaseUrl: currentBinding.serverBaseUrl,
+        channelId: currentBinding.channelId,
+      });
+      const isRevoked = revocation.isRevoked;
+      session = await prepareDiscussionSessionEntry(this.#runtime, sessionKey);
+      const sessionAuthority = session;
+      const client = this.#clientFactory(account);
+      const assertCurrentAuthority = () => {
+        sessionAuthority.source();
+        const bound = bindingFacts.read();
+        if (
+          !bound ||
+          bound.externalRef !== currentBinding.externalRef ||
+          bound.serverBaseUrl !== currentBinding.serverBaseUrl ||
+          bound.channelId !== currentBinding.channelId ||
+          sessionAuthority.entry?.sessionId !== currentBinding.sessionId ||
+          sessionAuthority.entry.archivedAt !== undefined ||
+          this.resolveBindingAccount(currentBinding).state !== "active" ||
+          isRevoked(bound)
+        ) {
+          throw new Error("ClickClack discussion authority changed before channel update");
+        }
+      };
+      let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
+      if (labelChanged) {
+        updated = await this.#withChannelMutationLock(() =>
+          renameDiscussionChannel({
+            client,
+            workspaceId: currentBinding.workspaceId,
+            channelId: currentBinding.channelId,
+            label,
+            sessionKey,
+            agentId: currentBinding.agentId,
+            patch,
+            assertCurrentAuthority,
+          }),
+        );
+      } else {
+        assertCurrentAuthority();
+        updated = await client.updateChannel(currentBinding.channelId, patch);
+        assertChannelPatch(updated, patch);
       }
-    };
-    let updated: Awaited<ReturnType<ClickClackClient["updateChannel"]>>;
-    if (labelChanged) {
-      updated = await this.#withChannelMutationLock(() =>
-        renameDiscussionChannel({
-          client,
-          workspaceId: currentBinding.workspaceId,
-          channelId: currentBinding.channelId,
-          label,
-          sessionKey,
-          agentId: currentBinding.agentId,
-          patch,
-          assertCurrentAuthority,
-        }),
-      );
-    } else {
-      assertCurrentAuthority();
-      updated = await client.updateChannel(currentBinding.channelId, patch);
-      assertChannelPatch(updated, patch);
+      const nextBinding: ClickClackDiscussionBinding = {
+        ...currentBinding,
+        externalUrl,
+        label,
+        section,
+        ...(updated.display_title !== undefined ? { displayTitle: updated.display_title } : {}),
+      };
+      if (updated.display_title === undefined) {
+        delete nextBinding.displayTitle;
+      }
+      // Record the delivered metadata even if policy changed while HTTP was in flight.
+      await this.#store.setIfCurrent(sessionKey, currentBinding, nextBinding);
+    } finally {
+      session?.release();
+      revocation?.release();
+      bindingFacts.release();
     }
-    const nextBinding: ClickClackDiscussionBinding = {
-      ...currentBinding,
-      externalUrl,
-      label,
-      section,
-      ...(updated.display_title !== undefined ? { displayTitle: updated.display_title } : {}),
-    };
-    if (updated.display_title === undefined) {
-      delete nextBinding.displayTitle;
-    }
-    await this.#store.setIfCurrent(sessionKey, currentBinding, nextBinding, {
-      assertCurrent: assertCurrentAuthority,
-    });
   }
 
   async #refreshSessionAttachment(
@@ -572,21 +569,6 @@ export class ClickClackDiscussionService {
       );
       return undefined;
     }
-  }
-
-  async #reconcilePendingOpen(
-    pending: PendingDiscussionOpen,
-    options: { allowRetry?: boolean } = {},
-  ): Promise<void> {
-    await reconcilePendingDiscussionOpen({
-      runtime: this.#runtime,
-      store: this.#store,
-      clientFactory: this.#clientFactory,
-      pending,
-      ...options,
-      finalizePendingBinding: (key, binding) => this.#finalizePendingBinding(key, binding),
-      open: (key) => this.#open(key),
-    });
   }
 
   async #releaseStaleBinding(
@@ -618,38 +600,16 @@ export class ClickClackDiscussionService {
     return await this.#store.deleteIfCurrent(sessionKey, binding);
   }
 
-  async #finalizePendingBinding(
-    sessionKey: string,
-    binding: ClickClackDiscussionBinding,
-  ): Promise<void> {
-    const pending = await getPendingDiscussionOpen(this.#runtime, sessionKey);
-    if (pending?.externalRef === binding.externalRef) {
-      // A matching binding is the durable commit record. Clear the fail-closed
-      // tombstone first, then the recovery reservation; every crash point can
-      // replay this sequence without orphaning the remote channel.
-      await clearClickClackDiscussionChannelRevoked({
-        runtime: this.#runtime,
-        serverBaseUrl: binding.serverBaseUrl,
-        channelId: binding.channelId,
-      });
-      await clearDiscussionBindingGeneration({
-        runtime: this.#runtime,
-        sessionKey,
-        expectedGeneration: pending.generation,
-      });
-    }
-  }
-
   async #resolveBindingForUse(
     binding: ClickClackDiscussionBinding,
   ): Promise<DiscussionBindingUseResolution> {
-    const resolved = resolveDiscussionBindingAccount(this.#currentConfig(), binding);
+    const resolved = this.resolveBindingAccount(binding);
     if (resolved.state !== "active") {
       return resolved;
     }
     const workspaces = await this.#clientFactory(resolved.account).workspaces();
     const workspace = findClickClackWorkspace(workspaces, resolved.account.discussions.workspace);
-    const current = resolveDiscussionBindingAccount(this.#currentConfig(), binding);
+    const current = this.resolveBindingAccount(binding);
     if (current.state !== "active") {
       return current;
     }

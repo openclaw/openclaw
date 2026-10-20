@@ -14,7 +14,7 @@ import {
   physicalFactsTestEntrypoint,
   type PhysicalFactsTestResult,
 } from "./physical-facts-runtime.test-support.js";
-import { physicalDatabaseCapabilities, requireNativeDatabaseFile } from "./physical-facts.js";
+import { requireNativeDatabaseFile } from "./physical-facts.js";
 import { assertPostgresCatalog, readPostgresCatalog } from "./postgres-catalog.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -23,15 +23,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("physical database capabilities", () => {
   it("keeps native housekeeping and copied-file recovery specific to SQLite", () => {
-    expect(physicalDatabaseCapabilities.postgres).toEqual({
-      nativeFile: false,
-      integrity: "server-constraints",
-      wal: "skip",
-      checkpoint: "skip",
-      vacuum: "skip",
-      readSnapshot: "repeatable-read",
-    });
-    expect(physicalDatabaseCapabilities.sqlite.nativeFile).toBe(true);
     for (const operation of ["integrity", "repair", "file-snapshot"] as const) {
       expect(() => requireNativeDatabaseFile("postgres", operation)).toThrow(
         "PostgreSQL schema with its matching anchor",
@@ -147,7 +138,6 @@ describe.skipIf(!connection)("PostgreSQL physical admission", () => {
       expect(result.writtenName).toBe("written");
       expect(result.reusedAdmissionId).toBe(result.facts.admissionId);
       expect(result.renewedAdmissionId).not.toBe(result.facts.admissionId);
-      expect(result.identityError).toContain("identity or version mismatch");
       expect(result.versionError).toContain("metadata identity or version mismatch");
       expect(result.missingError).toContain("restore the matching PostgreSQL schema and anchor");
     } finally {

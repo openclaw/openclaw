@@ -52,6 +52,7 @@ export function insertSharedWorktreeReceipt(
     sessionKey: session.sessionKey,
     agentId: session.agentId,
     idempotencyKey: options.idempotencyKey ?? requestId,
+    draft: false,
   };
   return runOpenClawStateWriteTransaction(({ db }) =>
     insertGitHubPublicationRequest(db, {
@@ -133,6 +134,7 @@ export function repositoryReceipt(
     identity_login: "fixture-bot",
     title: null,
     body: null,
+    draft: null,
     push_repository: "owner/repository",
     repository: "owner/repository",
     base_branch: "main",

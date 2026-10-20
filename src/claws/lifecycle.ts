@@ -44,7 +44,6 @@ export type ClawAddPlanContext = {
   config?: OpenClawConfig;
   agentId?: string;
   workspace?: string;
-  resumableWorkspace?: string;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
@@ -138,9 +137,7 @@ export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
   clawMarkdownBody?: Buffer;
   packageBootstrap?: ClawWorkspaceSourceSnapshot;
-  includePackageBootstrap?: boolean;
   openClawProfile?: ClawOpenClawProfile;
-  reconstructLegacyDynamicToolProfilePlan?: boolean;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
   context?: ClawAddPlanContext;
@@ -188,9 +185,7 @@ export async function buildClawAddPlan(params: {
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
   const openClawAgentSettings = params.openClawProfile?.agent ?? {};
-  const persistedOpenClawAgentSettings = params.reconstructLegacyDynamicToolProfilePlan
-    ? openClawAgentSettings
-    : materializeClawToolProfile(openClawAgentSettings);
+  const persistedOpenClawAgentSettings = materializeClawToolProfile(openClawAgentSettings);
   const agentConfig: ClawAddPlan["agent"]["config"] = clawOwnedAgentConfig({
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
@@ -229,11 +224,7 @@ export async function buildClawAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
-  const resumableWorkspace = context.resumableWorkspace
-    ? canonicalWorkspacePath(context.resumableWorkspace)
-    : undefined;
-  const workspaceBlocked =
-    configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
+  const workspaceBlocked = configuredWorkspaceConflict || workspaceExistsOnDisk;
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
@@ -256,7 +247,7 @@ export async function buildClawAddPlan(params: {
     ...(workspaceBlocked ? { reason: workspaceCollisionMessage } : {}),
   });
 
-  if (params.packageBootstrap && params.includePackageBootstrap !== false) {
+  if (params.packageBootstrap) {
     actions.push({
       kind: "bootstrap",
       id: "BOOTSTRAP.md",

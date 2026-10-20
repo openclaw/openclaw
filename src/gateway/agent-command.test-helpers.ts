@@ -15,7 +15,7 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const requestModule = await import("./server-methods.js");
   const admission = await import("../process/gateway-work-admission.js");
   const asyncWork = await import("../shared/async-work-scope.js");
-  const sessionWork = await import("../sessions/session-lifecycle-admission.js");
+  const sessionWork = await import("../sessions/session-controller.lifecycle.js");
   const chatModule = selection
     ? undefined
     : await import("./server-methods/chat-send-dispatch-errors.js");
@@ -24,7 +24,12 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const retainWork = admission.runWithRetainedGatewayRootWork;
   const continueWork = admission.runWithGatewayIndependentRootWorkContinuation;
   const trackWork = asyncWork.trackAsyncWork;
-  const beginSessionWork = sessionWork.beginSessionWorkAdmission;
+  const beginSessionWork = sessionWork.beginSessionEffect;
+  const rootWorkAdmission = admission.tryBeginGatewayRootWorkAdmission;
+  const previousRootWork = vi.isMockFunction(rootWorkAdmission)
+    ? rootWorkAdmission.getMockImplementation()
+    : undefined;
+  const beginRootWork = previousRootWork ?? rootWorkAdmission;
   type ObservedRequest = {
     runId?: string;
     request?: Promise<void>;
@@ -44,8 +49,31 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
     }
     return pending;
   };
+  const rootWorkSpy = vi
+    .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
+    .mockImplementation((origin) => {
+      const lease = beginRootWork(origin);
+      const observed = observedRequest.getStore();
+      if (!lease?.ownsRoot || !observed) {
+        return lease;
+      }
+      return {
+        ...lease,
+        run: (run) =>
+          lease.run(() => {
+            const observeRelease = admission.captureGatewayRootWorkReleaseObserver();
+            if (observeRelease) {
+              const released = createDeferred();
+              observeRelease(() => released.resolve());
+              // Only cleanup joins final release; dispatch-only waits must stay nonblocking.
+              void captureEffect(released.promise);
+            }
+            return run();
+          }),
+      };
+    });
   const sessionWorkSpy = vi
-    .spyOn(sessionWork, "beginSessionWorkAdmission")
+    .spyOn(sessionWork, "beginSessionEffect")
     .mockImplementation((params) => {
       const pending = beginSessionWork(params);
       if (observedRequest.getStore()) {
@@ -161,6 +189,11 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
         requestSpy.mockRestore();
         effectSpy.mockRestore();
         continuationSpy.mockRestore();
+        if (previousRootWork) {
+          rootWorkSpy.mockImplementation(previousRootWork);
+        } else {
+          rootWorkSpy.mockRestore();
+        }
         observedRequest.disable();
       }
     },

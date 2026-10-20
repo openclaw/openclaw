@@ -17,9 +17,14 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "delivery">): boolean {
+function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
+): boolean {
   return (
     isDeliverySuspended(entry) ||
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    entry.delivery?.status === "discarded" ||
     entry.delivery?.disposition === "delivered" ||
     entry.delivery?.disposition === "intentional_non_delivery" ||
     entry.delivery?.disposition === "permanent_failure"

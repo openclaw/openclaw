@@ -12,10 +12,15 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "./openclaw-agent-db-resources.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import {
+  registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStateDatabaseLifecycleListener,
+} from "./openclaw-state-db-cache.js";
 import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createStateDomainPublication } from "./state-domain-publication.js";
@@ -57,10 +62,18 @@ type CredentialOwner = {
   sources?: Set<string>;
   canonicalPath?: string;
   dispose?: () => void;
+  waiters?: Set<() => void>;
 };
+function wakeCredentialWaiters(owner: CredentialOwner | undefined) {
+  owner?.waiters?.forEach((wake) => wake());
+}
 const owners = resolveGlobalMap<string, CredentialOwner>(
   Symbol.for("openclaw.personalCredentialAuthority"),
-  "close-and-restart",
+  (value) => {
+    const retired = [...value.values()];
+    value.clear();
+    retired.forEach(wakeCredentialWaiters);
+  },
 );
 function ownerFor(identity: string) {
   let owner = owners.get(identity);
@@ -109,14 +122,18 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
         rootKey,
         ...(owners.get(rootKey)?.sources ?? []),
       ]) {
-        owners.get(identity)?.dispose?.();
+        const owner = owners.get(identity);
+        owner?.dispose?.();
         owners.delete(identity);
+        wakeCredentialWaiters(owner);
       }
     } else {
       for (const owner of owners.values()) {
         owner.dispose?.();
       }
+      const retired = [...owners.values()];
       owners.clear();
+      retired.forEach(wakeCredentialWaiters);
     }
   }
 });
@@ -223,17 +240,12 @@ export function withPersonalCredentialPublication(
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       publication.committed(isRecord(facts) ? facts.personalCredentials : undefined);
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (admission.settlement) {
-          const confirmed = admission.settlement.kind === "completed";
-          publication.finish(confirmed, confirmed && !admission.committed);
-        }
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      if (admission.settlement) {
+        const confirmed = admission.settlement.kind === "completed";
+        publication.finish(confirmed, confirmed && !admission.committed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       publication.finish(known, known && !admission.committed);
@@ -335,6 +347,7 @@ authProfileCredentialPublication.subscribeFacts((change) => {
     if (fact.kind === "unknown") {
       for (const target of affected) {
         target.uncertain = true;
+        wakeCredentialWaiters(target);
       }
       return;
     }
@@ -343,6 +356,7 @@ authProfileCredentialPublication.subscribeFacts((change) => {
     if (!profiles) {
       for (const target of affected) {
         target.uncertain = true;
+        wakeCredentialWaiters(target);
       }
       return;
     }
@@ -353,6 +367,7 @@ authProfileCredentialPublication.subscribeFacts((change) => {
       }
     }
   }
+  affected.forEach(wakeCredentialWaiters);
 });
 
 /** Deny before the native effect; managed settlement installs all facts before releasing denial. */
@@ -368,7 +383,6 @@ export function withAuthProfileCredentialWrite<T>(
     const publication = authProfileCredentialPublication.begin({ identity, assertCurrent() {} });
     let failed = false;
     const managed = stageSqliteTransactionState(sqlPublicationAnchor(db), {
-      stage() {},
       commit() {
         if (failed) {
           publication.finish(false);
@@ -417,23 +431,24 @@ export function createAuthProfileCredentialWriteAdmission(
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       publication.committed(isRecord(facts) ? facts.authCredentials : undefined);
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (admission.settlement) {
-          const confirmed = admission.settlement.kind === "completed";
-          publication.finish(confirmed, confirmed && !admission.committed);
-        }
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      if (admission.settlement) {
+        const confirmed = admission.settlement.kind === "completed";
+        publication.finish(confirmed, confirmed && !admission.committed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       publication.finish(known, known && !admission.committed);
     });
     return { admission, nativeLocations: [context.admission.databasePath] };
   };
+}
+
+export class AuthProfileCredentialPublicationPendingError extends Error {
+  constructor(readonly waitUntilCurrent: () => Promise<void>) {
+    super("Auth profile credential authority is unavailable; retry after owner recovery");
+  }
 }
 
 export function captureAuthProfileCredentialAuthority(
@@ -450,10 +465,12 @@ export function captureAuthProfileCredentialAuthority(
       path: source.databasePath,
       revoke: () => {
         owner.uncertain = true;
+        wakeCredentialWaiters(owner);
       },
       close: async () => {
         owner.dispose?.();
         owners.delete(source.identity);
+        wakeCredentialWaiters(owner);
       },
     });
   }
@@ -463,23 +480,46 @@ export function captureAuthProfileCredentialAuthority(
     owner.cells.set(profileId, cell);
   }
   const retained = cell;
-  const assertCurrent = () => {
+  const unavailable = () =>
+    new Error("Auth profile credential authority is unavailable; retry after owner recovery");
+  const assertOwnerCurrent = () => {
     context.admission.assertCurrent();
     if (
       owners.get(rootIdentity) !== root ||
       owners.get(source.identity) !== owner ||
-      root.pending.size ||
       root.uncertain ||
-      owner.pending.size ||
       owner.uncertain
     ) {
-      throw new Error(
-        "Auth profile credential authority is unavailable; retry after owner recovery",
-      );
+      throw unavailable();
+    }
+  };
+  const waitUntilCurrent = async () => {
+    assertOwnerCurrent();
+    while (root.pending.size || owner.pending.size) {
+      const changed = createDeferredCore();
+      (root.waiters ??= new Set()).add(changed.resolve);
+      (owner.waiters ??= new Set()).add(changed.resolve);
+      // Worker-only state owners can close without a native-handle lifecycle event.
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        async close(identity) {
+          if (!identity || identity.key === context.admission.identity.key) {
+            changed.resolve();
+          }
+        },
+      });
+      try {
+        await changed.promise;
+      } finally {
+        unregister();
+        root.waiters.delete(changed.resolve);
+        owner.waiters.delete(changed.resolve);
+      }
+      assertOwnerCurrent();
     }
   };
   // Preparation may overlap publication; only the effect reader grants current authority.
   return {
+    waitUntilCurrent,
     observe(credential: AuthProfileCredential | undefined) {
       if (!retained.observed) {
         retained.credential = credential && structuredClone(credential);
@@ -487,7 +527,10 @@ export function captureAuthProfileCredentialAuthority(
       }
     },
     readCurrentCredential(this: void) {
-      assertCurrent();
+      assertOwnerCurrent();
+      if (root.pending.size || owner.pending.size) {
+        throw new AuthProfileCredentialPublicationPendingError(waitUntilCurrent);
+      }
       return retained.credential && structuredClone(retained.credential);
     },
   };

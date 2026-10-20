@@ -102,6 +102,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "factory-github-proof": () =>
+    import("./factory-github-proof.js").then((module) => module.factoryGitHubProofHandlers),
   "sessions-github": () =>
     import("./sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () => import("./sessions-diff.js").then((module) => module.sessionsDiffHandlers),
@@ -173,6 +175,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
+  "update-handoff-sentinel": () =>
+    import("./update-handoff-sentinel.js").then((module) => module.updateHandoffSentinelHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),
   "voicewake-routing": () =>
     import("./voicewake-routing.js").then((module) => module.voicewakeRoutingHandlers),

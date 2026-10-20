@@ -162,11 +162,6 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
       setCached(cacheKey, resolved ?? null, Date.now());
 
       if (resolved) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
-          );
-        }
         return { ...message, thread_ts: resolved };
       }
 

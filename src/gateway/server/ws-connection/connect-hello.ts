@@ -1,4 +1,5 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
   ErrorCodes,
@@ -123,6 +124,7 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
@@ -132,10 +134,12 @@ export async function sendGatewayHello(
     sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
-  if (cachedHealth) {
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
   const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
@@ -265,6 +269,7 @@ export async function sendGatewayHello(
       hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
   let bootstrapHandoff: SetupHandoff | undefined;

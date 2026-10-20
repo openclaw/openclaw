@@ -9,29 +9,27 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
-import type { UpdateCheckResult } from "./update-check.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { readUpdateRunStatus } from "./update-run-status.js";
+import { createDevGitStatus } from "./update-startup-git.test-support.js";
+import {
+  containingObject,
+  matchingObject,
+  idleActiveWorkInspectors,
+  expectIncludes,
+  recordedFailureReport,
+} from "./update-startup-suite.test-support.js";
 import { getUpdateSchedule, resetUpdateStatusState } from "./update-status-state.js";
 
-const { fault } = vi.hoisted(
-  (): {
-    fault: { at?: "sentinel-read" | "state-write"; error?: Error };
-  } => ({
-    fault: {},
-  }),
-);
+const fault = vi.hoisted((): { at?: "sentinel-read" | "state-write"; error?: Error } => ({}));
 
-vi.mock("./restart-sentinel.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./restart-sentinel.js")>("./restart-sentinel.js");
+vi.mock("./restart-sentinel.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./restart-sentinel.js")>();
   return {
     ...actual,
     readRestartSentinelSnapshot: async (
@@ -60,13 +58,13 @@ vi.mock("../state/config-machine-state-async.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./openclaw-root.js", async () => ({
-  ...(await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js")),
+vi.mock("./openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-root.js")>()),
   resolveOpenClawPackageRoot: vi.fn(async () => "/opt/openclaw"),
 }));
 
-vi.mock("./update-check.js", async () => ({
-  ...(await vi.importActual<typeof import("./update-check.js")>("./update-check.js")),
+vi.mock("./update-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-check.js")>()),
   checkUpdateStatus: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
 }));
@@ -75,10 +73,8 @@ vi.mock("./update-triage.js", () => ({ runUpdateFailureTriage: vi.fn() }));
 
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: vi.fn(async () => null) }));
 
-vi.mock("../model-catalog/remote-refresh.js", async () => ({
-  ...(await vi.importActual<typeof import("../model-catalog/remote-refresh.js")>(
-    "../model-catalog/remote-refresh.js",
-  )),
+vi.mock("../model-catalog/remote-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../model-catalog/remote-refresh.js")>()),
   refreshRemoteModelCatalog: vi.fn(async () => ({
     status: "unchanged" as const,
     providers: 1,
@@ -86,26 +82,6 @@ vi.mock("../model-catalog/remote-refresh.js", async () => ({
     generatedAt: 1_753_500_000_000,
   })),
 }));
-
-function idleActiveWorkInspectors(): GatewayActiveWorkInspectors {
-  return {
-    getQueueSize: () => 0,
-    getPendingReplies: () => 0,
-    getEmbeddedRuns: () => 0,
-    getBackgroundExecSessions: () => 0,
-    getCronRuns: () => 0,
-    getAgentRuns: () => 0,
-    getAcpRuns: () => 0,
-    getMediaRuns: () => 0,
-    getRootRequests: () => 0,
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
-  };
-}
 
 describe("update campaign apply exception boundary", () => {
   let testState: OpenClawTestState;
@@ -146,27 +122,13 @@ describe("update campaign apply exception boundary", () => {
     { at: "sentinel-read", code: undefined, message: "sentinel transaction unavailable" },
   ] as const)("records and logs $at failure ($code)", async ({ at, code, message }) => {
     const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
-      installKind: "git",
-      packageManager: "pnpm",
-      git: {
-        root: "/opt/openclaw",
-        sha: "current-sha",
-        tag: null,
-        branch: "main",
-        upstream: "origin/main",
-        upstreamSha: "upstream-sha",
-        commitAtMs: null,
-        dirty: false,
-        ahead: 0,
-        behind: 2,
-        fetchOk: true,
-      },
-    } satisfies UpdateCheckResult);
+    vi.mocked(checkUpdateStatus).mockResolvedValue(createDevGitStatus());
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "dev", version: "99.0.0-dev.1" });
     const { runGatewayUpdateCheck } = await import("./update-startup.js");
-    const runAutoUpdate = vi.fn(async () => ({ status: "handoff" as const }));
+    const autoRun = await import("./update-startup-auto-run.js");
+    const runAutoUpdate = vi
+      .spyOn(autoRun, "runAutoUpdateCommand")
+      .mockResolvedValue({ status: "handoff" });
     const log = { info: vi.fn() };
 
     await runGatewayUpdateCheck({
@@ -175,7 +137,6 @@ describe("update campaign apply exception boundary", () => {
       isNixMode: false,
       allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     fault.at = at;
@@ -183,49 +144,32 @@ describe("update campaign apply exception boundary", () => {
 
     await clock.advanceBy(60_000);
 
-    const runId = listUpdateRuns()[0]?.runId ?? "";
-    const run = getUpdateRun(runId);
+    const run = getUpdateRun(listUpdateRuns()[0]?.runId ?? "");
     const diagnostic = code ? `${message} | ${code}` : message;
     expect(run).toMatchObject({
       status: "failed",
       reason: code ?? "unexpected-error",
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          status: "failed",
-          detail: diagnostic,
-          failureFacts: [expect.objectContaining({ code: code ?? "Error", message: diagnostic })],
-        }),
-      ]),
+      steps: containingObject({
+        status: "failed",
+        detail: diagnostic,
+        failureFacts: matchingObject({ code: code ?? "Error", message: diagnostic }),
+      }),
       target: { kind: "git", installationMethod: "git-checkout" },
       verification: { rollbackOutcome: { status: "not-attempted" } },
     });
     const runStatus = await readUpdateRunStatus();
-    assert(!("runStatusError" in runStatus));
+    assert(!("runStatusError" in runStatus) && runStatus.lastRun);
     const { lastRun } = runStatus;
     expect(lastRun).toEqual(run);
-    assert(lastRun);
     const report = renderUpdateRunReport(lastRun);
     expect(report.headline).toContain(code ?? "unexpected-error");
     expect(report.markdown).toContain(message);
     expect(report.markdown.length).toBeLessThanOrEqual(1500);
-    const prepared = await prepareUpdateFailureReport({
-      attemptId: lastRun.runId,
-      recordedRun: lastRun,
-      result: {
-        status: "error",
-        mode: "git",
-        reason: lastRun.reason ?? undefined,
-        steps: [],
-        durationMs: 0,
-      },
-    });
-    expect(prepared.body).toContain(message);
-    expect(prepared.body).toContain("git-checkout");
-    expect(prepared.body).toContain("startup campaign does not roll back");
+    const { body } = await recordedFailureReport(lastRun, "git");
+    expectIncludes(body, message, "git-checkout", "startup campaign does not roll back");
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
     const failureLog = log.info.mock.calls.find(([line]) => String(line).includes(message));
-    expect(failureLog).toBeDefined();
     expect(failureLog?.[1]).toMatchObject({ channel: "dev", forced: false, tag: "dev" });
   });
 });

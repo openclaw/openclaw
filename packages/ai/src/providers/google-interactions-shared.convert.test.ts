@@ -1,5 +1,6 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { AssistantMessage, Context, Model, ToolResultMessage, UserMessage } from "../types.js";
 import {
   buildGoogleInteractionsParams,
@@ -7,192 +8,133 @@ import {
 } from "./google-interactions-request.js";
 import { makeModel } from "./google-shared.test-helpers.js";
 
-const zeroUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-function user(content: UserMessage["content"]): UserMessage {
-  return { role: "user", content, timestamp: 0 };
-}
-
+const model = {
+  ...makeModel("gemini-3-flash-preview"),
+  api: "google-interactions",
+} satisfies Model<"google-interactions">;
+const text = (value: string) => ({ type: "text" as const, text: value });
+const toolCall = (
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+  thoughtSignature?: string,
+) => ({
+  type: "toolCall" as const,
+  id,
+  name,
+  arguments: args,
+  thoughtSignature,
+});
+const user = (content: UserMessage["content"]): UserMessage => ({
+  role: "user",
+  content,
+  timestamp: 0,
+});
+const step = (type: "user_input" | "model_output", value: string) => ({
+  type,
+  content: [text(value)],
+});
 function assistant(
   content: AssistantMessage["content"],
-  identity?: Partial<Pick<AssistantMessage, "api" | "provider" | "model">>,
+  identity: Partial<Pick<AssistantMessage, "api" | "provider" | "model">> = {},
 ): AssistantMessage {
-  return {
-    role: "assistant",
-    content,
-    api: identity?.api ?? "google-interactions",
-    provider: identity?.provider ?? "google",
-    model: identity?.model ?? "gemini-3-flash-preview",
-    usage: zeroUsage,
-    stopReason: "stop",
-    timestamp: 0,
-  };
+  return { ...createAssistantOutput(model), ...identity, content, timestamp: 0 };
 }
-
-function toolResult(
-  toolCallId: string,
-  toolName: string,
-  content: ToolResultMessage["content"],
-  isError = false,
-): ToolResultMessage {
-  return { role: "toolResult", toolCallId, toolName, content, isError, timestamp: 0 };
+function params(
+  messages: Context["messages"],
+  options: Parameters<typeof buildGoogleInteractionsParams>[2] = {},
+  target = model,
+) {
+  return buildGoogleInteractionsParams(target, { messages }, options);
 }
+const missingResult = (id: string, name: string) => ({
+  type: "function_result",
+  call_id: id,
+  name,
+  result: [text(DEFAULT_MISSING_TOOL_RESULT_TEXT)],
+  is_error: true,
+});
 
 describe("buildGoogleInteractionsParams", () => {
-  const model = {
-    ...makeModel("gemini-3-flash-preview"),
-    api: "google-interactions",
-  } satisfies Model<"google-interactions">;
-
   it("converts basic messages to user_input and model_output steps", () => {
-    const context: Context = {
+    const converted = buildGoogleInteractionsParams(model, {
       systemPrompt: "You are a helpful assistant.",
       messages: [
         user("Hello"),
-        assistant([
-          { type: "text", text: "Hi there!" },
-          { type: "thinking", thinking: "internal thoughts" },
-        ]),
+        assistant([text("Hi there!"), { type: "thinking", thinking: "internal thoughts" }]),
         user("What is 2+2?"),
         {
-          role: "user",
-          content: "OpenClaw runtime context:\ncurrent runtime facts",
+          ...user("OpenClaw runtime context:\ncurrent runtime facts"),
           timestamp: 1,
           runtimeContext: {},
         },
       ],
-    };
-
-    const params = buildGoogleInteractionsParams(model, context, {});
-
-    expect(params.model).toBe("gemini-3-flash-preview");
-    expect(params.system_instruction).toBe("You are a helpful assistant.");
-    expect(params.store).toBe(false);
-    expect(params.stream).toBe(true);
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Hello" }],
-      },
-      {
-        type: "model_output",
-        content: [{ type: "text", text: "Hi there!" }],
-      },
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "What is 2+2?" }],
-      },
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent runtime facts" }],
-      },
-    ]);
+    });
+    expect(converted).toEqual({
+      model: "gemini-3-flash-preview",
+      system_instruction: "You are a helpful assistant.",
+      store: false,
+      stream: true,
+      input: [
+        step("user_input", "Hello"),
+        step("model_output", "Hi there!"),
+        step("user_input", "What is 2+2?"),
+        step("user_input", "OpenClaw runtime context:\ncurrent runtime facts"),
+      ],
+    });
   });
 
   it("preserves chronological model step order in stateless replay", () => {
-    const params = buildGoogleInteractionsParams(
-      model,
-      {
-        messages: [
-          user("Solve this"),
-          assistant([
-            { type: "text", text: "First result" },
-            {
-              type: "thinking",
-              thinking: "Then reason",
-              thinkingSignature: "sig_ordered_thought==",
-            },
-            { type: "text", text: "Second result" },
-          ]),
-        ],
-      },
-      {},
-    );
-
-    expect(params.input).toEqual([
-      { type: "user_input", content: [{ type: "text", text: "Solve this" }] },
-      { type: "model_output", content: [{ type: "text", text: "First result" }] },
-      {
-        type: "thought",
-        signature: "sig_ordered_thought==",
-        summary: [{ type: "text", text: "Then reason" }],
-      },
-      { type: "model_output", content: [{ type: "text", text: "Second result" }] },
+    expect(
+      params([
+        user("Solve this"),
+        assistant([
+          text("First result"),
+          { type: "thinking", thinking: "Then reason", thinkingSignature: "sig_ordered_thought==" },
+          text("Second result"),
+        ]),
+      ]).input,
+    ).toEqual([
+      step("user_input", "Solve this"),
+      step("model_output", "First result"),
+      { type: "thought", signature: "sig_ordered_thought==", summary: [text("Then reason")] },
+      step("model_output", "Second result"),
     ]);
   });
 
   it("emits thought signatures in separate thought steps and not on function_call steps", () => {
-    const context: Context = {
-      messages: [
+    expect(
+      params([
         user("Weather in Tokyo?"),
-        assistant([
-          {
-            type: "toolCall",
-            id: "call_123",
-            name: "getWeather",
-            arguments: { city: "Tokyo" },
-            thoughtSignature: "sig_tool_call_token==",
-          },
-        ]),
-      ],
-    };
-
-    const params = buildGoogleInteractionsParams(model, context, {});
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Weather in Tokyo?" }],
-      },
-      {
-        type: "thought",
-        signature: "sig_tool_call_token==",
-      },
-      {
-        type: "function_call",
-        id: "call_123",
-        name: "getWeather",
-        arguments: { city: "Tokyo" },
-      },
-      {
-        type: "function_result",
-        call_id: "call_123",
-        name: "getWeather",
-        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
-        is_error: true,
-      },
+        assistant([toolCall("call_123", "getWeather", { city: "Tokyo" }, "sig_tool_call_token==")]),
+      ]).input,
+    ).toEqual([
+      step("user_input", "Weather in Tokyo?"),
+      { type: "thought", signature: "sig_tool_call_token==" },
+      { type: "function_call", id: "call_123", name: "getWeather", arguments: { city: "Tokyo" } },
+      missingResult("call_123", "getWeather"),
     ]);
   });
 
   it("resolves the documented Gemini API partner client header x-goog-api-client", () => {
-    const headers = resolveGoogleApiClientHeaders({
-      baseUrl: "https://generativelanguage.googleapis.com",
-    });
-    expect(headers["x-goog-api-client"]).toMatch(/^openclaw\//u);
+    expect(
+      resolveGoogleApiClientHeaders({
+        baseUrl: "https://generativelanguage.googleapis.com",
+        model,
+      })["x-goog-api-client"],
+    ).toMatch(/^openclaw\//u);
   });
 
   it("rejects unsupported explicit prompt caching locally", () => {
-    const context: Context = {
-      messages: [user("Hello")],
-    };
-
     expect(() =>
-      buildGoogleInteractionsParams(model, context, {
+      params([user("Hello")], {
         cachedContent: "cachedContents/123",
       } as Record<string, unknown>),
     ).toThrow(/Explicit prompt caching/);
   });
 
   it("maps an explicit tool choice into generation_config", () => {
-    const params = buildGoogleInteractionsParams(
+    const converted = buildGoogleInteractionsParams(
       model,
       {
         messages: [user("Use a tool")],
@@ -206,31 +148,34 @@ describe("buildGoogleInteractionsParams", () => {
       },
       { toolChoice: "any" },
     );
-    expect(params.generation_config?.tool_choice).toBe("any");
+    expect(converted.generation_config?.tool_choice).toBe("any");
   });
 
   it("applies the model's minimum supported reasoning when direct options disable thinking", () => {
-    const params = buildGoogleInteractionsParams(
-      { ...model, reasoning: true },
-      { messages: [user("Answer briefly")] },
-      { thinking: { enabled: false } },
-    );
-
-    expect(params.generation_config).toEqual({
-      thinking_level: "minimal",
-      thinking_summaries: "none",
-    });
+    expect(
+      params(
+        [user("Answer briefly")],
+        { thinking: { enabled: false } },
+        {
+          ...model,
+          reasoning: true,
+        },
+      ).generation_config,
+    ).toEqual({ thinking_level: "minimal", thinking_summaries: "none" });
   });
 
   it.each([true, false])(
     "preserves the caller output cap for Interactions thinking (enabled=%s)",
     (enabled) => {
-      const params = buildGoogleInteractionsParams(
-        { ...model, id: "gemini-3-flash-preview", reasoning: true, maxTokens: 65536 },
-        { messages: [user("Answer briefly")] },
-        { maxTokens: 64, thinking: { enabled, level: "LOW" } },
+      const converted = params(
+        [user("Answer briefly")],
+        {
+          maxTokens: 64,
+          thinking: { enabled, level: "LOW" },
+        },
+        { ...model, reasoning: true, maxTokens: 65536 },
       );
-      const serialized = JSON.stringify(params);
+      const serialized = JSON.stringify(converted);
       expect(JSON.parse(serialized).generation_config).toEqual({
         max_output_tokens: 64,
         thinking_level: "low",
@@ -240,108 +185,61 @@ describe("buildGoogleInteractionsParams", () => {
   );
 
   it("strips incompatible thought signatures and repairs missing tool results before conversion", () => {
-    const params = buildGoogleInteractionsParams(
-      model,
-      {
-        messages: [
-          user("Use a tool"),
-          assistant(
-            [
-              {
-                type: "thinking",
-                thinking: "Reasoning from the old transport",
-                thinkingSignature: "incompatible-signature",
-              },
-              {
-                type: "toolCall",
-                id: "call_legacy",
-                name: "lookup",
-                arguments: { query: "value" },
-                thoughtSignature: "incompatible-tool-signature",
-              },
-            ],
-            { api: "google-generative-ai" },
-          ),
+    const converted = params([
+      user("Use a tool"),
+      assistant(
+        [
+          {
+            type: "thinking",
+            thinking: "Reasoning from the old transport",
+            thinkingSignature: "incompatible-signature",
+          },
+          toolCall("call_legacy", "lookup", { query: "value" }, "incompatible-tool-signature"),
         ],
-      },
-      {},
-    );
-
-    expect(params.input).toEqual([
-      { type: "user_input", content: [{ type: "text", text: "Use a tool" }] },
-      {
-        type: "model_output",
-        content: [{ type: "text", text: "Reasoning from the old transport" }],
-      },
-      {
-        type: "function_call",
-        id: "call_legacy",
-        name: "lookup",
-        arguments: { query: "value" },
-      },
-      {
-        type: "function_result",
-        call_id: "call_legacy",
-        name: "lookup",
-        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
-        is_error: true,
-      },
+        { api: "google-generative-ai" },
+      ),
     ]);
-    expect(JSON.stringify(params.input)).not.toContain("incompatible-signature");
+    expect(converted.input).toEqual([
+      step("user_input", "Use a tool"),
+      step("model_output", "Reasoning from the old transport"),
+      { type: "function_call", id: "call_legacy", name: "lookup", arguments: { query: "value" } },
+      missingResult("call_legacy", "lookup"),
+    ]);
+    expect(JSON.stringify(converted.input)).not.toContain("incompatible-signature");
   });
 
   it("normalizes toolResult image blocks to snake_case mime_type", () => {
-    const context: Context = {
-      messages: [
-        user("Read the file"),
-        assistant([
-          {
-            type: "toolCall",
-            id: "call_read_1",
-            name: "read",
-            arguments: { path: "test.png" },
-          },
-        ]),
-        toolResult("call_read_1", "read", [
-          { type: "text", text: "Read image file" },
-          {
-            type: "image",
-            mimeType: "image/png",
-            data: "base64data",
-          },
-        ]),
+    const result: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_read_1",
+      toolName: "read",
+      isError: false,
+      timestamp: 0,
+      content: [
+        text("Read image file"),
+        { type: "image", mimeType: "image/png", data: "base64data" },
       ],
     };
-
-    const params = buildGoogleInteractionsParams(
-      { ...model, input: ["text", "image"] },
-      context,
+    const converted = params(
+      [
+        user("Read the file"),
+        assistant([toolCall("call_read_1", "read", { path: "test.png" })]),
+        result,
+      ],
       {},
+      { ...model, input: ["text", "image"] },
     );
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Read the file" }],
-      },
-      {
-        type: "function_call",
-        id: "call_read_1",
-        name: "read",
-        arguments: { path: "test.png" },
-      },
+    expect(converted.input).toEqual([
+      step("user_input", "Read the file"),
+      { type: "function_call", id: "call_read_1", name: "read", arguments: { path: "test.png" } },
       {
         type: "function_result",
         call_id: "call_read_1",
         name: "read",
         is_error: false,
         result: [
-          { type: "text", text: "Read image file" },
-          {
-            type: "image",
-            mime_type: "image/png",
-            data: "base64data",
-          },
+          text("Read image file"),
+          { type: "image", mime_type: "image/png", data: "base64data" },
         ],
       },
     ]);

@@ -1,9 +1,34 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { scanInstalledApps } from "./installed-apps.js";
+
+const redirectedRoots = vi.hoisted(() => new Map<string, string>());
+vi.mock("@openclaw/fs-safe/walk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/walk")>();
+  return {
+    ...actual,
+    walkDirectory: ((root, options) => {
+      const target = redirectedRoots.get(root);
+      if (!target) {
+        throw new Error(`Unowned installed-app fixture root: ${root}`);
+      }
+      return actual.walkDirectory(target, options);
+    }) satisfies typeof actual.walkDirectory,
+  };
+});
+
+beforeEach(() => {
+  mockProcessPlatform("darwin");
+});
+afterEach(() => {
+  redirectedRoots.clear();
+  vi.restoreAllMocks();
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -22,6 +47,9 @@ async function makeFixtureRoot(): Promise<{
       fs.mkdir(directory, { recursive: true }),
     ),
   );
+  redirectedRoots.set("/Applications", applications);
+  redirectedRoots.set(path.join(os.homedir(), "Applications"), userApplications);
+  redirectedRoots.set("/System/Applications", systemApplications);
   return { root, applications, userApplications, systemApplications };
 }
 
@@ -49,7 +77,7 @@ describe("scanInstalledApps", () => {
       fs.mkdir(path.join(roots.applications, "Not An App")),
     ]);
 
-    const result = await scanInstalledApps({ platform: "darwin", roots });
+    const result = await scanInstalledApps();
 
     expect(result).toEqual({
       status: "ok",
@@ -85,7 +113,7 @@ describe("scanInstalledApps", () => {
       path.join(roots.applications, "RealTarget.app"),
       path.join(roots.userApplications, "Linked.app"),
     );
-    const result = await scanInstalledApps({ platform: "darwin", roots });
+    const result = await scanInstalledApps();
     expect(result.status).toBe("ok");
     if (result.status === "ok") {
       expect(result.apps.map((app) => app.label)).toContain("Linked");
@@ -93,7 +121,8 @@ describe("scanInstalledApps", () => {
   });
 
   it("returns a typed unsupported result off macOS", async () => {
-    await expect(scanInstalledApps({ platform: "linux" })).resolves.toEqual({
+    mockProcessPlatform("linux");
+    await expect(scanInstalledApps()).resolves.toEqual({
       status: "unsupported",
       platform: "linux",
       apps: [],
@@ -165,7 +194,7 @@ describe("scanInstalledApps", () => {
       const linkedPath = path.join(roots.userApplications, "Linked.app");
       await fs.symlink(path.join(roots.applications, "XML.app"), linkedPath);
 
-      const result = await scanInstalledApps({ roots });
+      const result = await scanInstalledApps();
 
       expect(result.status).toBe("ok");
       if (result.status !== "ok") {

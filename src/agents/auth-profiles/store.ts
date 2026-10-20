@@ -90,8 +90,6 @@ import {
   listOwnedRuntimeAuthProfileStoreSnapshots,
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
   restoreOwnedRuntimeAuthProfileStoreSnapshot,
-  setRuntimeAuthProfileStoreSnapshot,
-  updateRuntimeAuthProfileStoreSnapshot,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshots.js";
 import {
@@ -270,7 +268,7 @@ export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
   return resolveAgentAuthPath(effectiveAgentDir) === mainPath;
 }
 
-/** @deprecated Use findPersistedAuthProfileCredentialAsync. Supported through 2026-12-31. */
+/** @deprecated Use findPersistedAuthProfileCredentialAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
   profileId: string;
@@ -310,7 +308,7 @@ export function findPersistedAuthProfileCredential(params: {
 
 /**
  * Resolve which agent dir owns a persisted profile, accounting for inherited OAuth.
- * @deprecated Use resolvePersistedAuthProfileOwnerAgentDirAsync. Supported through 2026-12-31.
+ * @deprecated Use resolvePersistedAuthProfileOwnerAgentDirAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   agentDir?: string;
@@ -792,7 +790,11 @@ export { preserveResolvedSecretBackedCredentials } from "./runtime-snapshot-owne
 export function createAuthProfileStoreRuntime(
   externalAuth: ReturnType<typeof createExternalAuthRuntime>,
 ) {
-  const { listRuntimeExternalAuthProfiles, overlayExternalAuthProfiles } = externalAuth;
+  const {
+    listRuntimeExternalAuthProfiles,
+    overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles,
+  } = externalAuth;
 
   function maybeSyncPersistedExternalCliAuthProfiles(params: {
     store: AuthProfileStore;
@@ -1114,6 +1116,7 @@ export function createAuthProfileStoreRuntime(
     resolveRuntimeAuthProfileLoadOptions,
     loadAuthProfileStoreForAgent,
     loadRuntimeAuthProfileStore,
+    withPreparedExternalAuthProfiles,
     captureScope,
   });
 
@@ -1305,8 +1308,7 @@ export function createAuthProfileStoreRuntime(
     captureScope,
     withPreparedAuthProfileStoreReads,
     overlayExternalAuthProfiles,
-    setRuntimeAuthProfileStoreSnapshot,
-    updateRuntimeAuthProfileStoreSnapshot,
+    withPreparedExternalAuthProfiles,
   });
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */
@@ -1409,7 +1411,7 @@ export function createAuthProfileStoreRuntime(
 
   /**
    * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
-   * with readOnly: true and allowKeychainPrompt: false. Supported through 2026-12-31.
+   * with readOnly: true and allowKeychainPrompt: false. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   function loadAuthProfileStoreForSecretsRuntime(
     agentDir?: string,
@@ -1619,7 +1621,7 @@ export function createAuthProfileStoreRuntime(
 
   /**
    * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
-   * Supported through 2026-12-31.
+   * Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   function saveAuthProfileStore(
     store: AuthProfileStore,

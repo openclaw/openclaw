@@ -15,9 +15,15 @@ type ReaderMethod = "github.preview" | "github.detail";
 async function handleGitHubRequest(
   method: ReaderMethod,
   { params, respond }: GatewayRequestHandlerOptions,
+  sessionHost?: string,
 ) {
-  const parsed = parseGitHubLinkParams(params);
-  if (!parsed || (method === "github.preview" && parsed.target.kind === "commit")) {
+  const parsed = parseGitHubLinkParams(params, sessionHost);
+  if (
+    !parsed ||
+    (sessionHost && (typeof params.sessionKey !== "string" || !params.sessionKey.trim())) ||
+    (method === "github.preview" &&
+      (parsed.target.kind === "commit" || parsed.section !== undefined))
+  ) {
     respond(
       false,
       undefined,
@@ -30,8 +36,10 @@ async function handleGitHubRequest(
       method === "github.preview" ? "controlUi.githubPreview" : "controlUi.githubDetail",
       {
         ...parsed.target,
+        ...(sessionHost ? { githubHost: sessionHost, sessionKey: params.sessionKey } : {}),
         ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
         ...(parsed.refresh ? { refresh: true } : {}),
+        ...(parsed.section ? { section: parsed.section } : {}),
       },
     );
     if (!result.ok) {
@@ -43,14 +51,14 @@ async function handleGitHubRequest(
       // adapter alone selects/revalidates managed identities and caller lifetime.
       if (
         !isControlUiGitHubPreview(result.payload) ||
-        githubTargetUrl(result.payload).toLowerCase() !==
-          githubTargetUrl(parsed.target).toLowerCase()
+        githubTargetUrl(result.payload, sessionHost).toLowerCase() !==
+          githubTargetUrl(parsed.target, sessionHost).toLowerCase()
       ) {
         throw new ControlUiGitHubError(502, "GitHub preview returned an invalid response");
       }
       respond(
         true,
-        { ...githubPreviewView(result.payload), url: parsed.url },
+        { ...githubPreviewView(result.payload, sessionHost), url: parsed.url },
         undefined,
         result.meta,
       );
@@ -61,7 +69,7 @@ async function handleGitHubRequest(
         typeof document.title !== "string" ||
         typeof document.body !== "string" ||
         typeof document.url !== "string" ||
-        document.url.toLowerCase() !== githubTargetUrl(parsed.target).toLowerCase()
+        document.url.toLowerCase() !== githubTargetUrl(parsed.target, sessionHost).toLowerCase()
       ) {
         throw new ControlUiGitHubError(502, "GitHub document returned a different resource");
       }
@@ -101,3 +109,16 @@ export const githubHandlers = {
   "github.detail": (options: GatewayRequestHandlerOptions) =>
     handleGitHubRequest("github.detail", options),
 };
+
+/** Separate from the public/profile-independent RPC; the host owns session admission. */
+export function handleSessionGitHubRequest(
+  kind: "preview" | "detail",
+  host: string,
+  options: GatewayRequestHandlerOptions,
+) {
+  return handleGitHubRequest(
+    kind === "preview" ? "github.preview" : "github.detail",
+    options,
+    host,
+  );
+}

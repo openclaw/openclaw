@@ -197,21 +197,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("classifies provider business-denial error payloads as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "zai",
-      model: "glm-5.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload(
+      "zai",
+      "glm-5.1",
+      '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
+    );
 
     expect(result).toEqual({
       message:
@@ -497,21 +487,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("does not retry unclassified non-GPT error payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "the model produced an application-level error",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload(
+      "custom",
+      "llama-3.1",
+      "the model produced an application-level error",
+    );
 
     expect(result).toBeNull();
   });
@@ -521,21 +501,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     // made `timeout` payloads fallback-eligible, so this payload reached the chain
     // before, but labelled `timeout`; it now carries `server_error`, which is also
     // an allowlisted ProviderErrorPayloadFailoverReason.
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "HTTP 500: internal server error",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload("custom", "llama-3.1", "HTTP 500: internal server error");
 
     expect(result).toEqual({
       message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
@@ -547,14 +513,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
   it("classifies generic 'LLM request failed.' payloads as timeout fallback (#138531)", () => {
     const rawError = "LLM request failed.";
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [{ isError: true, text: rawError }],
-        meta: { durationMs: 42 },
-      },
-    });
+    const result = classifyErrorPayload("custom", "llama-3.1", rawError);
 
     expect(result).toEqual({
       message: `custom/llama-3.1 ended with a provider error: ${rawError}`,
@@ -565,21 +524,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("does not retry non-business transport error payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "connection closed before a response arrived",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload(
+      "custom",
+      "llama-3.1",
+      "connection closed before a response arrived",
+    );
 
     expect(result).toBeNull();
   });

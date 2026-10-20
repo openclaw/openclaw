@@ -94,6 +94,7 @@ export async function serveControlUiPublicSessionMedia(params: {
       return unavailable(503);
     }
     const result = await gate.run({
+      kind: "transcript",
       publicationKey: locator.shareId,
       sessionKey: locator.sessionKey,
       config,
@@ -108,9 +109,7 @@ export async function serveControlUiPublicSessionMedia(params: {
         if (!message || getPublicSessionEntryId(message) !== entryId) {
           return null;
         }
-        const bytes = await readPublicSessionAttachment(message, attachmentId, locator);
-        const mime = bytes ? await detectMime({ buffer: bytes }) : undefined;
-        return mime && PUBLIC_IMAGE_TYPES.has(mime) ? bytes : null;
+        return await readPublicSessionAttachment(message, attachmentId, locator);
       },
     });
     if (result.kind !== "ok") {

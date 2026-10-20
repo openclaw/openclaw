@@ -56,13 +56,29 @@ describe("plugins search command", () => {
       context: "profile",
       profile: "work",
       container: undefined,
-      command: "openclaw --profile work plugins install clawhub:openclaw-calendar",
+      packageName: "openclaw-calendar",
+      command: "openclaw --profile work plugins install openclaw-calendar@latest",
+    },
+    {
+      context: "official package",
+      profile: undefined,
+      container: undefined,
+      packageName: "@openclaw/diffs",
+      command: "openclaw plugins install @openclaw/diffs",
+    },
+    {
+      context: "short ID collision",
+      profile: undefined,
+      container: undefined,
+      packageName: "discord",
+      command: "openclaw plugins install discord@latest",
     },
     {
       context: "container over profile",
       profile: "work",
       container: "staging",
-      command: "openclaw --container staging plugins install clawhub:openclaw-calendar",
+      packageName: "@composio/composio",
+      command: "openclaw --container staging plugins install @composio/composio",
     },
   ])("searches ClawHub plugin families with the $context install context", async (scenario) => {
     mocks.searchClawHubPackages
@@ -70,7 +86,7 @@ describe("plugins search command", () => {
         {
           score: 12,
           package: {
-            name: "openclaw-calendar",
+            name: scenario.packageName,
             displayName: "Calendar",
             family: "code-plugin",
             channel: "community",
@@ -117,7 +133,7 @@ describe("plugins search command", () => {
       family: "bundle-plugin",
       limit: 5,
     });
-    expect(mocks.logs.join("\n")).toContain("openclaw-calendar");
+    expect(mocks.logs.join("\n")).toContain(scenario.packageName);
     expect(mocks.logs.join("\n")).toContain(`Install: ${scenario.command}`);
   });
 

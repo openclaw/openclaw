@@ -77,6 +77,24 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
     { name: "optional helper", expectation: "optional", delivery: "missing", phased: false },
     { name: "private result", expectation: "result-required", delivery: "missing", phased: false },
     {
+      name: "private result held during recovery",
+      expectation: "result-required",
+      delivery: "pending-during-recovery",
+      phased: false,
+    },
+    {
+      name: "private result observation fails during recovery",
+      expectation: "result-required",
+      delivery: "unknown-during-recovery",
+      phased: false,
+    },
+    {
+      name: "recovery answer visible in transcript",
+      expectation: "result-required",
+      delivery: "visible-during-recovery",
+      phased: false,
+    },
+    {
       name: "external cross-chat send with empty final",
       expectation: "required",
       delivery: "missing",
@@ -180,6 +198,9 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
     let observations = 0;
     input.terminalBase.runParams.resolveReplyDelivery = async () => {
       observations += 1;
+      if (delivery === "visible-during-recovery") {
+        return observations === 1 ? "missing" : "delivered";
+      }
       if (delivery === "pending-during-recovery" || delivery === "unknown-during-recovery") {
         if (observations === 1) {
           return "missing";
@@ -194,6 +215,14 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       }
       return delivery;
     };
+    if (delivery === "visible-during-recovery") {
+      const resolveTerminalDelivery = input.terminalBase.runParams.resolveReplyDelivery;
+      input.terminalBase.runParams.resolveReplyDeliveryFacts = async (minimum) => ({
+        source: "missing",
+        terminal: await resolveTerminalDelivery(minimum),
+      });
+      input.terminalBase.runParams.resolveReplyDelivery = undefined;
+    }
     const finalText =
       emptyFinal && expectation !== "result-required" ? SILENT_REPLY_TOKEN : "The note is saved.";
     backendMocks.runSettledFinalization.mockResolvedValueOnce({
@@ -230,6 +259,8 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       expect(runAttempt).not.toHaveBeenCalled();
       return;
     }
+    const pendingDuringRecovery =
+      delivery === "pending-during-recovery" || delivery === "unknown-during-recovery";
     if (expectation === "result-required") {
       expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
       const [preparedAttempt] = backendMocks.runSettledFinalization.mock.calls[0] ?? [];
@@ -242,10 +273,20 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       expect(preparedAttempt.prompt).toContain("produce the required result now");
       expect(preparedAttempt.prompt).toContain("NO_REPLY is not allowed");
       expect(result.finalizationOutcome).toBe("answered");
-      expect(result.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({ text: finalText }),
-      ]);
-      expect(result.prepared.replyDeliveryState).toBe("missing");
+      expect(result.prepared.payloadsWithToolMedia).toEqual(
+        pendingDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
+      );
+      expect(result.prepared.replyDeliveryState).toBe(
+        delivery === "visible-during-recovery"
+          ? "delivered"
+          : pendingDuringRecovery
+            ? "pending"
+            : "missing",
+      );
+      if (delivery === "visible-during-recovery") {
+        expect(observations).toBe(2);
+        expect(result.prepared.sourceReplyDeliveryState).toBe("missing");
+      }
     } else if (emptyFinal) {
       expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
       const [preparedAttempt] = backendMocks.runSettledFinalization.mock.calls[0] ?? [];

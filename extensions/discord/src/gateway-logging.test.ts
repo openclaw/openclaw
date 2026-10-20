@@ -60,7 +60,7 @@ describe("attachDiscordGatewayLogging", () => {
     cleanup();
   });
 
-  it("promotes warnings while keeping metrics verbose-only", () => {
+  it("promotes warnings", () => {
     const emitter = new EventEmitter();
     const runtime = createRuntimeSpies();
 
@@ -70,10 +70,9 @@ describe("attachDiscordGatewayLogging", () => {
     });
 
     emitter.emit("warning", "High latency detected: 1200ms");
-    emitter.emit("metrics", { latency: 42, errors: 1 });
 
     const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(2);
+    expect(logVerboseMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
       "warn:discord gateway warning: High latency detected: 1200ms",
     );
@@ -96,7 +95,6 @@ describe("attachDiscordGatewayLogging", () => {
 
     emitter.emit("debug", "Gateway websocket closed: 1001");
     emitter.emit("warning", "High latency detected: 1200ms");
-    emitter.emit("metrics", { latency: 42 });
 
     expect(logVerboseMock).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();

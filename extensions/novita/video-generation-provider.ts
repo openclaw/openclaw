@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -116,16 +116,6 @@ const MODEL_CATALOG: Readonly<Record<string, VideoGenerationCatalogModelEntry>> 
   },
 };
 
-function nearestDuration(
-  value: number | undefined,
-  allowed: readonly [number, ...number[]],
-): number {
-  const requested = typeof value === "number" && Number.isFinite(value) ? value : allowed[0];
-  return allowed.reduce((best, current) =>
-    Math.abs(current - requested) < Math.abs(best - requested) ? current : best,
-  );
-}
-
 function resolveModel(req: VideoGenerationRequest): string {
   const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
   if (!Object.hasOwn(MODEL_CATALOG, model)) {
@@ -147,21 +137,6 @@ function resolveModel(req: VideoGenerationRequest): string {
   return images.length > 0 ? model.replace(/-t2v$/, "-i2v") : model;
 }
 
-function resolveImage(req: VideoGenerationRequest): string | undefined {
-  const image = req.inputImages?.[0];
-  if (!image) {
-    return undefined;
-  }
-  const url = normalizeOptionalString(image.url);
-  if (url) {
-    return url;
-  }
-  if (!image.buffer) {
-    throw new Error("Novita image-to-video input is missing image data.");
-  }
-  return toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" });
-}
-
 function resolveResolution(req: VideoGenerationRequest, wan: boolean): string {
   const resolution = normalizeOptionalString(req.resolution)?.toUpperCase();
   return resolution === "1080P" ? "1080P" : wan ? "720P" : "768P";
@@ -180,7 +155,10 @@ function resolveWanSize(req: VideoGenerationRequest): string {
 
 function buildBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
   const wan = model.startsWith("wan");
-  const image = resolveImage(req);
+  const image = resolveImageSourceUrl(
+    req.inputImages?.[0],
+    "Novita image-to-video input is missing image data.",
+  );
   const options = req.providerOptions ?? {};
   const mode = image ? "imageToVideo" : "generate";
   const schema = MODEL_CATALOG[model]?.capabilities?.[mode]?.providerOptions ?? {};
@@ -195,7 +173,7 @@ function buildBody(req: VideoGenerationRequest, model: string): Record<string, u
       `Novita ${model} supports ${wan ? "at most one" : "no"} audio reference input.`,
     );
   }
-  const duration = nearestDuration(req.durationSeconds, wan ? [5, 10, 15] : [6, 10]);
+  const duration = req.durationSeconds ?? (wan ? 5 : 6);
   const resolution = resolveResolution(req, wan);
   if (!wan) {
     if (duration === 10 && resolution === "1080P") {

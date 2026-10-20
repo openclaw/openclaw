@@ -2,17 +2,18 @@
 // cache so list rendering never rescans transcripts that have not changed.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  isSessionTranscriptProjectionUnavailableError,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
-  readSessionTranscriptWatermark,
-  type SessionTranscriptMessageEvent,
-  type SessionTranscriptReadScope,
-} from "../config/sessions/session-accessor.js";
-import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
+} from "../config/sessions/session-accessor.sqlite-active-events.js";
+import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
+import { resolveSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { resolveSessionTitleSource } from "../sessions/session-title-source.js";
@@ -181,7 +182,8 @@ export function readSessionTitleFieldsFromTranscript(
           : undefined;
     return result?.fields ?? { ...EMPTY_SESSION_TITLE_FIELDS };
   }
-  const target = resolveSessionTranscriptReadTarget(input);
+  const target =
+    read?.target ?? resolveSessionTranscriptReadTargetCore(input, resolveSessionStorePathForScope);
   try {
     const scope = { ...toTranscriptReadScope(target), ...(input.env ? { env: input.env } : {}) };
     const cacheKey = `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;

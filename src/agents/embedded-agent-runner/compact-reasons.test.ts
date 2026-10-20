@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { describeFailoverError, resolveFailoverReasonFromError } from "../failover-error.js";
 import {
   classifyCompactionReason,
-  formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
   resolveCompactionFailure,
@@ -98,18 +97,4 @@ describe("isBenignCompactionSkipReason", () => {
       expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
     },
   );
-});
-
-describe("formatUnknownCompactionReasonDetail", () => {
-  it("strips terminal escapes and log separators from unknown reasons", () => {
-    // Unknown reason detail is embedded in metric tags, so strip control
-    // characters and separators before exporting it.
-    expect(
-      formatUnknownCompactionReasonDetail("\u001b[31mNo API\u001b[0m provider = ollama\nnext"),
-    ).toBe("No_API_provider_ollama_next");
-  });
-
-  it("omits empty unknown reason detail", () => {
-    expect(formatUnknownCompactionReasonDetail(" \n\t ")).toBeUndefined();
-  });
 });

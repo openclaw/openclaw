@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
@@ -9,6 +10,69 @@ import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
+  it.each(["edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
+    "rejects draft on %s without changing PR state",
+    async (action) => {
+      const callGateway = vi.fn();
+      const tool = createGitHubPublishTool({ callGateway, actionsAvailable: true });
+      await expect(
+        withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: "agent:main:host-owned" },
+          () => tool.execute("choice", { action, draft: false }),
+        ),
+      ).rejects.toThrow("draft only selects the state when publishing a new PR");
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it("offers current-PR preparation without privileged actions", () => {
+    const tool = createGitHubPublishTool();
+    expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "request_review",
+        requestId: "a1111111-1111-4111-8111-111111111111",
+        expectedHeadCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.parameters, { action: "request_review", focus: "extra instructions" }),
+    ).toBe(false);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "upload_evidence",
+        requestId: "10000000-0000-4000-8000-000000000002",
+        expectedHeadCommit: "a".repeat(40),
+        evidence: { path: "proof.png", sha256: "b".repeat(64), sizeBytes: 68 },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "edit",
+        title: "New title",
+        expectedTitle: "Old title",
+      }),
+    ).toBe(true);
+    expect(Value.Check(tool.parameters, { action: "ready" })).toBe(true);
+    expect(Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "another" })).toBe(
+      false,
+    );
+    for (const action of ["inspect", "merge", "close"]) {
+      expect(Value.Check(tool.parameters, { action })).toBe(false);
+    }
+    expect(Value.Check(tool.parameters, { action: "edit", publishingSessionKey: "another" })).toBe(
+      false,
+    );
+    expect(tool.description).toContain("used only when creating a PR");
+    expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
+    expect(
+      Value.Check(
+        createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }).parameters,
+        { action: "edit" },
+      ),
+    ).toBe(false);
+  });
+
   it.each(["available", "absent", "self-scoped", "denied"] as const)(
     "offers a scheduled continuation only with %s automation creation",
     (availability) => {
@@ -103,24 +167,32 @@ describe("github_publish tool", () => {
     },
   );
 
-  it("binds bounded model intent to the host-owned session", async () => {
-    const callGatewayMock = vi.fn(async () => ({
-      requestId: "publication-1",
-      status: "requested" as const,
-      message: "Publication was accepted.",
-    }));
-    const callGateway = callGatewayMock as InProcessGatewayCaller;
-    const tool = createGitHubPublishTool({ callGateway });
+  it.each([undefined, false, true])(
+    "preserves the draft choice %s in bounded model intent",
+    async (draft) => {
+      const callGatewayMock = vi.fn(async () => ({
+        requestId: "publication-1",
+        status: "requested" as const,
+        message: "Publication was accepted.",
+      }));
+      const callGateway = callGatewayMock as InProcessGatewayCaller;
+      const tool = createGitHubPublishTool({ callGateway });
 
-    await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:host-owned" },
-      async () => await tool.execute("tool-call-1", { title: "Publish the fix" }),
-    );
+      await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:host-owned" },
+        async () =>
+          await tool.execute("tool-call-1", {
+            title: "Publish the fix",
+            ...(draft !== undefined ? { draft } : {}),
+          }),
+      );
 
-    expect(callGatewayMock).toHaveBeenCalledWith("sessions.github.publish", {
-      sessionKey: "agent:main:host-owned",
-      idempotencyKey: "tool-call-1",
-      title: "Publish the fix",
-    });
-  });
+      expect(callGatewayMock).toHaveBeenCalledWith("sessions.github.publish", {
+        sessionKey: "agent:main:host-owned",
+        idempotencyKey: "tool-call-1",
+        title: "Publish the fix",
+        ...(draft !== undefined ? { draft } : {}),
+      });
+    },
+  );
 });

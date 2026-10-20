@@ -80,6 +80,8 @@ describe("litellm image generation provider", () => {
     });
   });
 
+  // The multipart edit tests own LiteLLM's part names and upload assembly.
+  // Assert each image's bytes and MIME type, not only the part count.
   it("routes to the edit endpoint as multipart when input images are provided", async () => {
     postMultipartRequestMock.mockImplementation(pngResponse);
 

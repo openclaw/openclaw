@@ -45,10 +45,11 @@ export function createCliRuntimeModelAuthEvaluator(
     ref: ModelAuthAvailabilityRef,
     evaluation: ModelAuthAvailabilityEvaluation,
   ): ModelAuthAvailabilityEvaluation | undefined => {
-    if (ref.runtimeId === "openclaw") {
+    if (ref.runtimeId === "openclaw" || evaluation.routeResolution !== null) {
       return undefined;
     }
-    if (evaluation.routeResolution !== null || normalizeProviderId(provider) === "openai") {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (normalizedProvider === "openai") {
       return undefined;
     }
     const selectedProfileId = ref.pinnedProfileId?.trim() || ref.preferredProfileId?.trim();
@@ -64,11 +65,11 @@ export function createCliRuntimeModelAuthEvaluator(
             authProfileId: selectedProfileId,
             metadataSnapshot: params.metadataSnapshot,
             preparedAuthDirectories: params.preparedCliRuntimeAuthDirectories,
-          }) ?? normalizeProviderId(provider));
+          }) ?? normalizedProvider);
+    const normalizedRuntimeProvider = normalizeProviderId(runtimeProvider);
     const binding = resolveCliRuntimeModelBackendBinding({ provider, runtime: runtimeProvider });
-    const runtimeOwners = params.metadataSnapshot?.owners?.cliBackends.get(
-      normalizeProviderId(runtimeProvider),
-    );
+    const runtimeOwners =
+      params.metadataSnapshot?.owners?.cliBackends.get(normalizedRuntimeProvider);
     // Agent harnesses can use provider auth without registering a CLI backend.
     if (
       !binding &&
@@ -77,7 +78,7 @@ export function createCliRuntimeModelAuthEvaluator(
     ) {
       return undefined;
     }
-    if (ref.runtimeId && runtimeProvider !== normalizeProviderId(provider) && !binding) {
+    if (ref.runtimeId && runtimeProvider !== normalizedProvider && !binding) {
       return { availability: false, routeResolution: null, unavailableReason: "missing-auth" };
     }
     if (runtimeOwners?.length) {
@@ -114,7 +115,7 @@ export function createCliRuntimeModelAuthEvaluator(
         : evaluation;
     }
     const runtimeAuth = { id: runtimeProvider, source: "native" as const };
-    if (normalizeProviderId(runtimeProvider) === normalizeProviderId(provider)) {
+    if (normalizedRuntimeProvider === normalizedProvider) {
       return runtimeOwners?.length ? { ...evaluation, runtimeAuth } : undefined;
     }
     const runtimeAuthMode =
@@ -141,8 +142,7 @@ export function createCliRuntimeModelAuthEvaluator(
         params.agentId,
       ),
     );
-    return params.preparedSyntheticAuthComplete ||
-      configuredRuntimes.has(normalizeProviderId(runtimeProvider))
+    return params.preparedSyntheticAuthComplete || configuredRuntimes.has(normalizedRuntimeProvider)
       ? {
           availability: false,
           routeResolution: null,

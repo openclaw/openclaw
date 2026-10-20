@@ -124,6 +124,7 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
     lowerPrecedenceEnv: overrides.lowerPrecedenceEnv ?? {},
     homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
     configPath: overrides.configPath ?? "",
+    mapIncludePath: overrides.mapIncludePath ?? ((absolutePath) => absolutePath),
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
     suppressFutureVersionWarning:
@@ -228,6 +229,7 @@ export function resolveConfigIncludesForRead(
     configPath,
     {
       readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      mapPath: deps.mapIncludePath,
       onLexicalPath: recordIncludeWatchPath,
       onIncludeResolved,
       readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) => {

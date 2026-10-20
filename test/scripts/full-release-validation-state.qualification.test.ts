@@ -162,11 +162,6 @@ console.log(response);
     { release_package_spec: "openclaw@2026.9.1" },
     { skip_package_telegram_e2e: "true" },
     { allow_frozen_target_scenario_omissions: "true" },
-    {
-      trusted_workflow_json: JSON.stringify({
-        laneInputs: { extension_test_exclude_patterns_json: '["*.test.ts"]' },
-      }),
-    },
   ])("rejects a narrowed candidate request: %j", (narrowed) => {
     expect(() => resolveQualificationCoverage(policy, { ...inputs, ...narrowed })).toThrow();
   });

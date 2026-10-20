@@ -31,6 +31,7 @@ export function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
   includePluginSteering?: boolean;
+  maxChars?: number;
   toolResultMaxChars?: number;
   message: unknown;
   messageId?: string;
@@ -67,6 +68,7 @@ export function projectSessionMessagePayload(params: {
         subagentCoordination: params.subagentCoordination,
         resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
+        maxChars: params.maxChars,
         toolResultMaxChars: params.toolResultMaxChars,
         activity: false,
       })
@@ -98,6 +100,7 @@ export function projectSessionMessagePayload(params: {
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
             includePluginSteering: params.includePluginSteering,
+            maxChars: params.maxChars,
             toolResultMaxChars: params.toolResultMaxChars,
             subagentCoordination: params.subagentCoordination,
             resolveCronJobName: params.resolveCronJobName,

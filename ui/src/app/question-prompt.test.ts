@@ -168,21 +168,33 @@ describe("question event parsing", () => {
     });
   });
 
-  it("rejects malformed records and answer maps", () => {
+  it("preserves question and option display normalization for canonical Gateway records", () => {
     const state = createState();
-    expect(requestQuestion(state, { id: "" })).toBe(false);
+    const question = requestedPayload().questions[0]!;
+    requestQuestion(state, {
+      questions: [
+        { ...question, question: "  Which format?  ", options: [{ label: "  Compact  " }] },
+      ],
+    });
+    expect(state.prompts.get("question-1")?.questions[0]).toMatchObject({
+      question: "Which format?",
+      options: [{ label: "Compact" }],
+    });
+  });
+
+  it.each(["question", "label"])("rejects an empty-after-trim %s", (field) => {
+    const state = createState();
+    const question = requestedPayload().questions[0]!;
     expect(
       requestQuestion(state, {
-        questions: [{ questionId: "Bad ID", header: "Bad", question: "Bad?", options: [] }],
+        questions: [
+          field === "question"
+            ? { ...question, question: "  " }
+            : { ...question, options: [{ label: "  " }] },
+        ],
       }),
     ).toBe(false);
-    expect(
-      recordQuestionResolution(state, {
-        id: "question-1",
-        status: "answered",
-        answers: { answers: { format: "Compact" } },
-      }),
-    ).toBe(false);
+    expect(state.prompts.size).toBe(0);
   });
 
   it.each([

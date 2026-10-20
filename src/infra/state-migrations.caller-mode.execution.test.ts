@@ -14,8 +14,10 @@ import {
   type PreparedLegacySessionSurfaces,
 } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
@@ -213,7 +215,7 @@ describe("legacy state migration caller execution", () => {
   );
 
   it.each(["automatic", "doctor", "direct", "detected-directory", "detected-config"] as const)(
-    "refuses retired OAuth sidecars before %s schema preparation on every attempt",
+    "keeps schema repair Doctor-owned and preserves OAuth sidecars through %s",
     async (mode) => {
       const fixture = await makeFixture();
       delete fixture.env.OPENCLAW_OAUTH_DIR;
@@ -258,27 +260,43 @@ describe("legacy state migration caller execution", () => {
       );
       const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
       writeLegacyStateSchemaV1(stateDatabasePath);
-      const before = snapshotSqliteArtifacts(stateDatabasePath);
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const migration = detected
-          ? runLegacyStateMigrations({
-              detected,
-              ...(mode === "detected-directory" || mode === "detected-config"
-                ? {}
-                : { config: cfg, env: fixture.env }),
-              doctorOnlyStateMigrations: true,
-              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-            })
-          : autoMigrateLegacyState({
-              cfg,
-              env: fixture.env,
-              homedir: () => fixture.homeDir,
-              doctorOnlyStateMigrations: mode === "doctor",
-              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      const sourceBytes = fs.readFileSync(authStorePath);
+      {
+        const migrate = () =>
+          detected
+            ? runLegacyStateMigrations({
+                detected,
+                ...(mode === "detected-directory" || mode === "detected-config"
+                  ? {}
+                  : { config: cfg, env: fixture.env }),
+                doctorOnlyStateMigrations: true,
+                legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+              })
+            : autoMigrateLegacyState({
+                cfg,
+                env: fixture.env,
+                homedir: () => fixture.homeDir,
+                doctorOnlyStateMigrations: mode === "doctor",
+                legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+              });
+        const migration =
+          mode === "automatic"
+            ? migrate()
+            : withStateMigrationBackupForTest({ env: fixture.env }, migrate);
+        if (mode === "automatic") {
+          await expect(migration).rejects.toThrow("startup migrations did not complete cleanly");
+        } else {
+          await migration;
+          const database = new DatabaseSync(stateDatabasePath, { readOnly: true });
+          try {
+            expect(database.prepare("PRAGMA user_version").get()).toEqual({
+              user_version: OPENCLAW_STATE_SCHEMA_VERSION,
             });
-        await expect(migration).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
-        expect(snapshotSqliteArtifacts(stateDatabasePath)).toEqual(before);
+          } finally {
+            database.close();
+          }
+        }
+        expect(fs.readFileSync(authStorePath)).toEqual(sourceBytes);
         expect(fs.readFileSync(sidecarPath, "utf8")).toBe(sidecarBytes);
       }
     },
@@ -314,13 +332,15 @@ describe("legacy state migration caller execution", () => {
     writeLegacyStateSchemaV1(stateDatabasePath);
     const plan = await planFixture(fixture);
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: fixture.env }, () =>
+      autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
 
     expect(result.mode).toBe("doctor");
     expect(result.warnings).toEqual([]);

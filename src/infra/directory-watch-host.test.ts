@@ -22,6 +22,7 @@ describe("macOS directory watch host", () => {
       const watched = path.join(root, "watched");
       const retired = path.join(root, "retired");
       fs.mkdirSync(watched);
+      fs.mkdirSync(path.join(watched, "nested"));
       fs.mkdirSync(retired);
       const nativeWatch = vi.spyOn(fs, "watch");
       expect(() => watchDirectory(path.join(root, "missing"), () => {})).toThrow();
@@ -31,18 +32,36 @@ describe("macOS directory watch host", () => {
         Promise.withResolvers(),
       ];
       let received = 0;
-      const watch = watchDirectory(watched, (event, filename) =>
-        events[received++]?.resolve([event, filename]),
+      const watch = watchDirectory(
+        watched,
+        (event, filename) => {
+          if (received++ === 0) {
+            events[0]!.resolve([event, filename]);
+          } else if (filename === path.join("nested", "profiles")) {
+            events[1]!.resolve([event, filename]);
+          }
+        },
+        true,
       );
       // Registration is asynchronous, so the live watch first invalidates the whole directory.
       await expect(events[0]!.promise).resolves.toEqual(["change", undefined]);
       const lost = Promise.withResolvers<void>();
+      const open = fs.openSync;
+      // Retire after caller admission, before helper registration. Deleting a live
+      // Linux watch emits rename rather than the registration error under test.
+      vi.spyOn(fs, "openSync").mockImplementationOnce((...args) => {
+        const fd = open(...args);
+        fs.rmdirSync(retired);
+        return fd;
+      });
       watchDirectory(retired, () => {}).on("error", () => lost.resolve());
-      fs.rmdirSync(retired);
       await lost.promise;
 
-      fs.writeFileSync(path.join(watched, "profiles"), "after");
-      await expect(events[1]!.promise).resolves.toEqual(["rename", "profiles"]);
+      fs.writeFileSync(path.join(watched, "nested", "profiles"), "after");
+      await expect(events[1]!.promise).resolves.toEqual([
+        "rename",
+        path.join("nested", "profiles"),
+      ]);
       watch.close();
       expect(nativeWatch).not.toHaveBeenCalled();
     },

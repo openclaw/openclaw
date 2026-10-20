@@ -41,13 +41,12 @@ afterEach(() => {
 
 describe("previous Gateway readiness before update activation", () => {
   it.each([
-    { readyz: 503, owned: true, replacement: false, verified: false },
-    { readyz: 200, owned: true, replacement: false, verified: true },
-    { readyz: 200, owned: false, replacement: false, verified: false },
-    { readyz: 200, owned: true, replacement: true, verified: false },
+    { readyz: 503, owned: true, verified: false },
+    { readyz: 200, owned: true, verified: true },
+    { readyz: 200, owned: false, verified: false },
   ])(
-    "observes the incumbent once without spending activation's budget (HTTP $readyz, owned=$owned, replacement=$replacement)",
-    async ({ readyz, owned, replacement, verified }) => {
+    "observes the incumbent once without spending activation's budget (HTTP $readyz, owned=$owned)",
+    async ({ readyz, owned, verified }) => {
       const service = {
         ...makeGatewayService({ status: "running", pid: 8000 }),
         isLoaded: vi.fn(async () => false),
@@ -60,10 +59,9 @@ describe("previous Gateway readiness before update activation", () => {
         listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
         hints: [],
       }));
-      let bootId = "previous-boot";
       callGateway.mockImplementation((params) =>
         gatewayHealthResponse({
-          server: { version: "2026.9.5", buildId: "previous-build", bootId },
+          server: { version: "2026.9.5", buildId: "previous-build", bootId: "previous-boot" },
           health: { channels: { discord: { probe: { ok: false, error: "4014" } } } },
         })(params),
       );
@@ -73,9 +71,6 @@ describe("previous Gateway readiness before update activation", () => {
         createListener: () =>
           createServer((request, response) => {
             requests.push(request.url ?? "");
-            if (request.url === "/readyz" && replacement) {
-              bootId = "replacement-boot";
-            }
             response.writeHead(request.url === "/readyz" ? readyz : 200).end();
           }),
       });

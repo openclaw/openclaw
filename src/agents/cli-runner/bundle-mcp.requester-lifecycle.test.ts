@@ -9,10 +9,10 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
 import {
   getAdvertisedScopedMcpCatalog,
-  getSessionMcpRuntimeManagerForTesting,
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../agent-bundle-mcp-manager.test-support.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
@@ -91,7 +91,7 @@ it("keeps requester tools callable across static native preflight until session 
     await setSessionMcpRuntimeScheduler(scheduler);
     await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
       await withPluginRuntimeRegistryScope(registry.registry, async () => {
-        const manager = getSessionMcpRuntimeManagerForTesting();
+        const manager = getSessionMcpRuntimeTestManager();
         expect(manager.listSessionIds()).not.toContain(sessionId);
         const config: OpenClawConfig = {
           plugins: { enabled: false },

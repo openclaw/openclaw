@@ -13,6 +13,7 @@ import {
   readCodexComputerUseStatus,
 } from "./computer-use.js";
 import { createComputerUseRequest, expectSetupErrorStatus } from "./computer-use.test-support.js";
+import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexComputerUseConfig } from "./config.js";
 import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -108,7 +109,7 @@ describe("managed unified Computer Use marketplace", () => {
             pluginCacheMode: "shared",
             strictReadiness: false,
           },
-        },
+        } satisfies CodexPluginConfig,
       };
       if (cacheState === "disabled") {
         await expectSetupErrorStatus(ensureCodexComputerUse(params), disabledStatus);

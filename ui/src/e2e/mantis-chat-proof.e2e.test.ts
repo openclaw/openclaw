@@ -116,12 +116,12 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
       const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-      expect(await workingLabel.textContent()).toBe("Preparing this turn…");
+      expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
       expect(
         await page
           .locator(".chat-working-indicator__status > span:not(.sr-only)")
           .allTextContents(),
-      ).toEqual(["Preparing this turn…", "·"]);
+      ).toEqual(["Waiting for turn to start…", "·"]);
       await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
       // Keep each elapsed-time/heartbeat tick, without rendering every frame
       // between the one-second clock readings or suspending pending RPC replies.

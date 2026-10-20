@@ -1,5 +1,4 @@
 import type { Static } from "typebox";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { ApprovalChannelReviewerSchema, ApprovalScopeSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";

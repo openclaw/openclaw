@@ -19,10 +19,7 @@ type SessionDeliveryRuntime = {
   scheduler: GatewayScheduler;
   queueContext: OpenClawStateWorkerContext;
   deliver: DeliverSessionDeliveryFn;
-  drain?: typeof drainPendingSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
-  reloadPending?: typeof loadPendingSessionDelivery;
-  listPending?: typeof loadPendingSessionDeliveries;
   onSettled?: SettleSessionDeliveryFn;
 };
 
@@ -100,7 +97,7 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
   activeRuntime.runningEntries.add(id);
   let pending: QueuedSessionDelivery | null = null;
   try {
-    pending = await (activeRuntime.drain ?? drainPendingSessionDelivery)({
+    pending = await drainPendingSessionDelivery({
       id,
       queueContext: activeRuntime.queueContext,
       now: () => activeRuntime.scheduler.now(),
@@ -185,10 +182,7 @@ export async function scheduleSessionDelivery(
   try {
     let entry: QueuedSessionDelivery | null;
     try {
-      entry = await (activeRuntime.reloadPending ?? loadPendingSessionDelivery)(
-        id,
-        activeRuntime.queueContext,
-      );
+      entry = await loadPendingSessionDelivery(id, activeRuntime.queueContext);
     } catch (error) {
       activeRuntime.log.error(`session delivery: failed to load ${id}: ${String(error)}`);
       armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, generation);
@@ -217,9 +211,7 @@ export async function schedulePendingSessionDeliveries(): Promise<void> {
   try {
     let entries: QueuedSessionDelivery[];
     try {
-      entries = await (activeRuntime.listPending ?? loadPendingSessionDeliveries)(
-        activeRuntime.queueContext,
-      );
+      entries = await loadPendingSessionDeliveries(activeRuntime.queueContext);
     } catch (error) {
       activeRuntime.log.error(`session delivery: failed to scan pending entries: ${String(error)}`);
       armPendingScan(generation);

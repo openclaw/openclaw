@@ -8272,7 +8272,6 @@ test "$package_manager" = "pnpm@12.1.0"
     );
     expect(hydratePnpm.run).toContain("Refusing unsafe pnpm directory");
     expect(hydratePnpm.run).toContain("pnpm_install_artifacts_ready");
-    expect(hydratePnpm.run).toContain("run_pnpm_install || run_pnpm_install");
     expect(hydratePnpm.run).toContain('setsid pnpm "${install_args[@]}"');
     expect(hydratePnpm.run).toContain("grep -qE '^Done in .+ using pnpm v'");
     expect(hydratePnpm.run).toContain("https://github.com/pnpm/pnpm/issues/12297");
@@ -8949,7 +8948,15 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(releaseChecksWorkflow).toContain(
       'codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"',
     );
-    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(6);
+    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(5);
+    const parityReportJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_parity_report_release_checks",
+    );
+    expect(parityReportJob.steps?.some((step) => step.run?.includes("pnpm build"))).toBe(false);
+    expect(workflowStep(parityReportJob, "Generate parity report").run).toContain(
+      "pnpm openclaw qa parity-report",
+    );
     expect(releaseChecksWorkflow).not.toContain(
       "node --import tsx scripts/build-all.mts qaRuntime",
     );
@@ -13138,7 +13145,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(job.steps?.filter(({ name }) => name === "Prepare Git owner")).toEqual([
         {
           name: "Prepare Git owner",
-          uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+          uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
         },
       ]);
       const prepare =
@@ -15157,7 +15164,7 @@ promote_windows_release_assets
     );
     expect(androidWorkflow).toContain("environment: android-release");
     expect(androidWorkflow).toContain(
-      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
     );
     expect(androidWorkflow).toContain("repositories: apps-signing");
     expect(androidWorkflow).toContain("permission-contents: read");

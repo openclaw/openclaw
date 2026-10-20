@@ -31,10 +31,7 @@ export function createSignedCreateMessageRequest(params?: { backend?: string }) 
 }
 
 /** Redacted Talk 23 / Nextcloud 33 file-bearing message Activity fixture. */
-export function createSignedFileSharedActivityRequest(params?: {
-  backend?: string;
-  fileSize?: string | number;
-}) {
+export function createFileSharedActivityBody(params?: { fileSize?: string | number }) {
   const payload = {
     type: "Activity",
     actor: { type: "Person", id: "users/alice", name: "Alice" },
@@ -65,24 +62,11 @@ export function createSignedFileSharedActivityRequest(params?: {
     },
     target: { type: "Collection", id: "redacted-room-token", name: "Receipts" },
   };
-  const body = JSON.stringify(payload);
-  const { random, signature } = generateNextcloudTalkSignature({
-    body,
-    secret: "nextcloud-secret", // pragma: allowlist secret
-  });
-  return {
-    body,
-    headers: {
-      "content-type": "application/json",
-      "x-nextcloud-talk-random": random,
-      "x-nextcloud-talk-signature": signature,
-      "x-nextcloud-talk-backend": params?.backend ?? "https://nextcloud.example",
-    },
-  };
+  return JSON.stringify(payload);
 }
 
 /** Redacted canonical native Talk voice-message Activity fixture. */
-export function createSignedVoiceMessageActivityRequest(params?: { backend?: string }) {
+export function createVoiceMessageActivityBody() {
   const payload = {
     type: "Activity",
     actor: { type: "Person", id: "users/alice", name: "Alice" },
@@ -113,18 +97,5 @@ export function createSignedVoiceMessageActivityRequest(params?: { backend?: str
     },
     target: { type: "Collection", id: "redacted-room-token", name: "Voice notes" },
   };
-  const body = JSON.stringify(payload);
-  const { random, signature } = generateNextcloudTalkSignature({
-    body,
-    secret: "nextcloud-secret", // pragma: allowlist secret
-  });
-  return {
-    body,
-    headers: {
-      "content-type": "application/json",
-      "x-nextcloud-talk-random": random,
-      "x-nextcloud-talk-signature": signature,
-      "x-nextcloud-talk-backend": params?.backend ?? "https://nextcloud.example",
-    },
-  };
+  return JSON.stringify(payload);
 }

@@ -137,6 +137,7 @@ describe("worker node enrollment", () => {
         path.join(packageRoot, "node-runtime-recovery.mjs"),
         "export const recovery = true;",
       ),
+      fs.writeFile(path.join(packageRoot, "cli-parent-lifetime.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "cli-invocation.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),

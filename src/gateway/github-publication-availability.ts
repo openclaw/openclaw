@@ -45,13 +45,11 @@ import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 // Discovery is best effort for 15 seconds; publication resolves the current Git repository again.
-const worktreeTargets = createStaleWhileRevalidateCache<{
-  supported: boolean;
-}>({
+const repositoryTargets = createStaleWhileRevalidateCache<boolean>({
   maxEntries: 256,
   maxPending: Number.POSITIVE_INFINITY,
   ttlMs: 15_000,
-  cacheable: (target) => target.supported,
+  cacheable: (supported) => supported,
 });
 
 function publicationConfigSnapshot() {
@@ -650,7 +648,6 @@ export async function hasSupportedGitHubPublicationTarget(
   const workspaceId = initial.entry.repositoryWorkspaceId;
   if (workspaceId) {
     const prepared = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-    assertCurrent();
     const owner = resolveGitHubPublicationWorkspaceOwner(session, prepared, sessionRead);
     return isSupportedGitHubOrigin(owner.workspace.url);
   }
@@ -658,23 +655,19 @@ export async function hasSupportedGitHubPublicationTarget(
     return false;
   }
   const owner = await preparePublicationWorktreeRead(initial, context, sessionRead)();
-  const assertWorktreeCurrent = () => {
-    assertCurrent();
-    owner.assertCurrent();
-  };
-  assertWorktreeCurrent();
-  const key = `${context.admission.databasePath}\0${owner.worktree.id}`;
+  owner.assertCurrent();
+  const { repoRoot, repoFingerprint } = owner.worktree;
+  const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
   const load = async () => {
-    // Share repository facts, not the initiating reader's connection authority.
+    // Resolve through a checkout because the shared root can be bare. Readers
+    // share repository facts while retaining their own registry authority.
     const repository = await prepareGitHubPublicationRepositoryIdentity({
       worktree: owner.worktree,
-      assertCurrent: owner.assertRegistryCurrent,
+      assertCurrent: () => context.admission.assertCurrent(),
     });
-    return {
-      supported: isSupportedGitHubOrigin(repository.originUrl),
-    };
+    return isSupportedGitHubOrigin(repository.originUrl);
   };
-  const target = await worktreeTargets.read(key, load, { allowStale: false });
-  assertWorktreeCurrent();
-  return target.value.supported;
+  const target = await repositoryTargets.read(key, load, { allowStale: false });
+  owner.assertCurrent();
+  return target.value;
 }

@@ -123,6 +123,7 @@ import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
 import {
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
@@ -798,6 +799,10 @@ const SOURCE_TEST_TARGETS = new Map([
       "src/agents/model-compat.test.ts",
     ],
   ],
+  [
+    "src/plugin-sdk/lazy-value.ts",
+    ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
+  ],
   ["src/plugin-sdk/memory-host-events.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   [
@@ -916,10 +921,6 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "extensions/google-meet/src/cli-artifact-commands.ts",
-    ["extensions/google-meet/src/cli-artifacts.test.ts"],
-  ],
-  [
     "extensions/google-meet/src/cli-export.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
@@ -927,11 +928,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "extensions/google-meet/src/cli-space-commands.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
-  [
-    "extensions/google-meet/src/cli-runtime-commands.ts",
-    ["extensions/google-meet/src/cli-runtime.test.ts"],
-  ],
-  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
   [
     "extensions/google-meet/src/cli-command-context.ts",
     [
@@ -1344,7 +1340,7 @@ function createBoundedExtensionPlans(
   const chunks = createExtensionTestProcessTargetChunks(
     config,
     config === EXTENSION_DATABASE_WORKERS_VITEST_CONFIG && plan.includePatterns
-      ? plan.includePatterns
+      ? expandVitestIncludePatterns(plan.includePatterns, cwd)
       : roots,
     forwardedArgs,
     cwd,
@@ -5284,7 +5280,7 @@ export function buildVitestRunPlans(
   args: string[],
   cwd = process.cwd(),
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
-  options: ChangedTestTargetOptions = {},
+  options: ChangedTestTargetOptions & { changedTargetArgs?: string[] | null } = {},
 ) {
   const {
     forwardedArgs,
@@ -5293,7 +5289,11 @@ export function buildVitestRunPlans(
     watchMode,
   } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
+    targetArgs.length === 0
+      ? options.changedTargetArgs !== undefined
+        ? options.changedTargetArgs
+        : resolveChangedTargetArgs(args, cwd, listChangedPaths, options)
+      : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   const ownedTargets = explicitIncludeTargets(targetArgs, cwd);
   if (
@@ -6020,13 +6020,16 @@ export function applyDefaultVitestNoOutputTimeout<T extends WatchableVitestSpecS
 
 export function createVitestRunSpecs(
   args: string[],
-  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
+  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string; changedTargetArgs?: string[] | null } = {},
 ) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
   const ownedTargets = explicitIncludeTargets(parseTestProjectsArgs(args, cwd).targetArgs, cwd);
   const plans = filterPlansForContractIncludeFile(
-    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, { env: baseEnv }),
+    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, {
+      env: baseEnv,
+      changedTargetArgs: params.changedTargetArgs,
+    }),
     baseEnv,
     ownedTargets,
   );
@@ -6036,7 +6039,7 @@ export function createVitestRunSpecs(
   )
     ? loadIncludePatternsForSpecFilter(baseEnv)
     : null;
-  return plans.flatMap((originalPlan, index) => {
+  const scopedPlans = plans.flatMap((originalPlan) => {
     const plan =
       originalPlan.includePatterns && inheritedIncludes
         ? {
@@ -6048,9 +6051,28 @@ export function createVitestRunSpecs(
             ),
           }
         : originalPlan;
-    if (inheritedIncludes && plan.includePatterns?.length === 0) {
-      return [];
+    return inheritedIncludes && plan.includePatterns?.length === 0 ? [] : [plan];
+  });
+  const boundedPlans = scopedPlans.flatMap((plan) => {
+    if (plan.watchMode || plan.config !== GATEWAY_SERVER_VITEST_CONFIG) {
+      return [plan];
     }
+    const chunks = createGatewayServerTestTargetChunks(
+      cwd,
+      plan.forwardedArgs,
+      baseEnv,
+      plan.includePatterns ?? undefined,
+    );
+    return chunks.length > 1
+      ? chunks.map((targets) =>
+          Object.assign({}, plan, {
+            forwardedArgs: replaceVitestFileFilters(plan.forwardedArgs, targets),
+            timingTargets: targets,
+          }),
+        )
+      : [plan];
+  });
+  return boundedPlans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
       ? path.join(os.tmpdir(), `openclaw-vitest-include-${randomUUID()}-${index}.json`)
       : null;

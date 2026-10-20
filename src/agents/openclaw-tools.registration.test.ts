@@ -12,7 +12,6 @@ import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
-import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -26,6 +25,7 @@ import {
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { resolveCoreToolFactoryFamily } from "./tool-catalog.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -179,7 +179,10 @@ describe("openclaw-tools progress_card gating", () => {
   it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
-        shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
+        shouldIncludePrimarySessionToolForOpenClawTools(toolName, {
+          agentSessionKey,
+          questionInputMode: "native",
+        });
       expect(includeTool()).toBe(false);
       expect(includeTool("agent:main:main")).toBe(true);
       expect(includeTool("agent:main:subagent:worker")).toBe(false);
@@ -196,6 +199,7 @@ describe("openclaw-tools progress_card gating", () => {
     expect(
       createFastToolNames({
         runSessionKey: "agent:main:non-embedded",
+        questionInputMode: "native",
       }),
     ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
     setEmbeddedMode(true);
@@ -204,12 +208,14 @@ describe("openclaw-tools progress_card gating", () => {
       await withPreparedSessionCapabilityRead(() =>
         createFastToolNames({
           agentSessionKey: "agent:main:subagent:worker",
+          questionInputMode: "native",
         }),
       ),
     ).not.toContain("ask_user");
     expect(
       createFastToolNames({
         runSessionKey: "agent:main:run",
+        questionInputMode: "native",
       }),
     ).toContain("ask_user");
   });
@@ -584,16 +590,32 @@ describe("gateway client capability tool filtering", () => {
       ).toBe(actions);
       expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing && actions);
+      expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
+      expect(
+        Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
+      ).toBe(actions);
+      expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(publishing);
       if (!publishing) {
         expect(tool.description).toContain("cannot publish its own workspace");
       } else if (!actions) {
         expect(tool.parameters).toHaveProperty("properties", {
+          action: expect.any(Object),
+          conflictsResolved: expect.any(Object),
+          baseCommit: expect.any(Object),
+          draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),
+          requestId: expect.any(Object),
+          expectedHeadCommit: expect.any(Object),
+          expectedTitle: expect.any(Object),
+          expectedBody: expect.any(Object),
+          evidence: expect.any(Object),
         });
         expect(tool.parameters).toHaveProperty("additionalProperties", false);
         expect(tool.description).not.toContain("use inspect");
-        expect(tool.description).not.toContain("expectedHeadCommit");
+        expect(tool.description).toContain("expectedHeadCommit");
       }
     },
   );

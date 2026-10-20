@@ -324,7 +324,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       }
       case "error":
         this.readiness.reject(restoreDiscordAudioError(event.error));
-        logger.warn("discord voice: " + event.error.message);
+        logger.warn("discord voice: audio worker failed", { code: event.error.code });
         break;
       case "log":
         if (event.level === "warn") {

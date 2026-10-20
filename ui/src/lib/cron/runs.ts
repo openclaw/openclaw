@@ -1,4 +1,3 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -14,16 +13,6 @@ import type { CronState } from "./types.ts";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 export type CronRunsViewState = "idle" | "pending" | "failed" | "ready";
-
-function normalizeCronRunsPageMeta(page: CronRunsResult, pageCount: number) {
-  const total = Math.max(0, Math.floor(asFiniteNumber(page.total) ?? pageCount));
-  const offset = Math.max(0, Math.floor(asFiniteNumber(page.offset) ?? 0));
-  const hasMore = typeof page.hasMore === "boolean" ? page.hasMore : offset + pageCount < total;
-  const next = asFiniteNumber(page.nextOffset);
-  const nextOffset =
-    next !== undefined ? Math.max(0, Math.floor(next)) : hasMore ? offset + pageCount : null;
-  return { total, hasMore, nextOffset };
-}
 
 export function clearCronRunsPage(state: CronState) {
   cronRunsViews.delete(state);
@@ -158,6 +147,7 @@ export async function loadCronRuns(
   state.cronRunsLoadingMore = append;
   try {
     const res = await client.request<CronRunsResult>("cron.runs", {
+      view: "summary",
       // An exact job owns its history; the overview's agent filter may select another owner.
       ...(request.scope === "all" && request.agentId ? { agentId: request.agentId } : {}),
       scope: request.scope,
@@ -176,12 +166,10 @@ export async function loadCronRuns(
     }
     cronRunsViews.set(state, request);
     state.cronRunsError = null;
-    const entries = Array.isArray(res.entries) ? res.entries : [];
-    state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
-    const meta = normalizeCronRunsPageMeta(res, entries.length);
-    state.cronRunsTotal = Math.max(meta.total, state.cronRuns.length);
-    state.cronRunsHasMore = meta.hasMore;
-    state.cronRunsNextOffset = meta.nextOffset;
+    state.cronRuns = append ? [...state.cronRuns, ...res.entries] : res.entries;
+    state.cronRunsTotal = Math.max(res.total, state.cronRuns.length);
+    state.cronRunsHasMore = res.hasMore;
+    state.cronRunsNextOffset = res.nextOffset;
     return "ok";
   } catch (err) {
     if (!ownsCronRunsRequest(state, request) || request.queued) {
@@ -250,11 +238,11 @@ export function updateCronRunsFilter(
   if (patch.cronRunsRunId !== undefined) {
     state.cronRunsRunId = patch.cronRunsRunId;
   }
-  if (Array.isArray(patch.cronRunsStatuses)) {
+  if (patch.cronRunsStatuses !== undefined) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
     state.cronRunsStatusFilter = patch.cronRunsStatuses[0] ?? "all";
   }
-  if (Array.isArray(patch.cronRunsDeliveryStatuses)) {
+  if (patch.cronRunsDeliveryStatuses !== undefined) {
     state.cronRunsDeliveryStatuses = patch.cronRunsDeliveryStatuses;
   }
   if (patch.cronRunsStatusFilter) {
@@ -262,7 +250,7 @@ export function updateCronRunsFilter(
     state.cronRunsStatuses =
       patch.cronRunsStatusFilter === "all" ? [] : [patch.cronRunsStatusFilter];
   }
-  if (typeof patch.cronRunsQuery === "string") {
+  if (patch.cronRunsQuery !== undefined) {
     state.cronRunsQuery = patch.cronRunsQuery;
   }
   state.cronRunsSortDir = patch.cronRunsSortDir ?? state.cronRunsSortDir;

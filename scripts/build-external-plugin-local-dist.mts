@@ -93,7 +93,7 @@ export async function buildExternalPluginLocalDist(
       : generatedAssets.filter(
           (asset) => asset.startsWith(`${packageDir}/`) && !asset.includes("/node_modules/"),
         );
-    const step: BuildCacheStep = {
+    const step = {
       label: `tsdown:external-plugin:${plan.pluginDir}`,
       cache: {
         inputs: [
@@ -107,7 +107,7 @@ export async function buildExternalPluginLocalDist(
           path.posix.join(target, output.replace(/^\.\/dist\//u, "")),
         ),
       },
-    };
+    } satisfies BuildCacheStep;
     const cacheParams = {
       rootDir: repoRoot,
       env,

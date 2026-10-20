@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
@@ -60,18 +61,15 @@ describe("stale exec heartbeat wakes", () => {
           lastTo: "-100155462274",
         });
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        await test({
-          sessionKey,
-          replySpy,
-          run: (options = {}) =>
-            runHeartbeatOnce({
-              cfg,
-              agentId: "main",
-              ...execWake,
-              deps: { getReplyFromConfig: replySpy },
-              ...options,
-            }),
-        });
+        const run: Parameters<typeof test>[0]["run"] = (options = {}) =>
+          runHeartbeatOnce({
+            cfg,
+            agentId: "main",
+            ...execWake,
+            deps: { getReplyFromConfig: replySpy },
+            ...options,
+          });
+        await test({ sessionKey, replySpy, run });
       });
   }
   beforeEach(() => {
@@ -150,14 +148,11 @@ describe("stale exec heartbeat wakes", () => {
     heartbeatCase(async ({ sessionKey, replySpy, run }) => {
       enqueueSystemEvent("Unrelated queued event", { sessionKey });
       const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
-      expect(
-        (
-          await run({
-            scheduledEveryMs: 5 * 60_000,
-            deps: { getReplyFromConfig: replySpy, telegram },
-          })
-        ).status,
-      ).toBe("ran");
+      const result = await run({
+        scheduledEveryMs: 5 * 60_000,
+        deps: { getReplyFromConfig: replySpy, telegram },
+      });
+      expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
       expect(peekSystemEvents(sessionKey)).toEqual(["Unrelated queued event"]);
     }),
@@ -180,18 +175,23 @@ describe("stale exec heartbeat wakes", () => {
   );
 
   it(
-    "retires a stale exec wake before busy gates without consuming excluded base content",
+    "retires a stale exec wake while busy without consuming excluded base content",
     heartbeatCase(async ({ sessionKey, replySpy, run }) => {
       const notice = "PRIVATE_EXCLUDED_STALE_NOTICE";
       enqueueSystemEvent(notice, { sessionKey, contextKey: "notice:excluded" });
-      expect(
-        await run({
-          heartbeat: { isolatedSession: true },
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 1 },
-        }),
-      ).toEqual(stale);
-      expect(replySpy).not.toHaveBeenCalled();
-      expect(peekSystemEvents(sessionKey)).toEqual([notice]);
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "busy-session",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      try {
+        expect(await run({ heartbeat: { isolatedSession: true } })).toEqual(stale);
+        expect(replySpy).not.toHaveBeenCalled();
+        expect(peekSystemEvents(sessionKey)).toEqual([notice]);
+      } finally {
+        operation.complete();
+      }
     }),
   );
 

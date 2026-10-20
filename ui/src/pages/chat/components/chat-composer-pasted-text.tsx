@@ -42,7 +42,6 @@ function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentCont
   }
   removeDraftAttachment(att, props);
   props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
-  props.onRequestUpdate?.();
 }
 
 export function ComposerPastedText(componentProps: {
@@ -79,6 +78,15 @@ export function ComposerPastedText(componentProps: {
     >
       {t("chat.attachments.showInTextField")}
     </button>
+  );
+  // Peer attachment updates must preserve the composer's focused action nodes.
+  const composerAction = restoreAction();
+  const composerRemoveAction = (
+    <AttachmentRemove
+      label={removeLabel()}
+      disabled={componentProps.controls.disabled}
+      onClick={remove}
+    />
   );
   const open = () => {
     if (!current()) {
@@ -123,14 +131,8 @@ export function ComposerPastedText(componentProps: {
       sizeBytes={componentProps.attachment.sizeBytes}
       scope={componentProps.attachment.id}
       onOpen={open}
-      composerAction={restoreAction()}
-      composerRemoveAction={
-        <AttachmentRemove
-          label={removeLabel()}
-          disabled={componentProps.controls.disabled}
-          onClick={remove}
-        />
-      }
+      composerAction={composerAction}
+      composerRemoveAction={composerRemoveAction}
     />
   );
 }

@@ -1,19 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  takeSqliteWorkerOperationAdmissionAttachment,
-  withSqliteWorkerOperationAdmission,
-} from "../infra/sqlite-worker-operation-admission.js";
-import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { OpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-async-lifecycle.js";
 import {
-  createOpenClawDatabaseMaintenanceScope,
-  getOpenClawDatabaseMaintenanceScope,
-  type OpenClawStateDatabaseAsyncResource,
-} from "./openclaw-state-db-async-lifecycle.js";
+  expiryAdmission,
+  leaseTestContext,
+  observe,
+  waitUntil,
+} from "./openclaw-state-lease-async.test-support.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
-import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import { withOpenClawStateLeaseAsync } from "./openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -22,20 +17,18 @@ type Storage = ReturnType<
 >;
 type LeaseOwner = Parameters<Storage["acquire"]>[0];
 type Command = { assertCurrent(): void; publish(expiresAt: number): number };
+const lostLease = { ok: false, error: { code: "OPENCLAW_STATE_LEASE_LOST" } };
 
+const { leaseMocks } = await vi.hoisted(() => import("./openclaw-state-lease-async.test-mocks.js"));
 const mocks = vi.hoisted(() => ({
   configureStorage: vi.fn<(storage: Storage) => Storage>(),
-  registerResource: vi.fn<(resource: OpenClawStateDatabaseAsyncResource) => () => void>(),
-  forbidden: vi.fn(() => {
-    throw new Error("Controlled timer test reached SQLite or an independent heartbeat worker");
-  }),
 }));
 
 vi.mock("./openclaw-state-lease-worker-storage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./openclaw-state-lease-worker-storage.js")>();
   return {
     ...actual,
-    acquireLease: mocks.forbidden,
+    acquireLease: leaseMocks.forbidden,
     createOpenClawStateLeaseWorkerStorage: (context: OpenClawStateWorkerContext) =>
       mocks.configureStorage(actual.createOpenClawStateLeaseWorkerStorage(context)),
   };
@@ -43,68 +36,24 @@ vi.mock("./openclaw-state-lease-worker-storage.js", async (importOriginal) => {
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
   Worker: vi.fn(function Worker() {
-    mocks.forbidden();
+    leaseMocks.forbidden();
   }),
 }));
+// mock-isolation: The timer fixture drives storage itself and rejects worker-store dispatch.
 vi.mock("./openclaw-state-worker-store.js", () => ({
-  runOpenClawStateWorkerOperation: mocks.forbidden,
-}));
-vi.mock("./openclaw-state-db-cache.js", () => ({
-  registerOpenClawStateDatabaseAsyncResource: mocks.registerResource,
-}));
-vi.mock("./openclaw-state-lease-process-exit.js", () => ({
-  registerProcessExitLeaseCleanup: () => () => {},
-}));
-vi.mock("./openclaw-state-lease-storage.js", () => ({
-  STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
-  isOpenClawStateLeaseWriteContention: () => false,
-  releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
-    execute?.(),
-  resolveLeaseDatabasePath: mocks.forbidden,
-  renewOpenClawStateLease: mocks.forbidden,
-  verifyOpenClawStateLeaseOwnership: mocks.forbidden,
-  releaseOpenClawStateLease: mocks.forbidden,
-}));
-vi.mock("./openclaw-state-db-readonly.js", () => ({
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: mocks.forbidden,
-}));
-vi.mock("../infra/sqlite-worker-identity.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
-    "../infra/sqlite-worker-identity.js",
-  )),
-  inspectDatabasePathIdentitySync: mocks.forbidden,
-  readDatabasePathIdentitySync: mocks.forbidden,
+  runOpenClawStateWorkerOperation: leaseMocks.forbidden,
 }));
 
 beforeEach(() => {
-  vi.clearAllMocks();
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
   vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
 });
-afterEach(() => {
-  vi.useRealTimers();
-  expect(mocks.forbidden).not.toHaveBeenCalled();
-});
-
-function observe<T>(promise: Promise<T>) {
-  let settled = false;
-  const outcome = promise.then(
-    (value) => {
-      settled = true;
-      return { ok: true as const, value };
-    },
-    (error: unknown) => {
-      settled = true;
-      return { ok: false as const, error };
-    },
-  );
-  return { outcome, settled: () => settled };
-}
+afterEach(() => vi.useRealTimers());
 
 function fixture() {
-  const maintenance = createOpenClawDatabaseMaintenanceScope();
+  const { maintenance, context } = leaseTestContext();
   const resources = new Set<OpenClawStateDatabaseAsyncResource>();
   const leaseMs = 3_000;
   let committedExpiry = Date.now() + leaseMs;
@@ -114,18 +63,6 @@ function fixture() {
   }>();
   const finishCallback = createDeferredCore();
   const events: string[] = [];
-  const context: OpenClawStateWorkerContext = {
-    environment: { OPENCLAW_STATE_DIR: "/synthetic-state" },
-    maintenanceScope: maintenance,
-    admission: {
-      coordinationKey: "file:synthetic-state",
-      databasePath: "/synthetic-state/lease.sqlite",
-      identity: { key: "file:synthetic-state", canonicalPath: "/synthetic-state/lease.sqlite" },
-      assertCurrent() {
-        expect(getOpenClawDatabaseMaintenanceScope()).toBe(maintenance);
-      },
-    },
-  };
   const onRenew = vi.fn(async (command: Command) => command.publish(Date.now() + leaseMs));
   const onVerify = vi.fn(async (command: Command) => command.publish(committedExpiry));
   const execute = (
@@ -135,34 +72,15 @@ function fixture() {
   ) =>
     owner.runLifecycle(purpose, async (scope) => {
       scope.assertCurrent();
-      const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
-      const { admission } = scope.createAdmission({ settled: settled.promise });
-      try {
-        const attachment = withSqliteWorkerOperationAdmission(
-          admission,
-          takeSqliteWorkerOperationAdmissionAttachment,
-        );
-        if (
-          !isRecord(attachment) ||
-          attachment.kind !== "state-lease-expiry" ||
-          !(attachment.observation instanceof SharedArrayBuffer)
-        ) {
-          throw new Error("Missing owner-bound expiry observation");
-        }
-        expect(attachment.identity).toEqual(scope.identity);
-        const observation = new BigInt64Array(attachment.observation);
-        return await operation({
-          assertCurrent: scope.assertCurrent,
-          publish(expiresAt) {
-            committedExpiry = expiresAt;
-            Atomics.store(observation, leaseHeartbeatState.expiresAt, BigInt(expiresAt));
-            return expiresAt;
-          },
-        });
-      } finally {
-        admission.finish();
-        settled.resolve({ kind: "completed" });
-      }
+      using observation = expiryAdmission(scope);
+      return await operation({
+        assertCurrent: scope.assertCurrent,
+        publish(expiresAt) {
+          committedExpiry = expiresAt;
+          observation.publish(expiresAt);
+          return expiresAt;
+        },
+      });
     });
   const renew = vi.fn<Storage["renew"]>((owner) => execute(owner, "renew", onRenew));
   const verify = vi.fn<Storage["verify"]>((owner) => execute(owner, "verify", onVerify));
@@ -182,18 +100,14 @@ function fixture() {
     storage.renew = renew;
     storage.verify = verify;
     storage.release = release;
-    storage.withRetainedStartup = mocks.forbidden;
+    storage.withRetainedStartup = leaseMocks.forbidden;
     return storage;
   });
-  mocks.registerResource.mockImplementation((resource) => {
+  leaseMocks.registerResource.mockImplementation((resource) => {
     resources.add(resource);
-    return () => {
-      resources.delete(resource);
-    };
+    return () => resources.delete(resource);
   });
-  maintenance.own({}, "shared-resources", () => {
-    events.push("actor-close");
-  });
+  maintenance.own({}, "shared-resources", () => void events.push("actor-close"));
   const run = () =>
     observe(
       withOpenClawStateLeaseAsync(
@@ -208,14 +122,7 @@ function fixture() {
     );
   return {
     run,
-    enter(result: ReturnType<typeof run>) {
-      return Promise.race([
-        entered.promise,
-        result.outcome.then((outcome) => {
-          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-        }),
-      ]);
-    },
+    enter: (result: ReturnType<typeof run>) => waitUntil(entered.promise, result),
     maintenance,
     resources,
     finishCallback,
@@ -229,6 +136,46 @@ function fixture() {
 }
 
 describe("async state lease timer", () => {
+  it.each([
+    { availableAfterMs: 2_400, remainsOwned: true },
+    { availableAfterMs: 3_100, remainsOwned: false },
+  ])(
+    "retains ownership only when contention clears before expiry ($availableAfterMs ms)",
+    async ({ availableAfterMs, remainsOwned }) => {
+      const f = fixture();
+      const availableAt = Date.now() + availableAfterMs;
+      f.onRenew.mockImplementation(async (command) => {
+        if (Date.now() < availableAt) {
+          throw Object.assign(new Error("database is locked"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 5,
+          });
+        }
+        return command.publish(Date.now() + 3_000);
+      });
+      const result = f.run();
+      try {
+        const { lease, within } = await f.enter(result);
+        await within(() => vi.advanceTimersByTimeAsync(3_300));
+        expect(lease.signal.aborted).toBe(!remainsOwned);
+        if (remainsOwned) {
+          await within(() => lease.assertOwned());
+        } else {
+          await expect(within(() => lease.assertOwned())).rejects.toMatchObject(lostLease.error);
+        }
+        f.finishCallback.resolve();
+        expect(await result.outcome).toMatchObject(
+          remainsOwned ? { ok: true, value: "completed" } : lostLease,
+        );
+        expect(f.release).toHaveBeenCalledOnce();
+      } finally {
+        f.finishCallback.resolve();
+        await result.outcome;
+        await f.maintenance.close();
+      }
+    },
+  );
+
   it.each([false, true])(
     "joins renewal before sealing public methods (committed before reply: %s)",
     async (committedEarly) => {
@@ -317,16 +264,10 @@ describe("async state lease timer", () => {
         expect(lease.signal.aborted).toBe(false);
         reply.resolve();
         if (assertion) {
-          expect(await assertion.outcome).toMatchObject({
-            ok: false,
-            error: { code: "OPENCLAW_STATE_LEASE_LOST" },
-          });
+          expect(await assertion.outcome).toMatchObject(lostLease);
           f.finishCallback.resolve();
         }
-        expect(await result.outcome).toMatchObject({
-          ok: false,
-          error: { code: "OPENCLAW_STATE_LEASE_LOST" },
-        });
+        expect(await result.outcome).toMatchObject(lostLease);
         expect(lease.signal.aborted).toBe(true);
         expect(f.release).toHaveBeenCalledOnce();
       } finally {

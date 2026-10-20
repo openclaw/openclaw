@@ -1,47 +1,46 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createSessionActorMemoryGoals } from "./session-actor-memory-goals.js";
-import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
+import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 
 const sessionKey = "agent:main:dashboard:incognito-side-state";
 const sessionId = "session-1";
 const now = 1_000_000;
+const edit = {
+  sessionKey,
+  expectedSessionId: sessionId,
+  operation: {
+    action: "edit" as const,
+    goalId: "goal-1",
+    operationId: "edit-1",
+    requestFingerprint: "request-1",
+    issuedAtMs: now,
+    objective: "First edit",
+  },
+};
 
 afterEach(() => vi.useRealTimers());
 
 function fixture() {
   vi.useFakeTimers();
   vi.setSystemTime(now);
-  const initial = createSessionActorMemoryState({
-    database: { kind: "memory", handle: "memory-1", incarnation: "incarnation-1" },
-    sessionKey,
-  });
-  const state: ReturnType<typeof createSessionActorMemoryState> = {
-    ...initial,
-    hot: {
-      ...initial.hot,
-      version: { epoch: "epoch-1", sequence: 0 },
-      writeToken: "0",
-      dependencySessionIds: [sessionId],
-      entry: {
-        sessionId,
-        updatedAt: now,
-        incognito: true,
-        forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "Original objective",
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-          tokenStart: 0,
-          tokenStartFresh: true,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
+  const state = createMemoryTestState(sessionKey, {
+    sessionId,
+    updatedAt: now,
+    incognito: true,
+    forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
+    goal: {
+      schemaVersion: 1,
+      id: "goal-1",
+      objective: "Original objective",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+      tokenStart: 0,
+      tokenStartFresh: true,
+      tokensUsed: 0,
+      continuationTurns: 0,
     },
-  };
+  });
   return {
     state,
     goals: createSessionActorMemoryGoals({ state, agentId: "main", path: "/synthetic/incognito" }),
@@ -51,30 +50,18 @@ function fixture() {
 describe("memory actor Goal receipts", () => {
   it("replays Goal receipts without overwriting a later edit or exposing its stored objects", () => {
     const { state, goals } = fixture();
-    const input = {
-      sessionKey,
-      expectedSessionId: sessionId,
-      operation: {
-        action: "edit" as const,
-        goalId: "goal-1",
-        operationId: "edit-1",
-        requestFingerprint: "request-1",
-        issuedAtMs: now,
-        objective: "First edit",
-      },
-    };
+    const input = edit;
     const first = goals.mutate(input);
     expect(first).toMatchObject({
       replayed: false,
       result: { status: "updated", goal: { objective: "First edit" } },
     });
-    if (!first.result.goal) {
-      throw new Error("Expected edited Goal");
-    }
+    assert(first.result.goal, "Expected edited Goal");
     first.result.goal.objective = "Caller mutation";
-    if (!first.sessionEntry?.goal || !first.previous?.goal || !first.previous.forkSource) {
-      throw new Error("Expected committed and previous Goal entries");
-    }
+    assert(
+      first.sessionEntry?.goal && first.previous?.goal && first.previous.forkSource,
+      "Expected committed and previous Goal entries",
+    );
     first.sessionEntry.goal.objective = "Changed returned entry";
     first.previous.goal.objective = "Changed returned previous entry";
     first.previous.forkSource.sessionId = "Changed shared source";
@@ -99,16 +86,8 @@ describe("memory actor Goal receipts", () => {
     const { state, goals } = fixture();
     expect(() =>
       goals.mutate({
+        ...edit,
         sessionKey: "agent:main:dashboard:incognito-another-session",
-        expectedSessionId: sessionId,
-        operation: {
-          action: "edit",
-          goalId: "goal-1",
-          operationId: "wrong-target",
-          requestFingerprint: "request-wrong-target",
-          issuedAtMs: now,
-          objective: "Misrouted edit",
-        },
       }),
     ).toThrow("Goal operation does not target this session actor");
     expect(state.hot.entry?.goal?.objective).toBe("Original objective");

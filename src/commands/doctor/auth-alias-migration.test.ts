@@ -47,7 +47,7 @@ function writeStore(env: NodeJS.ProcessEnv, store: unknown, agentDir?: string) {
 
 describe("Doctor stored auth alias migration", () => {
   it.each(["import", "repair sequence"])(
-    "refuses config-selected retired sidecars before direct %s mutates auth",
+    "imports config-selected OAuth sidecars through %s before alias repair",
     async (entrypoint) => {
       await withOpenClawTestState(
         { label: "auth-retired-sidecar", layout: "home", env: { OPENCLAW_OAUTH_DIR: undefined } },
@@ -62,6 +62,7 @@ describe("Doctor stored auth alias migration", () => {
               "openai-codex:default": {
                 type: "oauth",
                 provider: "openai-codex",
+                expires: 1_900_000_000_000,
                 oauthRef: {
                   source: "openclaw-credentials",
                   provider: "openai-codex",
@@ -71,7 +72,17 @@ describe("Doctor stored auth alias migration", () => {
             },
           });
           fs.mkdirSync(path.dirname(sidecar), { recursive: true });
-          fs.writeFileSync(sidecar, "unparsed historical bytes");
+          fs.writeFileSync(
+            sidecar,
+            JSON.stringify({
+              version: 1,
+              profileId: "openai-codex:default",
+              provider: "openai-codex",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+            }),
+          );
+          const sidecarBytes = fs.readFileSync(sidecar);
           const sourceBytes = fs.readFileSync(sourcePath);
           const cfg = {
             plugins: { enabled: false },
@@ -89,10 +100,27 @@ describe("Doctor stored auth alias migration", () => {
                   env: fixture.env,
                   doctorFixCommand: "openclaw doctor --fix",
                 });
-          await expect(pending).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
-          expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
-          expect(fs.readFileSync(sidecar, "utf8")).toBe("unparsed historical bytes");
-          expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["auth-profiles.json"]);
+          await pending;
+          expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toMatchObject({
+            "example:default": { type: "api_key", key: "synthetic-key" },
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+            },
+          });
+          for (const [source, bytes] of [
+            [sourcePath, sourceBytes],
+            [sidecar, sidecarBytes],
+          ] as const) {
+            expect(fs.existsSync(source)).toBe(false);
+            const archive = fs
+              .readdirSync(path.dirname(source))
+              .find((name) => name.startsWith(`${path.basename(source)}.migrated-`));
+            expect(archive).toBeDefined();
+            expect(fs.readFileSync(path.join(path.dirname(source), archive!))).toEqual(bytes);
+          }
           expect(fixture.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
         },
       );

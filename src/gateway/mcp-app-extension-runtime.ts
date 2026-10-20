@@ -110,7 +110,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
       | undefined;
     const prepareSession = () => {
       preparing ??= (async () => {
-        current();
         const isolation = resolveSandboxRuntimeStatus({
           cfg,
           agentId,
@@ -314,7 +313,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         request.assertCurrent();
         assertTool(tool, false, assertAccess);
       };
-      assertCurrent();
+      request.assertCurrent();
       const required = assertTool(tool, true, assertAccess);
       if (required) {
         await requestMcpAppToolApproval({
@@ -331,7 +330,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         });
       }
       const assertExecutionCurrent = () => {
-        assertCurrent();
+        request.assertCurrent();
         if (assertTool(tool, true, assertAccess) && !required) {
           throw new Error("MCP App approval policy changed before execution");
         }
@@ -382,7 +381,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         ...retained,
         prepareToolCall: prepareViewToolCall,
         assertCurrent: () => {
-          retained.assertCurrent();
           if (
             current(retained.assertCurrent).entry.permissionMode !== target.entry.permissionMode
           ) {
