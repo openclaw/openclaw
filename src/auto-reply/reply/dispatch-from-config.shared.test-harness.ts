@@ -7,11 +7,7 @@ import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environm
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
-import type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-} from "../../plugins/hook-types.js";
+import type { PluginHookBeforeDispatchResult } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -99,12 +95,9 @@ const hookMocks = vi.hoisted(() => ({
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
-    runReplyDispatch: vi.fn<
-      (
-        eventValue: PluginHookReplyDispatchEvent,
-        _ctx: unknown,
-      ) => Promise<PluginHookReplyDispatchResult | undefined>
-    >(async () => undefined),
+    runReplyDispatch: vi.fn<ReturnType<typeof createHookRunner>["runReplyDispatch"]>(
+      async () => undefined,
+    ),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));

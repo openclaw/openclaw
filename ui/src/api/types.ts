@@ -83,7 +83,6 @@ export type {
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
-export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
 export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
 export type ChannelStatus = Omit<ChannelAccountSnapshot, "accountId" | "probe"> & {
@@ -180,7 +179,6 @@ export type CronJobsTriggerFilter = NonNullable<CronListParams["trigger"]>;
 export type CronJobsSortBy = NonNullable<CronListParams["sortBy"]>;
 export type CronRunScope = NonNullable<CronRunsParams["scope"]>;
 export type CronRunsStatusValue = NonNullable<CronRunsParams["statuses"]>[number];
-export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 

@@ -1,11 +1,12 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../cli/failure-output.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  exportTrajectoryForCommand: vi.fn(),
-  formatTrajectoryCommandExportSummary: vi.fn(),
+  exportTrajectoryBundle: vi.fn(),
   getRuntimeConfig: vi.fn(),
   loadSessionEntryReadOnly: vi.fn(),
   resolveExplicitStorePath: vi.fn(),
@@ -35,9 +36,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../trajectory/command-export.js", () => ({
-  exportTrajectoryForCommand: mocks.exportTrajectoryForCommand,
-  formatTrajectoryCommandExportSummary: mocks.formatTrajectoryCommandExportSummary,
+vi.mock("../trajectory/export.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../trajectory/export.js")>()),
+  exportTrajectoryBundle: mocks.exportTrajectoryBundle,
 }));
 
 vi.mock("../config/sessions/paths.js", async (importOriginal) => ({
@@ -50,11 +51,14 @@ vi.mock("./session-store-targets.js", () => ({
 }));
 
 let runtime: ReturnType<typeof createTestRuntime>;
+let workspace: string;
+const workspaces = useSessionStoreTempDirs(afterAll, "openclaw-export-command-");
 const sessionKey = "agent:main:telegram:direct:123";
 type Options = Parameters<typeof exportTrajectoryCommand>[0];
 const encode = (request: unknown) =>
   Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
-const run = (options: Options = {}) => exportTrajectoryCommand({ sessionKey, ...options }, runtime);
+const run = (options: Options = {}) =>
+  exportTrajectoryCommand({ sessionKey, workspace, output: "export", ...options }, runtime);
 async function expectTrajectoryFailure(options: Options, message: string) {
   const execution = run(options);
   await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
@@ -73,28 +77,25 @@ function expectNoSessionLookup() {
 }
 function expectNoReadOrExport() {
   expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
-  expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  expect(mocks.exportTrajectoryBundle).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   runtime = createTestRuntime();
+  workspace = workspaces.make();
   mocks.getRuntimeConfig.mockReturnValue({});
   mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
   mocks.resolveExplicitStorePath.mockImplementation(
     (params: { storePath: string }) => params.storePath,
   );
   mocks.loadSessionEntryReadOnly.mockReturnValue({ sessionId: "session-1", updatedAt: 1 });
-  mocks.exportTrajectoryForCommand.mockResolvedValue({
-    outputDir: "/tmp/workspace/.openclaw/trajectory-exports/export",
-    displayPath: ".openclaw/trajectory-exports/export",
-    sessionId: "session-1",
-    eventCount: 2,
-    runtimeEventCount: 0,
-    transcriptEventCount: 2,
+  mocks.exportTrajectoryBundle.mockImplementation(async ({ outputDir }: { outputDir: string }) => ({
+    outputDir,
+    manifest: { eventCount: 2, runtimeEventCount: 0, transcriptEventCount: 2 },
     files: ["manifest.json", "events.jsonl", "session-branch.json"],
-  });
-  mocks.formatTrajectoryCommandExportSummary.mockReturnValue("trajectory exported");
+    supplementalFiles: [],
+  }));
 });
 
 it("points missing session key users at the sessions command", async () => {
@@ -200,7 +201,7 @@ it("reports a missing session without resolving its transcript or exporting", as
   );
 
   expect(mocks.resolveSessionTranscriptReadTarget).not.toHaveBeenCalled();
-  expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  expect(mocks.exportTrajectoryBundle).not.toHaveBeenCalled();
 });
 
 it("reports transcript target resolution failures without invoking the exporter", async () => {
@@ -213,24 +214,35 @@ it("reports transcript target resolution failures without invoking the exporter"
     "Failed to resolve session file: transcript target is unavailable",
   );
 
-  expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  expect(mocks.exportTrajectoryBundle).not.toHaveBeenCalled();
 });
 
 it("reports exporter failures without formatting a successful result", async () => {
-  mocks.exportTrajectoryForCommand.mockRejectedValueOnce(new Error("workspace is unavailable"));
+  mocks.exportTrajectoryBundle.mockRejectedValueOnce(new Error("workspace is unavailable"));
 
   await expectTrajectoryFailure({}, "Failed to export trajectory: workspace is unavailable");
 
-  expect(mocks.formatTrajectoryCommandExportSummary).not.toHaveBeenCalled();
+  expect(runtime.log).not.toHaveBeenCalled();
 });
 
 it("preserves successful JSON output", async () => {
   await run({ json: true });
 
   expect(runtime.log).toHaveBeenCalledWith(
-    JSON.stringify(await mocks.exportTrajectoryForCommand.mock.results[0]?.value, null, 2),
+    JSON.stringify(
+      {
+        outputDir: path.join(workspace, ".openclaw", "trajectory-exports", "export"),
+        displayPath: path.join(".openclaw", "trajectory-exports", "export"),
+        sessionId: "session-1",
+        eventCount: 2,
+        runtimeEventCount: 0,
+        transcriptEventCount: 2,
+        files: ["manifest.json", "events.jsonl", "session-branch.json"],
+      },
+      null,
+      2,
+    ),
   );
-  expect(mocks.formatTrajectoryCommandExportSummary).not.toHaveBeenCalled();
   expect(runtime.error).not.toHaveBeenCalled();
   expect(runtime.exit).not.toHaveBeenCalled();
 });

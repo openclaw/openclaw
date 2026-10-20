@@ -45,7 +45,6 @@ type CronRuntimeState = Pick<
 export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean; event?: unknown };
 export type CronJobsProjection<Row extends CronInventoryJob> = {
   compact?: true;
-  readRows?: (rows: Row[]) => Row[];
   applyRuntime: (
     state: CronJobsState<Row>,
     index: number,
@@ -65,49 +64,8 @@ export function retireCronJobsRequest(state: CronJobsState<unknown>) {
   state.cronJobsLoadingMore = false;
 }
 
-function isCronInventoryTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function hasCompactCronInventoryFacts(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const autoDisabled = value.autoDisabled;
-  return (
-    typeof value.id === "string" &&
-    value.id.trim().length > 0 &&
-    typeof value.name === "string" &&
-    (value.agentId === undefined || typeof value.agentId === "string") &&
-    typeof value.enabled === "boolean" &&
-    isCronInventoryTimestamp(value.updatedAtMs) &&
-    (value.nextRunAtMs === null || isCronInventoryTimestamp(value.nextRunAtMs)) &&
-    (value.lastRunAtMs === null || isCronInventoryTimestamp(value.lastRunAtMs)) &&
-    (value.lastRunStatus === null ||
-      value.lastRunStatus === "ok" ||
-      value.lastRunStatus === "error" ||
-      value.lastRunStatus === "skipped") &&
-    (value.runningAtMs === undefined || isCronInventoryTimestamp(value.runningAtMs)) &&
-    (autoDisabled === undefined ||
-      (isRecord(autoDisabled) &&
-        (autoDisabled.reason === "consecutive-failures" ||
-          autoDisabled.reason === "schedule-errors") &&
-        isCronInventoryTimestamp(autoDisabled.atMs) &&
-        typeof autoDisabled.consecutiveErrors === "number" &&
-        Number.isSafeInteger(autoDisabled.consecutiveErrors) &&
-        autoDisabled.consecutiveErrors > 0))
-  );
-}
-
 const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   compact: true,
-  readRows: (rows) => {
-    // A partial inventory cannot establish absence or retire dismissed alerts.
-    if (!rows.every(hasCompactCronInventoryFacts)) {
-      throw new Error("cron.list returned an invalid compact inventory row");
-    }
-    return rows;
-  },
   applyRuntime: (state, index, { updatedAtMs, runtime, finished }) => {
     // Runtime facts preserve name order; other compact orderings need an authoritative page.
     if (state.cronJobsSortBy !== "name") {
@@ -278,8 +236,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
       return;
     }
     resolveCronListPageNextOffset(page, offset);
-    const jobs = projection.readRows?.(page.jobs) ?? page.jobs;
-    state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
+    state.cronJobs = append ? [...state.cronJobs, ...page.jobs] : page.jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;
     state.cronJobsHasMore = page.hasMore;

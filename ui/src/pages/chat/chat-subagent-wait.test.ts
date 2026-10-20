@@ -402,7 +402,7 @@ describe("chat waiting on subagents", () => {
   it.each([
     { name: "no loaded handoff", history: [] },
     { name: "only an earlier turn's handoff", history: messages },
-  ])("renders the recorded wait clock with $name", async ({ history }) => {
+  ])("renders the recorded wait clock with $name", ({ history }) => {
     const now = Date.UTC(2026, 9, 12, 20, 48);
     const wait = resolveChatSubagentWait({
       selectedSession: { ...parent, startedAt: now - 100_000, endedAt: now - 65_000 },
@@ -428,8 +428,6 @@ describe("chat waiting on subagents", () => {
       );
       flush();
       const elapsed = container.querySelector("openclaw-elapsed-time");
-      await elapsed?.updateComplete;
-      flush();
       expect(elapsed?.textContent?.trim()).toBe("1m 5s");
     } finally {
       view?.unmount();

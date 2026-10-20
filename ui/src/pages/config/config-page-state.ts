@@ -44,6 +44,7 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
@@ -136,7 +137,6 @@ export function createConfigPage(
   let sessionObserverModelsUnavailable = false;
   let hiddenSessionCatalogLabels: ReadonlyMap<string, string> = EMPTY_SESSION_CATALOG_LABELS;
   let installedSessionSourcePluginIds: Set<string> | null = null;
-  let sessionSourcePluginsLoading = false;
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
   let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
@@ -147,10 +147,6 @@ export function createConfigPage(
     camera: createMediaDeviceState(),
   };
   let cameraSelectionRequest = 0;
-  let systemInfoAbort: AbortController | null = null;
-  let modelsAbort: AbortController | null = null;
-  let pluginsAbort: AbortController | null = null;
-  let labelsAbort: AbortController | null = null;
   let previousGateway: ApplicationContext["gateway"] | null = null;
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
@@ -231,14 +227,10 @@ export function createConfigPage(
   }
 
   function abortRequests() {
-    systemInfoAbort?.abort();
-    systemInfoAbort = null;
-    modelsAbort?.abort();
-    modelsAbort = null;
-    pluginsAbort?.abort();
-    pluginsAbort = null;
-    labelsAbort?.abort();
-    labelsAbort = null;
+    systemInfoTask.cancel();
+    modelsTask.cancel();
+    pluginsTask.cancel();
+    labelsTask.cancel();
     modelsAgent = null;
     requestedPluginsClient = null;
     labelsKey = "";
@@ -276,10 +268,8 @@ export function createConfigPage(
     if (!client) {
       clearInterval(poll);
       poll = undefined;
-      systemInfoAbort?.abort();
-      systemInfoAbort = null;
-      modelsAbort?.abort();
-      modelsAbort = null;
+      systemInfoTask.cancel();
+      modelsTask.cancel();
     } else if (connectionChanged || !systemInfo || !poll) {
       startSystemInfoPolling();
       void refreshSystemInfo();
@@ -357,36 +347,79 @@ export function createConfigPage(
     return context.gateway.snapshot.client;
   }
 
-  async function refreshSystemInfo() {
-    const client = systemInfoRequestClient();
-    if (!client || systemInfoAbort) {
-      return;
-    }
-    const abort = new AbortController();
-    systemInfoAbort = abort;
-    try {
-      const sample = await readSystemInfo(context.gateway, abort.signal);
-      if (abort.signal.aborted || systemInfoRequestClient() !== client) {
-        return;
+  const systemInfoTask = createPageRequest(invalidate, {
+    task: async (client: GatewayBrowserClient, { signal }) => {
+      const sample = await readSystemInfo(context.gateway, signal);
+      return systemInfoRequestClient() === client ? sample : null;
+    },
+    onComplete: (sample) => {
+      if (sample) {
+        systemInfo = sample.value;
+        startSystemInfoPolling();
+        void refreshSessionObserverModels(true);
       }
-      systemInfo = sample.value;
-      startSystemInfoPolling();
-      void refreshSessionObserverModels(true);
-    } catch (error) {
-      if (abort.signal.aborted) {
-        return;
-      }
+    },
+    onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         systemInfo = null;
         systemInfoUnavailable = true;
       }
-    } finally {
-      if (systemInfoAbort === abort) {
-        systemInfoAbort = null;
+    },
+  });
+  const modelsTask = createPageRequest(invalidate, {
+    task: async (
+      { client, agentId }: { client: GatewayBrowserClient; agentId: string },
+      { signal },
+    ) => {
+      const { models } = await loadModelCatalog(client, { agentId, preparedOnly: true, signal });
+      return systemInfoRequestClient() === client &&
+        context.settingsAgentSelection.state.selectedId === agentId
+        ? models
+        : null;
+    },
+    onComplete: (models) => {
+      if (models) {
+        sessionObserverModels = models;
+        sessionObserverModelsUnavailable = false;
       }
-      if (!abort.signal.aborted) {
-        invalidate();
-      }
+    },
+    onError: () => {
+      sessionObserverModels = [];
+      sessionObserverModelsUnavailable = true;
+    },
+  });
+  const pluginsTask = createPageRequest(invalidate, {
+    task: (client: GatewayBrowserClient, { signal }) =>
+      client.request<PluginsListResult>("plugins.list", {}, { signal }),
+    onComplete: (result) => {
+      installedSessionSourcePluginIds = new Set(
+        result.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id),
+      );
+    },
+    onError: () => {},
+  });
+  const labelsTask = createPageRequest(invalidate, {
+    task: (
+      { client, agentId }: { client: GatewayBrowserClient; agentId: string | null },
+      { signal },
+    ) =>
+      client.request<SessionsCatalogListResult>(
+        "sessions.catalog.list",
+        { ...(agentId ? { agentId } : {}), metadataOnly: true },
+        { signal },
+      ),
+    onComplete: (result) => {
+      hiddenSessionCatalogLabels = new Map(
+        result.catalogs.map((catalog) => [catalog.id, catalog.label]),
+      );
+    },
+    onError: () => {},
+  });
+
+  async function refreshSystemInfo() {
+    const client = systemInfoRequestClient();
+    if (client && !systemInfoTask.pending) {
+      await systemInfoTask.run(client);
     }
   }
 
@@ -394,52 +427,21 @@ export function createConfigPage(
     const client = systemInfo ? systemInfoRequestClient() : null;
     const agentId = context.settingsAgentSelection.state.selectedId;
     if (!client || !agentId) {
-      modelsAbort?.abort();
-      modelsAbort = null;
+      modelsTask.cancel();
       sessionObserverModels = [];
       sessionObserverModelsUnavailable = !agentId;
       return;
     }
-    if (modelsAgent === agentId && (modelsAbort || !force)) {
+    if (modelsAgent === agentId && (modelsTask.pending || !force)) {
       return;
     }
     const changed = modelsAgent !== agentId;
-    modelsAbort?.abort();
-    const abort = new AbortController();
-    modelsAbort = abort;
     modelsAgent = agentId;
     if (changed) {
       sessionObserverModels = [];
       sessionObserverModelsUnavailable = false;
     }
-    try {
-      const { models } = await loadModelCatalog(client, {
-        agentId,
-        preparedOnly: true,
-        signal: abort.signal,
-      });
-      if (
-        abort.signal.aborted ||
-        systemInfoRequestClient() !== client ||
-        context.settingsAgentSelection.state.selectedId !== agentId
-      ) {
-        return;
-      }
-      sessionObserverModels = models;
-      sessionObserverModelsUnavailable = false;
-    } catch {
-      if (!abort.signal.aborted) {
-        sessionObserverModels = [];
-        sessionObserverModelsUnavailable = true;
-      }
-    } finally {
-      if (modelsAbort === abort) {
-        modelsAbort = null;
-      }
-      if (!abort.signal.aborted) {
-        invalidate();
-      }
-    }
+    await modelsTask.run({ client, agentId });
   }
 
   function syncAppearanceRequests() {
@@ -450,30 +452,11 @@ export function createConfigPage(
         ? snapshot.client
         : null;
     if (pluginsClient !== requestedPluginsClient) {
-      pluginsAbort?.abort();
-      pluginsAbort = null;
+      pluginsTask.cancel();
       requestedPluginsClient = pluginsClient;
       installedSessionSourcePluginIds = null;
-      sessionSourcePluginsLoading = Boolean(pluginsClient);
       if (pluginsClient) {
-        const abort = new AbortController();
-        pluginsAbort = abort;
-        void pluginsClient
-          .request<PluginsListResult>("plugins.list", {}, { signal: abort.signal })
-          .then((result) => {
-            if (!abort.signal.aborted) {
-              installedSessionSourcePluginIds = new Set(
-                result.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id),
-              );
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            if (!abort.signal.aborted) {
-              sessionSourcePluginsLoading = false;
-              invalidate();
-            }
-          });
+        void pluginsTask.run(pluginsClient);
       }
     }
     const agentId = context.settingsAgentSelection.state.selectedId;
@@ -487,57 +470,13 @@ export function createConfigPage(
       ? `${agentId}\0${[...hiddenSessionCatalogIds].toSorted().join("\0")}`
       : "";
     if (key !== labelsKey) {
-      labelsAbort?.abort();
-      labelsAbort = null;
+      labelsTask.cancel();
       labelsKey = key;
       hiddenSessionCatalogLabels = EMPTY_SESSION_CATALOG_LABELS;
       if (labelsClient) {
-        const abort = new AbortController();
-        labelsAbort = abort;
-        void labelsClient
-          .request<SessionsCatalogListResult>(
-            "sessions.catalog.list",
-            { ...(agentId ? { agentId } : {}), metadataOnly: true },
-            { signal: abort.signal },
-          )
-          .then((result) => {
-            if (!abort.signal.aborted) {
-              hiddenSessionCatalogLabels = new Map(
-                result.catalogs.map((catalog) => [catalog.id, catalog.label]),
-              );
-            }
-          })
-          .catch(() => undefined)
-          .finally(() => {
-            if (!abort.signal.aborted) {
-              invalidate();
-            }
-          });
+        void labelsTask.run({ client: labelsClient, agentId });
       }
     }
-  }
-
-  function tabIconProps() {
-    const id = context.agentSelection.state.selectedId;
-    const agent = agents.read().agentsList?.agents.find((entry) => entry.id === id);
-    const unlocked = lobsterdex.read();
-    return {
-      tabIcon: settings.tabIcon,
-      lobsterdexEnabled: context.theme.branding.lobsterdex,
-      tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
-      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
-      setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
-        if (
-          preference.startsWith("lobster:") &&
-          (!context.theme.branding.lobsterdex ||
-            !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
-            !getLobsterdex().has(preference.slice(8)))
-        ) {
-          return;
-        }
-        applySettings({ tabIcon: preference });
-      },
-    };
   }
 
   async function refreshMediaDevices(kind: "microphone" | "camera", requestPermission: boolean) {
@@ -716,6 +655,9 @@ export function createConfigPage(
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const utilityModel = readModelSetting(agentsDefaults?.utilityModel);
+    const id = context.agentSelection.state.selectedId;
+    const agent = agents.read().agentsList?.agents.find((entry) => entry.id === id);
+    const unlocked = lobsterdex.read();
     const themePref = currentSyncedPref("theme");
     const themeModePref = currentSyncedPref("themeMode");
     const accentPref = currentSyncedPref("accent");
@@ -880,7 +822,21 @@ export function createConfigPage(
         });
       },
       onOpenCustomThemeImport: () => customThemeImportOwner.open(),
-      ...tabIconProps(),
+      tabIcon: settings.tabIcon,
+      lobsterdexEnabled: context.theme.branding.lobsterdex,
+      tabIconAgentAvatar: agent ? resolveAgentAvatarUrl(agent, identities.read().get(id)) : null,
+      tabIconLobsters: LOBSTER_PET_PALETTES.filter((palette) => unlocked.has(palette.id)),
+      setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
+        if (
+          preference.startsWith("lobster:") &&
+          (!context.theme.branding.lobsterdex ||
+            !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
+            !getLobsterdex().has(preference.slice(8)))
+        ) {
+          return;
+        }
+        applySettings({ tabIcon: preference });
+      },
       textScale: settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: settings.textScale !== undefined,
       setTextScale: (value: number) =>
@@ -953,7 +909,7 @@ export function createConfigPage(
       catalogOpenTarget: normalizeCatalogOpenTarget(settings.catalogOpenTarget),
       pluginsHref: pathForRoute("plugin-settings", context.basePath),
       installedSessionSourcePluginIds,
-      sessionSourcePluginsLoading,
+      sessionSourcePluginsLoading: pluginsTask.pending,
       microphone: {
         ...mediaDevices.microphone,
         selectedDeviceId: settings.realtimeTalkInputDeviceId ?? "",

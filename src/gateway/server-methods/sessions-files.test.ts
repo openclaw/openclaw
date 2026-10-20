@@ -58,6 +58,20 @@ vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
     hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
+  const { createRepositorySessionEntryReader } =
+    await import("./sessions-files.repository.test-support.js");
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
+      actual.readRetainedSessionEntryFacts,
+      (key) => hoisted.loadSessionEntry(key),
+    ),
+  };
+});
+
 // mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
 vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
   withSessionTranscriptDeltaReader: ((scope, consume) =>
@@ -536,11 +550,24 @@ describe("sessions.files RPC handlers", () => {
 
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";
-    const firstSave = saveFile("ui/vite.config.ts", "export default { first: true };\n", original);
-    mockSession({ sessionId: "nested", spawnedCwd: workspacePath("ui") });
+    const firstSession = hoisted.loadSessionEntry();
+    const nestedKey = "agent:main:nested";
+    const nestedSession = {
+      ...firstSession,
+      canonicalKey: nestedKey,
+      entry: { ...firstSession.entry, sessionId: "nested", spawnedCwd: workspacePath("ui") },
+    };
+    hoisted.loadSessionEntry.mockImplementation((key: string) =>
+      key === nestedKey ? nestedSession : firstSession,
+    );
     const [first, second] = await Promise.all([
-      firstSave,
-      saveFile("./vite.config.ts", "export default { second: true };\n", original),
+      saveFile("ui/vite.config.ts", "export default { first: true };\n", original),
+      files.request("set", {
+        sessionKey: nestedKey,
+        path: "./vite.config.ts",
+        content: "export default { second: true };\n",
+        expectedHash: hashContent(original),
+      }),
     ]);
 
     const calls = [...first, ...second];

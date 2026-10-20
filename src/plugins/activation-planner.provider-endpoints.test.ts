@@ -12,7 +12,6 @@ vi.mock("./plugin-registry-contributions.js", async (importOriginal) => ({
 }));
 
 let resolveManifestActivationPluginIds: typeof import("./activation-planner.js").resolveManifestActivationPluginIds;
-let resolveManifestActivationPlan: typeof import("./activation-planner.js").resolveManifestActivationPlan;
 
 const dashscopeBaseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 
@@ -48,8 +47,7 @@ const config = {
 
 describe("activation planner configured provider endpoints", () => {
   beforeAll(async () => {
-    ({ resolveManifestActivationPlan, resolveManifestActivationPluginIds } =
-      await import("./activation-planner.js"));
+    ({ resolveManifestActivationPluginIds } = await import("./activation-planner.js"));
   });
 
   beforeEach(() => {
@@ -62,13 +60,6 @@ describe("activation planner configured provider endpoints", () => {
   it("plans endpoint owners for custom provider ids from configured base URLs", () => {
     const trigger = { kind: "provider" as const, provider: "custom-dashscope" };
     expect(resolveManifestActivationPluginIds({ config, trigger })).toEqual(["qwen"]);
-    expect(resolveManifestActivationPlan({ config, trigger }).entries).toEqual([
-      {
-        pluginId: "qwen",
-        origin: "bundled",
-        reasons: ["manifest-provider-endpoint-owner"],
-      },
-    ]);
   });
 
   it("applies disable, deny, and allowlist policy to endpoint owners", () => {

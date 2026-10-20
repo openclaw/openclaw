@@ -344,6 +344,7 @@ describe("noteDevicePairingHealth", () => {
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith({
       method: "device.pair.list",
       timeoutMs: 5_000,
+      sharedStateMode: "read-only",
       config: { gateway: { mode: "remote" } },
     });
     expect(noteMock).toHaveBeenCalledTimes(1);

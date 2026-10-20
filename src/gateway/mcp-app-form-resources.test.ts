@@ -58,12 +58,12 @@ vi.mock("./question-session-access.js", () => ({
 }));
 vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
-  resolveLocalSessionWorkspaceRoot: () => state.root,
   withSessionFileRoot: async (
     params: { sessionKey: string; agentId?: string },
     cfg: OpenClawConfig,
     consume: (
       loaded: {
+        root: string;
         canonicalKey: string;
         agentId: string;
         storePath: string;
@@ -75,6 +75,7 @@ vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
   ) =>
     consume(
       {
+        root: state.root,
         canonicalKey: params.sessionKey,
         agentId: params.agentId ?? "main",
         storePath: state.root,

@@ -4,6 +4,7 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { buildGatewayDiscoveryTarget } from "../../infra/gateway-discovery-targets.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 
 export type GatewayDiscoverOpts = {
   timeout?: string;
@@ -12,11 +13,9 @@ export type GatewayDiscoverOpts = {
 
 export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBeacon[] {
   // Use display and endpoint fields; Bonjour can surface the same gateway on multiple interfaces.
-  const out: GatewayBonjourBeacon[] = [];
-  const seen = new Set<string>();
-  for (const b of beacons) {
+  return dedupeByKey(beacons, (b) => {
     const host = resolveGatewayDiscoveryEndpoint(b)?.host ?? "";
-    const key = [
+    return [
       b.domain ?? "",
       b.instanceName ?? "",
       b.displayName ?? "",
@@ -24,13 +23,7 @@ export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBe
       String(b.port ?? ""),
       String(b.gatewayPort ?? ""),
     ].join("|");
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(b);
-  }
-  return out;
+  });
 }
 
 export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): string[] {

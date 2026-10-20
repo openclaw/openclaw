@@ -122,16 +122,6 @@ function compareSidebarSessionRowsByCreatedAt(
   return byObservedOrder || a.key.localeCompare(b.key);
 }
 
-function isSidebarDraftOwnedBySelf(
-  row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
-  selfUserId: string | undefined,
-): boolean {
-  return (
-    row.visibility === "draft" &&
-    (row.sharingRole === "owner" || Boolean(selfUserId && row.createdActor?.id === selfUserId))
-  );
-}
-
 export type SidebarSessionNavigationState = {
   routeSessionKey: string;
   selectedAgentId: string;
@@ -258,7 +248,10 @@ export function buildSidebarSessionNavigationState(input: {
           sharingRole: row.sharingRole,
           communication: row.communication,
           effectiveCommunication: row.effectiveCommunication,
-          draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, selfUserId),
+          draftOwnedBySelf:
+            row.visibility === "draft" &&
+            (row.sharingRole === "owner" ||
+              Boolean(selfUserId && row.createdActor?.id === selfUserId)),
           category: normalizeOptionalString(row.category),
           icon: normalizeOptionalString(row.icon),
           color: normalizeOptionalString(row.color),
