@@ -46,6 +46,27 @@ it.each([
       privateCompletion,
       inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
     };
+    const mirror = {
+      params,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      notifyUserMessagePersisted: () => undefined,
+      cwd: params.workspaceDir,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    };
+    const progress = {
+      type: "agentMessage",
+      id: "progress",
+      phase: "commentary",
+      text: "Checking the worker result",
+    };
+    const answer = {
+      ...progress,
+      id: "answer",
+      phase: "final_answer",
+      text: "The repair passed validation",
+    };
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -60,25 +81,12 @@ it.each([
       ]),
     );
     await mirrorPromptAtTurnStartBestEffort({
-      params,
+      ...mirror,
       ...target,
-      notifyUserMessagePersisted: () => undefined,
-      cwd: params.workspaceDir,
-      threadId: "thread-1",
-      turnId: "turn-1",
       upstreamUserText: params.prompt,
     });
     const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "agentMessage",
-          id: "progress",
-          phase: "commentary",
-          text: "Checking the worker result",
-        },
-      }),
-    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: progress }));
     const checkpointMessages = await readCodexMirroredSessionHistoryMessages({
       ...params,
       sessionFile: target.bogusSessionFile,
@@ -91,25 +99,10 @@ it.each([
       [hidden, hidden],
     );
 
-    await projector.handleNotification(
-      turnCompleted([
-        {
-          type: "agentMessage",
-          id: "answer",
-          phase: "final_answer",
-          text: "The repair passed validation",
-        },
-      ]),
-    );
+    await projector.handleNotification(turnCompleted([answer]));
     await codexTranscriptMirrorRuntime.mirrorBestEffort({
-      params,
+      ...mirror,
       result: projector.buildResult(buildEmptyToolTelemetry()),
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      notifyUserMessagePersisted: () => undefined,
-      cwd: params.workspaceDir,
-      threadId: "thread-1",
-      turnId: "turn-1",
     });
     const messages = await readCodexMirroredSessionHistoryMessages({
       ...params,

@@ -35,10 +35,17 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  function createHarness(): ReturnType<typeof createClientHarness> {
+  function createHarness() {
     const harness = createClientHarness();
     clients.push(harness.client);
-    return harness;
+    return {
+      ...harness,
+      notify: (method: string, params: JsonObject) => harness.send({ method, params }),
+      request: (id: string, method: string, params: JsonObject) =>
+        harness.send({ id, method, params }),
+      expectResponse: async (id: string, result: unknown) =>
+        expect(await waitForResponse(harness, id)).toEqual({ id, result }),
+    };
   }
 
   it("settles native completion after a strict Guardian denial interruption", async () => {
@@ -89,7 +96,7 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     await route.bindTurn("turn-native");
     const watch = watchTurn(router, route.threadId, "turn-native", { timeoutMs: 1_000 });
     try {
-      harness.send({ method: "turn/completed", params: { threadId: route.threadId, turn } });
+      harness.notify("turn/completed", { threadId: route.threadId, turn });
       await settleInput();
       expect(route.completed).toBe(false);
       expect(watch.state).toBe("pending");
@@ -243,13 +250,10 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     void watch.completion.then(settled);
 
     await vi.advanceTimersByTimeAsync(900);
-    harness.send({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-native-progress",
-        turnId: "turn-native-progress",
-        delta: "working",
-      },
+    harness.notify("item/agentMessage/delta", {
+      threadId: "thread-native-progress",
+      turnId: "turn-native-progress",
+      delta: "working",
     });
     await vi.advanceTimersByTimeAsync(101);
     await expect(watch.completion).resolves.toBe(false);
@@ -287,27 +291,17 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
       onRequest: requestHandler,
     });
     route.armTurn();
-    harness.send({
-      id: "request-release",
-      method: "item/commandExecution/requestApproval",
-      params: {
-        threadId: "thread-release",
-        turnId: "turn-release",
-        itemId: "item-1",
-      },
+    harness.request("request-release", "item/commandExecution/requestApproval", {
+      threadId: "thread-release",
+      turnId: "turn-release",
+      itemId: "item-1",
     });
     await settleInput();
 
     route.release();
-    harness.send({
-      method: "item/started",
-      params: { threadId: "thread-release", turnId: "turn-release" },
-    });
+    harness.notify("item/started", { threadId: "thread-release", turnId: "turn-release" });
 
-    expect(await waitForResponse(harness, "request-release")).toEqual({
-      id: "request-release",
-      result: { decision: "decline" },
-    });
+    await harness.expectResponse("request-release", { decision: "decline" });
     expect(notificationHandler).not.toHaveBeenCalled();
     expect(requestHandler).not.toHaveBeenCalled();
 
@@ -350,14 +344,8 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     activeRoute.release();
     expect(activeSignals()).toEqual([true, true]);
 
-    expect(await waitForResponse(harness, "request-active")).toEqual({
-      id: "request-active",
-      result: { decision: "decline" },
-    });
-    expect(await waitForResponse(harness, "request-active-reject")).toEqual({
-      id: "request-active-reject",
-      result: { decision: "decline" },
-    });
+    await harness.expectResponse("request-active", { decision: "decline" });
+    await harness.expectResponse("request-active-reject", { decision: "decline" });
 
     const closingRoute = router.reserveThread({
       threadId: "thread-close",
@@ -365,10 +353,10 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     });
     closingRoute.armTurn();
     await closingRoute.bindTurn("turn-close");
-    harness.send({
-      id: "request-close",
-      method: "item/commandExecution/requestApproval",
-      params: { threadId: "thread-close", turnId: "turn-close", itemId: "item-4" },
+    harness.request("request-close", "item/commandExecution/requestApproval", {
+      threadId: "thread-close",
+      turnId: "turn-close",
+      itemId: "item-4",
     });
     await vi.waitFor(() => expect(activeHandler).toHaveBeenCalledTimes(3));
     harness.send(completedNotification("thread-close", "turn-close"));
@@ -402,17 +390,12 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         onNotification: notifications,
       });
       route.armTurn();
-      harness.send({
-        method: "turn/completed",
-        params: {
-          threadId: route.threadId,
-          turn: {
-            id: reason === "stale completion" ? "turn-stale" : "turn-current",
-            status: "completed",
-            items: [],
-          },
-        },
-      });
+      harness.send(
+        completedNotification(
+          route.threadId,
+          reason === "stale completion" ? "turn-stale" : "turn-current",
+        ),
+      );
       if (reason === "explicit release") {
         route.release();
       }
@@ -432,10 +415,9 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     const harness = createHarness();
     const router = getCodexAppServerTurnRouter(harness.client);
     const route = router.reserveThread({ threadId: "thread-dormant-release" });
-    harness.send({
-      id: "request-dormant-release",
-      method: "item/tool/call",
-      params: { threadId: "thread-dormant-release", turnId: "turn-1" },
+    harness.request("request-dormant-release", "item/tool/call", {
+      threadId: "thread-dormant-release",
+      turnId: "turn-1",
     });
     await settleInput();
 
@@ -494,7 +476,7 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         ...completed,
         threadId: "thread-closed-paused",
         turnId: "turn-current",
-        completedTurn: { id: "turn-current", status: "completed", items: [] },
+        completedTurn: completed.params.turn,
       },
     ];
     try {
@@ -549,16 +531,13 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         ? route.bindTurn("turn-overflow", { beforeNotifications: beforeNotifications.promise })
         : undefined;
       void binding?.catch(() => undefined);
-      harness.send({
-        id: "request-overflow",
-        method: "item/commandExecution/requestApproval",
-        params: { threadId: route.threadId, turnId: "turn-overflow", itemId: "item-overflow" },
+      harness.request("request-overflow", "item/commandExecution/requestApproval", {
+        threadId: route.threadId,
+        turnId: "turn-overflow",
+        itemId: "item-overflow",
       });
       for (let index = 0; index < 256; index += 1) {
-        harness.send({
-          method: "item/started",
-          params: { threadId: "thread-overflow", turnId: "turn-overflow" },
-        });
+        harness.notify("item/started", { threadId: "thread-overflow", turnId: "turn-overflow" });
       }
       await settleInput();
       try {
@@ -578,10 +557,7 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
         await expect(binding ?? route.bindTurn("turn-overflow")).rejects.toThrow(
           "pre-bind notification buffer exceeded 256 entries",
         );
-        expect(await waitForResponse(harness, "request-overflow")).toEqual({
-          id: "request-overflow",
-          result: { decision: "decline" },
-        });
+        await harness.expectResponse("request-overflow", { decision: "decline" });
         beforeNotifications.resolve();
         await settleInput();
         expect(notifications).not.toHaveBeenCalled();
