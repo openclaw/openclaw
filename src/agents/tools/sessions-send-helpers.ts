@@ -42,11 +42,12 @@ export async function recoverSessionsSendReply(
   if (!replyText?.endsWith("…")) {
     return { replyText };
   }
-  const full = readFullReply
-    ? await Promise.resolve()
-        .then(readFullReply)
-        .catch(() => undefined)
-    : undefined;
+  let full: string | undefined;
+  try {
+    full = await readFullReply?.();
+  } catch {
+    // Full reply recovery is best-effort; preserve the bounded preview on failure.
+  }
   const recovered = matchAgentRunTerminalReplyText(replyText, full);
   return recovered === undefined ? { replyText, replyTruncated: true } : { replyText: recovered };
 }
