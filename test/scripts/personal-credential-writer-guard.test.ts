@@ -39,12 +39,13 @@ function allowedGraph(sources: Record<string, string>) {
     update: string | ((original: string) => string),
     messages?: string | string[],
   ) => {
-    const original = sources[file];
-    assert(original !== undefined, `Missing fixture source: ${file}`);
-    expectDenied(
-      { ...sources, [file]: typeof update === "string" ? update : update(original) },
-      messages,
-    );
+    let replacement = update;
+    if (typeof replacement === "function") {
+      const original = sources[file];
+      assert(original !== undefined, `Missing fixture source: ${file}`);
+      replacement = replacement(original);
+    }
+    expectDenied({ ...sources, [file]: replacement }, messages);
   };
 }
 
