@@ -70,6 +70,7 @@ const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
 const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCH_POLL_MS = 60_000;
 const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
+const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
   "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
@@ -2048,10 +2049,12 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
   };
 }
 
+export class MissingFrvPlanError extends Error {}
+
 export async function loadPlan(options, loadExecutionPlan = downloadExecutionPlan) {
   const payload = await loadExecutionPlan(options.repository, options.runId);
   if (!payload) {
-    throw new Error("run has no authenticated immutable FRV plan");
+    throw new MissingFrvPlanError("run has no authenticated immutable FRV plan");
   }
   const plan = validateReleaseExecutionPlanArtifact(payload, { parentRunId: options.runId });
   if (plan.attemptEvidenceVersion === undefined) {
@@ -2061,6 +2064,133 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
     throw new Error("FRV continuation requires an all-group root");
   }
   return plan;
+}
+
+function unsealedParentIdentity(run, options) {
+  const identity = {
+    ...runIdentity(run),
+    runAttempt: positiveInteger(run.run_attempt, `${options.runId} run attempt`),
+    status: String(run.status ?? ""),
+    conclusion: run.conclusion ?? null,
+    triggeringActor: String(run.triggering_actor?.login ?? ""),
+  };
+  if (
+    identity.id !== options.runId ||
+    identity.repository !== options.repository ||
+    identity.event !== "workflow_dispatch" ||
+    identity.path.split("@", 1)[0] !== ".github/workflows/full-release-validation.yml" ||
+    identity.displayTitle !== "Full Release Validation" ||
+    !/^[a-f0-9]{40}$/u.test(identity.headSha) ||
+    !identity.headBranch ||
+    !["requested", "queued", "pending", "waiting", "in_progress", "completed"].includes(
+      identity.status,
+    )
+  ) {
+    throw new Error(`run ${options.runId} is not the exact Full Release Validation parent`);
+  }
+  return identity;
+}
+
+/** Project only authenticated lifecycle facts while the immutable plan is not yet available. */
+export async function inspectUnsealedPlan(options, client) {
+  const operationDeadline = createOperationDeadline();
+  const parent = await client.getRun(options.runId, { operationDeadline });
+  const before = unsealedParentIdentity(parent, options);
+  const jobs = await client.getAttemptJobs(options.runId, before.runAttempt, {
+    operationDeadline,
+  });
+  if (!Array.isArray(jobs)) {
+    throw new Error(`run ${options.runId} returned invalid current-attempt jobs`);
+  }
+  const sealJobs = jobs.filter((job) => {
+    if (job.run_id !== undefined && String(job.run_id) !== options.runId) {
+      throw new Error(`run ${options.runId} current-attempt job identity changed`);
+    }
+    if (job.run_attempt !== undefined && Number(job.run_attempt) !== before.runAttempt) {
+      throw new Error(`run ${options.runId} current-attempt job identity changed`);
+    }
+    return job.name === "Seal release execution plan";
+  });
+  if (sealJobs.length > 1) {
+    throw new Error(
+      `run ${options.runId} attempt ${before.runAttempt} has ambiguous plan seal jobs`,
+    );
+  }
+  const seal = sealJobs[0];
+  const uploads =
+    seal?.steps?.filter((step) => step.name === "Upload immutable release execution plan") ?? [];
+  if (uploads.length > 1) {
+    throw new Error(`run ${options.runId} attempt ${before.runAttempt} has ambiguous plan uploads`);
+  }
+  const upload = uploads[0];
+  const current = unsealedParentIdentity(
+    await client.getRun(options.runId, { operationDeadline }),
+    options,
+  );
+  if (JSON.stringify(current) !== JSON.stringify(before)) {
+    throw new Error(`run ${options.runId} changed while inspecting plan availability`);
+  }
+  const uploadSucceeded = upload?.status === "completed" && upload.conclusion === "success";
+  const uploadCompletedAt = uploadSucceeded ? Date.parse(upload.completed_at) : Number.NaN;
+  if (
+    uploadSucceeded &&
+    Number.isFinite(uploadCompletedAt) &&
+    Date.now() >= uploadCompletedAt &&
+    (before.status !== "completed" ||
+      Date.now() - uploadCompletedAt <= PLAN_ARTIFACT_PROPAGATION_MS)
+  ) {
+    return {
+      action: "waiting-for-plan",
+      planAvailability: {
+        state: "artifact-propagating",
+        runAttempt: before.runAttempt,
+        parentStatus: before.status,
+        sealStatus: seal.status,
+      },
+      nextCommand: `pnpm frv watch --run ${options.runId}`,
+    };
+  }
+  if (uploadSucceeded) {
+    throw new Error("run has no authenticated immutable FRV plan after its successful upload");
+  }
+  if (seal?.status === "completed" || before.status === "completed") {
+    throw new Error(
+      `run ${options.runId} attempt ${before.runAttempt} completed without an authenticated immutable FRV plan`,
+    );
+  }
+  const state = before.runAttempt > 1 ? "reseal-in-progress" : "not-yet-sealed";
+  return {
+    action: "waiting-for-plan",
+    planAvailability: {
+      state,
+      runAttempt: before.runAttempt,
+      parentStatus: before.status,
+      sealStatus: seal?.status ?? "not-started",
+    },
+    nextCommand: `pnpm frv watch --run ${options.runId}`,
+  };
+}
+
+export async function loadPlanForCommand(
+  options,
+  client,
+  loadExecutionPlan = downloadExecutionPlan,
+) {
+  try {
+    return { plan: await loadPlan(options, loadExecutionPlan) };
+  } catch (error) {
+    if (!(error instanceof MissingFrvPlanError)) {
+      throw error;
+    }
+    const pending = await inspectUnsealedPlan(options, client);
+    if (options.command === "status") {
+      return { pending };
+    }
+    throw new Error(
+      `run ${options.runId} plan is ${pending.planAvailability.state}; ${options.command} is unavailable until the immutable plan is sealed; next: ${pending.nextCommand}`,
+      { cause: error },
+    );
+  }
 }
 
 async function createPublicationReader(repository) {
@@ -3121,6 +3251,12 @@ function print(value, json) {
     }
     console.log(`next: ${value.nextCommand}`);
   }
+  if (value.planAvailability) {
+    console.log(
+      `plan: ${value.planAvailability.state}; attempt=${value.planAvailability.runAttempt}; parent=${value.planAvailability.parentStatus}; seal=${value.planAvailability.sealStatus}`,
+    );
+    console.log(`next: ${value.nextCommand}`);
+  }
   for (const child of value.status?.children ?? value.children ?? []) {
     console.log(
       `${child.key}: ${child.status}${child.conclusion && child.conclusion !== "success" ? ` (${child.conclusion})` : ""} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
@@ -3207,13 +3343,18 @@ async function main() {
     return;
   }
   if (options.command === "verify") {
-    const plan = await loadPlan(options);
+    const { plan } = await loadPlanForCommand(options, client);
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     await releaseSealedPriority(client, options.runId);
     return;
   }
-  const plan = await loadPlan(options);
+  const loaded = await loadPlanForCommand(options, client);
+  if (loaded.pending) {
+    print(loaded.pending, options.json);
+    return;
+  }
+  const plan = loaded.plan;
   if (options.command === "status") {
     print(await inspectQualificationStatus(plan, options.runId, client), options.json);
     return;
