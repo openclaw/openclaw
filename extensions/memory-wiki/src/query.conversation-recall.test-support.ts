@@ -1,6 +1,5 @@
 import type { MemoryCallerAuthority } from "openclaw/plugin-sdk/memory-host-search";
 import { expect, it, vi, type Mock } from "vitest";
-import type { OpenClawConfig } from "../api.js";
 import type { MemoryWikiPluginConfig, ResolvedMemoryWikiConfig } from "./config.js";
 import type { searchMemoryWiki } from "./query.js";
 
@@ -21,13 +20,6 @@ const CONVERSATION_RECALL = {
   scope: "same-agent-private",
   corpus: "sessions",
 } as const;
-
-function createRecallAppConfig(visibility: "self" | "tree"): OpenClawConfig {
-  return {
-    agents: { ownership: "explicit", entries: { main: {}, secondary: {} } },
-    tools: { sessions: { visibility } },
-  };
-}
 
 // One hit per recall decision: allowed prior private chat, the live anchor, a group
 // chat, another agent's private chat, and durable memory outside the sessions corpus.
@@ -71,16 +63,12 @@ const RECALL_SESSION_STORE = {
   },
 };
 
-/**
- * Registers conversation-recall coverage through real provider acquisition, the legacy
- * adapter's single authorization step, and Memory Core's session visibility owner.
- */
+// Exercise provider acquisition and Memory Core's visibility owner through the legacy adapter.
 export function registerConversationRecallQueryTests(params: ConversationRecallTestParams): void {
-  const searchAsSession = async (input: {
-    visibility: "self" | "tree";
-    sessionKey: string;
-    conversationRecall?: typeof CONVERSATION_RECALL;
-  }) => {
+  const searchAsSession = async (
+    sessionKey: string,
+    conversationRecall?: typeof CONVERSATION_RECALL,
+  ) => {
     const { config } = await params.createQueryVault({
       initialize: true,
       config: { search: { backend: "shared", corpus: "memory" } },
@@ -91,19 +79,23 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
     });
     params.getActiveMemorySearchManagerMock.mockResolvedValue({ manager: createRecallManager() });
     // The Wiki tool copies the host-granted recall pass into its session authority.
+    const recall = conversationRecall ? { conversationRecall } : {};
     const authority: MemoryCallerAuthority = {
       kind: "session",
-      sessionKey: input.sessionKey,
+      sessionKey,
       sandboxed: false,
-      ...(input.conversationRecall ? { conversationRecall: input.conversationRecall } : {}),
+      ...recall,
     };
     const results = await params.searchMemoryWiki({
       config,
-      appConfig: createRecallAppConfig(input.visibility),
+      appConfig: {
+        agents: { ownership: "explicit", entries: { main: {}, secondary: {} } },
+        tools: { sessions: { visibility: "self" } },
+      },
       agentId: "main",
-      agentSessionKey: input.sessionKey,
+      agentSessionKey: sessionKey,
       sandboxed: false,
-      ...(input.conversationRecall ? { conversationRecall: input.conversationRecall } : {}),
+      ...recall,
       memoryContext: { authority, assertCurrent() {} },
       query: "transcript",
       maxResults: 10,
@@ -111,27 +103,17 @@ export function registerConversationRecallQueryTests(params: ConversationRecallT
     return results.map((result) => result.path);
   };
 
-  it.each(["self"] as const)(
-    "returns recall-granted same-agent private session hits under %s visibility",
-    async (visibility) => {
-      // Only the prior private chat passes; the live anchor, group chat, other agent,
-      // and memory outside the recall corpus stay refused.
-      await expect(
-        searchAsSession({
-          visibility,
-          sessionKey: RECALL_SESSION_KEY,
-          conversationRecall: CONVERSATION_RECALL,
-        }),
-      ).resolves.toEqual(["sessions/prior-session.jsonl"]);
-    },
-  );
+  it("returns recall-granted same-agent private session hits under self visibility", async () => {
+    // The live anchor, group chat, other agent, and non-session memory stay refused.
+    await expect(searchAsSession(RECALL_SESSION_KEY, CONVERSATION_RECALL)).resolves.toEqual([
+      "sessions/prior-session.jsonl",
+    ]);
+  });
 
-  it.each(["self"] as const)(
-    "keeps requester visibility for a session search without recall under %s visibility",
-    async (visibility) => {
-      await expect(
-        searchAsSession({ visibility, sessionKey: ANCHOR_SESSION_KEY }),
-      ).resolves.toEqual(["sessions/current.jsonl", "MEMORY.md"]);
-    },
-  );
+  it("keeps requester visibility for a session search without recall under self visibility", async () => {
+    await expect(searchAsSession(ANCHOR_SESSION_KEY)).resolves.toEqual([
+      "sessions/current.jsonl",
+      "MEMORY.md",
+    ]);
+  });
 }

@@ -5,36 +5,32 @@ import { ingestMemoryWikiSource } from "./ingest.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
-const EMPTY_NOTES = "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
+const START = "<!-- openclaw:human:start -->";
+const END = "<!-- openclaw:human:end -->";
+const EMPTY_NOTES = `${START}\n${END}`;
 
-async function createSourceFixture(filename: string, content = "first body\n") {
+async function createSourceFixture(content = "first body\n") {
   const rootDir = await createTempDir("memory-wiki-notes-");
-  const inputPath = path.join(rootDir, filename);
+  const inputPath = path.join(rootDir, "notes.txt");
   const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
   await fs.writeFile(inputPath, content, "utf8");
-  await ingestMemoryWikiSource({
-    config,
-    inputPath,
-    nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-  });
-  const pagePath = path.join(config.vault.path, "sources", `${path.parse(filename).name}.md`);
+  const ingest = (day: number) =>
+    ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, day, 12) });
+  await ingest(5);
+  const pagePath = path.join(config.vault.path, "sources/notes.md");
 
   return {
     pagePath,
     editNotes: async (note: string, crlf = false) => {
       const edited = (await fs.readFile(pagePath, "utf8")).replace(
         EMPTY_NOTES,
-        `<!-- openclaw:human:start -->\n${note}\n<!-- openclaw:human:end -->`,
+        `${START}\n${note}\n${END}`,
       );
       await fs.writeFile(pagePath, crlf ? edited.replace(/\n/g, "\r\n") : edited, "utf8");
     },
     reingest: async (updatedContent: string) => {
       await fs.writeFile(inputPath, updatedContent, "utf8");
-      await ingestMemoryWikiSource({
-        config,
-        inputPath,
-        nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
-      });
+      await ingest(6);
       return fs.readFile(pagePath, "utf8");
     },
   };
@@ -42,7 +38,7 @@ async function createSourceFixture(filename: string, content = "first body\n") {
 
 describe("ingestMemoryWikiSource human notes", () => {
   it("preserves user notes when the same source is re-ingested", async () => {
-    const { editNotes, reingest } = await createSourceFixture("roadmap.txt", "v1 content\n");
+    const { editNotes, reingest } = await createSourceFixture("v1 content\n");
     const userNote = "KEY INSIGHT: covers $1 of the Q2 roadmap";
     await editNotes(userNote);
 
@@ -52,28 +48,13 @@ describe("ingestMemoryWikiSource human notes", () => {
   });
 
   it.each([
-    {
-      name: "closing",
-      malformedNotes: "<!-- openclaw:human:start -->\nHANDWRITTEN NOTE MUST SURVIVE",
-      missingMarker: /openclaw:human:end/i,
-    },
-    {
-      name: "opening",
-      malformedNotes: "HANDWRITTEN NOTE MUST SURVIVE\n<!-- openclaw:human:end -->",
-      missingMarker: /openclaw:human:start/i,
-    },
-    {
-      name: "opening and closing",
-      malformedNotes: "HANDWRITTEN NOTE MUST SURVIVE",
-      missingMarker: /openclaw:human:start/i,
-    },
-  ])(
-    "preserves the source page when handwritten Notes are missing the $name marker",
-    async ({ malformedNotes, missingMarker }) => {
-      const { pagePath, reingest } = await createSourceFixture(
-        "roadmap.txt",
-        "original source content\n",
-      );
+    ["closing", `${START}\nHANDWRITTEN NOTE MUST SURVIVE`, /openclaw:human:end/i],
+    ["opening", `HANDWRITTEN NOTE MUST SURVIVE\n${END}`, /openclaw:human:start/i],
+    ["opening and closing", "HANDWRITTEN NOTE MUST SURVIVE", /openclaw:human:start/i],
+  ] as const)(
+    "preserves the source page when handwritten Notes are missing the %s marker",
+    async (_name, malformedNotes, missingMarker) => {
+      const { pagePath, reingest } = await createSourceFixture("original source content\n");
       const existingPage = (await fs.readFile(pagePath, "utf8")).replace(
         EMPTY_NOTES,
         malformedNotes,
@@ -86,16 +67,8 @@ describe("ingestMemoryWikiSource human notes", () => {
   );
 
   it("preserves CRLF notes without copying marker comments from existing source content", async () => {
-    const sourceWithMarkers = [
-      "first body",
-      "<!-- openclaw:human:start -->",
-      "OLD SOURCE MARKER PAYLOAD",
-      "<!-- openclaw:human:end -->",
-      "",
-    ].join("\n");
     const { editNotes, reingest } = await createSourceFixture(
-      "windows-notes.txt",
-      sourceWithMarkers,
+      `first body\n${START}\nOLD SOURCE MARKER PAYLOAD\n${END}\n`,
     );
     const userNote = "CRLF USER NOTE";
     await editNotes(userNote, true);
