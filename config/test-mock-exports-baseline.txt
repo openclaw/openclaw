@@ -5726,7 +5726,6 @@
 ["src/gateway/mcp-app-host-files.test.ts","./mcp-app-standalone.js","88d50fcf2e04d500ce2f009e729942a9053d6f051acd3e211a89866f7e26f87c",1]
 ["src/gateway/mcp-app-host-files.test.ts","./operator-role-policy.js","f7e44efb5f6be277f217effe15b1302d64a5a1b7e7da64bf3cb75ce71b169e44",1]
 ["src/gateway/mcp-app-host-files.test.ts","./server-methods/session-scoped-read.js","66092db3b2218008a88775027421f9e5aad6df73dd1b25f6a3e836d96fa7fa55",1]
-["src/gateway/mcp-app-host-files.test.ts","./server-methods/sessions-files.js","e4240684fe0c5321e5adbbb5673a643df08cd96e70cd7bf4fbf078cfa6b144ac",1]
 ["src/gateway/mcp-app-reconstruction.test.ts","../agents/agent-bundle-mcp-manager-api.js","430daa6d9ce511f36ebe9e03cf8293abe4a000cb6f2e706f45f64a4d2cdb0780",1]
 ["src/gateway/mcp-app-reconstruction.test.ts","../agents/agent-bundle-mcp-manager-cleanup.js","8ba839dc316c5cbae80f248d538096634627e0eff3d29bf0e8001029275d5550",1]
 ["src/gateway/mcp-app-reconstruction.test.ts","../agents/mcp-ui-resource.js","2cb5098eedd899a82785aff466a8c0d509a8a230ab5100e736efab61b40c6b30",1]
