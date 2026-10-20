@@ -1,7 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getConsoleSettings } from "./console.js";
 import { getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
@@ -19,85 +18,67 @@ function configure(overrides: Parameters<typeof setLoggerOverride>[0]) {
 }
 const captureStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 const envWarnings = (spy: ReturnType<typeof captureStderr>) =>
-  spy.mock.calls
-    .map(([line]) => String(line))
-    .filter((line) => line.includes("OPENCLAW_LOG_LEVEL"));
+  spy.mock.calls.map(([line]) => String(line));
 
-describe("OPENCLAW_LOG_LEVEL", () => {
-  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_LOG_LEVEL", undefined);
+  loggingState.invalidEnvLogLevelValue = null;
+  resetLogger();
+});
 
-  beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_LOG_LEVEL"]);
-    delete process.env.OPENCLAW_LOG_LEVEL;
-    loggingState.invalidEnvLogLevelValue = null;
-    resetLogger();
-    setLoggerOverride(null);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  loggingState.invalidEnvLogLevelValue = null;
+  resetLogger();
+  vi.restoreAllMocks();
+});
+
+it("applies a valid env override to both file and console levels", () => {
+  configure({ consoleStyle: "json" });
+  process.env.OPENCLAW_LOG_LEVEL = "debug";
+
+  expect(getResolvedLoggerSettings()).toEqual({
+    level: "debug",
+    file: testLogPath,
+    maxFileBytes: defaultMaxFileBytes,
   });
+  expect(getConsoleSettings()).toEqual({ level: "debug", style: "json" });
+});
 
-  afterEach(() => {
-    envSnapshot?.restore();
-    envSnapshot = undefined;
-    loggingState.invalidEnvLogLevelValue = null;
-    resetLogger();
-    setLoggerOverride(null);
-    vi.restoreAllMocks();
-  });
-
-  it("applies a valid env override to both file and console levels", () => {
-    configure({ consoleStyle: "json" });
-    process.env.OPENCLAW_LOG_LEVEL = "debug";
-
-    expect(getResolvedLoggerSettings()).toEqual({
-      level: "debug",
-      file: testLogPath,
-      maxFileBytes: defaultMaxFileBytes,
-    });
-    expect(getConsoleSettings()).toEqual({ level: "debug", style: "json" });
-  });
-
-  it("warns once and ignores invalid env values", () => {
-    configure({});
+it.each([
+  ["compact", "error", "warn"],
+  ["json", "silent", "info"],
+] as const)(
+  "warns once and ignores invalid env values (%s)",
+  (consoleStyle, level, consoleLevel) => {
+    configure({ consoleStyle, level, consoleLevel });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
     const stderrSpy = captureStderr();
-
-    expect(getResolvedLoggerSettings().level).toBe("error");
-    expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
-    expect(getConsoleSettings().level).toBe("warn");
-    expect(getResolvedLoggerSettings().level).toBe("error");
-
+    expect(getConsoleSettings().level).toBe(consoleLevel);
+    expect(getResolvedLoggerSettings()).toMatchObject({ level, maxFileBytes: defaultMaxFileBytes });
+    expect(getResolvedLoggerSettings().level).toBe(level);
     const warnings = envWarnings(stderrSpy);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
-  });
+    if (consoleStyle === "json") {
+      expect(JSON.parse(warnings[0] ?? "")).toMatchObject({
+        level: "warn",
+        message: expect.stringContaining('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"'),
+      });
+    }
+  },
+);
 
-  it("structures invalid env warnings for JSON console output", () => {
-    configure({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
-    process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = captureStderr();
+it.each(["compact", "json"] as const)("redacts %s env warnings", (consoleStyle) => {
+  const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"; // pragma: allowlist secret
+  setLoggerOverride({ level: "silent", consoleStyle, file: testLogPath });
+  process.env.OPENCLAW_LOG_LEVEL = secret;
+  const stderrSpy = captureStderr();
 
-    expect(getConsoleSettings().level).toBe("info");
+  getResolvedLoggerSettings();
 
-    const [warning] = envWarnings(stderrSpy);
-    expect(JSON.parse(warning ?? "")).toMatchObject({
-      level: "warn",
-      message: expect.stringContaining('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"'),
-    });
-  });
-
-  it.each(["compact", "json"] as const)(
-    "redacts invalid env values in %s warnings",
-    (consoleStyle) => {
-      const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"; // pragma: allowlist secret
-      setLoggerOverride({ level: "silent", consoleStyle, file: testLogPath });
-      process.env.OPENCLAW_LOG_LEVEL = secret;
-      const stderrSpy = captureStderr();
-
-      getResolvedLoggerSettings();
-
-      expect(stderrSpy).toHaveBeenCalledOnce();
-      const warning = String(stderrSpy.mock.calls[0]?.[0]);
-      expect(warning).toContain("Ignoring invalid OPENCLAW_LOG_LEVEL=");
-      expect(warning).not.toContain(secret);
-    },
-  );
+  expect(stderrSpy).toHaveBeenCalledOnce();
+  const warning = String(stderrSpy.mock.calls[0]?.[0]);
+  expect(warning).toContain("Ignoring invalid OPENCLAW_LOG_LEVEL=");
+  expect(warning).not.toContain(secret);
 });

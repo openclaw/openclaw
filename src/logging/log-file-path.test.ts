@@ -33,19 +33,15 @@ describe("resolveConfiguredLogFilePath", () => {
     expect(path.basename(resolveForProfile(profile))).toBe(`${prefix}-2026-07-22.log`);
   });
 
-  it("keeps profiles distinct when sanitization would otherwise collide", () => {
-    const underscored = resolveForProfile("QA_Profile");
-    const dashed = resolveForProfile("qa-profile");
-
-    expect(underscored).not.toBe(dashed);
-    expect(path.basename(dashed)).toBe("openclaw-qa--profile-2026-07-22.log");
-  });
-
-  it("keeps escaped output distinct from a profile that resembles the encoding", () => {
-    const transformed = resolveForProfile("QA_Profile");
-    const lookalike = resolveForProfile("-1q-1a-0-1profile");
-
-    expect(transformed).not.toBe(lookalike);
+  it.each([
+    ["qa-profile", "openclaw-qa--profile-2026-07-22.log"],
+    ["-1q-1a-0-1profile", undefined],
+  ])("keeps QA_Profile distinct from %s", (profile, expected) => {
+    const other = resolveForProfile(profile);
+    expect(resolveForProfile("QA_Profile")).not.toBe(other);
+    if (expected) {
+      expect(path.basename(other)).toBe(expected);
+    }
   });
 
   it("bounds direct environment profiles that exceed the CLI length contract", () => {
@@ -65,29 +61,27 @@ describe("resolveConfiguredLogFilePath", () => {
   });
 });
 
-describe("profile rolling log families", () => {
-  it.each([
-    ["openclaw-dev-2026-07-22.log", "openclaw-dev-2026-07-23.log"],
-    ["openclaw-YYYY-MM-DD.log", "openclaw-2026-07-23.log"],
-  ])("advances %s while preserving its family", (before, after) => {
-    expect(
-      resolveRollingLogFilePathForDate(`/tmp/openclaw/${before}`, new Date(2026, 6, 23, 12)),
-    ).toBe(`/tmp/openclaw/${after}`);
-  });
+it.each([
+  ["openclaw-dev-2026-07-22.log", "openclaw-dev-2026-07-23.log"],
+  ["openclaw-YYYY-MM-DD.log", "openclaw-2026-07-23.log"],
+])("advances %s while preserving its family", (before, after) => {
+  expect(
+    resolveRollingLogFilePathForDate(`/tmp/openclaw/${before}`, new Date(2026, 6, 23, 12)),
+  ).toBe(`/tmp/openclaw/${after}`);
+});
 
-  it("keeps default and named profile fallback families separate", () => {
-    expect(
-      isSameRollingLogFileFamily("openclaw-dev-2026-07-22.log", "openclaw-dev-2026-07-21.log"),
-    ).toBe(true);
-    expect(
-      isSameRollingLogFileFamily("openclaw-dev-2026-07-22.log", "openclaw-2026-07-22.log"),
-    ).toBe(false);
-  });
+it("keeps default and named profile fallback families separate", () => {
+  expect(
+    isSameRollingLogFileFamily("openclaw-dev-2026-07-22.log", "openclaw-dev-2026-07-21.log"),
+  ).toBe(true);
+  expect(isSameRollingLogFileFamily("openclaw-dev-2026-07-22.log", "openclaw-2026-07-22.log")).toBe(
+    false,
+  );
+});
 
-  it("keeps legacy explicit dated paths rolling without broadening the override contract", () => {
-    expect(isLegacyRollingLogFilePath("openclaw-2026-07-22.log")).toBe(true);
-    expect(isLegacyRollingLogFilePath("openclaw-YYYY-MM-DD.log")).toBe(true);
-    expect(isLegacyRollingLogFilePath("openclaw-dev-2026-07-22.log")).toBe(false);
-    expect(isLegacyRollingLogFilePath("openclaw-configured.log")).toBe(false);
-  });
+it("keeps legacy explicit dated paths rolling without broadening the override contract", () => {
+  expect(isLegacyRollingLogFilePath("openclaw-2026-07-22.log")).toBe(true);
+  expect(isLegacyRollingLogFilePath("openclaw-YYYY-MM-DD.log")).toBe(true);
+  expect(isLegacyRollingLogFilePath("openclaw-dev-2026-07-22.log")).toBe(false);
+  expect(isLegacyRollingLogFilePath("openclaw-configured.log")).toBe(false);
 });
