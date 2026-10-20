@@ -7,6 +7,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
   resolveConfiguredModelRefMock,
@@ -60,14 +61,7 @@ describe("cron model provider preflight", () => {
     resetRunCronIsolatedAgentTurnHarness();
     resolveConfiguredModelRefMock.mockReturnValue({ provider: "ollama", model: "qwen3:32b" });
     resolveCronSessionMock.mockReturnValue(
-      makeCronSession({
-        sessionEntry: {
-          sessionId: "cron-session",
-          updatedAt: 0,
-          systemSent: false,
-          skillsSnapshot: undefined,
-        },
-      }),
+      makeCronSession({ sessionEntry: makeCronSessionEntry({ sessionId: "cron-session" }) }),
     );
     preflightCronModelProviderMock.mockResolvedValueOnce({
       status: "unavailable",
@@ -82,17 +76,13 @@ describe("cron model provider preflight", () => {
   it("continues with a reachable fallback and drops the unavailable model's auth profile", async () => {
     mockRunCronFallbackPassthrough();
     const result = await runPreflight(false);
-    expect(result.status).toBe("ok");
-    expect(result.provider).toBe("openrouter");
-    expect(result.model).toBe("nvidia/nemotron-3-super-120b-a12b:free");
+    const selected = { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" };
+    expect(result).toMatchObject({ status: "ok", ...selected });
     expect(preflightCronModelProviderMock.mock.calls.map((call) => call[0])).toMatchObject([
       { provider: "ollama", model: "qwen3:32b" },
-      { provider: "openrouter", model: "nvidia/nemotron-3-super-120b-a12b:free" },
+      selected,
     ]);
-    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openrouter",
-      model: "nvidia/nemotron-3-super-120b-a12b:free",
-    });
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]).toMatchObject(selected);
     expect(runWithModelFallbackMock.mock.calls[0]?.[0]).toMatchObject({
       fallbacksOverride: ["openai/gpt-5.4"],
     });

@@ -15,17 +15,24 @@ function bindingKeys(
   return resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId });
 }
 
-async function disableCronJobsBoundToSession(
-  params: Omit<Parameters<typeof disableCronJobsBoundToSessions>[0], "sessionKeys"> & {
-    sessionKey: string;
-  },
+async function disable(
+  jobs: CronStoredJob[],
+  updateWithPrecondition: Parameters<
+    typeof disableCronJobsBoundToSessions
+  >[0]["cron"]["updateWithPrecondition"],
+  defaultAgentId: string | null = "main",
 ): Promise<string[]> {
+  const sessionKey = "agent:main:cron:bound";
   const disabled = await disableCronJobsBoundToSessions({
-    cron: params.cron,
-    cfg: params.cfg,
-    sessionKeys: [params.sessionKey],
+    cron: {
+      list: async () => jobs,
+      updateWithPrecondition,
+      getDefaultAgentId: () => defaultAgentId ?? undefined,
+    },
+    cfg,
+    sessionKeys: [sessionKey],
   });
-  return disabled.get(params.sessionKey.trim()) ?? [];
+  return disabled.get(sessionKey) ?? [];
 }
 
 describe("resolveCronJobBoundSessionKeys", () => {
@@ -83,31 +90,16 @@ describe("disableCronJobsBoundToSession", () => {
       job({ id: "already-off", enabled: false, sessionKey: "cron:bound" }),
     ];
     const update = fakeUpdateWithPrecondition(() => jobs);
-    const disabled = await disableCronJobsBoundToSession({
-      cron: {
-        list: async () => jobs,
-        updateWithPrecondition: update,
-        getDefaultAgentId: () => "main",
-      },
-      cfg,
-      sessionKey: "agent:main:cron:bound",
-    });
+    const disabled = await disable(jobs, update);
     expect(disabled).toEqual(["bound", "created-here"]);
     expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
   });
 
   test("leaves ownerless jobs unchanged when no canonical default is configured", async () => {
-    const update = fakeUpdateWithPrecondition(() => [job({ id: "elsewhere" })]);
-    const disabled = await disableCronJobsBoundToSession({
-      cron: {
-        list: async () => [job({ id: "elsewhere" })],
-        updateWithPrecondition: update,
-        getDefaultAgentId: () => undefined,
-      },
-      cfg,
-      sessionKey: "agent:main:cron:elsewhere",
-    });
+    const jobs = [job({ id: "bound" })];
+    const update = fakeUpdateWithPrecondition(() => jobs);
+    const disabled = await disable(jobs, update, null);
     expect(disabled).toEqual([]);
     expect(update).not.toHaveBeenCalled();
   });
@@ -117,15 +109,7 @@ describe("disableCronJobsBoundToSession", () => {
     // The locked current job now targets a different session.
     const retargeted = [job({ id: "bound", sessionTarget: "session:agent:main:elsewhere" })];
     const update = fakeUpdateWithPrecondition(() => retargeted);
-    const disabled = await disableCronJobsBoundToSession({
-      cron: {
-        list: async () => listed,
-        updateWithPrecondition: update,
-        getDefaultAgentId: () => "main",
-      },
-      cfg,
-      sessionKey: "agent:main:cron:bound",
-    });
+    const disabled = await disable(listed, update);
     expect(disabled).toEqual([]);
     expect(update).toHaveBeenCalledTimes(1);
   });
@@ -134,17 +118,7 @@ describe("disableCronJobsBoundToSession", () => {
     const listed = [job({ id: "vanished", sessionKey: "cron:bound" }), job({ id: "bound" })];
     // "vanished" was removed concurrently; the fake only knows "bound".
     const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
-    await expect(
-      disableCronJobsBoundToSession({
-        cron: {
-          list: async () => listed,
-          updateWithPrecondition: update,
-          getDefaultAgentId: () => "main",
-        },
-        cfg,
-        sessionKey: "agent:main:cron:bound",
-      }),
-    ).rejects.toThrow(AggregateError);
+    await expect(disable(listed, update)).rejects.toThrow(AggregateError);
     expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
   });

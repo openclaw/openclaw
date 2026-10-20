@@ -38,7 +38,7 @@ import {
   waitForCronRunQueue,
 } from "./service/run-queue.js";
 import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
-import { createCronServiceState } from "./service/state.js";
+import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import * as cronStore from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -51,6 +51,49 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-run-queue-",
   fakeTimers: false,
 });
+
+function serviceDeps(storePath: string, overrides: Partial<CronServiceDeps> = {}): CronServiceDeps {
+  return {
+    scheduler: overrides.scheduler ?? createTestGatewayScheduler(),
+    nowMs: () => NOW,
+    storePath,
+    cronEnabled: true,
+    defaultAgentId: "main",
+    log: logger,
+    enqueueSystemEvent() {},
+    requestHeartbeat() {},
+    runIsolatedAgentJob: async () => ({ status: "ok" }),
+    ...overrides,
+  };
+}
+
+type StartupAdmission = Parameters<Parameters<typeof withAgentDatabaseStartupAdmission>[0]>[0];
+function deferAdmission(
+  admission: StartupAdmission,
+  env: NodeJS.ProcessEnv,
+  inspections: [string, Promise<OpenClawDatabaseSchemaPreflight>][],
+  reason: string,
+  isCurrent = () => true,
+) {
+  const refusals = admission.defer({
+    env,
+    reason,
+    inspections: inspections.map(([agentId, result]) => ({
+      target: { agentId, path: openOpenClawAgentDatabase({ agentId, env }).path },
+      result,
+    })),
+  });
+  recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
+  const lifetime = admission.adopt();
+  admission.activate({
+    isCurrent,
+    preparationReady: Promise.resolve(),
+    openAgent: async () => {},
+    migrateAgent: async () => {},
+    publishAgent: async () => {},
+  });
+  return { refusals, lifetime };
+}
 
 function commandJob(id: string, nextRunAtMs = NOW + 60_000): CronJob {
   return {
@@ -71,42 +114,21 @@ it("finishes cron initialization while missed command jobs await their agents", 
   await withAgentDatabaseStartupAdmission(async (admission) => {
     const env = { ...process.env };
     const inspections = jobs.map(() => createDeferred<OpenClawDatabaseSchemaPreflight>());
-    const refusals = admission.defer({
+    const { lifetime } = deferAdmission(
+      admission,
       env,
-      inspections: jobs.map((job, index) => ({
-        target: {
-          agentId: job.agentId,
-          path: openOpenClawAgentDatabase({ agentId: job.agentId, env }).path,
-        },
-        result: inspections[index]!.promise,
-      })),
-      reason: "synthetic missed command startup admission",
-    });
-    recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
-    const lifetime = admission.adopt();
-    admission.activate({
-      isCurrent: () => true,
-      preparationReady: Promise.resolve(),
-      openAgent: async () => {},
-      migrateAgent: async () => {},
-      publishAgent: async () => {},
-    });
+      jobs.map((job, index) => [job.agentId, inspections[index]!.promise]),
+      "synthetic missed command startup admission",
+    );
     const finished = createFinishedBarrier();
     const laterFinished = finished.waitForOk("later-ready");
     const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
-    const { cron, state } = createCronServiceWithStateForTest({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => NOW,
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      log: logger,
-      enqueueSystemEvent() {},
-      requestHeartbeat() {},
-      runIsolatedAgentJob: async () => ({ status: "ok" }),
-      runCommandJob,
-      onEvent: finished.onEvent,
-    });
+    const { cron, state } = createCronServiceWithStateForTest(
+      serviceDeps(storePath, {
+        runCommandJob,
+        onEvent: finished.onEvent,
+      }),
+    );
     const receipts = () =>
       runOpenClawStateWriteTransaction(({ db }) =>
         db
@@ -168,52 +190,29 @@ it.for(["manual", "scheduled"] as const)(
         ...process.env,
         OPENCLAW_STATE_DIR: path.join(path.dirname(storePath), "admission-state"),
       };
-      const refusal = admission.defer({
+      const { refusals: refusal, lifetime } = deferAdmission(
+        admission,
         env,
-        inspections: [
-          {
-            target: {
-              agentId: "preparing",
-              path: openOpenClawAgentDatabase({ agentId: "preparing", env }).path,
-            },
-            result: inspection.promise,
-          },
-        ],
-        reason: "synthetic queued startup admission",
-      });
-      recordAgentDatabaseAdmissions(refusal, { env, source: "startup" });
-      const lifetime = admission.adopt();
-      admission.activate({
-        isCurrent: () => true,
-        preparationReady: Promise.resolve(),
-        openAgent: async () => {},
-        migrateAgent: async () => {},
-        publishAgent: async () => {},
-      });
+        [["preparing", inspection.promise]],
+        "synthetic queued startup admission",
+      );
       const healthyStarted = createDeferred();
       const healthyRelease = createDeferred();
       const ran: string[] = [];
-      const { cron, state } = createCronServiceWithStateForTest({
-        env,
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => NOW,
-        storePath,
-        cronEnabled: true,
-        defaultAgentId: "main",
-        log: logger,
-        enqueueSystemEvent() {},
-        requestHeartbeat() {},
-        isAgentAvailable: (agentId) => !readAgentDatabaseAdmissionRefusal(agentId, { env }),
-        runIsolatedAgentJob: async () => ({ status: "ok" }),
-        runCommandJob: async ({ job }) => {
-          ran.push(job.id);
-          if (job.id === healthyJob.id) {
-            healthyStarted.resolve();
-            await healthyRelease.promise;
-          }
-          return { status: "ok" };
-        },
-      });
+      const { cron, state } = createCronServiceWithStateForTest(
+        serviceDeps(storePath, {
+          env,
+          isAgentAvailable: (agentId) => !readAgentDatabaseAdmissionRefusal(agentId, { env }),
+          runCommandJob: async ({ job }) => {
+            ran.push(job.id);
+            if (job.id === healthyJob.id) {
+              healthyStarted.resolve();
+              await healthyRelease.promise;
+            }
+            return { status: "ok" };
+          },
+        }),
+      );
       try {
         const requests =
           source === "manual"
@@ -279,29 +278,14 @@ it.for([
     await withAgentDatabaseStartupAdmission(async (admission) => {
       const env = { ...process.env };
       const inspection = createDeferred<OpenClawDatabaseSchemaPreflight>();
-      const refusals = admission.defer({
-        env,
-        inspections: [
-          {
-            target: {
-              agentId: job.agentId,
-              path: openOpenClawAgentDatabase({ agentId: job.agentId, env }).path,
-            },
-            result: inspection.promise,
-          },
-        ],
-        reason: "synthetic slow startup",
-      });
-      recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
-      const lifetime = admission.adopt();
       let ownsPreparation = true;
-      admission.activate({
-        isCurrent: () => ownsPreparation,
-        preparationReady: Promise.resolve(),
-        openAgent: async () => {},
-        migrateAgent: async () => {},
-        publishAgent: async () => {},
-      });
+      const { lifetime } = deferAdmission(
+        admission,
+        env,
+        [[job.agentId, inspection.promise]],
+        "synthetic slow startup",
+        () => ownsPreparation,
+      );
       const observed = createDeferred();
       const waitForPreparation = admission.waitForAgentPreparation.bind(admission);
       vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((id, options) => {
@@ -310,18 +294,9 @@ it.for([
         return waiting;
       });
       const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
-      const { cron, state } = createCronServiceWithStateForTest({
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => NOW,
-        storePath,
-        cronEnabled: true,
-        defaultAgentId: "main",
-        log: logger,
-        enqueueSystemEvent() {},
-        requestHeartbeat() {},
-        runIsolatedAgentJob: async () => ({ status: "ok" }),
-        runCommandJob,
-      });
+      const { cron, state } = createCronServiceWithStateForTest(
+        serviceDeps(storePath, { runCommandJob }),
+      );
       try {
         const [request] = await commitCronRunRequests(state, [job], {
           source: "manual",
@@ -422,19 +397,7 @@ it.for(["complete", "cancel", "lost-result"] as const)(
       }
       return { status: "ok" as const };
     });
-    const createService = () =>
-      new CronService({
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => NOW,
-        storePath,
-        cronEnabled: true,
-        defaultAgentId: "main",
-        log: logger,
-        enqueueSystemEvent() {},
-        requestHeartbeat() {},
-        runIsolatedAgentJob: async () => ({ status: "ok" }),
-        runCommandJob,
-      });
+    const createService = () => new CronService(serviceDeps(storePath, { runCommandJob }));
     const cron = createService();
     const sibling = createService();
     const controller = new AbortController();
@@ -509,22 +472,15 @@ it("keeps owned running work out of recovery and queue database polling", async 
   const entered = createDeferred();
   const release = createDeferred();
   await saveCronStore(storePath, { version: 1, jobs: [job] });
-  const { cron, state } = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => NOW,
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: logger,
-    enqueueSystemEvent() {},
-    requestHeartbeat() {},
-    runIsolatedAgentJob: async () => ({ status: "ok" }),
-    runCommandJob: async () => {
-      entered.resolve();
-      await release.promise;
-      return { status: "ok" };
-    },
-  });
+  const { cron, state } = createCronServiceWithStateForTest(
+    serviceDeps(storePath, {
+      runCommandJob: async () => {
+        entered.resolve();
+        await release.promise;
+        return { status: "ok" };
+      },
+    }),
+  );
   let completion: Promise<unknown> | undefined;
   let restoreLoads: (() => void) | undefined;
   try {
@@ -582,18 +538,9 @@ it("joins a running job before restarting after scheduler cleanup fails", async 
     await release.promise;
     return { status: "ok" as const };
   });
-  const { cron, state } = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => NOW,
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: logger,
-    enqueueSystemEvent() {},
-    requestHeartbeat() {},
-    runIsolatedAgentJob: async () => ({ status: "ok" }),
-    runCommandJob,
-  });
+  const { cron, state } = createCronServiceWithStateForTest(
+    serviceDeps(storePath, { runCommandJob }),
+  );
   const pending: Array<Promise<unknown>> = [];
   let restoreStop: (() => void) | undefined;
   try {
@@ -639,18 +586,12 @@ it("force-runs a disabled job while scheduling is paused without consuming its p
   job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
   const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
   await saveCronStore(storePath, { version: 1, jobs: [job] });
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => NOW,
-    storePath,
-    cronEnabled: false,
-    defaultAgentId: "main",
-    log: logger,
-    enqueueSystemEvent() {},
-    requestHeartbeat() {},
-    runIsolatedAgentJob: async () => ({ status: "ok" }),
-    runCommandJob,
-  });
+  const cron = new CronService(
+    serviceDeps(storePath, {
+      cronEnabled: false,
+      runCommandJob,
+    }),
+  );
   try {
     cron.pauseScheduling();
     expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
@@ -723,18 +664,14 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   });
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
   const createService = () =>
-    createCronServiceWithStateForTest({
-      scheduler: createTestGatewayScheduler(clock.clock),
-      nowMs: clock.clock.now,
-      storePath,
-      cronEnabled: true,
-      defaultAgentId: "main",
-      log: logger,
-      enqueueSystemEvent() {},
-      requestHeartbeat() {},
-      runCommandJob,
-      runIsolatedAgentJob,
-    });
+    createCronServiceWithStateForTest(
+      serviceDeps(storePath, {
+        scheduler: createTestGatewayScheduler(clock.clock),
+        nowMs: clock.clock.now,
+        runCommandJob,
+        runIsolatedAgentJob,
+      }),
+    );
   const { cron, state } = createService();
   const { cron: sibling } = createService();
   sibling.pauseScheduling();
@@ -885,18 +822,7 @@ it("retires a stale markerless receipt at startup so the job can run again", asy
     );
   expect(readOldReceipt()).toEqual({ receipt_id: receiptId, status: "running" });
   const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
-  const cron = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => NOW,
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: logger,
-    enqueueSystemEvent() {},
-    requestHeartbeat() {},
-    runIsolatedAgentJob: async () => ({ status: "ok" }),
-    runCommandJob,
-  });
+  const cron = new CronService(serviceDeps(storePath, { runCommandJob }));
   try {
     await cron.start();
     expect(readOldReceipt()).toEqual({ receipt_id: receiptId, status: "interrupted" });
@@ -939,20 +865,15 @@ it("contains recovered scheduled launch failures without an unhandled rejection"
   expect(requested.accepted).toHaveLength(1);
   const failure = new Error("scheduler owner is retired");
   const scheduler = createTestGatewayScheduler();
-  const state = createCronServiceState({
-    scheduler,
-    nowMs: () => NOW,
-    storePath,
-    cronEnabled: true,
-    defaultAgentId: "main",
-    log: logger,
-    enqueueSystemEvent() {},
-    requestHeartbeat() {},
-    runSchedulerOwned: async () => {
-      throw failure;
-    },
-    runIsolatedAgentJob: async () => ({ status: "ok" }),
-  });
+  const state = createCronServiceState(
+    serviceDeps(storePath, {
+      scheduler,
+      runSchedulerOwned: async () => {
+        throw failure;
+      },
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
+    }),
+  );
   // Durable requests survive restart; this new owner has no caller completion to observe.
   state.store = await loadCronStore(storePath);
   const unhandled: unknown[] = [];

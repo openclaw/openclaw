@@ -118,15 +118,20 @@ async function createFixture() {
   return { cron: createCron(), createCron, sessionStorePath, read, write };
 }
 
-function addJob(cron: CronService, id: string, enabled = true) {
+function addJob(
+  cron: CronService,
+  id: string,
+  overrides: Partial<Parameters<CronService["add"]>[0]> = {},
+) {
   return cron.add({
     id,
     name: id,
-    enabled,
+    enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "work" },
+    ...overrides,
   });
 }
 
@@ -143,7 +148,7 @@ describe("CronService.remove session cleanup", () => {
 
   it("does not materialize a session database when the deleted job never ran", async () => {
     const { cron, sessionStorePath } = await createFixture();
-    const job = await addJob(cron, "never-ran", false);
+    const job = await addJob(cron, "never-ran", { enabled: false });
     const sessionKey = `agent:main:cron:${job.id}`;
     const databasePath = resolveSqliteScope({
       agentId: "main",
@@ -203,19 +208,13 @@ describe("CronService.remove session cleanup", () => {
 
     const removal = cron.remove(job.id);
     let unrelatedAdded = false;
-    const unrelatedAdd = cron
-      .add({
-        id: "unrelated-during-session-cleanup",
-        name: "unrelated during session cleanup",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 120_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "unrelated" },
-      })
-      .then(() => {
-        unrelatedAdded = true;
-      });
+    const unrelatedAdd = addJob(cron, "unrelated-during-session-cleanup", {
+      name: "unrelated during session cleanup",
+      schedule: { kind: "every", everyMs: 120_000 },
+      payload: { kind: "agentTurn", message: "unrelated" },
+    }).then(() => {
+      unrelatedAdded = true;
+    });
 
     try {
       await unrelatedAdd;
@@ -231,7 +230,7 @@ describe("CronService.remove session cleanup", () => {
 
   it("reports failed session cleanup after removal and preserves the session for retry", async () => {
     const { cron, read, write } = await createFixture();
-    const job = await addJob(cron, "cleanup-transport-failure", false);
+    const job = await addJob(cron, "cleanup-transport-failure", { enabled: false });
     const sessionKey = `agent:main:cron:${job.id}`;
     await write(sessionKey, "transport-session");
     gatewayTestState.callGateway.mockRejectedValueOnce(new Error("Gateway disconnected"));
@@ -281,13 +280,8 @@ describe("CronService.remove session cleanup", () => {
   it("fences same-id replacement across services sharing one store", async () => {
     const { cron: removingCron, createCron, read, write } = await createFixture();
     const replacementCron = createCron();
-    const original = await removingCron.add({
-      id: "cross-service-reused-id",
+    const original = await addJob(removingCron, "cross-service-reused-id", {
       name: "original job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "original" },
     });
     const sessionKey = `agent:main:cron:${original.id}`;
@@ -296,20 +290,14 @@ describe("CronService.remove session cleanup", () => {
 
     await removingCron.remove(original.id);
     let replacementAdded = false;
-    const replacementPromise = replacementCron
-      .add({
-        id: original.id,
-        name: "replacement job",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 120_000 },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "replacement" },
-      })
-      .then((job) => {
-        replacementAdded = true;
-        return job;
-      });
+    const replacementPromise = addJob(replacementCron, original.id, {
+      name: "replacement job",
+      schedule: { kind: "every", everyMs: 120_000 },
+      payload: { kind: "agentTurn", message: "replacement" },
+    }).then((job) => {
+      replacementAdded = true;
+      return job;
+    });
     await replacementCron.status();
     expect(replacementAdded).toBe(false);
 
@@ -327,13 +315,9 @@ describe("CronService.remove session cleanup", () => {
 
   it("does not delete a shared main session", async () => {
     const { cron, read, write } = await createFixture();
-    const job = await cron.add({
-      id: "main-session-job",
+    const job = await addJob(cron, "main-session-job", {
       name: "main session job",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "work" },
     });
     const sessionKey = "agent:main:main";

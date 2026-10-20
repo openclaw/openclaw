@@ -28,18 +28,14 @@ export function makeDeps(): CliDeps {
   };
 }
 
-function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: boolean }>) {
+function mockEmbeddedTexts(texts: string[]) {
   vi.mocked(runEmbeddedAgent).mockResolvedValue({
-    payloads,
+    payloads: texts.map((text) => ({ text })),
     meta: {
       durationMs: 5,
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
     },
   });
-}
-
-function mockEmbeddedTexts(texts: string[]) {
-  mockEmbeddedPayloads(texts.map((text) => ({ text })));
 }
 
 export function mockEmbeddedOk() {
@@ -51,11 +47,6 @@ export async function readCronSessionEntry(storePath: string, key: string) {
 }
 
 export const DEFAULT_MESSAGE = "do it";
-const DEFAULT_SESSION_KEY = "cron:job-1";
-const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
-  kind: "agentTurn",
-  message: DEFAULT_MESSAGE,
-};
 
 type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
@@ -90,7 +81,10 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
     mockEmbeddedTexts(options.mockTexts ?? ["ok"]);
   }
 
-  const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
+  const jobPayload: CronJob["payload"] = options.jobPayload ?? {
+    kind: "agentTurn",
+    message: DEFAULT_MESSAGE,
+  };
   const res = await runCronIsolatedAgentTurn({
     deliveryAttemptFence: null,
     cfg,
@@ -101,7 +95,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
     },
     message:
       options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
-    sessionKey: options.sessionKey ?? DEFAULT_SESSION_KEY,
+    sessionKey: options.sessionKey ?? "cron:job-1",
     lane: "cron",
   });
 
