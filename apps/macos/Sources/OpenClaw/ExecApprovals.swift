@@ -41,10 +41,6 @@ enum ExecApprovalDecision: String, Codable, Equatable {
     case deny
 }
 
-enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable {
-    case empty
-}
-
 struct ExecAllowlistUse: Sendable {
     let match: ExecAllowlistEntry
     let resolvedPath: String?
@@ -60,14 +56,24 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
     }
 }
 
-enum ExecApprovalsMutationError: Error, Equatable, Sendable {
-    case invalidPattern(ExecAllowlistPatternValidationReason)
-    case unavailable
+enum ExecApprovalsMutationError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
 }
 
-enum ExecApprovalsReadError: Error, Equatable, Sendable {
-    case migrationRequired(ExecApprovalsLegacyMigrationRequiredError)
-    case unavailable
+enum ExecApprovalsReadError: Error, LocalizedError, Equatable, Sendable {
+    case unavailable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unavailable(diagnostic): diagnostic
+        }
+    }
 }
 
 struct ExecApprovalsResolved: Sendable {
@@ -76,6 +82,7 @@ struct ExecApprovalsResolved: Sendable {
     let agent: ExecApprovalsResolvedDefaults
     let allowlist: [ExecAllowlistEntry]
     var file: ExecApprovalsFile
+    var unavailableReason: String?
 }
 
 struct ExecApprovalsResolvedDefaults: Codable, Sendable {

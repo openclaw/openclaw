@@ -25,12 +25,7 @@ import {
   updateCronJobsFilter,
   validateCronForm,
 } from "../../lib/cron/index.ts";
-import {
-  loadCronRuns,
-  loadCronRunsForJob,
-  loadMoreCronRuns,
-  updateCronRunsFilter,
-} from "../../lib/cron/runs.ts";
+import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -51,11 +46,13 @@ import {
 } from "./delivery-conversations.ts";
 import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
-import type { CronActions, CronDetailTab, CronListTab } from "./page-types.ts";
 import { createCronRouteSelection, resolveCronRouteData } from "./route-model.ts";
 import { createCronRunTranscript } from "./run-transcript.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
+
+type CronListTab = "tasks" | "activity";
+type CronDetailTab = "settings" | "history";
 
 /** Owns page presentation; cron admission and mutation chains remain synchronous. */
 export function createCronPage(context: () => ApplicationContext, host: () => HTMLElement) {
@@ -666,7 +663,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       if (editing) {
         return;
       }
-      if (runNow && result.jobId) {
+      if (runNow) {
         // Explicit create-and-run intent survives navigation while saving.
         await runCronJob(cronState, result.jobId, "force");
       }
@@ -692,7 +689,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onOpenCreate: openCreate,
     onClosePanel: closePanel,
     onClone: cloneJob,
-    onToggle: (job, enabled) => {
+    onToggle: (job: CronJob, enabled: boolean) => {
       const scope = gateway.capture();
       const editorGeneration = deliveryDirectory.generation;
       runCronAdminTask(async (cronState) => {
@@ -700,7 +697,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         deliveryDirectory.reconcileRoute(cronState, scope, editorGeneration);
       });
     },
-    onRun: (job, mode) =>
+    onRun: (job: CronJob, mode?: "force" | "due") =>
       runCronAdminTask((cronState) => runCronJob(cronState, job.id, mode ?? "force")),
     onRemove: removeJob,
     onLoadMoreJobs: () =>
@@ -716,8 +713,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         cronJobsSortBy: "nextRunAtMs",
         cronJobsSortDir: "asc",
       }),
-    onLoadMoreRuns: () => void runCronTask((cronState) => loadMoreCronRuns(cronState)),
-    onRunsFiltersChange: (patch) =>
+    onLoadMoreRuns: () =>
+      void runCronTask((cronState) => loadCronRuns(cronState, { append: true })),
+    onRunsFiltersChange: (patch: Parameters<typeof updateCronRunsFilter>[1]) =>
       void runCronTask(async (cronState) => {
         updateCronRunsFilter(cronState, patch);
         if (patch.cronRunsRunId !== undefined && cronState.cronEditingJob) {
@@ -725,8 +723,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
         await loadCronRuns(cronState);
       }),
-    onViewRunTranscript: (entry, trigger) => void runTranscript.open(entry, trigger),
-  } satisfies CronActions;
+    onViewRunTranscript: (entry: CronRunLogEntry, trigger: HTMLButtonElement) =>
+      void runTranscript.open(entry, trigger),
+  };
   return {
     context,
     inventories: { agents, channels, runtimeConfig },

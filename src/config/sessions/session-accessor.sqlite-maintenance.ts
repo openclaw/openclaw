@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChildLogger } from "../../logging/logger.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
@@ -243,12 +244,7 @@ function buildSessionMaintenanceBatches(params: {
     groupsByRoot.set(root, group);
   }
 
-  const plansBySessionId = new Map<string, SessionStateDeletePlan[]>();
-  for (const plan of params.stateDeletePlans) {
-    const plans = plansBySessionId.get(plan.sessionId) ?? [];
-    plans.push(plan);
-    plansBySessionId.set(plan.sessionId, plans);
-  }
+  const plansBySessionId = groupRecords(params.stateDeletePlans, (plan) => plan.sessionId);
   const standaloneGroups: SessionMaintenanceBatch[] = [];
   for (const [sessionId, plans] of plansBySessionId) {
     const removalIndex = removalIndexBySessionId.get(sessionId);

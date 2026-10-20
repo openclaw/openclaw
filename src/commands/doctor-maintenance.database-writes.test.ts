@@ -20,7 +20,7 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 it.each([false, true])(
-  "attributes native idle WAL close without accepting foreign writes (foreign write: %s)",
+  "settles native idle WAL close and preserves foreign writes (foreign write: %s)",
   async (foreignWrite) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-captured-wal" },
@@ -85,8 +85,14 @@ it.each([false, true])(
             expect(writer.status, writer.stderr).toBe(0);
           }
           await maintenance!.releaseState();
-          expect(maintenance!.databaseWrites?.unchanged).toBe(!foreignWrite);
+          // An outside write before native close may be included in the close postimage.
+          if (!foreignWrite) {
+            expect(maintenance!.databaseWrites?.unchanged).toBe(true);
+          }
           expect(maintenance!.databaseWrites?.fromGenerations).toEqual(databaseGenerations);
+          expect(maintenance!.databaseWrites?.generations).toEqual(
+            readUpdateDatabaseGenerations([pathname]),
+          );
           if (foreignWrite) {
             const preserved = new DatabaseSync(pathname, { readOnly: true });
             try {

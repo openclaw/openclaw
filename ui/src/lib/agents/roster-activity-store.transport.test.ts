@@ -51,7 +51,7 @@ function fixture() {
         : request.method === "sessions.list"
           ? snapshot("", false, [])
           : request.method === "sessions.groups.list"
-            ? { names: [], sectionOrder: [] }
+            ? { groups: [], sectionOrder: [] }
             : undefined;
     if (payload === undefined) {
       throw new Error(`Unexpected RPC: ${request.method}`);

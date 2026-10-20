@@ -33,10 +33,7 @@ import {
 import { readArtifactBase64Payload } from "./server-methods/artifacts-base64.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import {
-  resolveLocalSessionWorkspaceRoot,
-  withSessionFileRoot,
-} from "./server-methods/sessions-files.js";
+import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createWorkspaceUploadBatch } from "./server-methods/workspace-fs.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
@@ -513,29 +510,23 @@ export function createMcpAppWorkspaceUploadProvider(params: {
               throw new Error("Form upload session generation changed");
             }
           }
-          if (
-            resolveLocalSessionWorkspaceRoot({
-              ...params,
-              source: {
-                entry: metadata
-                  ? metadata.readCurrent()
-                  : readRetainedSessionEntryFacts(
-                      {
-                        agentId: loaded.readSource?.agentId ?? params.agentId,
-                        path: loaded.readSource?.path ?? loaded.storePath,
-                      },
-                      {
-                        sessionKeys: [loaded.canonicalKey],
-                        projection: "exact",
-                        snapshotFields: [],
-                      },
-                    )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry,
-                cfg: request.options.context.getRuntimeConfig(),
-              },
-            }) !== params.workspaceDir
-          ) {
+          const current = metadata
+            ? metadata.readCurrent()
+            : readRetainedSessionEntryFacts(
+                {
+                  agentId: loaded.readSource?.agentId ?? params.agentId,
+                  path: loaded.readSource?.path ?? loaded.storePath,
+                },
+                {
+                  sessionKeys: [loaded.canonicalKey],
+                  projection: "exact",
+                  snapshotFields: ["skillsSnapshot"],
+                },
+              )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
+          if (!current || current.execNode || loaded.root !== params.workspaceDir) {
             throw new Error("Form upload workspace authority changed");
           }
+          loaded.fileWorkspace?.assertCurrent(request.options.context.getRuntimeConfig(), current);
         };
         const files = request.files.map((file) => {
           if (

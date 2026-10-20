@@ -53,10 +53,8 @@ export type WhatsAppQaMessageScenarioContext = {
   gateway: WhatsAppQaGatewayRuntime;
   gatewayTarget: string;
   gatewayWorkspaceDir: string;
-  recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
   scenarioId: string;
-  scenarioTitle: string;
   sent: { messageId?: string };
   sutAccountId: string;
   sutPhoneE164: string;
@@ -183,10 +181,3 @@ export type WhatsAppQaScenarioMetadata = {
   timeoutMs: number;
   title: string;
 };
-
-export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage {
-  approvalState?: "pending" | "resolved";
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
-}

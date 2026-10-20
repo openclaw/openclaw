@@ -638,7 +638,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
     });
-    const churn = reconcileToolCallExecutionParams(sessionState, {
+    const active = reconcileToolCallExecutionParams(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
@@ -650,7 +650,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,
-      active: churn.active,
+      active,
     });
   } catch (err) {
     log.warn(

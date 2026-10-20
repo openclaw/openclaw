@@ -9,7 +9,6 @@ import type {
   CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
-  CronRunsStatusFilter,
   CronRunsStatusValue,
   CronSortDir,
   CronStatus,
@@ -147,7 +146,6 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsScope: CronRunScope;
   cronRunsStatuses: CronRunsStatusValue[];
   cronRunsDeliveryStatuses: CronDeliveryStatus[];
-  cronRunsStatusFilter: CronRunsStatusFilter;
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;

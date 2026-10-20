@@ -4,8 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { parseCustomId } from "./components.base.js";
-import { Button, StringSelectMenu } from "./components.message.js";
+import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
@@ -54,19 +53,19 @@ describe("ComponentRegistry", () => {
   });
 
   it("resolves wildcard parser entries by component type", () => {
-    const registry = new ComponentRegistry<Button | StringSelectMenu>();
-    class WildcardButton extends Button {
-      label = "button";
-      customId = "__button_wildcard__";
-      override customIdParser = wildcardParser(this.customId);
-    }
-    class WildcardSelect extends StringSelectMenu {
-      customId = "__select_wildcard__";
-      options = [];
-      override customIdParser = wildcardParser(this.customId);
-    }
-    const button = new WildcardButton();
-    const select = new WildcardSelect();
+    const registry = new ComponentRegistry<BaseMessageInteractiveComponent>();
+    const button = {
+      type: ComponentType.Button,
+      customId: "__button_wildcard__",
+      customIdParser: wildcardParser("__button_wildcard__"),
+      run() {},
+    };
+    const select = {
+      type: ComponentType.StringSelect,
+      customId: "__select_wildcard__",
+      customIdParser: wildcardParser("__select_wildcard__"),
+      run() {},
+    };
 
     registry.register(button);
     registry.register(select);

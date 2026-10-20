@@ -1,6 +1,7 @@
 import { log } from "@clack/prompts";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -47,13 +48,9 @@ type FormatMode = "preview" | "result";
 
 function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   const lines: string[] = [];
-  const buckets = new Map<string, MigrationItem[]>();
-  for (const item of plan.items) {
-    const kind = KNOWN_KINDS.has(item.kind) ? item.kind : "other";
-    const items = buckets.get(kind) ?? [];
-    items.push(item);
-    buckets.set(kind, items);
-  }
+  const buckets = groupRecords(plan.items, (item) =>
+    KNOWN_KINDS.has(item.kind) ? item.kind : "other",
+  );
   for (const group of [...ITEM_GROUPS, { kind: "other", heading: "Other:" }]) {
     const items = buckets.get(group.kind);
     if (!items || items.length === 0) {

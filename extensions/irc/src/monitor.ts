@@ -435,27 +435,6 @@ export async function monitorIrcProvider(
         },
       });
 
-      const ingressState: {
-        handoff: "none" | "adopted" | "deferred" | "abandoned";
-      } = { handoff: "none" };
-      const trackedIngressLifecycle = turnAdoptionLifecycle
-        ? {
-            ...turnAdoptionLifecycle,
-            onAdopted: async () => {
-              ingressState.handoff = "adopted";
-              await turnAdoptionLifecycle.onAdopted();
-            },
-            onDeferred: () => {
-              ingressState.handoff = "deferred";
-              turnAdoptionLifecycle.onDeferred();
-            },
-            onAbandoned: async () => {
-              ingressState.handoff = "abandoned";
-              await turnAdoptionLifecycle.onAbandoned();
-            },
-          }
-        : undefined;
-
       await core.channel.inbound.dispatch({
         cfg,
         channel: CHANNEL_ID,
@@ -472,9 +451,7 @@ export async function monitorIrcProvider(
         },
         replyPipeline: {},
         replyOptions: {
-          ...(trackedIngressLifecycle
-            ? bindIngressLifecycleToReplyOptions(trackedIngressLifecycle)
-            : {}),
+          ...bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle),
           skillFilter: groupMatch.groupConfig?.skills,
           disableBlockStreaming:
             typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
@@ -485,22 +462,7 @@ export async function monitorIrcProvider(
           },
         },
       });
-
-      if (turnAdoptionLifecycle?.abortSignal.aborted && ingressState.handoff === "none") {
-        return {
-          kind: "failed-retryable",
-          error: turnAdoptionLifecycle.abortSignal.reason,
-        };
-      }
-      if (turnAdoptionLifecycle && ingressState.handoff === "none") {
-        // Terminal core no-dispatch/gate: settle the claim instead of leaving it
-        // watchdog-held. Reply-lane adoption remains the normal completion path.
-        await turnAdoptionLifecycle.onAdopted();
-        ingressState.handoff = "adopted";
-      }
-      return ingressState.handoff === "deferred" || ingressState.handoff === "abandoned"
-        ? { kind: "deferred" }
-        : { kind: "completed" };
+      return undefined;
     },
   });
 

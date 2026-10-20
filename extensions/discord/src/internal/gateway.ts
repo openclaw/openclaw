@@ -459,8 +459,4 @@ export class GatewayPlugin implements GatewayPluginContract {
   updateVoiceState(data: GatewayVoiceStateUpdateData): void {
     this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data }, true);
   }
-
-  getRateLimitStatus() {
-    return this.outboundLimiter.getStatus();
-  }
 }

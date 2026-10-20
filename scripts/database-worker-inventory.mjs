@@ -237,7 +237,7 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence:
-        "Participant rows serve workers and deprecated resolveMemorySessionTargets, but also generic entry decoding through entry-current-check's native source-authority fallback. This shared kernel is neither worker-only nor deprecated-only.",
+        "prepareSqliteSessionEntryRowDecoder in session-accessor.sqlite-entry-read.ts serves generic entry decoding as well as workers and deprecated resolveMemorySessionTargets. Its native/callback closure is not proven worker-only or deprecated-only; retain T1 for this shared participant kernel.",
     },
   ],
   [
@@ -316,7 +316,7 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence:
-        "Async registry reads use the session actor or session-transcript.worker.ts. selectConversationRows remains native for deprecated SDK getConversationSession and session-entry-current-check.ts's retained synchronous conversation-bound source assertion; do not classify the shared read as worker-only.",
+        "selectConversationRows is reachable only from resolveCurrentConversationSession, whose only bundled caller is deprecated SDK getConversationSession. Async registry reads use the session actor or session-transcript.worker.ts; session-entry-current-check.ts consumes captureConversationBindingFacts.",
     },
   ],
   [
@@ -324,7 +324,7 @@ const reviewed = new Map([
     {
       priority: 99,
       evidence:
-        "session-transcript.worker.ts and session-source-predicate.worker.ts read conversation rows in workers; conversation-registry.ts and entry-mutation.ts retain deprecated SDK and borrowed transaction callers; incognito reads memory actor state. The shared query remains mixed.",
+        "selectConversationRowsFromDatabase serves transcript workers and deprecated SDK getConversationSession, but also session-accessor.sqlite-entry-mutation.ts's resolveConversationInDatabase and readSessionSourceValidation. client-voice-session-source.ts and client-voice-session-write.ts still invoke that validator natively for opaque source predicates; published voice authority does not make the shared query worker-only.",
     },
   ],
   [
@@ -441,6 +441,13 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
+      {
+        tier: "W",
+        operations: ["loadTranscriptReadSnapshotSync"],
+        binding: "result",
+        evidence:
+          "Only captureAuthoritativeMemoryEvents supplies readOnly: true, through readSessionMemoryCapture dispatched by session-history-read-operation.worker.ts or openclaw-agent-execution-operations.ts. Native SessionManager open/reload, loadTranscriptEventsSync, and transcript-commit.kernel.ts omit this option and return before this opener; their shared SQL remains T1.",
+      },
       {
         tier: "W",
         operations: [
@@ -2001,6 +2008,13 @@ const reviewedOperations = new Map([
   [
     "src/state/agent-deletion-journal.ts",
     [
+      {
+        tier: "T2",
+        operations: ["readAgentDeletionPathFenceRows"],
+        binding: "rows",
+        evidence:
+          "Native SQL is limited to openclaw-agent-db lease/schema/registry admission and Doctor journal restore/quarantine. Agent event guards without an explicit database consume published owner facts. Explicit-database deletion/recovery and Cron availability callers execute in their existing workers.",
+      },
       {
         tier: "W",
         operations: [
@@ -3971,7 +3985,7 @@ function render(rows) {
     "",
     "Reviewed mixed modules classify calls by their named lexical operation path, optionally narrowed to a variable initializer or an exact synchronous guard. These qualifiers exclude nested function bodies, and a guard applies only to its then-branch, so unrelated sites remain conservative even when source lines move. Other file tiers retain the broadest applicable counted exposure, including explicit worker/maintenance mixtures. Each file has at most one row per tier; tier file counts overlap, while total files and call expressions are unique. These are not measured runtime call counts. Recheck the operation and all registered callers before changing its classification. Maintenance invoked by Gateway timers remains T1. Prepared results never confer current authority; follow [worker access](/reference/database-schemas/worker-access).",
     "",
-    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle and conversation-bound final-effect authority checks remain native residuals. Memory actor category reads use prepared catalog facts; native approval SDK compatibility retains its existing classification. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
+    "Canonical-repair mutations and exact-row readers retain T2 for native Doctor callers; Gateway legacy-main detection compares entries and transcript content in the existing session reader worker. Full generation and node-artifact custody fingerprints remain Doctor-only. Shared cleanup kernels retain T1 where released opaque SDK callbacks require native transactions; initialization rollback uses the worker's commit finalizer. Synchronous lifecycle checks and opaque source validators remain native residuals; conversation-bound final effects consume published binding facts. Memory actor category reads use prepared catalog facts; native approval SDK compatibility retains its existing classification. Claw provenance's counted writes are CLI-only; its raw Gateway reads remain runtime debt outside the five-primitive scan. Likewise, worker-only direct Cron receipt calls do not classify the host current-authority reads they transitively expose. Reclassification corrects metadata; it does not move runtime SQL or demonstrate a speedup.",
     "",
     "The scan covers JavaScript/TypeScript files under `src/`, `extensions/`, `packages/`, and `scripts/` as selected by `rg` (respecting ignore rules). It recognizes direct calls, property calls with these names, and named-import aliases. It does not resolve higher-order aliases, dynamic dispatch, transitive wrappers, direct `DatabaseSync` methods, other query primitives, or native-language SQLite. It is a reproducible migration queue, not a complete prohibition checker. Tests are deliberately excluded rather than counted as T3.",
     "",
@@ -4005,7 +4019,7 @@ function render(rows) {
     "",
     "The history cutover leaves selected/current session entries, the retained transcript-session key, and lazy subagent source/run-input visibility reads as native work. Ordinary full pages and raw cursor deltas use the history worker. Pending-input source and receipt reads also use workers; synchronous SDK completion remains a separate native path. Bound Claude CLI history now uses its temporary merge index: cold preparation scans bounded source windows, and page/anchor requests project only selected messages. Incognito history comes from the session actor memory backend, which never opens SQLite or uses a database worker. Its CLI-history adapter uses the same matching policy over an in-memory display index. A failed durable worker read never selects the memory backend.",
     "",
-    "Durable session reaction summaries and target-message reads use the admitted history worker; reaction writes use the canonical SQLite worker broker with live transaction and commit admission. Incognito reactions use the session actor memory backend. The synchronous reaction kernel now runs only through the admitted durable worker; the native incognito read/write and test-only synchronous production reader paths are removed. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry remains T1 because other synchronous callers are outside this cutover. Schemas, stored bytes, retention, and update behavior are unchanged.",
+    "Durable session reaction summaries and target-message reads use the admitted history worker; reaction writes use the canonical SQLite worker broker with live transaction and commit admission. Incognito reactions use the session actor memory backend. The synchronous reaction kernel now runs only through the admitted durable worker; the native incognito read/write and test-only synchronous production reader paths are removed. Reaction mirroring reads durable source conversation bindings through the history worker, including a final read after account/config preparation and immediately before dispatch; synchronous handoff guards retain live reactor, session, and config checks. The conversation registry's synchronous reader is deprecated SDK compatibility; its shared conversation-query kernel remains T1 for opaque native voice validation. Schemas, stored bytes, retention, and update behavior are unchanged.",
     "",
     '<a id="next-five-independent-lanes" />',
     "",
