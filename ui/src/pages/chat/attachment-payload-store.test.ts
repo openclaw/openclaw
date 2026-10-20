@@ -29,11 +29,7 @@ import { prepareOutboxPayload } from "./outbox-payloads.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 const dataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
-const pdfMetadata = {
-  mimeType: "application/pdf",
-  fileName: "brief.pdf",
-  sizeBytes: 9,
-};
+const pdfMetadata = { mimeType: "application/pdf", fileName: "brief.pdf", sizeBytes: 9 };
 const pdf = { id: "synthetic-pdf", ...pdfMetadata };
 let created: Map<string, Blob>;
 let revoked: string[];
@@ -120,11 +116,7 @@ async function persisted(host: ReturnType<typeof hostFor>): Promise<ChatQueueIte
   const result = await prepareOutboxPayload(host, item);
   assert(result.status === "ready", "Payload was not persisted");
   releaseChatAttachmentPayloads(item.attachments);
-  return {
-    ...item,
-    ...result.update,
-    attachments: [{ ...pdf }],
-  };
+  return { ...item, ...result.update, attachments: [{ ...pdf }] };
 }
 it("retains document Open and Download after complete outbox hydration", async () => {
   const host = hostFor();
@@ -179,10 +171,7 @@ it("does not allocate a preview for an outbox read whose recovery owner changed"
 
 it("keeps restored and independently cloned preview ownership separate", async () => {
   const [restored] = await hydrateDurableComposerAttachments([
-    {
-      blob: new browserBlob(["%PDF-1.4\n"]),
-      ...pdfMetadata,
-    },
+    { blob: new browserBlob(["%PDF-1.4\n"]), ...pdfMetadata },
   ]);
   assert(restored, "Missing restored draft");
   owned.push(restored);

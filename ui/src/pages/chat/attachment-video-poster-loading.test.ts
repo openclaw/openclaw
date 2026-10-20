@@ -79,8 +79,7 @@ it.each(["module", "poster"] as const)(
     expect(revoked).toEqual([]);
     posterReady.resolve(new Blob(["late poster"], { type: "image/jpeg" }));
     await expect(pending).resolves.toBeNull();
-    expect(created).toEqual([file]);
-    expect(revoked).toEqual(["blob:poster-source-1"]);
+    expect({ created, revoked }).toEqual({ created: [file], revoked: ["blob:poster-source-1"] });
   },
 );
 
@@ -90,8 +89,7 @@ it("keeps the video payload when the poster module cannot load", async () => {
   await expect(pending).resolves.toBeNull();
   expect(getChatAttachmentBlob(attachment)).toBe(file);
   expect(getChatAttachmentVideoPosterUrl(attachment)).toBe(pending);
-  expect(created).toEqual([file]);
-  expect(revoked).toEqual(["blob:poster-source-1"]);
+  expect({ created, revoked }).toEqual({ created: [file], revoked: ["blob:poster-source-1"] });
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked).toEqual(["blob:poster-source-1"]);
 });

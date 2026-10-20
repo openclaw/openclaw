@@ -23,11 +23,7 @@ export function renderAttachmentHarness(
   getAttachments: () => ChatAttachment[],
   onAttachmentsChange: (attachments: ChatAttachment[]) => void,
 ) {
-  return renderChatView({
-    attachments: getAttachments(),
-    getAttachments,
-    onAttachmentsChange,
-  });
+  return renderChatView({ attachments: getAttachments(), getAttachments, onAttachmentsChange });
 }
 
 export async function renderSettledPastedTextAttachment(
