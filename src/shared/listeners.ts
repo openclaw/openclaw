@@ -21,3 +21,17 @@ export function registerListener<T>(
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+
+/** Synchronous owner changes preserve live Set iteration and propagate listener errors. */
+export function createChangeListeners() {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    publish: () => {
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    clear: () => listeners.clear(),
+  };
+}
