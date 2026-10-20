@@ -118,36 +118,29 @@ describe("Sessions hub navigation", () => {
     });
   });
 
-  it("does not steal deliberate focus established before a queued route handoff", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
-    activate(source);
-
-    await mount({ active: "worktrees", onSelect: () => undefined });
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    outside.focus();
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 0);
-    });
-
-    expect(document.activeElement).toBe(outside);
-  });
-
-  it("does not steal deliberate focus established before the destination mounts", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
-    findTab(source)?.focus();
-    activate(source);
-
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    outside.focus();
-    await mount({ active: "worktrees", onSelect: () => undefined });
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 0);
-    });
-
-    expect(document.activeElement).toBe(outside);
-  });
+  it.each(["queued", "before mount"] as const)(
+    "does not steal deliberate focus established %s",
+    async (stage) => {
+      const source = await mount({ active: "sessions", onSelect: () => undefined });
+      if (stage === "before mount") {
+        findTab(source)?.focus();
+      }
+      activate(source);
+      if (stage === "queued") {
+        await mount({ active: "worktrees", onSelect: () => undefined });
+      }
+      const outside = document.createElement("button");
+      document.body.append(outside);
+      outside.focus();
+      if (stage === "before mount") {
+        await mount({ active: "worktrees", onSelect: () => undefined });
+      }
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
+      expect(document.activeElement).toBe(outside);
+    },
+  );
 
   it("keeps only the latest cross-route keyboard focus handoff", async () => {
     const first = await mount({ active: "sessions", onSelect: () => undefined });

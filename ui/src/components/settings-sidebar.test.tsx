@@ -9,6 +9,7 @@ import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { AgentSelectElement } from "./agent-select.ts";
+import { saveIndicatorProps as saveIndicator } from "./settings-save-indicator.test-support.ts";
 import { renderSettingsSidebar as SettingsSidebar } from "./settings-sidebar.tsx";
 import "./tooltip.ts";
 
@@ -55,17 +56,40 @@ function labels(selector = ".settings-sidebar__item-label") {
   return [...container.querySelectorAll(selector)].map((item) => item.textContent?.trim());
 }
 
-const saveIndicator = () => ({
-  status: "idle" as const,
-  lastError: null,
-  needsApply: false,
-  applying: false,
-  applyDisabled: false,
-  onRetry: vi.fn(),
-  onSave: vi.fn(),
-  onReload: vi.fn(),
-  onApply: vi.fn(),
-});
+function searchHarness(initialQuery: string, overrides: Partial<SidebarProps> = {}) {
+  let searchQuery = initialQuery;
+  const rerender = () =>
+    render({
+      ...overrides,
+      searchQuery,
+      onSearchQueryChange: (next) => {
+        searchQuery = next;
+        rerender();
+      },
+    });
+  rerender();
+  const input = query<HTMLInputElement>(".settings-sidebar__search-input")!;
+  return {
+    input,
+    get value() {
+      return searchQuery;
+    },
+    enter(value: string) {
+      input.value = value;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+  };
+}
+
+type SearchBlock = NonNullable<SidebarProps["searchBlockMatches"]>[number];
+function block(
+  routeId: SearchBlock["routeId"],
+  label: string,
+  hash: string,
+  options: Partial<Pick<SearchBlock, "search" | "pathname">> = {},
+): SearchBlock {
+  return { routeId, label, hash, ...options };
+}
 
 const sidebarAgentProps = () => ({
   agents: [
@@ -132,28 +156,32 @@ describe("settings sidebar search", () => {
     expect(active?.textContent?.trim()).toBe("Models");
   });
 
-  it("links Ask OpenClaw to the shared custodian route", () => {
-    const onNavigate = vi.fn();
-    render({
-      onNavigate,
-    });
-
-    const link = query<HTMLAnchorElement>('.settings-sidebar__item[href="/custodian"]');
-    expect(link?.textContent?.trim()).toBe("Ask OpenClaw");
-    link?.click();
-    expect(onNavigate).toHaveBeenCalledWith("custodian");
-  });
+  it.each(["OpenClaw", "Moonbase"])(
+    "links Ask %s and follows branding publications",
+    (brandName) => {
+      const original = currentThemeBranding();
+      const onNavigate = vi.fn();
+      render({ onNavigate });
+      try {
+        if (brandName === "Moonbase") {
+          setCurrentThemeBranding({ ...original, brandName });
+          flush();
+        }
+        const link = query<HTMLAnchorElement>('.settings-sidebar__item[href="/custodian"]');
+        expect(link?.textContent?.trim()).toBe(`Ask ${brandName}`);
+        link?.click();
+        expect(onNavigate).toHaveBeenCalledWith("custodian");
+      } finally {
+        setCurrentThemeBranding(original);
+        flush();
+      }
+    },
+  );
 
   it("does not match the middle of a word for a short query", () => {
     render({
       searchQuery: "cp",
-      searchBlockMatches: [
-        {
-          routeId: "connection",
-          label: "Gateway Host",
-          hash: "#settings-connection-host",
-        },
-      ],
+      searchBlockMatches: [block("connection", "Gateway Host", "#settings-connection-host")],
     });
 
     const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
@@ -165,18 +193,10 @@ describe("settings sidebar search", () => {
     render({
       searchQuery: "mcp",
       searchBlockMatches: [
-        {
-          routeId: "appearance",
-          label: "Language",
+        block("appearance", "Language", "#settings-language", {
           search: "?section=__appearance__",
-          hash: "#settings-language",
-        },
-        {
-          routeId: "mcp",
-          label: "MCP",
-          search: "?section=mcp",
-          hash: "#config-section-mcp",
-        },
+        }),
+        block("mcp", "MCP", "#config-section-mcp", { search: "?section=mcp" }),
       ],
       onNavigate,
     });
@@ -202,12 +222,9 @@ describe("settings sidebar search", () => {
     render({
       searchQuery: "infrastructure",
       searchBlockMatches: [
-        {
-          routeId: "infrastructure",
-          label: "Browser",
+        block("infrastructure", "Browser", "#config-section-browser", {
           search: "?section=browser",
-          hash: "#config-section-browser",
-        },
+        }),
       ],
       onNavigate,
     });
@@ -240,13 +257,7 @@ describe("settings sidebar search", () => {
     render({
       canAdmin: false,
       searchQuery: "security",
-      searchBlockMatches: [
-        {
-          routeId: "security",
-          label: "Security policy",
-          hash: "#config-section-security",
-        },
-      ],
+      searchBlockMatches: [block("security", "Security policy", "#config-section-security")],
     });
 
     expect(query('a[href="/settings/security"]')).toBeNull();
@@ -263,12 +274,7 @@ describe("settings sidebar search", () => {
       activeHash: "#memory-backend",
       searchQuery: "backend",
       searchBlockMatches: [
-        {
-          routeId: "memory",
-          label: "Memory",
-          pathname: "/ui/settings/memory/settings",
-          hash: "#memory-backend",
-        },
+        block("memory", "Memory", "#memory-backend", { pathname: "/ui/settings/memory/settings" }),
       ],
       onNavigate,
     });
@@ -286,31 +292,10 @@ describe("settings sidebar search", () => {
   });
 
   it("filters localized routes and groups while preserving navigation", () => {
-    let searchQuery = "";
     const onNavigate = vi.fn();
-    const rerender = () => {
-      render({
-        searchQuery,
-        onNavigate,
-        onSearchQueryChange: (nextQuery) => {
-          searchQuery = nextQuery;
-          rerender();
-        },
-      });
-    };
-    const enterQuery = (value: string) => {
-      const input = query<HTMLInputElement>(".settings-sidebar__search-input");
-      if (!input) {
-        throw new Error("expected settings search input");
-      }
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    };
-    rerender();
+    const { input, enter: enterQuery } = searchHarness("", { onNavigate });
     const allLabels = labels();
-    const input = query<HTMLInputElement>(".settings-sidebar__search-input");
-    expect(input?.getAttribute("aria-label")).toBe("Search settings");
-    expect(input?.placeholder).toBe("Search settings…");
+    expect(input).toMatchObject({ ariaLabel: "Search settings", placeholder: "Search settings…" });
     // Management surfaces moved back to the workspace sidebar.
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
@@ -347,28 +332,16 @@ describe("settings sidebar search", () => {
   });
 
   it("clears a focused search before Escape exits Settings", () => {
-    let searchQuery = "gateway";
     const onExit = vi.fn();
-    const rerender = () => {
-      render({
-        searchQuery,
-        onExit,
-        onSearchQueryChange: (nextQuery) => {
-          searchQuery = nextQuery;
-          rerender();
-        },
-      });
-    };
-
-    rerender();
-    const input = query<HTMLInputElement>(".settings-sidebar__search-input");
+    const search = searchHarness("gateway", { onExit });
+    const { input } = search;
     expect(input).not.toBeNull();
     input?.focus();
 
     input?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
     );
-    expect(searchQuery).toBe("");
+    expect(search.value).toBe("");
     expect(document.activeElement).toBe(input);
     expect(onExit).not.toHaveBeenCalled();
 
@@ -597,21 +570,6 @@ it("preserves search drafts, navigation focus, and instance-local scroll shadows
   other.unmount();
 });
 
-it("refreshes the Ask label when the branding owner publishes", () => {
-  const original = currentThemeBranding();
-  render({});
-  try {
-    setCurrentThemeBranding({ ...original, brandName: "Moonbase" });
-    flush();
-    expect(query('.settings-sidebar__item[href="/custodian"]')?.textContent?.trim()).toBe(
-      "Ask Moonbase",
-    );
-  } finally {
-    setCurrentThemeBranding(original);
-    flush();
-  }
-});
-
 it("follows agent owner replacement and publications without remounting", async () => {
   const agents = sidebarAgentProps();
   type SelectionListener = Parameters<SidebarProps["settingsAgentSelection"]["subscribe"]>[0];
@@ -624,9 +582,7 @@ it("follows agent owner replacement and publications without remounting", async 
       state: { selectedId: "main", scopeId: "main" },
       subscribe(listener: SelectionListener) {
         selectionListeners.add(listener);
-        return () => {
-          selectionListeners.delete(listener);
-        };
+        return () => void selectionListeners.delete(listener);
       },
     };
     const agentIdentity = {
@@ -637,9 +593,7 @@ it("follows agent owner replacement and publications without remounting", async 
       entries: () => identities,
       subscribe(listener: () => void) {
         identityListeners.add(listener);
-        return () => {
-          identityListeners.delete(listener);
-        };
+        return () => void identityListeners.delete(listener);
       },
     };
     return {
@@ -649,9 +603,7 @@ it("follows agent owner replacement and publications without remounting", async 
       identityListeners,
       publishIdentity(emoji: string) {
         identities = [{ agentId: settingsAgentSelection.state.selectedId, emoji }];
-        for (const notify of identityListeners) {
-          notify();
-        }
+        identityListeners.forEach((notify) => notify());
       },
     };
   };
@@ -663,6 +615,11 @@ it("follows agent owner replacement and publications without remounting", async 
   render(props);
   const selector = query<AgentSelectElement>("openclaw-agent-select")!;
   await selector.updateComplete;
+  const label = () => selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label");
+  const avatar = () =>
+    selector
+      .querySelector(".agent-select__trigger .identity-avatar__text")
+      ?.getAttribute("data-avatar");
   const { settingsAgentSelection, selectionListeners, identityListeners } = original;
   const selectionSubscriptions = [...selectionListeners];
   const identitySubscriptions = [...identityListeners];
@@ -671,29 +628,13 @@ it("follows agent owner replacement and publications without remounting", async 
   expect([[...selectionListeners], [...identityListeners]]).toEqual(subscriptions);
   settingsAgentSelection.state.selectedId = "research";
   settingsAgentSelection.state.scopeId = "research";
-  for (const notify of selectionListeners) {
-    notify(settingsAgentSelection.state);
-  }
-  await waitForSolid(() =>
-    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
-      "Research",
-    ),
-  );
+  selectionListeners.forEach((notify) => notify(settingsAgentSelection.state));
+  await waitForSolid(() => expect(label()).toContain("Research"));
   original.publishIdentity("🦉");
-  await waitForSolid(() =>
-    expect(
-      selector
-        .querySelector(".agent-select__trigger .identity-avatar__text")
-        ?.getAttribute("data-avatar"),
-    ).toBe("🦉"),
-  );
+  await waitForSolid(() => expect(avatar()).toBe("🦉"));
   const replacement = createOwners();
   render({ ...props, ...replacement });
-  await waitForSolid(() =>
-    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
-      "Main",
-    ),
-  );
+  await waitForSolid(() => expect(label()).toContain("Main"));
   expect(selectionListeners.size).toBe(0);
   expect(identityListeners.size).toBe(0);
   expect(replacement.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
@@ -701,31 +642,21 @@ it("follows agent owner replacement and publications without remounting", async 
   const replacementRequests = replacement.agentIdentity.ensure.mock.calls.length;
   settingsAgentSelection.state.selectedId = "main";
   settingsAgentSelection.state.scopeId = "main";
-  for (const notify of selectionSubscriptions) {
-    notify(settingsAgentSelection.state);
-  }
-  for (const notify of identitySubscriptions) {
-    notify();
-  }
+  selectionSubscriptions.forEach((notify) => notify(settingsAgentSelection.state));
+  identitySubscriptions.forEach((notify) => notify());
   await waitForSolid(() => {
     expect(original.agentIdentity.ensure).toHaveBeenCalledTimes(originalRequests);
     expect(replacement.agentIdentity.ensure).toHaveBeenCalledTimes(replacementRequests);
-    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
-      "Main",
-    );
+    expect(label()).toContain("Main");
   });
   replacement.settingsAgentSelection.state.selectedId = "research";
-  for (const notify of replacement.selectionListeners) {
-    notify(replacement.settingsAgentSelection.state);
-  }
+  replacement.selectionListeners.forEach((notify) =>
+    notify(replacement.settingsAgentSelection.state),
+  );
   replacement.publishIdentity("🦊");
   await waitForSolid(() => {
     expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
-    expect(
-      selector
-        .querySelector(".agent-select__trigger .identity-avatar__text")
-        ?.getAttribute("data-avatar"),
-    ).toBe("🦊");
+    expect(avatar()).toBe("🦊");
   });
   expect(query("openclaw-agent-select")).toBe(selector);
 });
