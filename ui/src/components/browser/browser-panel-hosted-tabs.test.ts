@@ -14,19 +14,16 @@ import {
 import "./browser-panel.ts";
 
 const favicon = "data:image/png;base64,eA==";
-const nativeDefaults = {
-  loading: false,
-  canGoBack: false,
-  canGoForward: false,
-  openedBy: "web",
-} satisfies Partial<NativeBrowserTab>;
 const nativeTab = {
   id: "native:b",
   title: "",
   url: "https://second.test/b",
   favicon,
-  ...nativeDefaults,
-};
+  loading: false,
+  canGoBack: false,
+  canGoForward: false,
+  openedBy: "web",
+} satisfies NativeBrowserTab;
 
 function nativeState(tabs: NativeBrowserTab[]) {
   vi.stubGlobal("webkit", {
@@ -71,22 +68,22 @@ describe("Browser panel hosted tabs", () => {
     stubScreenshotMedia();
     nativeState([nativeTab]);
     const gateway = createBrowserClient(async (request) => {
-      if (request.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [
-            createBrowserPanelTestTab("remote:a", "https://example.test/a", "  Example  "),
-            createBrowserPanelTestTab("remote:c", "about:blank", ""),
-          ],
-        };
+      switch (request.path) {
+        case "/tabs":
+          return {
+            running: true,
+            tabs: [
+              createBrowserPanelTestTab("remote:a", "https://example.test/a", "  Example  "),
+              createBrowserPanelTestTab("remote:c", "about:blank", ""),
+            ],
+          };
+        case "/screenshot":
+          return { path: "/fresh.png", targetId: "raw-remote:a", url: "https://example.test/a" };
+        case "/act":
+          return createBrowserPanelTestMetrics("https://example.test/a", "Example");
+        default:
+          return { ok: true };
       }
-      if (request.path === "/screenshot") {
-        return { path: "/fresh.png", targetId: "raw-remote:a", url: "https://example.test/a" };
-      }
-      if (request.path === "/act") {
-        return createBrowserPanelTestMetrics("https://example.test/a", "Example");
-      }
-      return { ok: true };
     });
     const panel = document.createElement("openclaw-browser-panel");
     panel.available = true;
@@ -164,39 +161,8 @@ describe("Browser panel hosted tabs", () => {
     }
   });
 
-  it("publishes favicon-only native pushes to hosted tabs and the dock strip", async () => {
-    const tab = {
-      ...nativeDefaults,
-      id: "mac-icon",
-      sessionKey: "session-icon",
-      url: "https://example.test/page",
-      title: "Example page",
-    };
-    nativeState([tab]);
-    const panel = document.createElement("openclaw-browser-panel");
-    panel.sessionKey = tab.sessionKey;
-    panel.available = true;
-    panel.remoteAvailable = false;
-    panel.embedded = true;
-    panel.presented = true;
-    mountSolid(() => panel);
-    await panel.updateComplete;
-    const changed = vi.fn();
-    panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
-    publishTabs(1, [{ ...tab, favicon }]);
-    await panel.updateComplete;
-    expect(panel.hostedTabs[0]?.favicon).toBe(favicon);
-    expect(panel.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(favicon);
-    expect(changed).toHaveBeenCalledOnce();
-    publishTabs(2, [tab]);
-    await panel.updateComplete;
-    expect(panel.hostedTabs[0]?.favicon).toBeUndefined();
-    expect(panel.querySelector("img.tabstrip-tab__favicon")).toBeNull();
-    expect(changed).toHaveBeenCalledTimes(2);
-  });
-
-  it("notifies the host of tab and active changes but not unrelated renders", async () => {
-    const { panel } = await mount();
+  it("publishes selection, title and favicon-only changes but not unrelated renders", async () => {
+    const { panel } = await mount(true, false);
     const changed = vi.fn();
     document.body.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
     try {
@@ -215,13 +181,25 @@ describe("Browser panel hosted tabs", () => {
       expect(changed).toHaveBeenCalledTimes(2);
       expect(panel.hostedTabs.map((tab) => tab.label)).toEqual(["Changed", "Example", "New tab"]);
 
+      const { favicon: _previousIcon, ...withoutIcon } = { ...nativeTab, title: "Changed" };
+      publishTabs(2, [withoutIcon]);
+      await panel.updateComplete;
+      expect(panel.hostedTabs[0]?.favicon).toBeUndefined();
+      expect(panel.querySelector("img.tabstrip-tab__favicon")).toBeNull();
+      expect(changed).toHaveBeenCalledTimes(3);
+      publishTabs(3, [{ ...withoutIcon, favicon }]);
+      await panel.updateComplete;
+      expect(panel.hostedTabs[0]?.favicon).toBe(favicon);
+      expect(panel.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(favicon);
+      expect(changed).toHaveBeenCalledTimes(4);
+
       const address = panel.querySelector<HTMLInputElement>(".bp-url")!;
       address.value = "https://draft.test/";
       address.dispatchEvent(new Event("input", { bubbles: true }));
       await panel.updateComplete;
-      panel.tabsInHeader = false;
+      panel.tabsInHeader = true;
       await panel.updateComplete;
-      expect(changed).toHaveBeenCalledTimes(2);
+      expect(changed).toHaveBeenCalledTimes(4);
     } finally {
       document.body.removeEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
     }

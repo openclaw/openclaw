@@ -16,15 +16,13 @@ export const PAGE_URL = "https://example.test/page";
 export const minted = {
   token: "startup",
   wsPath: "/browser/screencast?token=startup",
-  targetId: "raw-a",
-  url: PAGE_URL,
+  ...page(),
 };
-export const ready = JSON.stringify({
-  type: "ready",
-  targetId: "raw-a",
-  url: PAGE_URL,
-  title: "Page",
-});
+export const ready = JSON.stringify({ type: "ready", ...page(), title: "Page" });
+
+function page() {
+  return { targetId: "raw-a", url: PAGE_URL };
+}
 
 export class StartupSocket extends TestScreencastSocket {
   readyState = 0;
@@ -88,6 +86,17 @@ export function streamFixture<Socket extends TestScreencastSocket>(
     }
   });
   function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) {
+    const responses: Record<string, () => unknown> = {
+      "/tabs": () => ({
+        running: true,
+        ...(!startup ? { canAutoResizeViewport: true } : {}),
+        tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")],
+      }),
+      "/screencast": () =>
+        startup ? minted : { ...minted, token: "token", wsPath: "/browser/screencast?token=token" },
+      "/screenshot": () => ({ path: "/fresh.png", ...page() }),
+      "/act": () => createBrowserPanelTestMetrics(PAGE_URL),
+    };
     const gateway = createBrowserClient(
       async (envelope) => {
         if (handle) {
@@ -96,24 +105,7 @@ export function streamFixture<Socket extends TestScreencastSocket>(
             return result;
           }
         }
-        switch (envelope.path) {
-          case "/tabs":
-            return {
-              running: true,
-              ...(!startup ? { canAutoResizeViewport: true } : {}),
-              tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")],
-            };
-          case "/screencast":
-            return startup
-              ? minted
-              : { ...minted, token: "token", wsPath: "/browser/screencast?token=token" };
-          case "/screenshot":
-            return { path: "/fresh.png", targetId: "raw-a", url: PAGE_URL };
-          case "/act":
-            return createBrowserPanelTestMetrics(PAGE_URL);
-          default:
-            return { ok: true };
-        }
+        return responses[envelope.path]?.() ?? { ok: true };
       },
       { screencast: true },
     );
