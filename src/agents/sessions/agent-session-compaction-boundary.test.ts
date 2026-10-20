@@ -48,50 +48,31 @@ describe("AgentSession compaction boundary", () => {
       updatedAt: 1,
     });
     const sessionManager = SessionManager.open(scope, dir);
+    function appendToolRound(
+      id: string,
+      text: string,
+      timestamp: number,
+      resultTimestamp = timestamp,
+    ) {
+      const entryId = sessionManager.appendMessage({
+        ...createAssistant(testModel, [{ type: "toolCall", id, name: "read", arguments: {} }]),
+        timestamp,
+      });
+      sessionManager.appendMessage({
+        role: "toolResult",
+        toolCallId: id,
+        toolName: "read",
+        content: [{ type: "text", text }],
+        isError: false,
+        timestamp: resultTimestamp,
+      });
+      return entryId;
+    }
     sessionManager.appendMessage(makeUserMessage("Tetris", 1));
-    const retainedId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [
-        { type: "toolCall", id: "retained-call", name: "read", arguments: {} },
-      ]),
-      timestamp: 2,
-    });
-    sessionManager.appendMessage({
-      role: "toolResult",
-      toolCallId: "retained-call",
-      toolName: "read",
-      content: [{ type: "text", text: "retained tool result".repeat(100) }],
-      isError: false,
-      timestamp: 3,
-    });
-    sessionManager.appendMessage({
-      ...createAssistant(testModel, [
-        { type: "toolCall", id: "second-retained", name: "read", arguments: {} },
-      ]),
-      timestamp: 3,
-    });
-    sessionManager.appendMessage({
-      role: "toolResult",
-      toolCallId: "second-retained",
-      toolName: "read",
-      content: [{ type: "text", text: "second retained tool result" }],
-      isError: false,
-      timestamp: 3,
-    });
+    const retainedId = appendToolRound("retained-call", "retained tool result".repeat(100), 2, 3);
+    appendToolRound("second-retained", "second retained tool result", 3);
     sessionManager.appendCompaction("Prior work is summarized.", retainedId, 100);
-    sessionManager.appendMessage({
-      ...createAssistant(testModel, [
-        { type: "toolCall", id: "new-call", name: "read", arguments: {} },
-      ]),
-      timestamp: 4,
-    });
-    sessionManager.appendMessage({
-      role: "toolResult",
-      toolCallId: "new-call",
-      toolName: "read",
-      content: [{ type: "text", text: "new tool result" }],
-      isError: false,
-      timestamp: 5,
-    });
+    appendToolRound("new-call", "new tool result", 4, 5);
     const summarize = vi.fn<CompactionProvider["summarize"]>(
       async () =>
         "## Decisions\nContinue.\n\n## Open TODOs\nNone.\n\n## Constraints/Rules\nNone.\n\n## Pending user asks\nNone.\n\n## Exact identifiers\nNone.",

@@ -10,8 +10,8 @@ afterEach(() => {
 });
 
 function createRegistry(params: {
-  providerApi: "openai-completions" | "openai-responses";
-  modelApi: "openai-completions" | "openai-responses";
+  providerApi?: "openai-completions" | "openai-responses";
+  modelApi?: "openai-completions" | "openai-responses";
   auth?: "none";
   storedKey?: boolean;
   inlineKey?: boolean;
@@ -28,7 +28,7 @@ function createRegistry(params: {
       providers: {
         custom: {
           baseUrl: "https://inference.example.invalid/v1",
-          api: params.providerApi,
+          api: params.providerApi ?? "openai-completions",
           auth: params.auth,
           ...(params.inlineKey === false ? {} : { apiKey: "synthetic-inline-key" }),
           authHeader: true,
@@ -39,7 +39,7 @@ function createRegistry(params: {
           models: [
             {
               id: "model",
-              api: params.modelApi,
+              api: params.modelApi ?? "openai-completions",
               headers: {
                 authorization: params.authorization ?? "Bearer synthetic-model-header",
                 "X-Model": "visible-model-header",
@@ -62,7 +62,6 @@ it.each(["openai-completions", "openai-responses"] as const)(
   async (providerApi) => {
     const { registry, model, getApiKey } = createRegistry({
       providerApi,
-      modelApi: "openai-completions",
       auth: "none",
       storedKey: true,
     });
@@ -103,8 +102,6 @@ it.each(["openai-completions", "openai-responses"] as const)(
 it("does not resolve unused Authorization values for no-auth registry requests", async () => {
   vi.stubEnv("OPENCLAW_TEST_UNUSED_AUTHORIZATION", "");
   const { registry, model, getApiKey } = createRegistry({
-    providerApi: "openai-completions",
-    modelApi: "openai-completions",
     auth: "none",
     inlineKey: false,
     authorization: "OPENCLAW_TEST_UNUSED_AUTHORIZATION",
@@ -120,7 +117,6 @@ it("does not resolve unused Authorization values for no-auth registry requests",
 
 it("rejects an effective Responses override before registry credential lookup", async () => {
   const { registry, model, getApiKey } = createRegistry({
-    providerApi: "openai-completions",
     modelApi: "openai-responses",
     auth: "none",
     storedKey: true,
@@ -136,8 +132,6 @@ it("rejects an effective Responses override before registry credential lookup", 
 
 it("preserves normal registry credential precedence and bearer headers", async () => {
   const { registry, model } = createRegistry({
-    providerApi: "openai-completions",
-    modelApi: "openai-completions",
     storedKey: true,
   });
   await expect(registry.getApiKeyAndHeaders(model)).resolves.toMatchObject({

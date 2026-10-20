@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Usage } from "../../llm/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -28,12 +29,21 @@ function messageEntry(id: string, message: AgentMessage) {
   return { type: "message", id, parentId: "compact-1", message };
 }
 
+function assistant(text: string, usage: Usage) {
+  return makeAgentAssistantMessage({ content: text ? [{ type: "text", text }] : [], usage });
+}
+
+function getUsage(messages: AgentMessage[], branchEntries: unknown[], contextWindow = 200_000) {
+  return AgentSession.prototype.getContextUsage.call({
+    model: { contextWindow },
+    messages,
+    sessionManager: { getBranch: () => branchEntries },
+  } as unknown as AgentSession);
+}
+
 describe("AgentSession context usage", () => {
   it("reports unknown usage after a provider checkpoint until a later measured response", () => {
-    const owner = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "covered" }],
-      usage: measuredUsage(90_000),
-    });
+    const owner = assistant("covered", measuredUsage(90_000));
     owner.providerReplay = {
       v: 1,
       type: "openai-responses-retained-compaction",
@@ -45,23 +55,15 @@ describe("AgentSession context usage", () => {
     };
     const messages: AgentMessage[] = [owner];
     const branchEntries = [messageEntry("checkpoint-owner", owner)];
-    const session = {
-      model: { contextWindow: 100_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession;
-    expect(AgentSession.prototype.getContextUsage.call(session)).toEqual({
+    expect(getUsage(messages, branchEntries, 100_000)).toEqual({
       tokens: null,
       contextWindow: 100_000,
       percent: null,
     });
-    const later = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "later" }],
-      usage: measuredUsage(8_000),
-    });
+    const later = assistant("later", measuredUsage(8_000));
     messages.push(later);
     branchEntries.push(messageEntry("later", later));
-    expect(AgentSession.prototype.getContextUsage.call(session)?.tokens).toBe(8_000);
+    expect(getUsage(messages, branchEntries, 100_000)?.tokens).toBe(8_000);
   });
 
   it.each([
@@ -84,14 +86,8 @@ describe("AgentSession context usage", () => {
     },
     { name: "zero usage after compaction", compacted: true, usage: measuredUsage(0) },
   ])("preserves an earlier exact snapshot before $name", ({ compacted, usage: latestUsage }) => {
-    const exact = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "exact answer" }],
-      usage: measuredUsage(180_000, 10_000),
-    });
-    const later = makeAgentAssistantMessage({
-      content: latestUsage.totalTokens === 0 ? [] : [{ type: "text", text: "small answer" }],
-      usage: latestUsage,
-    });
+    const exact = assistant("exact answer", measuredUsage(180_000, 10_000));
+    const later = assistant(latestUsage.totalTokens === 0 ? "" : "small answer", latestUsage);
     const messages: AgentMessage[] = [
       exact,
       { role: "user", content: "small follow-up", timestamp: 1 },
@@ -100,11 +96,7 @@ describe("AgentSession context usage", () => {
     const branchEntries = compacted
       ? [compaction, messageEntry("assistant-exact", exact), messageEntry("assistant-later", later)]
       : [];
-    const usage = AgentSession.prototype.getContextUsage.call({
-      model: { contextWindow: 200_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession);
+    const usage = getUsage(messages, branchEntries);
 
     expect(usage?.tokens).toBeGreaterThan(190_000);
   });
@@ -119,28 +111,18 @@ describe("AgentSession context usage", () => {
       totalTokens: 927_907,
       contextUsage: { state: "unavailable" as const },
     };
-    const retained = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "retained answer" }],
-      usage: {
-        ...unavailableUsage,
-        contextUsage: { state: "available", promptTokens: 120_000, totalTokens: 125_000 },
-      },
+    const retained = assistant("retained answer", {
+      ...unavailableUsage,
+      contextUsage: { state: "available", promptTokens: 120_000, totalTokens: 125_000 },
     });
-    const later = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "new answer" }],
-      usage: unavailableUsage,
-    });
+    const later = assistant("new answer", unavailableUsage);
     const messages: AgentMessage[] = [
       retained,
       { role: "user", content: "new prompt", timestamp: 1 },
       later,
     ];
     const branchEntries = [compaction, messageEntry("assistant-new", later)];
-    const usage = AgentSession.prototype.getContextUsage.call({
-      model: { contextWindow: 200_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession);
+    const usage = getUsage(messages, branchEntries);
 
     expect(usage?.tokens).not.toBeNull();
     expect(usage?.tokens).toBeLessThan(1_000);

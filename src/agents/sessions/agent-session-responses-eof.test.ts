@@ -34,6 +34,41 @@ function responseCall(callId: string, args = "", status = "in_progress") {
   };
 }
 
+function outputItem<T>(type: "added" | "done", item: T, output_index = 0) {
+  return { type: `response.output_item.${type}`, output_index, item };
+}
+
+function terminalResponse<T extends object>(type: string, response: T) {
+  return { type: `response.${type}`, response };
+}
+
+function createRetrySession(
+  execute?: NonNullable<
+    NonNullable<Parameters<typeof createTestSession>[0]>["customTools"]
+  >[number]["execute"],
+  enabled = true,
+) {
+  return createTestSession({
+    settingsManager: SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled, maxRetries: 1, baseDelayMs: 1 },
+    }),
+    ...(execute
+      ? {
+          customTools: [
+            {
+              name: "record",
+              label: "Record",
+              description: "Records a fixture action",
+              parameters: Type.Object({}),
+              execute,
+            },
+          ],
+        }
+      : {}),
+  });
+}
+
 it.each([
   { failure: "eof", recover: true },
   { failure: "malformed_sse", recover: true },
@@ -97,11 +132,7 @@ it.each([
         const stream = createAssistantMessageEventStream();
         const output = createAssistant(model, []);
         const events = (async function* () {
-          yield {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: responseCall("unfinished"),
-          };
+          yield outputItem("added", responseCall("unfinished"));
           yield {
             type: "response.function_call_arguments.delta",
             output_index: 0,
@@ -110,24 +141,19 @@ it.each([
           };
           if (identityFailure) {
             if (earlyConflict) {
-              yield {
-                type: "response.output_item.done",
-                output_index: 0,
-                item: {
-                  ...responseCall("unfinished", "{}", "completed"),
-                  call_id: "different_call",
-                },
-              };
-              yield {
-                type:
-                  failure === "identity_early_failed" ? "response.failed" : "response.incomplete",
-                response: {
+              yield outputItem("done", {
+                ...responseCall("unfinished", "{}", "completed"),
+                call_id: "different_call",
+              });
+              yield terminalResponse(
+                failure === "identity_early_failed" ? "failed" : "incomplete",
+                {
                   id: "resp_rejected",
                   status: failure === "identity_early_failed" ? "failed" : "incomplete",
                   incomplete_details: { reason: "content_filter" },
                   output: [],
                 },
-              };
+              );
               return;
             }
             if (beforeConflict) {
@@ -151,10 +177,10 @@ it.each([
                     ? responseCall("completed", "{}", "completed")
                     : { type: "mcp_call", id: "mcp_completed", status: "completed" };
               if (beforeConflict === "function") {
-                yield { type: "response.output_item.added", output_index: 1, item };
+                yield outputItem("added", item, 1);
               }
               if (erased) {
-                yield { type: "response.output_item.added", output_index: 1, item };
+                yield outputItem("added", item, 1);
                 yield {
                   type:
                     beforeConflict === "erased-refusal"
@@ -166,56 +192,46 @@ it.each([
                   delta: "Partial answer",
                 };
               }
-              yield {
-                type: "response.output_item.done",
-                output_index: 1,
-                item: erased ? { ...item, content: [] } : item,
-              };
+              yield outputItem("done", erased ? { ...item, content: [] } : item, 1);
             }
-            yield {
-              type: filteredConflict ? "response.incomplete" : "response.completed",
-              response: {
-                id: "resp_conflicting",
-                status: filteredConflict ? "incomplete" : "completed",
-                ...(filteredConflict ? { incomplete_details: { reason: "content_filter" } } : {}),
-                output: [
-                  filteredConflict
-                    ? {
-                        type: "reasoning",
-                        id: "rs_conflicting",
-                        encrypted_content: "test-encrypted-placeholder",
-                        summary: [],
-                      }
-                    : failure === "identity_type"
-                      ? { type: "message", id: "msg_conflicting", content: [] }
-                      : {
-                          ...responseCall("unfinished", "{}", "completed"),
-                          call_id: "different_call",
-                        },
-                  ...(terminalRefusal
-                    ? [
-                        {
-                          type: "message",
-                          id: "msg_refusal",
-                          content: [{ type: "refusal", refusal: "Declined" }],
-                        },
-                      ]
-                    : []),
-                ],
-              },
-            };
+            yield terminalResponse(filteredConflict ? "incomplete" : "completed", {
+              id: "resp_conflicting",
+              status: filteredConflict ? "incomplete" : "completed",
+              ...(filteredConflict ? { incomplete_details: { reason: "content_filter" } } : {}),
+              output: [
+                filteredConflict
+                  ? {
+                      type: "reasoning",
+                      id: "rs_conflicting",
+                      encrypted_content: "test-encrypted-placeholder",
+                      summary: [],
+                    }
+                  : failure === "identity_type"
+                    ? { type: "message", id: "msg_conflicting", content: [] }
+                    : {
+                        ...responseCall("unfinished", "{}", "completed"),
+                        call_id: "different_call",
+                      },
+                ...(terminalRefusal
+                  ? [
+                      {
+                        type: "message",
+                        id: "msg_refusal",
+                        content: [{ type: "refusal", refusal: "Declined" }],
+                      },
+                    ]
+                  : []),
+              ],
+            });
             return;
           }
           if (failure !== "eof" && failure !== "malformed_sse") {
-            yield {
-              type: failure === "completed" ? "response.completed" : "response.incomplete",
-              response: {
-                id: "resp_incomplete",
-                status: responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
-                incomplete_details: { reason: failure },
-                output: [responseCall("unfinished", '{"value":', "incomplete")],
-              },
-            };
+            yield terminalResponse(failure === "completed" ? "completed" : "incomplete", {
+              id: "resp_incomplete",
+              status: responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
+              incomplete_details: { reason: failure },
+              output: [responseCall("unfinished", '{"value":', "incomplete")],
+            });
           }
         })();
         // Use the real SDK parser for malformed wire data, not a fabricated error.
@@ -255,25 +271,9 @@ it.each([
         ).catch((error: unknown) => failTransportStream({ stream, output, error }));
         return stream;
       }
-      return createAssistantResultStream(
-        createAssistant(model, [{ type: "text", text: "Recovered using saved result." }]),
-      );
+      return createAssistantResultStream(createAssistant(model, "Recovered using saved result."));
     });
-    const { session, sessionManager } = await createTestSession({
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: retryEnabled ?? true, maxRetries: 1, baseDelayMs: 1 },
-      }),
-      customTools: [
-        {
-          name: "record",
-          label: "Record",
-          description: "Records a fixture action",
-          parameters: Type.Object({}),
-          execute,
-        },
-      ],
-    });
+    const { session, sessionManager } = await createRetrySession(execute, retryEnabled);
 
     await session.prompt("Record once and report the result.");
 
@@ -364,7 +364,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
         const requestNumber = requests.length;
         if (requestNumber > (mode === "exhaust" || mode === "cancel-retry" ? 2 : 1)) {
           return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "Recovered using saved result." }]),
+            createAssistant(model, "Recovered using saved result."),
           );
         }
         started = createDeferred();
@@ -373,30 +373,19 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
         const output = createAssistant(model, []);
         stream.push({ type: "start", partial: output });
         const providerEvents = (async function* () {
-          yield {
-            type: "response.output_item.done",
-            output_index: 0,
-            item: {
-              ...responseCall("settled", "{}", "completed"),
-              call_id: `settled-${requestNumber}`,
-              async: true,
-            },
-          };
+          yield outputItem("done", {
+            ...responseCall("settled", "{}", "completed"),
+            call_id: `settled-${requestNumber}`,
+            async: true,
+          });
           await started.promise;
-          yield {
-            type: "response.output_item.added",
-            output_index: 1,
-            item: responseCall("unfinished"),
-          };
-          yield {
-            type: "response.incomplete",
-            response: {
-              id: "resp_incomplete",
-              status: "incomplete",
-              incomplete_details: { reason: "max_output_tokens" },
-              output: [responseCall("unfinished", '{"value":', "incomplete")],
-            },
-          };
+          yield outputItem("added", responseCall("unfinished"), 1);
+          yield terminalResponse("incomplete", {
+            id: "resp_incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [responseCall("unfinished", '{"value":', "incomplete")],
+          });
         })();
         void processResponsesStream(providerEvents, output, stream, model, options).catch(
           (error: unknown) => {
@@ -407,21 +396,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
         return stream;
       },
     );
-    const { session, sessionManager } = await createTestSession({
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 },
-      }),
-      customTools: [
-        {
-          name: "record",
-          label: "Record",
-          description: "Records once",
-          parameters: Type.Object({}),
-          execute,
-        },
-      ],
-    });
+    const { session, sessionManager } = await createRetrySession(execute);
     session.subscribe((event) => events.push(event));
     const pending = session.prompt("Record once and report the result.");
     try {
@@ -506,18 +481,13 @@ it.each(["", "Partial response before the disconnect"])(
       return createAssistantResultStream({
         ...createAssistant(
           model,
-          [{ type: "text", text: requests.length === 1 ? partialText : "Recovered response" }],
+          requests.length === 1 ? partialText : "Recovered response",
           requests.length === 1 ? "error" : "stop",
         ),
         ...(requests.length === 1 ? { errorMessage: "HTTP 503 temporary failure" } : {}),
       });
     });
-    const { session, sessionManager } = await createTestSession({
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: true, baseDelayMs: 1, maxRetries: 1 },
-      }),
-    });
+    const { session, sessionManager } = await createRetrySession();
     await session.prompt("Original request");
 
     expect(requests).toHaveLength(2);
