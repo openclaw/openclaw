@@ -639,6 +639,13 @@ describe("gateway-status command", () => {
   it("retains configured WSS identity only for the selected SSH route", async () => {
     for (const scenario of [
       { ssh: undefined, port: undefined, transport: undefined, retained: true },
+      {
+        ssh: undefined,
+        port: undefined,
+        transport: undefined,
+        configuredSshTarget: "ssh me@studio",
+        retained: true,
+      },
       { ssh: "me@studio", port: undefined, transport: undefined, retained: true },
       { ssh: "me@other", port: undefined, transport: undefined, retained: false },
       { ssh: "me@studio", port: "19080", transport: undefined, retained: false },
@@ -652,7 +659,7 @@ describe("gateway-status command", () => {
           remote: {
             url: "wss://localhost:19000/gateway?probe=1",
             remotePort: 18789,
-            sshTarget: "me@studio",
+            sshTarget: scenario.configuredSshTarget ?? "me@studio",
             tlsFingerprint: "sha256:remote-fingerprint",
             token: "rtok",
             transport: scenario.transport,

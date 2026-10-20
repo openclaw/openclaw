@@ -232,7 +232,7 @@ export async function gatewayStatusCommand(
           // not the forwarding listener or a different explicit/discovered SSH target.
           const sshTlsUrl =
             configuredTarget?.url.startsWith("wss://") &&
-            configuredRoute?.target === sshRouteTarget?.trim() &&
+            sanitizeSshTarget(configuredRoute?.target) === sshRouteTarget &&
             configuredRoute?.remotePort === remotePort
               ? configuredTarget.url
               : undefined;
