@@ -27,33 +27,29 @@ it.each([false, true])(
       const releaseEvent = `${nativeEvent}-release`;
       const nativeBefore = process.listenerCount(nativeEvent);
       const modelRef = `${id}/local-model`;
+      const writeJson = (name: string, value: unknown) =>
+        fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
       await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
-          name: id,
-          version: "1.0.0",
-          type: "module",
-          openclaw: { extensions: ["./index.ts"] },
-        }),
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          providers: [id],
-          configSchema: { type: "object", properties: {} },
-          providerAuthChoices: [
-            {
-              provider: id,
-              method: "local",
-              choiceId: id,
-              choiceLabel: "Local discovery fixture",
-              appGuidedDiscovery: true,
-            },
-          ],
-        }),
-      );
+      await writeJson("package.json", {
+        name: id,
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.ts"] },
+      });
+      await writeJson("openclaw.plugin.json", {
+        id,
+        providers: [id],
+        configSchema: { type: "object", properties: {} },
+        providerAuthChoices: [
+          {
+            provider: id,
+            method: "local",
+            choiceId: id,
+            choiceLabel: "Local discovery fixture",
+            appGuidedDiscovery: true,
+          },
+        ],
+      });
       await fs.writeFile(
         path.join(pluginDir, "index.ts"),
         `

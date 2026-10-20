@@ -30,24 +30,20 @@ it.each([false, true])(
         const before = process.listenerCount(nativeEvent);
         const events: string[] = [];
         const observe = (event: string) => events.push(event);
+        const writeJson = (name: string, value: unknown) =>
+          fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
         await fs.mkdir(pluginDir);
-        await fs.writeFile(
-          path.join(pluginDir, "package.json"),
-          JSON.stringify({
-            name: id,
-            version: "1.0.0",
-            type: "commonjs",
-            openclaw: { extensions: ["./index.cjs"] },
-          }),
-        );
-        await fs.writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id,
-            activation: { onAgentHarnesses: [id] },
-            configSchema: { type: "object", properties: {}, additionalProperties: false },
-          }),
-        );
+        await writeJson("package.json", {
+          name: id,
+          version: "1.0.0",
+          type: "commonjs",
+          openclaw: { extensions: ["./index.cjs"] },
+        });
+        await writeJson("openclaw.plugin.json", {
+          id,
+          activation: { onAgentHarnesses: [id] },
+          configSchema: { type: "object", properties: {}, additionalProperties: false },
+        });
         await fs.writeFile(
           path.join(pluginDir, "index.cjs"),
           `

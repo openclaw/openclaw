@@ -23,6 +23,16 @@ afterEach(async () => {
 });
 
 describe("configured utility detection and activation", () => {
+  const utilityResult = { ok: true, modelRef, modelTarget: "utility" };
+  const utilityDetection = {
+    utilityModel: modelRef,
+    setupModel: modelRef,
+    setupComplete: false,
+  };
+  async function writeConfig(configPath: string, config: unknown) {
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    clearConfigCache();
+  }
   it.each([
     { priorModel: modelRef, addProviderDuringLogin: false },
     { priorModel: "legacy/working", addProviderDuringLogin: true },
@@ -62,32 +72,25 @@ describe("configured utility detection and activation", () => {
           },
         };
       }
-      await fs.writeFile(setup.configPath, `${JSON.stringify(setup.config, null, 2)}\n`);
-      clearConfigCache();
+      await writeConfig(setup.configPath, setup.config);
 
       if (priorModel) {
         const before = await fs.readFile(setup.configPath, "utf8");
         await expect(setup.activate()).rejects.toThrow(/doctor --fix|explicit primary/i);
-        expect(setup.login).not.toHaveBeenCalled();
-        expect(setup.run).not.toHaveBeenCalled();
+        expect([setup.login.mock.calls, setup.run.mock.calls]).toEqual([[], []]);
         expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
         const migrated = migrateLegacyConfig(setup.config, {
           sourceConfigBeforeMigrations: setup.config,
         });
         assert(migrated.config);
         expect(migrated.partiallyValid).toBeUndefined();
-        await fs.writeFile(setup.configPath, `${JSON.stringify(migrated.config, null, 2)}\n`);
-        clearConfigCache();
+        await writeConfig(setup.configPath, migrated.config);
       }
 
       vi.mocked(setup.prompter.confirm).mockResolvedValue(true);
       const result = await setup.activate();
 
-      expect(result, result.ok ? undefined : result.error).toMatchObject({
-        ok: true,
-        modelRef,
-        modelTarget: "utility",
-      });
+      expect(result, result.ok ? undefined : result.error).toMatchObject(utilityResult);
       expect(setup.login).toHaveBeenCalledOnce();
       expect(setup.run).toHaveBeenCalledOnce();
       const candidate = setup.run.mock.calls[0]?.[0].config;
@@ -112,11 +115,7 @@ describe("configured utility detection and activation", () => {
       }
       if (!priorModel) {
         const detected = await setup.detect();
-        expect(detected).toMatchObject({
-          utilityModel: modelRef,
-          setupModel: modelRef,
-          setupComplete: false,
-        });
+        expect(detected).toMatchObject(utilityDetection);
         expect(detected.configuredModel).toBeUndefined();
       }
     },
@@ -126,8 +125,7 @@ describe("configured utility detection and activation", () => {
     "rechecks the advertised canonical identity while preserving authored %s and its profile",
     async (authoredModel) => {
       const setup = await fixture({ modelTarget: "utility" });
-      const activated = await setup.activate();
-      expect(activated).toMatchObject({ ok: true });
+      expect(await setup.activate()).toMatchObject({ ok: true });
       const profile = setup.readProfile();
       assert(profile);
       const config = (await readConfigFileSnapshot()).sourceConfig;
@@ -140,11 +138,7 @@ describe("configured utility detection and activation", () => {
       clearConfigCache();
 
       const detected = await setup.detect();
-      expect(detected).toMatchObject({
-        utilityModel: modelRef,
-        setupModel: modelRef,
-        setupComplete: false,
-      });
+      expect(detected).toMatchObject(utilityDetection);
       expect(detected.configuredModel).toBeUndefined();
       const candidate = detected.candidates.find(
         (entry) => entry.kind === "existing-model" && entry.modelTarget === "utility",
@@ -156,11 +150,7 @@ describe("configured utility detection and activation", () => {
         modelRef: candidate.modelRef,
         modelTarget: candidate.modelTarget,
       });
-      expect(verified).toMatchObject({
-        ok: true,
-        modelRef,
-        modelTarget: "utility",
-      });
+      expect(verified).toMatchObject(utilityResult);
       expect(setup.run).toHaveBeenCalledOnce();
       expect(setup.run.mock.calls[0]?.[0].authProfileId).toBe(profile[0]);
       expect(await fs.readFile(setup.configPath, "utf8")).toBe(authoredConfig);
