@@ -51,6 +51,7 @@ export function createPluginGenerationFileCapture({
   retained,
   sourceFacts,
   onPackageMetadata,
+  onCapturedPath,
 }: {
   boundary: string;
   destination: string;
@@ -67,6 +68,7 @@ export function createPluginGenerationFileCapture({
   retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
   onPackageMetadata: (source: string, target: string) => void;
+  onCapturedPath: (target: string) => void;
 }) {
   const { additions } = sourceCapture;
   const ancestors = new Set<string>();
@@ -97,6 +99,7 @@ export function createPluginGenerationFileCapture({
     const captured = capturedPaths.get(real);
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
+    onCapturedPath(target);
     // SDK companion loaders receive copied paths; those exact aliases retain this owner.
     capturedPaths.set(target, target);
     if (!capturedPaths.has(real)) {

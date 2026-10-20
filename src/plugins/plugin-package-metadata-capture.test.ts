@@ -1,7 +1,7 @@
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createPluginSourceCapture,
@@ -101,6 +101,40 @@ describe("captured package lookup", () => {
     });
   });
 
+  it("does not rescan unrelated packages for producer-indexed captured files", () => {
+    const packages = new Map<string, PluginPackageCapture>();
+    const capturedOwners = new Map<string, PluginPackageCapture>();
+    for (let i = 0; i < 1000; i++) {
+      const owner = capturedPackage(`fixture/package-${i}/node_modules/dependency-${i}`);
+      packages.set(owner.sourceRoot, owner);
+      for (let j = 0; j < 10; j++) {
+        capturedOwners.set(path.join(owner.capturedRoot, `part-${j}.cjs`), owner);
+      }
+    }
+    const scans = vi.spyOn(packages, "values");
+    for (const [filename, owner] of capturedOwners) {
+      expect(findPluginCapturedPackage(packages, filename, directory, capturedOwners)).toEqual({
+        owner,
+        root: owner.capturedRoot,
+      });
+    }
+    expect(scans).not.toHaveBeenCalled();
+  });
+
+  it("does not let an indexed file escape containment or retain a removed owner", () => {
+    const owner = capturedPackage("fixture/owner");
+    const filename = path.join(owner.capturedRoot, "module.cjs");
+    const outside = path.resolve("outside/module.cjs");
+    const nested = path.join(owner.capturedRoot, "node_modules", "other", "module.cjs");
+    const packages = new Map([[owner.sourceRoot, owner]]);
+    const capturedOwners = new Map([filename, outside, nested].map((file) => [file, owner]));
+    expect(findPluginCapturedPackage(packages, outside, directory, capturedOwners)).toBeUndefined();
+    expect(findPluginCapturedPackage(packages, nested, directory, capturedOwners)).toBeUndefined();
+    packages.clear();
+    expect(
+      findPluginCapturedPackage(packages, filename, directory, capturedOwners),
+    ).toBeUndefined();
+  });
   it("observes link additions, removals, and package removal on the next lookup", () => {
     const owner = capturedPackage("fixture/owner");
     const link = path.resolve("fixture/late-link");

@@ -68,6 +68,14 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
     return signature.digest("hex");
   };
   return {
+    finish(): PluginGenerationReceipt {
+      const steps = this.finishSteps();
+      let step = steps.next();
+      while (!step.done) {
+        step = steps.next();
+      }
+      return step.value;
+    },
     marker(framed: string): void {
       if (!finished) {
         events.push(framed);
@@ -92,7 +100,7 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
         events.push(file);
       }
     },
-    finish(): PluginGenerationReceipt {
+    *finishSteps(): Generator<void, PluginGenerationReceipt, void> {
       if (finished) {
         return finished;
       }
@@ -101,16 +109,22 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
         signature !== undefined && prepared?.signature === signature
           ? undefined
           : createHash("sha256");
-      using opened = createRootFileOpenBatchSync();
-      const openFile = opened.openFile.bind(opened);
-      for (const event of events) {
-        if (typeof event === "string") {
-          receipt?.update(event);
-        } else if (receipt || !event.content || !event.native) {
-          // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
-          // destinations even on a receipt hit; misses also replay native raw bytes.
-          readContent(event, receipt, event.content, openFile);
+      for (let offset = 0; offset < events.length; offset += 32) {
+        {
+          using opened = createRootFileOpenBatchSync();
+          const openFile = opened.openFile.bind(opened);
+          for (const event of events.slice(offset, offset + 32)) {
+            if (typeof event === "string") {
+              receipt?.update(event);
+            } else if (receipt || !event.content || !event.native) {
+              // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
+              // destinations even on a receipt hit; misses also replay native raw bytes.
+              readContent(event, receipt, event.content, openFile);
+            }
+          }
         }
+        // Close pinned root handles before giving the Gateway an event-loop turn.
+        yield;
       }
       finished = {
         signature: signature ?? inputSignature()!,

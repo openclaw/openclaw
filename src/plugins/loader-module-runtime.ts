@@ -5,7 +5,10 @@ import { runPluginRegistration } from "./api-lifecycle.js";
 import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import {
+  bindPluginInstanceModuleLoader,
+  bindPluginInstanceModuleLoaderAsync,
+} from "./plugin-instance-module-loader.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
@@ -179,38 +182,40 @@ export function createPluginModuleLoader(options: {
     });
   return Object.assign(load, {
     async prepare(modulePath: string, owner: Owner): Promise<void> {
-      // Compute workers already own retained native-ESM source captures. Keep their
-      // inline acquisition path so a prepared artifact cannot compete with that owner.
       if (!isMainThread || owner.record.origin === "bundled" || getPluginInstance(owner.record)) {
         return;
       }
       await withPluginCache(cache, async () => {
-        const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
-        const preparedArtifact = await preparePluginGenerationArtifact({
+        const { preparePluginGenerationSource } = await import("./plugin-generation-worker.js");
+        const preparedSource = await preparePluginGenerationSource({
           rootDir: owner.rootDir,
           source: modulePath,
           standalone: owner.standalone,
         });
-        if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
-          await preparedArtifact.artifact.disposeAsync();
-          throw new PluginInventoryRetiredError();
-        }
         try {
-          // Reentrant loading may have installed this exact owner while acquisition
-          // yielded. Never replace its module identity with a second capture.
+          if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
+            throw new PluginInventoryRetiredError();
+          }
           if (getPluginInstance(owner.record)) {
-            await preparedArtifact.artifact.disposeAsync();
+            await preparedSource.source.disposeAsync();
             return;
           }
           const instance = new PluginInstance(owner.record.id, owner);
-          instance.run(() =>
-            bindPluginInstanceModuleLoader({
-              ...binding(modulePath, owner, instance),
-              preparedArtifact,
-            }),
+          await instance.run(() =>
+            bindPluginInstanceModuleLoaderAsync(
+              {
+                ...binding(modulePath, owner, instance),
+                preparedSource,
+              },
+              () => {
+                if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
+                  throw new PluginInventoryRetiredError();
+                }
+              },
+            ),
           );
         } catch (error) {
-          await preparedArtifact.artifact.disposeAsync();
+          await preparedSource.source.disposeAsync();
           throw error;
         }
       });

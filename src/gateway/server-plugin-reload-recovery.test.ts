@@ -28,10 +28,10 @@ it("replaces a worker-backed plugin when its previous captured source is missing
     body: 'module.exports = { id: "missing-capture", register(api) { api.registerProvider({ id: "replacement", label: "Old", auth: [] }); } };',
   });
   let capturedRoot: string | undefined;
-  const prepare = preparation.preparePluginGenerationArtifact;
-  vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+  const prepare = preparation.preparePluginGenerationSource;
+  vi.spyOn(preparation, "preparePluginGenerationSource").mockImplementation(async (params) => {
     const prepared = await prepare(params);
-    capturedRoot = prepared.artifact.boundaryRoot;
+    capturedRoot = prepared.source.sourceCapture.directory;
     return prepared;
   });
   const captureState = makePluginLoaderTempDir();

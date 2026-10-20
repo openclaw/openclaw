@@ -11,8 +11,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
-import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
+import type { PluginSourceCustodyFork } from "./plugin-generation-source-lookup.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
 import type {
   GenerationWorkerInput,
@@ -26,15 +26,12 @@ import {
   settlePluginNativeAdmissionState,
   type PluginNativeAdmissionTransfer,
 } from "./plugin-native-admission-state.js";
+import { createPluginSourceCaptureState } from "./plugin-package-metadata-capture.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { createPluginSourceCaptureRoot } from "./plugin-source-capture-directory.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
 
-export type PreparedPluginGenerationArtifact = {
-  artifact: PluginGenerationArtifact;
-  attachModuleSource(callback: (filename: string) => string): void;
-};
 type PreparationParameters = { rootDir: string; source: string; standalone?: boolean };
 type PreparationOwner = { closing: boolean; clients: Set<() => Promise<void>> };
 const preparationOwners = resolveGlobalSingleton(
@@ -65,10 +62,10 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
   return owner;
 }
 
-/** Each exposed artifact owns its capture worker; registry instance caching owns reuse. */
-export async function preparePluginGenerationArtifact(
+/** Retain prepared bytes while the instance owns local acquisition and loader hooks. */
+export async function preparePluginGenerationSource(
   params: PreparationParameters,
-): Promise<PreparedPluginGenerationArtifact> {
+): Promise<PluginSourceCustodyFork> {
   const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const owner = preparationOwnerFor(nativeSource);
   const storage = resolvePluginSourceCaptureStorage();
@@ -90,7 +87,6 @@ export async function preparePluginGenerationArtifact(
   const releaseRoot = () =>
     (releasedRoot ??= Promise.all([nativeRoots.close(), root.release()]).then(() => {}));
   const { port1, port2 } = new MessageChannel();
-  let moduleSource: ((filename: string) => string) | undefined;
   let resources = 0;
   let pending = 0;
   let drained: ReturnType<typeof createDeferredCore<void>> | undefined;
@@ -113,7 +109,7 @@ export async function preparePluginGenerationArtifact(
     }
   });
   function callback(message: GenerationWorkerCallback): void {
-    if (message.kind !== "mapping" && message.kind !== "native-root") {
+    if (message.kind !== "native-root") {
       return;
     }
     const reply: Extract<GenerationWorkerCallback, { kind: "callback-result" }> = {
@@ -121,11 +117,7 @@ export async function preparePluginGenerationArtifact(
       id: message.id,
     };
     try {
-      if (message.kind === "native-root") {
-        reply.root = nativeRoots.allocate();
-      } else {
-        reply.filename = moduleSource?.(message.filename) ?? message.filename;
-      }
+      reply.root = nativeRoots.allocate();
     } catch (failure) {
       reply.error = failure instanceof Error ? failure.message : String(failure);
     }
@@ -142,7 +134,7 @@ export async function preparePluginGenerationArtifact(
         if (pending) {
           await (drained ??= createDeferredCore()).promise;
         }
-        // Retained artifacts and recovery leases belong to the worker; dispose
+        // Retained source custody and recovery leases belong to the worker; dispose
         // them before the pool joins its physical execution lifetime.
         await pool.closeResources();
         await pool.close();
@@ -297,7 +289,6 @@ export async function preparePluginGenerationArtifact(
   try {
     const artifact = await request({
       operation: "capture",
-      captureId: 1,
       rootDir: params.rootDir,
       entryFile: params.standalone ? params.source : undefined,
       storage,
@@ -317,11 +308,27 @@ export async function preparePluginGenerationArtifact(
         namespaces: admission.namespaces,
       },
     });
+    // SAFETY: Custody capture returns the existing source owner's fork and content facts.
+    const retained = artifact as PluginSourceCustodyFork;
+    const source = retained.source;
+    const local = createPluginSourceCaptureState({
+      directory: source.sourceCapture.directory,
+      outputRoot: source.sourceCapture.outputRoot,
+      assertAvailable() {
+        if (closing || owner.closing) {
+          throw new Error("Plugin preparation worker has closed");
+        }
+      },
+      dispose: () => source.dispose(),
+      disposeAsync: () => source.disposeAsync(),
+    });
     return {
-      // SAFETY: A successful capture reply encodes the worker's PluginGenerationArtifact.
-      artifact: artifact as PluginGenerationArtifact,
-      attachModuleSource: (mapper) => {
-        moduleSource = mapper;
+      ...retained,
+      source: {
+        ...source,
+        sourceCapture: local,
+        dispose: () => local.dispose(),
+        disposeAsync: () => local.disposeAsync(),
       },
     };
   } catch (error) {

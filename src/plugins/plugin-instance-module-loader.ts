@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
@@ -17,8 +18,10 @@ import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   capturePluginGenerationArtifact,
+  capturePreparedPluginGenerationArtifactSteps,
   type PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
@@ -170,6 +173,35 @@ function retainedNativeEsmExecution(retained: RetainedNativeEsm) {
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
+  const steps = bindPluginInstanceModuleLoaderSteps(params);
+  while (!steps.next().done) {}
+}
+
+export async function bindPluginInstanceModuleLoaderAsync(
+  params: PluginInstanceModuleLoaderParams,
+  assertActive: () => void,
+): Promise<void> {
+  const steps = bindPluginInstanceModuleLoaderSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    await nextTurn();
+    try {
+      assertActive();
+    } catch (error) {
+      step = steps.throw(error);
+      continue;
+    }
+    if (getPluginCache().retirement) {
+      step = steps.throw(new PluginInventoryRetiredError());
+    } else {
+      step = steps.next();
+    }
+  }
+}
+
+function* bindPluginInstanceModuleLoaderSteps(
+  params: PluginInstanceModuleLoaderParams,
+): Generator<void, void, void> {
   const cache = getPluginCache();
   if (params.origin === "bundled") {
     if (params.expectedSourceDigest !== undefined) {
@@ -217,17 +249,21 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const reusedArtifact = retained?.artifact;
   let artifact: PluginGenerationArtifact;
   try {
-    params.preparedArtifact?.attachModuleSource(moduleSource);
+    params.preparedSource?.source.native?.retain(cache);
+    const captureArgs: Parameters<typeof capturePluginGenerationArtifact> = [
+      params.rootDir,
+      params.standalone ? params.source : undefined,
+      retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
+      moduleSource,
+      params.nativeRecovery,
+      undefined,
+      params.preparedSource,
+    ];
     artifact =
       reusedArtifact ??
-      params.preparedArtifact?.artifact ??
-      capturePluginGenerationArtifact(
-        params.rootDir,
-        params.standalone ? params.source : undefined,
-        retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
-        moduleSource,
-        params.nativeRecovery,
-      );
+      (params.preparedSource
+        ? yield* capturePreparedPluginGenerationArtifactSteps(...captureArgs)
+        : capturePluginGenerationArtifact(...captureArgs));
     if (
       params.expectedSourceDigest !== undefined &&
       artifact.sourceDigest !== params.expectedSourceDigest

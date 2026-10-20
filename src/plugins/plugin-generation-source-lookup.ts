@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
@@ -98,7 +99,16 @@ export function createPluginGenerationCapture<
     ]
   ) => T,
 ) {
-  return (...args: PluginGenerationCaptureArguments): T => {
+  return (
+    ...args: [
+      ...PluginGenerationCaptureArguments,
+      retained?: PluginSourceCustodyFork,
+      captureForCustody?: boolean,
+    ]
+  ): T => {
+    if (args[6] || args[7]) {
+      return create(...args);
+    }
     const [rootDir, entryFile, execute, moduleSource, nativeRecovery, dependencyLookupBoundary] =
       args;
     const custody =
@@ -259,22 +269,29 @@ function copyRecoverySource({
         const fact = native?.references.get(from);
         if (!fact) {
           if (fs.lstatSync(from).isSymbolicLink()) {
-            const target = fs.readlinkSync(from);
-            const relative = path.isAbsolute(target)
-              ? relativePluginPathInsideRootSync(boundaryRoot, target)
-              : undefined;
+            const resolved = path.resolve(path.dirname(from), fs.readlinkSync(from));
+            const target =
+              process.platform === "win32"
+                ? normalizeWindowsPathPreservingCase(resolved)
+                : resolved;
+            const relative = relativePluginPathInsideRootSync(boundaryRoot, target);
             if (relative !== undefined) {
-              // Windows junctions store absolute targets. A verbatim copy would
-              // point at the seed after custody disposes it, then fail on fork.
+              // Windows junctions contain absolute targets even when created with
+              // relative paths. Recovery must not point back into retiring custody.
+              const relocated = path.join(directory, relative);
               fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
               fs.symlinkSync(
-                path.relative(path.dirname(to), path.join(directory, relative)),
+                process.platform === "win32"
+                  ? relocated
+                  : path.relative(path.dirname(to), relocated),
                 to,
                 fs.statSync(from).isDirectory() ? "junction" : "file",
               );
               return false;
             }
           }
+          // External host links keep their existing policy; admitted native
+          // references use the validation and relocation branch below.
           return true;
         }
         const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
@@ -412,6 +429,7 @@ export function createPluginGenerationModuleLookup({
   captureExecutableFile,
   executable,
   packages,
+  capturedOwners,
   directory,
 }: {
   capturedPaths: Map<string, string>;
@@ -423,10 +441,11 @@ export function createPluginGenerationModuleLookup({
   captureExecutableFile: (filename: string) => string | undefined;
   executable: boolean;
   packages: ReadonlyMap<string, PluginPackageCapture>;
+  capturedOwners: ReadonlyMap<string, PluginPackageCapture>;
   directory: string;
 }) {
   const packageForFile = (filename: string) =>
-    findPluginCapturedPackage(packages, filename, directory)?.owner;
+    findPluginCapturedPackage(packages, filename, directory, capturedOwners)?.owner;
   return {
     boundaryRoot: directory,
     sourceForCaptured: (file: string) => originalSources.get(path.resolve(file)),
@@ -479,7 +498,7 @@ export function createPluginGenerationModuleLookup({
         return known;
       }
       return captureAdmitted(() => {
-        const captured = findPluginCapturedPackage(packages, filename, directory);
+        const captured = findPluginCapturedPackage(packages, filename, directory, capturedOwners);
         // import.meta.url can name a deferred peer through a private dependency link.
         const original = captured
           ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))

@@ -82,6 +82,17 @@ export const capturePluginGenerationArtifactInScope = createPluginGenerationCapt
 );
 
 function createPluginGenerationArtifact(
+  ...args: Parameters<typeof createPluginGenerationArtifactSteps>
+): PluginGenerationArtifact {
+  const steps = createPluginGenerationArtifactSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    step = steps.next();
+  }
+  return step.value;
+}
+
+export function* createPluginGenerationArtifactSteps(
   rootDir: string,
   entryFile?: string | readonly string[],
   execute?: <T>(run: () => T) => T,
@@ -90,7 +101,7 @@ function createPluginGenerationArtifact(
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
-): PluginGenerationArtifact {
+): Generator<void, PluginGenerationArtifact, void> {
   const entryFiles = typeof entryFile === "string" ? [entryFile] : entryFile && [...entryFile];
   if (entryFiles?.length === 0) {
     throw new Error("Selective plugin capture requires at least one entry");
@@ -98,8 +109,9 @@ function createPluginGenerationArtifact(
   const sourceCapture = retained?.source.sourceCapture ?? createPluginSourceCapture();
   const directory = sourceCapture.directory;
   const packages = new Map<string, PluginPackageCapture>();
+  const capturedOwners = new Map<string, PluginPackageCapture>();
   const packageForFile = (filename: string) =>
-    findPluginCapturedPackage(packages, filename, directory)?.owner;
+    findPluginCapturedPackage(packages, filename, directory, capturedOwners)?.owner;
   const capturedPaths = new Map<string, string>();
   const originalSources = new Map<string, string>();
   const hardlinkedSources = new Set<string>();
@@ -107,7 +119,7 @@ function createPluginGenerationArtifact(
     rootDir,
     directory,
     entryFiles,
-    nativeRecovery,
+    nativeRecovery ?? retained?.source.native,
     sourceCapture.outputRoot,
   );
   const metadataCapture = createPluginPackageMetadataCapture({
@@ -219,6 +231,7 @@ function createPluginGenerationArtifact(
       receipt,
       retained,
       sourceFacts: sourceFacts.files,
+      onCapturedPath: (target) => capturedOwners.set(target, owner),
       onPackageMetadata(source, target) {
         metadataCapture.record(target, (manifest) => {
           for (const alias of importTargetNames(manifest.imports)) {
@@ -647,11 +660,14 @@ function createPluginGenerationArtifact(
       );
       capturedPaths.set(alias, capturedPaths.get(entry)!);
     }
-    const initialReceipt = receipt.finish();
+    const initialReceipt = yield* receipt.finishSteps();
     nativeAdmission.finish(initialReceipt);
     additions.clear();
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages, resolution];
-    const clearCaptures = () => captures.forEach((capture) => capture.clear());
+    const clearCaptures = () => {
+      capturedOwners.clear();
+      captures.forEach((capture) => capture.clear());
+    };
     const sourceLookup = createPluginGenerationSourceLookup({
       rootDir,
       sourceRoot,
@@ -686,6 +702,7 @@ function createPluginGenerationArtifact(
         captureExecutableFile,
         executable: Boolean(execute),
         packages,
+        capturedOwners,
         directory,
       }),
       dispose: () => {

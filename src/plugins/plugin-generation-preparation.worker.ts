@@ -121,14 +121,9 @@ const codec = new GenerationCodec(
 let context: Extract<GenerationWorkerInput, { operation: "capture" }> | undefined;
 let callbacks: MessagePort | undefined;
 let nextCallback = 0;
-function observe(message: GenerationWorkerCallback): void {
-  if (message.kind === "native-load") {
-    recordPluginNativeLoad(message.filename);
-  }
-}
-function requestHost(
-  request: { kind: "mapping"; captureId: number; filename: string } | { kind: "native-root" },
-): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
+function requestHost(request: {
+  kind: "native-root";
+}): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
   if (!callbacks) {
     throw new Error("Plugin preparation host is unavailable");
   }
@@ -154,19 +149,11 @@ function requestHost(
       }
       return message;
     }
-    if (message) {
-      observe(message);
-    }
     if (performance.now() > deadline) {
       throw new Error("Plugin preparation callback timed out");
     }
     Atomics.wait(signal, 0, 0, 2);
   }
-}
-function mapSource(captureId: number, filename: string): string {
-  return callbacks
-    ? (requestHost({ kind: "mapping", captureId, filename }).filename ?? filename)
-    : filename;
 }
 function createNativeRoot() {
   const reference = requestHost({ kind: "native-root" }).root;
@@ -223,7 +210,6 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
       context = command;
       if (command.callbackPort) {
         callbacks = command.callbackPort;
-        callbacks.on("message", observe);
         callbacks.unref();
       }
     }
@@ -232,7 +218,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         recordPluginNativeLoad(filename);
       }
       let result: unknown;
-      let failedCapture: Resource | undefined;
+      const failedCaptures: Resource[] = [];
       try {
         if (command.operation === "capture") {
           const state = nativeAdmissionStateFor();
@@ -258,7 +244,11 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
               command.rootDir,
               command.entryFile,
               (run) => run(),
-              (filename) => mapSource(command.captureId, filename),
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              true,
             ),
           );
           const captureRecovery = artifact.captureRecoverySource.bind(artifact);
@@ -271,8 +261,11 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
             ownRecovery(custody.source);
             return custody;
           });
-          failedCapture = artifact;
-          result = artifact;
+          failedCaptures.push(artifact);
+          const custody = artifact.retainSourceCustody();
+          failedCaptures.push(custody.source);
+          result = custody;
+          await artifact.disposeAsync();
         } else if (command.operation === "call") {
           if (command.asynchronous) {
             await settlePluginNativeAdmissions();
@@ -297,7 +290,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         };
       } catch (error) {
         let failure = error;
-        if (failedCapture) {
+        for (const failedCapture of failedCaptures.toReversed()) {
           try {
             await failedCapture.disposeAsync();
           } catch (cleanupError) {

@@ -19,6 +19,11 @@ import {
 } from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 
+export {
+  findPluginCapturedPackage,
+  isPluginPackageFile,
+} from "./plugin-captured-package-lookup.js";
+
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
 export function createPluginDependencyResolver(lookupBoundary?: {
@@ -388,50 +393,6 @@ export type PluginPackageCapture = {
   captureTarget(filename: string): void;
 };
 
-export const isPluginPackageFile = (root: string, file: string) =>
-  isPathInside(root, file) && !path.relative(root, file).split(path.sep).includes("node_modules");
-
-function isCapturedPathInside(root: string, file: string): boolean {
-  return process.platform === "win32"
-    ? isPathInside(root, file)
-    : file === root ||
-        (file.startsWith(root) && (root.endsWith("/") || file.charCodeAt(root.length) === 47));
-}
-
-function isCapturedPackageFile(root: string, file: string): boolean {
-  if (process.platform === "win32") {
-    return isPluginPackageFile(root, file);
-  }
-  return (
-    isCapturedPathInside(root, file) &&
-    !/(?:^|\/)node_modules(?:\/|$)/u.test(file.slice(root.length))
-  );
-}
-
-/** Retain the matched lookup root; dependency links need their own source-relative mapping. */
-export function findPluginCapturedPackage(
-  packages: ReadonlyMap<string, PluginPackageCapture>,
-  filename: string,
-  directory: string,
-) {
-  // The artifact producer normalizes its directory, captured roots, and dependency links.
-  const file = process.platform === "win32" ? filename : path.resolve(filename);
-  if (!isCapturedPathInside(directory, file)) {
-    return undefined;
-  }
-  for (const owner of packages.values()) {
-    if (isCapturedPackageFile(owner.capturedRoot, file)) {
-      return { owner, root: owner.capturedRoot };
-    }
-    for (const root of owner.links) {
-      if (isCapturedPackageFile(root, file)) {
-        return { owner, root };
-      }
-    }
-  }
-  return undefined;
-}
-
 /** Captured metadata and declared target preparation share the artifact lifetime. */
 export function createPluginPackageMetadataCapture(params: {
   sourceForCaptured: (filename: string) => string | undefined;
@@ -659,10 +620,38 @@ export function createPluginSourceCapture() {
     }
     throw error;
   }
+  return createPluginSourceCaptureState({
+    directory,
+    outputRoot: override?.managedRoot ?? instance?.managedRoot,
+    dispose() {
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+      instance?.release();
+    },
+    async disposeAsync() {
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        await fsPromises.rm(directory, { recursive: true, force: true });
+      }
+      await instance?.releaseAsync();
+    },
+  });
+}
+
+/** Local acquisition state uses one directory owner's cleanup, including a retained worker lease. */
+export function createPluginSourceCaptureState(owner: {
+  assertAvailable?(): void;
+  directory: string;
+  outputRoot?: string;
+  dispose(): void;
+  disposeAsync(): Promise<void>;
+}) {
+  const { directory } = owner;
   const additions = new Set<string>();
   const captureFailures = new Map<string, unknown>();
   let disposed = false;
   const acquire = <T>(capture: () => T) => {
+    owner.assertAvailable?.();
     if (disposed) {
       throw new Error("Plugin module capture has been disposed");
     }
@@ -680,6 +669,7 @@ export function createPluginSourceCapture() {
     }
   };
   const assertModuleAvailable = (filename: string) => {
+    owner.assertAvailable?.();
     if (captureFailures.has(filename)) {
       throw captureFailures.get(filename);
     }
@@ -702,7 +692,7 @@ export function createPluginSourceCapture() {
     capture: acquire,
     assertModuleAvailable,
     directory,
-    outputRoot: override?.managedRoot ?? instance?.managedRoot,
+    outputRoot: owner.outputRoot,
     linkHost: (hostRoot: string) => {
       const modules = path.join(directory, "node_modules");
       fs.mkdirSync(modules, { recursive: true, mode: 0o700 });
@@ -711,17 +701,11 @@ export function createPluginSourceCapture() {
     },
     dispose() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
-        fs.rmSync(directory, { recursive: true, force: true });
-      }
-      instance?.release();
+      owner.dispose();
     },
     async disposeAsync() {
       beginDisposal();
-      if (!retainLoadedPluginSourceCapture(directory)) {
-        await fsPromises.rm(directory, { recursive: true, force: true });
-      }
-      await instance?.releaseAsync();
+      await owner.disposeAsync();
     },
   };
 }

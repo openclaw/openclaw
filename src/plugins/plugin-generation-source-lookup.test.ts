@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginGenerationSourceLookup } from "./plugin-generation-source-lookup.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -62,3 +64,50 @@ describe("plugin generation source lookup", () => {
     expect(lookup.resolve(source)).toBe(source);
   });
 });
+
+it.each(["absolute", "relative"] as const)(
+  "keeps %s captured dependency links inside recovery after the original capture retires",
+  (kind) => {
+    const parent = fs.realpathSync(tempDirs.make("plugin-recovery-dependency-"));
+    const boundary = path.join(parent, "capture");
+    const plugin = path.join(boundary, "plugin");
+    const dependency = path.join(boundary, "dependency");
+    fs.mkdirSync(path.join(plugin, "node_modules"), { recursive: true });
+    fs.mkdirSync(dependency);
+    const entry = path.join(plugin, "index.cjs");
+    fs.writeFileSync(entry, "module.exports = require('dependency');");
+    fs.writeFileSync(path.join(dependency, "index.js"), "module.exports = 42;");
+    const link = path.join(plugin, "node_modules", "dependency");
+    fs.symlinkSync(
+      kind === "absolute" ? dependency : path.relative(path.dirname(link), dependency),
+      link,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const lookup = createPluginGenerationSourceLookup({
+      rootDir: plugin,
+      sourceRoot: plugin,
+      capturedRoot: plugin,
+      boundaryRoot: boundary,
+      capturedPaths: new Map([[entry, entry]]),
+      hardlinkedSources: new Set(),
+      assertModuleAvailable: (filename) => fs.accessSync(filename),
+    });
+    withPluginSourceCaptureStorage({ stateDir: parent, placement: "temporary" }, () => {
+      const recovery = lookup.captureRecoverySource();
+      const fork = recovery.fork();
+      try {
+        recovery.dispose();
+        fs.rmSync(boundary, { recursive: true });
+        const recoveredEntry = fork.resolve(entry);
+        const recoveredRequire = createRequire(recoveredEntry);
+        expect(recoveredRequire("dependency")).toBe(42);
+        expect(fs.realpathSync(path.join(fork.rootDir, "node_modules", "dependency"))).toBe(
+          path.join(fork.sourceCapture.directory, "dependency"),
+        );
+      } finally {
+        fork.dispose();
+        recovery.dispose();
+      }
+    });
+  },
+);

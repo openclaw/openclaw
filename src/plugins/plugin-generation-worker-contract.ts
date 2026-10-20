@@ -7,7 +7,6 @@ import type { AdmissionState } from "./plugin-native-admission-state.js";
 export type GenerationWorkerInput = (
   | {
       operation: "capture";
-      captureId: number;
       rootDir: string;
       entryFile?: string;
       storage: PluginSourceCaptureStorage;
@@ -29,13 +28,10 @@ export type GenerationWorkerReply = (
   | { error: { message: string; name: string; stack?: string }; resources: number }
 ) & { released?: number[] };
 export type GenerationWorkerCallback =
-  | { kind: "mapping"; id: number; captureId: number; filename: string; signal: Int32Array }
   | { kind: "native-root"; id: number; signal: Int32Array }
   | {
       kind: "callback-result";
       id: number;
-      filename?: string;
       root?: { id: number; directory: string };
       error?: string;
-    }
-  | { kind: "native-load"; filename: string };
+    };
