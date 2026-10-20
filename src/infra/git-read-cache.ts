@@ -283,6 +283,36 @@ function createReadCache<Input, Output>(
   };
 }
 
+function createDiffReadCache(
+  freshness: Parameters<typeof createReadCache>[1],
+  maxEntries = MAX_CACHED_CHECKOUTS,
+) {
+  return createReadCache(
+    (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
+      runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
+    freshness,
+    (input, signal, diffTiming, previous) =>
+      runGitWorkerOperation(
+        {
+          type: "checkout.revision",
+          input: {
+            root: input.cwd,
+            scope: "diff",
+            summaryOnly: input.summaryOnly,
+            paths: previous?.files.flatMap((file) =>
+              file.oldPath ? [file.path, file.oldPath] : [file.path],
+            ),
+          },
+        },
+        { signal, diffTiming },
+      ),
+    undefined,
+    undefined,
+    (value) => !value.unavailableReason,
+    maxEntries,
+  );
+}
+
 function createReadCaches() {
   const comparisons = createReadCache<
     GitWorkerOperations["pull-request.branch-comparison"]["input"],
@@ -354,58 +384,18 @@ function createReadCaches() {
         ),
       (input) => input.root,
     ),
-    diff: createReadCache(
-      (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
-        runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
+    diff: createDiffReadCache(
       { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
-      (input, signal, diffTiming, previous) =>
-        runGitWorkerOperation(
-          {
-            type: "checkout.revision",
-            input: {
-              root: input.cwd,
-              scope: "diff",
-              summaryOnly: input.summaryOnly,
-              paths: previous?.files.flatMap((file) =>
-                file.oldPath ? [file.path, file.oldPath] : [file.path],
-              ),
-            },
-          },
-          { signal, diffTiming },
-        ),
-      undefined,
-      undefined,
-      (value) => !value.unavailableReason,
       // Full results may retain 1.5 MB of patches each.
       32,
     ),
-    diffSummary: createReadCache(
-      (input: GitReadOperations["checkout.diff"]["input"], signal, diffTiming) =>
-        runGitWorkerOperation({ type: "checkout.diff", input }, { signal, diffTiming }),
+    diffSummary: createDiffReadCache(
       // Visible clients share this short-lived summary; never duplicate a slow scan.
       {
         milliseconds: 10_000,
         joinPending: true,
         versionedMilliseconds: Number.POSITIVE_INFINITY,
       },
-      (input, signal, diffTiming, previous) =>
-        runGitWorkerOperation(
-          {
-            type: "checkout.revision",
-            input: {
-              root: input.cwd,
-              scope: "diff",
-              summaryOnly: input.summaryOnly,
-              paths: previous?.files.flatMap((file) =>
-                file.oldPath ? [file.path, file.oldPath] : [file.path],
-              ),
-            },
-          },
-          { signal, diffTiming },
-        ),
-      undefined,
-      undefined,
-      (value) => !value.unavailableReason,
     ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>
