@@ -28,8 +28,8 @@ const store = {
   profiles: { "fixture:default": { type: "api_key", provider: "fixture", key: "synthetic" } },
 };
 const state = { lastGood: { fixture: "fixture:default" } };
-const database = new (requireNodeSqlite().DatabaseSync)(source);
-try {
+{
+  using database = new (requireNodeSqlite().DatabaseSync)(source);
   database.exec(`
     CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT);
     CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT);
@@ -40,8 +40,6 @@ try {
   database
     .prepare("INSERT INTO auth_profile_state VALUES (?, ?)")
     .run("primary", JSON.stringify(state));
-} finally {
-  database.close();
 }
 const expected = {
   store: { status: "readable", raw: store },

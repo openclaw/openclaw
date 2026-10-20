@@ -16,13 +16,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it.each(["top-level", "nested"] as const)(
   "compares one committed schema during %s inspection and observes the next commit",
   (scope) => {
-    const directory = tempDirs.make("openclaw-schema-snapshot-");
-    const filename = path.join(directory, "state.sqlite");
-    const writer = new DatabaseSync(filename);
+    const filename = path.join(tempDirs.make("openclaw-schema-snapshot-"), "state.sqlite");
+    using writer = new DatabaseSync(filename);
     const schemaSql = "CREATE TABLE a (id INTEGER); CREATE TABLE z (id INTEGER);";
     const schema = sqliteSchemaFixture(schemaSql);
     writer.exec(`PRAGMA journal_mode=WAL; ${schemaSql}`);
-    const reader = new DatabaseSync(filename, { readOnly: true });
+    using reader = new DatabaseSync(filename, { readOnly: true });
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       const readTable = createSqliteTableContractReader(reader);
@@ -49,8 +48,6 @@ it.each(["top-level", "nested"] as const)(
       expect(reader.isTransaction).toBe(false);
     } finally {
       observation.restore();
-      reader.close();
-      writer.close();
     }
   },
 );
@@ -58,7 +55,7 @@ it.each(["top-level", "nested"] as const)(
 it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
   "does not require transaction-control authorization for top-level or nested inspections",
   () => {
-    const database = new DatabaseSync(":memory:");
+    using database = new DatabaseSync(":memory:");
     const schema = "CREATE TABLE records (id INTEGER);";
     database.exec(schema);
     const denyTransactionControl = (action: number) =>
@@ -84,7 +81,6 @@ it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
       if (database.isTransaction) {
         database.exec("ROLLBACK");
       }
-      database.close();
     }
   },
 );
@@ -93,43 +89,38 @@ it.each(["inspection callback", "exclusive writer"] as const)(
   "releases a failed %s snapshot so a cached retry reads fresh facts",
   (failureAt) => {
     const filename = path.join(tempDirs.make("openclaw-schema-snapshot-failure-"), "state.sqlite");
-    const writer = new DatabaseSync(filename);
+    using writer = new DatabaseSync(filename);
     const schema = "CREATE TABLE records (id INTEGER);";
     writer.exec(`PRAGMA journal_mode=DELETE; PRAGMA busy_timeout=0; ${schema}`);
-    const reader = new DatabaseSync(filename, { readOnly: true });
+    using reader = new DatabaseSync(filename, { readOnly: true });
     reader.exec("PRAGMA busy_timeout=0");
     enableNodeSqliteKyselyStatementCache(reader);
-    try {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        expect(collectSqliteSchemaIssues(reader, schema)).toEqual([]);
-      }
-      if (failureAt === "inspection callback") {
-        const failure = new Error("inspection failed");
-        expect(() =>
-          collectSqliteSchemaIssues(reader, schema, {}, () => {
-            // DELETE mode proves a real read lock exists, not just an autocommit flag.
-            expect(() => writer.exec("INSERT INTO records VALUES (1)")).toThrow(/locked/iu);
-            throw failure;
-          }),
-        ).toThrow(failure);
-        writer.exec("ALTER TABLE records ADD COLUMN later TEXT");
-        expect(collectSqliteSchemaIssues(reader, schema)).toEqual([
-          {
-            code: "unexpected-column",
-            objectName: "records.later",
-            message: "column definitions differ for records",
-          },
-        ]);
-        expect(reader.isTransaction).toBe(false);
-      } else {
-        writer.exec("BEGIN EXCLUSIVE");
-        expect(() => collectSqliteSchemaIssues(reader, schema)).toThrow(/locked/iu);
-        writer.exec("ROLLBACK");
-        expect(collectSqliteSchemaIssues(reader, schema)).toEqual([]);
-      }
-    } finally {
-      reader.close();
-      writer.close();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(collectSqliteSchemaIssues(reader, schema)).toEqual([]);
+    }
+    if (failureAt === "inspection callback") {
+      const failure = new Error("inspection failed");
+      expect(() =>
+        collectSqliteSchemaIssues(reader, schema, {}, () => {
+          // DELETE mode proves a real read lock exists, not just an autocommit flag.
+          expect(() => writer.exec("INSERT INTO records VALUES (1)")).toThrow(/locked/iu);
+          throw failure;
+        }),
+      ).toThrow(failure);
+      writer.exec("ALTER TABLE records ADD COLUMN later TEXT");
+      expect(collectSqliteSchemaIssues(reader, schema)).toEqual([
+        {
+          code: "unexpected-column",
+          objectName: "records.later",
+          message: "column definitions differ for records",
+        },
+      ]);
+      expect(reader.isTransaction).toBe(false);
+    } else {
+      writer.exec("BEGIN EXCLUSIVE");
+      expect(() => collectSqliteSchemaIssues(reader, schema)).toThrow(/locked/iu);
+      writer.exec("ROLLBACK");
+      expect(collectSqliteSchemaIssues(reader, schema)).toEqual([]);
     }
   },
 );

@@ -56,12 +56,10 @@ fs.writeFileSync(
 process.env.NODE_OPTIONS = "--import=" + pathToFileURL(probe).href;
 const callEnv = { ...process.env };
 const source = path.join(root, "source.sqlite");
-const database = new DatabaseSync(source);
-try {
+{
+  using database = new DatabaseSync(source);
   database.exec("CREATE TABLE padding (data BLOB)");
   database.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(0);
-} finally {
-  database.close();
 }
 const before = fs.readFileSync(source);
 const cacheEntries = () =>
@@ -109,8 +107,8 @@ assert.equal(fs.existsSync(retainedLocation), false);
 const prepared = prepareSqliteReadOnlyLocationSync(source);
 try {
   assert.deepEqual(fs.readFileSync(prepared.location), before);
-  const snapshot = new DatabaseSync(prepared.location, { readOnly: true });
-  try {
+  {
+    using snapshot = new DatabaseSync(prepared.location, { readOnly: true });
     assert.deepEqual(
       snapshot
         .prepare("SELECT data FROM padding")
@@ -124,8 +122,6 @@ try {
     );
     assert.equal(snapshot.prepare("PRAGMA user_version").get()?.user_version, 0);
     assert.equal(snapshot.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
-  } finally {
-    snapshot.close();
   }
 } finally {
   assert.equal(await prepared.cleanupAsync(), true);

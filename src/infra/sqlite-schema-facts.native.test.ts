@@ -41,6 +41,37 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
+  const rowsSchema = "CREATE TABLE original(id); INSERT INTO original VALUES(1),(2)";
+  const walSchema = `PRAGMA journal_mode=WAL; ${rowsSchema}; PRAGMA user_version=1`;
+  function openPair(schema?: string, admitted = true) {
+    const filename = path.join(tempDirs.make("sqlite-native-pair-"), "state.sqlite");
+    return [openDatabase(schema, admitted, filename), openDatabase("", true, filename)] as const;
+  }
+
+  function observeReads(inspect: (queries: string[]) => void) {
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      inspect(observation.queries);
+    } finally {
+      observation.restore();
+    }
+  }
+
+  function reuseCursor(database: DatabaseSync, ending: "completion" | "return") {
+    const statement = database.prepare("SELECT id FROM original");
+    const old = statement.iterate();
+    old.next();
+    if (ending === "completion") {
+      old.next();
+      old.next();
+    } else {
+      old.return?.();
+    }
+    const current = statement.iterate();
+    current.next();
+    old.return?.();
+    return current;
+  }
 
   it("does not retain the default encoding before the first schema object exists", () => {
     const filename = path.join(tempDirs.make("sqlite-empty-encoding-"), "agent.sqlite");
@@ -108,13 +139,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it.each(["autocommit", "commit", "rollback", "callback failure"] as const)(
     "settles %s writes while an unrelated read cursor remains open",
     (outcome) => {
-      const filename = path.join(tempDirs.make("sqlite-settled-writer-"), "agent.sqlite");
-      const writer = openDatabase(
-        "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES (1),(2)",
-        true,
-        filename,
-      );
-      const sibling = openDatabase("", true, filename);
+      const [writer, sibling] = openPair(`PRAGMA journal_mode=WAL; ${rowsSchema}`);
       const before = readSqliteDatabaseScopedWriteToken(sibling, "session");
       expect(before).toBeTypeOf("string");
       const rows = writer.prepare("SELECT id FROM original").iterate();
@@ -153,13 +178,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
   );
 
   it("settles a RETURNING writer when its own cursor closes", () => {
-    const filename = path.join(tempDirs.make("sqlite-returning-writer-"), "agent.sqlite");
-    const writer = openDatabase(
-      "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES (1),(2)",
-      true,
-      filename,
-    );
-    const sibling = openDatabase("", true, filename);
+    const [writer, sibling] = openPair(`PRAGMA journal_mode=WAL; ${rowsSchema}`);
     const reader = writer.prepare("SELECT id FROM original").iterate();
     const write = writer.prepare("INSERT INTO original VALUES (3),(4) RETURNING id").iterate();
     try {
@@ -397,21 +416,18 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(beforeLocal).toBeDefined();
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(database, schemaMutation);
-    const observation = observeSqliteReadSql(StatementSync.prototype);
-    try {
+    observeReads((queries) => {
       database.exec(sql);
       expect(localRevision()).not.toBe(beforeLocal);
       expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).toBe(schema?.admissionId);
       const sibling = openDatabase("", true, filename);
       expect(getAdmittedSqliteSchemaFacts(sibling)?.admissionId).toBe(schema?.admissionId);
       expect(schemaMutation).not.toHaveBeenCalled();
-      expect(observation.queries).toEqual([]);
+      expect(queries).toEqual([]);
       const beforeWrite = readSqliteDatabaseWriteRevision(sibling);
       database.exec("UPDATE temp.local_status SET sibling_write_revision=1");
       expect(readSqliteDatabaseWriteRevision(sibling)).not.toBe(beforeWrite);
-    } finally {
-      observation.restore();
-    }
+    });
   });
 
   it("retains no descriptor for raw snapshot opens and retires admitted snapshot custody", () => {
@@ -462,13 +478,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it.for([false, true])(
     "discards raw savepoint row receipts without DDL: schemaDependent=%s",
     (schemaDependent) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-row-rollback-"), "state.sqlite");
-      const database = openDatabase(
+      const [database, sibling] = openPair(
         "CREATE TABLE original(id); INSERT INTO original VALUES(1)",
-        true,
-        filename,
       );
-      const sibling = openDatabase("", true, filename);
       const key = {
         name: "row-backed-admission",
         schemaDependent,
@@ -495,9 +507,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
   );
 
   it("revokes catalog and schema-dependent receipts rolled back by raw savepoints", () => {
-    const filename = path.join(tempDirs.make("openclaw-schema-savepoint-"), "state.sqlite");
-    const database = openDatabase("CREATE TABLE original(id)", true, filename);
-    const sibling = openDatabase("", true, filename);
+    const [database, sibling] = openPair("CREATE TABLE original(id)");
     const key = {
       name: "savepoint-table-ready",
       schemaDependent: true,
@@ -524,13 +534,10 @@ describe("native SQLite schema snapshots and callbacks", () => {
     { sql: "BEGIN; SELECT * FROM original; SELECT * FROM missing", admitted: true },
     { sql: "BEGIN; SELECT * FROM original", admitted: false },
   ])("qualifies the raw control batch $sql (admitted=$admitted)", ({ sql, admitted }) => {
-    const filename = path.join(tempDirs.make("openclaw-schema-control-batch-"), "state.sqlite");
-    const reader = openDatabase(
+    const [reader, writer] = openPair(
       "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES(1); PRAGMA user_version=1",
       admitted,
-      filename,
     );
-    const writer = openDatabase("", true, filename);
     if (sql.includes("missing")) {
       expect(() => reader.exec(sql)).toThrow("no such table");
     } else {
@@ -582,28 +589,19 @@ describe("native SQLite schema snapshots and callbacks", () => {
       if (finish === "dispose" && typeof StatementSync.prototype[Symbol.dispose] !== "function") {
         context.skip();
       }
-      const filename = path.join(tempDirs.make("openclaw-schema-iterator-"), "state.sqlite");
-      const reader = openDatabase(
-        "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES(1),(2); PRAGMA user_version=1",
-        true,
-        filename,
-      );
-      const writer = openDatabase("", true, filename);
+      const [reader, writer] = openPair(walSchema);
       const statement = reader.prepare(sql);
       const rows = statement.iterate();
       try {
         expect(rows.next().done).toBe(false);
         writer.exec("CREATE TABLE committed_sibling(id); PRAGMA user_version=2");
         const committed = getAdmittedSqliteSchemaFacts(writer);
-        const admission = observeSqliteReadSql(StatementSync.prototype);
-        try {
+        observeReads((queries) => {
           expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(version);
           expect(tableExists(reader, "committed_sibling")).toBe(version === 2);
           // Schema capture retains the physical encoding across native snapshots.
-          expect(admission.queries).toHaveLength(3);
-        } finally {
-          admission.restore();
-        }
+          expect(queries).toHaveLength(3);
+        });
         expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
         const visible =
           reader.prepare("SELECT name FROM sqlite_schema WHERE name='committed_sibling'").get() !==
@@ -622,13 +620,10 @@ describe("native SQLite schema snapshots and callbacks", () => {
         } else {
           statement[finish]?.();
         }
-        const observation = observeSqliteReadSql(StatementSync.prototype);
-        try {
+        observeReads((queries) => {
           expect(getAdmittedSqliteSchemaFacts(reader)?.admissionId).toBe(committed?.admissionId);
-          expect(observation.queries).toEqual([]);
-        } finally {
-          observation.restore();
-        }
+          expect(queries).toEqual([]);
+        });
         reader.exec("CREATE TABLE after_reset(value)");
         expect(tableExists(writer, "after_reset")).toBe(true);
         if (finish !== "return" && finish !== "complete") {
@@ -645,13 +640,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it.for(["iterate", "all", "exec"] as const)(
     "keeps callback captures inside the native %s snapshot",
     (method) => {
-      const filename = path.join(tempDirs.make("openclaw-schema-first-callback-"), "state.sqlite");
-      const reader = openDatabase(
+      const [reader, writer] = openPair(
         "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES(1); PRAGMA user_version=1",
-        true,
-        filename,
       );
-      const writer = openDatabase("", true, filename);
       reader.function("read_catalog", () => {
         writer.exec("CREATE TABLE added(id); PRAGMA user_version=2");
         expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(1);
@@ -672,21 +663,18 @@ describe("native SQLite schema snapshots and callbacks", () => {
       } else {
         reader.prepare(sql)[method]();
       }
-      const observation = observeSqliteReadSql(StatementSync.prototype);
-      try {
+      observeReads((queries) => {
         expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(2);
         expect(getAdmittedSqliteSchemaFacts(writer)?.userVersion).toBe(2);
-        expect(observation.queries).toEqual([]);
-      } finally {
-        observation.restore();
-      }
+        expect(queries).toEqual([]);
+      });
     },
   );
 
   it("observes completed DDL iterator replay according to the native runtime", () => {
-    const native = new DatabaseSync(":memory:");
     let expected: boolean;
-    try {
+    {
+      using native = new DatabaseSync(":memory:");
       const control = native.prepare("DROP TABLE IF EXISTS target").iterate();
       control.next();
       native.exec("CREATE TABLE target(id)");
@@ -694,12 +682,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
       expected =
         native.prepare("SELECT name FROM sqlite_schema WHERE name='target'").get() !== undefined;
       control.return?.();
-    } finally {
-      native.close();
     }
-    const filename = path.join(tempDirs.make("openclaw-schema-done-ddl-"), "state.sqlite");
-    const writer = openDatabase(undefined, true, filename);
-    const reader = openDatabase("", true, filename);
+    const [writer, reader] = openPair();
     const rows = writer.prepare("DROP TABLE IF EXISTS target").iterate();
     try {
       expect(rows.next().done).toBe(true);
@@ -718,43 +702,16 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it.for(["completion", "return"] as const)(
     "preserves native return after %s without losing newer cursor custody",
     (ending) => {
-      const schema = "CREATE TABLE original(id); INSERT INTO original VALUES(1),(2)";
-      const native = new DatabaseSync(":memory:");
       let expected: unknown;
-      try {
-        native.exec(schema);
-        const statement = native.prepare("SELECT id FROM original");
-        const old = statement.iterate();
-        old.next();
-        if (ending === "completion") {
-          old.next();
-          old.next();
-        } else {
-          old.return?.();
-        }
-        const current = statement.iterate();
-        current.next();
-        old.return?.();
+      {
+        using native = new DatabaseSync(":memory:");
+        native.exec(rowsSchema);
+        const current = reuseCursor(native, ending);
         expected = current.next().value?.id;
         current.return?.();
-      } finally {
-        native.close();
       }
-      const filename = path.join(tempDirs.make("openclaw-schema-return-done-"), "state.sqlite");
-      const writer = openDatabase(`PRAGMA journal_mode=WAL; ${schema}`, true, filename);
-      const reader = openDatabase("", true, filename);
-      const statement = writer.prepare("SELECT id FROM original");
-      const old = statement.iterate();
-      old.next();
-      if (ending === "completion") {
-        old.next();
-        old.next();
-      } else {
-        old.return?.();
-      }
-      const current = statement.iterate();
-      current.next();
-      old.return?.();
+      const [writer, reader] = openPair(`PRAGMA journal_mode=WAL; ${rowsSchema}`);
+      const current = reuseCursor(writer, ending);
       try {
         if (expected === 1) {
           writer.exec("CREATE TABLE after_return(id)");
@@ -771,7 +728,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
 
   it("binds iterators eagerly while retaining native prototype and result semantics", () => {
     const database = openDatabase();
-    const native = new DatabaseSync(":memory:");
+    using native = new DatabaseSync(":memory:");
     let value = 1;
     let bindings = 0;
     let steps = 0;
@@ -798,12 +755,11 @@ describe("native SQLite schema snapshots and callbacks", () => {
     } finally {
       rows.return?.();
       control.return?.();
-      native.close();
     }
   });
 
   it("resets eagerly without retaining custody for unstepped iterators", () => {
-    const schema = "CREATE TABLE original(id); INSERT INTO original VALUES(1),(2)";
+    const schema = rowsSchema;
     using native = new DatabaseSync(":memory:");
     native.exec(schema);
     const control = native.prepare("SELECT id FROM original");
@@ -814,13 +770,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     previous.return?.();
     const expected = next.next().value;
     next.return?.();
-    const filename = path.join(tempDirs.make("openclaw-schema-unstepped-"), "state.sqlite");
-    const reader = openDatabase(
-      `PRAGMA journal_mode=WAL; ${schema}; PRAGMA user_version=1`,
-      true,
-      filename,
-    );
-    const sibling = openDatabase("", true, filename);
+    const [reader, sibling] = openPair(walSchema);
     const statement = reader.prepare("SELECT id FROM original");
     const old = statement.iterate();
     old.next();
@@ -844,13 +794,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it.skipIf(typeof StatementSync.prototype.close !== "function")(
     "preserves an iterator when native statement reuse is refused before reset",
     () => {
-      const filename = path.join(tempDirs.make("openclaw-schema-reentrant-"), "state.sqlite");
-      const reader = openDatabase(
-        "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES(1),(2); PRAGMA user_version=1",
-        true,
-        filename,
-      );
-      const writer = openDatabase("", true, filename);
+      const [reader, writer] = openPair(walSchema);
       let refused = false;
       reader.function("reenter", (value) => {
         if (value === 2) {
@@ -889,46 +833,36 @@ describe("native SQLite schema snapshots and callbacks", () => {
       INSERT INTO schema_meta VALUES('primary','agent',1,'${agentId}')`;
       const original = openDatabase(schema("original"), true, filename);
       expect(readExistingAgentSchemaMeta(original)?.agentId).toBe("original");
-      const raw = new DatabaseSync(filename);
-      try {
-        expect(raw.prepare("SELECT agent_id FROM schema_meta").get()?.agent_id).toBe("original");
-        const replaced = openDatabase(schema("replacement"), true, replacement);
-        expect(readExistingAgentSchemaMeta(replaced)?.agentId).toBe("replacement");
-        let deniedFilename = filename;
-        if (process.platform === "win32") {
-          // Windows refuses replacing an open SQLite file; both handles keep their identity.
-          expect(() => renameSync(replacement, filename)).toThrow(
-            expect.objectContaining({ code: "EBUSY" }),
-          );
-          deniedFilename = replacement;
-        } else {
-          renameSync(replacement, filename);
-        }
-        expect(readExistingAgentSchemaMeta(raw)?.agentId).toBe("original");
-        expect(readExistingAgentSchemaMeta(replaced)?.agentId).toBe("replacement");
-        const denied = new DatabaseSync(deniedFilename);
-        try {
-          denied.setAuthorizer((action, table) =>
-            action === constants.SQLITE_READ && table === "schema_meta"
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
-          expect(() => readExistingAgentSchemaMeta(denied)).toThrow(/prohibited|authorized/iu);
-        } finally {
-          denied.close();
-        }
-      } finally {
-        raw.close();
+      using raw = new DatabaseSync(filename);
+      expect(raw.prepare("SELECT agent_id FROM schema_meta").get()?.agent_id).toBe("original");
+      const replaced = openDatabase(schema("replacement"), true, replacement);
+      expect(readExistingAgentSchemaMeta(replaced)?.agentId).toBe("replacement");
+      let deniedFilename = filename;
+      if (process.platform === "win32") {
+        // Windows refuses replacing an open SQLite file; both handles keep their identity.
+        expect(() => renameSync(replacement, filename)).toThrow(
+          expect.objectContaining({ code: "EBUSY" }),
+        );
+        deniedFilename = replacement;
+      } else {
+        renameSync(replacement, filename);
       }
+      expect(readExistingAgentSchemaMeta(raw)?.agentId).toBe("original");
+      expect(readExistingAgentSchemaMeta(replaced)?.agentId).toBe("replacement");
+      using denied = new DatabaseSync(deniedFilename);
+      denied.setAuthorizer((action, table) =>
+        action === constants.SQLITE_READ && table === "schema_meta"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      expect(() => readExistingAgentSchemaMeta(denied)).toThrow(/prohibited|authorized/iu);
     },
   );
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
     "tracks DDL custody and shared catalog changes while an authorizer is installed",
     () => {
-      const filename = path.join(tempDirs.make("openclaw-schema-authorized-ddl-"), "state.sqlite");
-      const writer = openDatabase(undefined, true, filename);
-      const sibling = openDatabase("", true, filename);
+      const [writer, sibling] = openPair();
       const revision = getSqliteDatabaseSchemaRevision(sibling)!;
       let observed = false;
       writer.function("observe_pending", () => {
@@ -1001,20 +935,17 @@ describe("native SQLite schema snapshots and callbacks", () => {
           reader.prepare("SELECT id FROM original").all(),
         );
       }
-      const observation = observeSqliteReadSql(StatementSync.prototype);
-      try {
+      observeReads((queries) => {
         const qualified = getAdmittedSqliteSchemaFacts(reader);
         expect(qualified?.userVersion).toBe(version);
         expect(qualified?.tables.has("committed_sibling")).toBe(version === 2);
-        const qualificationQueries = [...observation.queries];
+        const qualificationQueries = [...queries];
         expect(
           qualificationQueries.filter((query) => query.includes("sqlite_schema")),
         ).toHaveLength(1);
         expect(getAdmittedSqliteSchemaFacts(reader)).toBe(qualified);
-        expect(observation.queries).toEqual(qualificationQueries);
-      } finally {
-        observation.restore();
-      }
+        expect(queries).toEqual(qualificationQueries);
+      });
       expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
     });
     reader.exec("ROLLBACK");

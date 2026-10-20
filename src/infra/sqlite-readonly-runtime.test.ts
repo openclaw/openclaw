@@ -40,19 +40,23 @@ function session() {
   });
 }
 
+function readinessChecker() {
+  return createReadinessChecker({
+    startedAt: Date.now(),
+    channelManager: {
+      getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+      getAutostartSuppression: () => null,
+      isAmbientAutostartSuppressed: () => false,
+    },
+  });
+}
+
 it
   .skipIf(process.platform === "win32")
   .each(["loader", "removed", "symbol", "dyld-symbol", "musl", "version", "permission"])(
   "reports a %s failure through the real read-only spawn and live readiness, without poisoning ordinary crashes",
   async (kind) => {
-    const readiness = createReadinessChecker({
-      startedAt: Date.now(),
-      channelManager: {
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        getAutostartSuppression: () => null,
-        isAmbientAutostartSuppressed: () => false,
-      },
-    });
+    const readiness = readinessChecker();
     // An ordinary worker failure must not mark a working executable as unavailable.
     const ordinaryExit = kind === "symbol" || kind === "musl" ? 127 : 1;
     await runtime(
@@ -111,14 +115,7 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   const executable = await runtime("echo v26.12.0");
   const recover = vi.fn(async () => ({ status: "report-only" as const, reason: "test service" }));
   const release = registerChildRuntimeRecovery(recover);
-  const readiness = createReadinessChecker({
-    startedAt: Date.now(),
-    channelManager: {
-      getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-      getAutostartSuppression: () => null,
-      isAmbientAutostartSuppressed: () => false,
-    },
-  });
+  const readiness = readinessChecker();
   try {
     expect(readiness().ready).toBe(true);
     await fs.unlink(executable);

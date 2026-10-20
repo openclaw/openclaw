@@ -11,11 +11,12 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture(mode = 0o600) {
   const root = fs.realpathSync(dirs.make("sqlite-rollback-recovery-"));
   const file = path.join(root, "operation.sqlite");
-  const database = new DatabaseSync(file);
-  database.exec(
-    "CREATE TABLE receipt (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT; INSERT INTO receipt VALUES (7, 'committed');",
-  );
-  database.close();
+  {
+    using database = new DatabaseSync(file);
+    database.exec(
+      "CREATE TABLE receipt (id INTEGER PRIMARY KEY, value TEXT NOT NULL) STRICT; INSERT INTO receipt VALUES (7, 'committed');",
+    );
+  }
   fs.chmodSync(file, mode);
   const identity = fs.statSync(file, { bigint: true });
   const directory = fs.statSync(root, { bigint: true });
@@ -54,15 +55,13 @@ function fixture(mode = 0o600) {
       .toSorted()
       .map((name) => {
         const absolute = path.join(root, name);
-        const stat = fs.lstatSync(absolute, { bigint: true });
-        return {
-          name,
-          dev: stat.dev,
-          ino: stat.ino,
-          mode: stat.mode,
-          mtime: stat.mtimeNs,
-          content: fs.readFileSync(absolute),
-        };
+        const {
+          dev,
+          ino,
+          mode: fileMode,
+          mtimeNs: mtime,
+        } = fs.lstatSync(absolute, { bigint: true });
+        return { name, dev, ino, mode: fileMode, mtime, content: fs.readFileSync(absolute) };
       });
   const crash = () =>
     createHotSqliteRollbackJournal({
@@ -79,11 +78,9 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
       const f = fixture(mode);
       f.crash();
       const before = f.files();
-      const reader = new DatabaseSync(f.file, { readOnly: true });
-      try {
+      {
+        using reader = new DatabaseSync(f.file, { readOnly: true });
         expect(() => f.read(reader)).toThrow(expect.objectContaining({ errcode: 776 }));
-      } finally {
-        reader.close();
       }
       const admission = await f.prepare();
       expect(admission.record).toEqual({ id: 7, value: "committed" });
@@ -100,16 +97,14 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
       const timestamp = fs.statSync(f.file);
       fs.utimesSync(f.file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
       admission.admit(() => {});
-      const recovered = new DatabaseSync(f.file, { readOnly: true });
-      try {
+      {
+        using recovered = new DatabaseSync(f.file, { readOnly: true });
         expect(f.read(recovered)).toEqual({ id: 7, value: "committed" });
         expect(
           recovered
             .prepare("SELECT name FROM sqlite_schema WHERE name = 'openclaw_hot_journal_pressure'")
             .get(),
         ).toBeUndefined();
-      } finally {
-        recovered.close();
       }
       expect(fs.existsSync(`${f.file}-journal`)).toBe(false);
       expect(fs.statSync(f.file).mode & 0o777).toBe(mode);
@@ -132,14 +127,10 @@ describe.skipIf(process.platform === "win32")("explicit SQLite rollback recovery
 
   it("refuses WAL without checkpointing, deleting sidecars, or invoking rollback admission", async () => {
     const f = fixture();
-    const writer = new DatabaseSync(f.file);
-    try {
-      writer.exec("PRAGMA journal_mode=WAL; UPDATE receipt SET value='committed WAL';");
-      const before = f.files();
-      await expect(f.prepare()).rejects.toThrow();
-      expect(f.files()).toEqual(before);
-    } finally {
-      writer.close();
-    }
+    using writer = new DatabaseSync(f.file);
+    writer.exec("PRAGMA journal_mode=WAL; UPDATE receipt SET value='committed WAL';");
+    const before = f.files();
+    await expect(f.prepare()).rejects.toThrow();
+    expect(f.files()).toEqual(before);
   });
 });
