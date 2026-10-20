@@ -49,17 +49,7 @@ export function setupSessionHistoryFixtures() {
 
   async function writeSqliteSession(
     params: { storedSessionFile?: string; incognito?: boolean; sessionKey?: string } = {},
-  ): Promise<{
-    marker: string;
-    sessionKey: string;
-    sessionTarget: {
-      agentId: string;
-      sessionId: string;
-      sessionKey: string;
-      storePath: string;
-      env?: NodeJS.ProcessEnv;
-    };
-  }> {
+  ) {
     await captureRuntimeConfigAsyncReader()();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
     tempDirs.push(dir);

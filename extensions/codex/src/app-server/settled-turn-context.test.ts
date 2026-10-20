@@ -78,9 +78,24 @@ function settledHostPromptTurn() {
   };
 }
 
+function capture(
+  messages: AgentMessage[],
+  overrides: Partial<Parameters<typeof captureCodexSettledTurnFinalizationContext>[0]> = {},
+) {
+  return captureCodexSettledTurnFinalizationContext({
+    sessionFile: "/tmp/session.jsonl",
+    sessionId: "session-1",
+    turnId: "turn-2",
+    model: "gpt-5.6-luna",
+    mirroredMessages: messages,
+    settledMessages: messages,
+    ...overrides,
+  });
+}
+
 async function captureContext(params: {
   historyMessages: AgentMessage[];
-  mirroredMessages: AgentMessage[];
+  mirroredMessages?: AgentMessage[];
   settledMessages: AgentMessage[];
   turnId?: string;
   model?: string;
@@ -90,10 +105,8 @@ async function captureContext(params: {
   mocks.readHistory.mockImplementation(
     (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(params.historyMessages),
   );
-  return captureCodexSettledTurnFinalizationContext({
-    sessionFile: "/tmp/session.jsonl",
-    sessionId: "session-1",
-    mirroredMessages: params.mirroredMessages,
+  return capture(params.settledMessages, {
+    mirroredMessages: params.mirroredMessages ?? params.settledMessages,
     settledMessages: params.settledMessages,
     turnId: params.turnId ?? "turn-2",
     model: params.model ?? "gpt-5.6-luna",
@@ -129,13 +142,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         return read(messages);
       });
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      const pending = captureCodexSettledTurnFinalizationContext({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-        mirroredMessages: messages,
-        settledMessages: messages,
-        turnId: "turn-2",
-        model: "gpt-5.6-luna",
+      const pending = capture(messages, {
         signal: controller.signal,
         assertActive: () => {
           if (!active) {
@@ -173,7 +180,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
 
       const context = await captureContext({
         historyMessages,
-        mirroredMessages: settledMessages,
         settledMessages,
         turnId: "turn-2",
         ...selection,
@@ -200,12 +206,12 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
   );
 
   it.each([
-    { budget: "items", overflow: 1, notice: false },
-    { budget: "bytes", overflow: 0, notice: false },
-    { budget: "bytes", overflow: 1, notice: false },
+    { budget: "items", overflow: 1 },
+    { budget: "bytes", overflow: 0 },
+    { budget: "bytes", overflow: 1 },
   ])(
     "preserves current evidence at the $budget limit (overflow=$overflow)",
-    async ({ budget, overflow, notice }) => {
+    async ({ budget, overflow }) => {
       const settledMessages = settledTurn();
       const expected = [
         { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
@@ -242,28 +248,19 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         };
       }
       const historyMessages = [
-        message(
-          { role: "user", content: overflow < 0 ? "x".repeat(65537) : "Older context." },
-          "older:prompt",
-        ),
+        message({ role: "user", content: "Older context." }, "older:prompt"),
         ...settledMessages,
       ];
       const before = structuredClone(historyMessages);
       const context = await captureContext({
         historyMessages,
-        mirroredMessages: settledMessages,
         settledMessages,
       });
       if (overflow > 0) {
         expect(context).toBeUndefined();
       } else {
         expect(context).toBeDefined();
-        expect(context?.data.slice(notice ? 1 : 0)).toEqual(expected);
-        if (notice) {
-          expect(context?.data[0]).toMatchObject({
-            content: [{ text: expect.stringContaining("Do not infer missing earlier facts") }],
-          });
-        }
+        expect(context?.data).toEqual(expected);
       }
       expect(historyMessages).toEqual(before);
     },
@@ -299,7 +296,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       const settledMessages = settledTurn();
       const captured = await captureContext({
         historyMessages: [...prior, ...settledMessages],
-        mirroredMessages: settledMessages,
         settledMessages,
       });
       expect(captured?.data).toBeDefined();
@@ -328,7 +324,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     await expect(
       captureContext({
         historyMessages: [...prior, prior[0]!, ...settledMessages],
-        mirroredMessages: settledMessages,
         settledMessages,
       }),
     ).resolves.toBeUndefined();
@@ -341,16 +336,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       mocks.readHistory.mockImplementation(
         (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(messages),
       );
-      await expect(
-        captureCodexSettledTurnFinalizationContext({
-          sessionFile: "/tmp/session.jsonl",
-          sessionId: "session-1",
-          mirroredMessages: messages,
-          settledMessages: messages,
-          turnId: "turn-2",
-          model,
-        }),
-      ).resolves.toBeUndefined();
+      await expect(capture(messages, { model })).resolves.toBeUndefined();
       expect(mocks.readHistory).not.toHaveBeenCalled();
     },
   );
@@ -393,7 +379,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     await expect(
       captureContext({
         historyMessages,
-        mirroredMessages: settledMessages,
         settledMessages,
         turnId: turnId ?? "turn-2",
       }),
@@ -416,7 +401,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     await expect(
       captureContext({
         historyMessages,
-        mirroredMessages: settledMessages,
         settledMessages,
         turnId: "turn-2",
       }),
@@ -446,15 +430,6 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
           })(),
         ),
     );
-    await expect(
-      captureCodexSettledTurnFinalizationContext({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-        model: "gpt-5.6-luna",
-        mirroredMessages: settledMessages,
-        settledMessages,
-        turnId: "turn-2",
-      }),
-    ).resolves.toBeUndefined();
+    await expect(capture(settledMessages)).resolves.toBeUndefined();
   });
 });

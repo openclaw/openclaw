@@ -170,6 +170,10 @@ function finalize(
   return runCodexSettledTurnFinalization({ attempt, settledAttempt }, options);
 }
 
+function expectBounded(params: Record<string, unknown>) {
+  expect(mocks.runBounded).toHaveBeenCalledWith(expect.objectContaining(params));
+}
+
 describe("runCodexSettledTurnFinalization", () => {
   beforeEach(() => {
     vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
@@ -230,13 +234,11 @@ describe("runCodexSettledTurnFinalization", () => {
 
       const result = await finalize(attempt, settledAttempt, options);
 
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isolation: "configured-transport",
-          requireNoExternalCapabilities: true,
-          options,
-        }),
-      );
+      expectBounded({
+        isolation: "configured-transport",
+        requireNoExternalCapabilities: true,
+        options,
+      });
       expect(result).toMatchObject({
         assistantTranscriptOwned: true,
         assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
@@ -303,26 +305,24 @@ describe("runCodexSettledTurnFinalization", () => {
           authRequirement: "subscription",
         }),
       );
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isolation: "private-stdio",
-          options,
-          authRequirement: "subscription",
-          preparedAuth: {
-            kind: "profile",
-            profileId: "openai:captured",
-            store: attempt.authProfileStore,
-            snapshot: expect.objectContaining({
-              loginParams: {
-                type: "chatgptAuthTokens",
-                accessToken: token,
-                chatgptAccountId: "synthetic-account",
-                chatgptPlanType: null,
-              },
-            }),
-          },
-        }),
-      );
+      expectBounded({
+        isolation: "private-stdio",
+        options,
+        authRequirement: "subscription",
+        preparedAuth: {
+          kind: "profile",
+          profileId: "openai:captured",
+          store: attempt.authProfileStore,
+          snapshot: expect.objectContaining({
+            loginParams: {
+              type: "chatgptAuthTokens",
+              accessToken: token,
+              chatgptAccountId: "synthetic-account",
+              chatgptPlanType: null,
+            },
+          }),
+        },
+      });
       expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
     },
   );
@@ -361,33 +361,23 @@ describe("runCodexSettledTurnFinalization", () => {
   );
 
   it.each([
-    {
-      label: "native execution",
-      managedHooksEnabled: true,
-      items: () => [{ id: "command", type: "commandExecution" }],
-      rejectedType: "commandExecution",
-    },
-    {
-      label: "unattested hook continuation",
-      managedHooksEnabled: undefined,
-      items: () => [managedHookPrompt],
-      rejectedType: "hookPrompt",
-    },
-    {
-      label: "mismatched prompt echo",
-      managedHooksEnabled: undefined,
-      items: () => [promptEcho("A different prompt.")],
-      rejectedType: "userMessage",
-    },
-    {
-      label: "duplicate prompt echo",
-      managedHooksEnabled: undefined,
-      items: (prompt: string) => [promptEcho(prompt), { ...promptEcho(prompt), id: "echo-2" }],
-      rejectedType: "userMessage",
-    },
-  ])(
-    "rejects $label before transcript mutation",
-    async ({ items, managedHooksEnabled, rejectedType }) => {
+    [
+      "native execution",
+      true,
+      () => [{ id: "command", type: "commandExecution" }],
+      "commandExecution",
+    ],
+    ["unattested hook continuation", undefined, () => [managedHookPrompt], "hookPrompt"],
+    ["mismatched prompt echo", undefined, () => [promptEcho("A different prompt.")], "userMessage"],
+    [
+      "duplicate prompt echo",
+      undefined,
+      (prompt: string) => [promptEcho(prompt), { ...promptEcho(prompt), id: "echo-2" }],
+      "userMessage",
+    ],
+  ] as const)(
+    "rejects %s before transcript mutation",
+    async (_label, managedHooksEnabled, items, rejectedType) => {
       const attempt = createAttempt();
       mocks.runBounded.mockResolvedValue({
         ...boundedResult(),

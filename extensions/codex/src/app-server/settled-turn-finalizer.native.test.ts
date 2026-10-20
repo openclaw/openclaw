@@ -215,6 +215,44 @@ function transcriptTarget(params: NativeRunParams) {
   };
 }
 
+function readTranscript(params: NativeRunParams) {
+  return readVisibleSessionTranscriptMessageEntries(transcriptTarget(params));
+}
+
+function callsFor(spy: MockInstance<CodexAppServerClient["request"]> | undefined, method: string) {
+  return spy?.mock.calls.filter(([name]) => name === method);
+}
+
+function containsObject(value: Record<string, unknown>) {
+  return expect.arrayContaining([expect.objectContaining(value)]);
+}
+
+function requestAccounts(fixture: NativeFixture) {
+  return fixture.requests.map(({ body, account }) => ({ model: body.model, account }));
+}
+
+async function configureAgentHome(fixture: NativeFixture): Promise<CodexPluginConfig> {
+  await writeNativeConfig(
+    fixture,
+    authBridge.resolveCodexAppServerHomeDir(fixture.agentDir),
+    "openai",
+  );
+  return {
+    ...fixture.pluginConfig,
+    appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
+  };
+}
+
+type SummaryScenario = {
+  label: string;
+  homeScope?: "agent" | "user";
+  preserveNativeModel?: boolean;
+  prepared?: boolean;
+  priorCount?: number;
+  hidden?: boolean;
+  live?: boolean;
+};
+
 function trackSharedClient(cleanups: Cleanup[]) {
   let current: CodexAppServerClient | undefined;
   const factory: CodexAppServerClientFactory = async (options) => {
@@ -251,15 +289,7 @@ describe.skipIf(process.platform === "win32")(
       { timeout: 60_000 },
       async (closure) => {
         await withNativeFixture(tempDir, async (fixture, cleanups) => {
-          const pluginConfig: CodexPluginConfig = {
-            ...fixture.pluginConfig,
-            appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
-          };
-          await writeNativeConfig(
-            fixture,
-            authBridge.resolveCodexAppServerHomeDir(fixture.agentDir),
-            "openai",
-          );
+          const pluginConfig = await configureAgentHome(fixture);
           fixture.setPhase(closure === "before completion" ? "hold" : "probe");
           // Process/auth startup is setup for the close-event contract below.
           const client = await sharedClients.createIsolatedCodexAppServerClient({
@@ -326,15 +356,7 @@ describe.skipIf(process.platform === "win32")(
       { timeout: 60_000 },
       async () => {
         await withNativeFixture(tempDir, async (fixture, cleanups) => {
-          const pluginConfig = {
-            ...fixture.pluginConfig,
-            appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
-          };
-          await writeNativeConfig(
-            fixture,
-            authBridge.resolveCodexAppServerHomeDir(fixture.agentDir),
-            "openai",
-          );
+          const pluginConfig = await configureAgentHome(fixture);
           const params = await createRunParams(fixture);
           usePreparedApiKey(params, fixture.baseUrl);
           const shared = trackSharedClient(cleanups);
@@ -356,9 +378,7 @@ describe.skipIf(process.platform === "win32")(
             threadId: binding.threadId,
             includeTurns: true,
           });
-          const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
-            transcriptTarget(params),
-          );
+          const transcriptBefore = await readTranscript(params);
           const closeSideHost = await bindProductionHarnessHostCapabilitiesForTest(params);
           cleanups.push(async () => closeSideHost());
           const side = {
@@ -401,7 +421,7 @@ describe.skipIf(process.platform === "win32")(
             text: SUMMARY,
           });
           expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
-          const forks = calls.mock.calls.filter(([method]) => method === "thread/fork");
+          const forks = callsFor(calls, "thread/fork")!;
           expect(forks).toHaveLength(1);
           expect(forks[0]?.[1]).toMatchObject({
             threadId: binding.threadId,
@@ -416,9 +436,7 @@ describe.skipIf(process.platform === "win32")(
               })
             ).thread.turns,
           ).toEqual(before.thread.turns);
-          expect(
-            await readVisibleSessionTranscriptMessageEntries(transcriptTarget(params)),
-          ).toEqual(transcriptBefore);
+          expect(await readTranscript(params)).toEqual(transcriptBefore);
           expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(binding);
 
           fixture.setPhase("hold");
@@ -448,12 +466,8 @@ describe.skipIf(process.platform === "win32")(
             controller.abort("native side proof cleanup");
             await settled;
           }
-          expect(calls.mock.calls.filter(([method]) => method === "turn/interrupt")).toHaveLength(
-            1,
-          );
-          expect(
-            calls.mock.calls.filter(([method]) => method === "thread/unsubscribe"),
-          ).toHaveLength(2);
+          expect(callsFor(calls, "turn/interrupt")).toHaveLength(1);
+          expect(callsFor(calls, "thread/unsubscribe")).toHaveLength(2);
           expect(client.getCloseError()).toBeUndefined();
           fixture.setPhase("health");
           await runNativePrompt(client, binding.threadId, "Confirm the parent still works.");
@@ -487,7 +501,7 @@ describe.skipIf(process.platform === "win32")(
             requireNoExternalCapabilities: true,
           });
           expect(hostProbe.text).toBe("Ready.");
-          expect(requests.map(({ body, account }) => ({ model: body.model, account }))).toEqual([
+          expect(requestAccounts(fixture)).toEqual([
             { model: HOST_MODEL, account: `Bearer ${HOST_KEY}` },
           ]);
           fixture.setPhase("probe");
@@ -567,7 +581,7 @@ describe.skipIf(process.platform === "win32")(
             }),
           );
           expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
-          expect(requests.map(({ body, account }) => ({ model: body.model, account }))).toEqual([
+          expect(requestAccounts(fixture)).toEqual([
             { model: NATIVE_MODEL, account: `Bearer ${NATIVE_KEY}` },
             { model: NATIVE_MODEL, account: `Bearer ${NATIVE_KEY}` },
           ]);
@@ -589,9 +603,7 @@ describe.skipIf(process.platform === "win32")(
           const bindingBefore = structuredClone(
             await readCodexAppServerBinding(params.sessionFile),
           );
-          const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
-            transcriptTarget(params),
-          );
+          const transcriptBefore = await readTranscript(params);
           const assertSourceCurrent = sharedClients.captureCodexAppServerClientLifetime(
             client,
             "connection",
@@ -631,9 +643,7 @@ describe.skipIf(process.platform === "win32")(
             replay: settledAttempt.replayMetadata,
           }).toEqual(before);
           expect(await readCodexAppServerBinding(params.sessionFile)).toEqual(bindingBefore);
-          expect(
-            await readVisibleSessionTranscriptMessageEntries(transcriptTarget(params)),
-          ).toEqual(transcriptBefore);
+          expect(await readTranscript(params)).toEqual(transcriptBefore);
           expect(assertSourceCurrent).not.toThrow();
           expect(client.getCloseError()).toBeUndefined();
           expect(sharedClients.releaseLeasedSharedCodexAppServerClient(client)).toBe(false);
@@ -655,76 +665,44 @@ describe.skipIf(process.platform === "win32")(
       },
     );
 
-    it.for([
-      {
-        label: "ordinary prepared API key",
-        homeScope: "agent" as const,
-        preserveNativeModel: false,
-        prepared: true,
-        priorCount: 0,
-      },
+    it.for<SummaryScenario>([
+      { label: "ordinary prepared API key" },
       {
         label: "preserveNativeModel-only host profile",
-        homeScope: "agent" as const,
         preserveNativeModel: true,
         prepared: false,
-        priorCount: 0,
       },
-      {
-        label: "ordinary user-home private host profile",
-        homeScope: "user" as const,
-        preserveNativeModel: false,
-        prepared: false,
-        priorCount: 0,
-      },
-      {
-        label: "long conversation",
-        homeScope: "agent" as const,
-        preserveNativeModel: false,
-        prepared: true,
-        priorCount: 201,
-      },
-      {
-        label: "hidden background notification",
-        homeScope: "agent" as const,
-        preserveNativeModel: false,
-        prepared: true,
-        priorCount: 0,
-        hidden: true,
-      },
+      { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
+      { label: "long conversation", priorCount: 201 },
+      { label: "hidden background notification", hidden: true },
       ...(LIVE
-        ? [
-            {
-              label: "hidden background notification with live provider",
-              homeScope: "agent" as const,
-              preserveNativeModel: false,
-              prepared: true,
-              priorCount: 0,
-              hidden: true,
-              live: true,
-            },
-          ]
+        ? [{ label: "hidden background notification with live provider", hidden: true, live: true }]
         : []),
     ])(
       "persists a host-authorized summary with the actual native selection ($label)",
       { timeout: LIVE ? 360_000 : 60_000 },
-      async (scenario) => {
-        const live = "live" in scenario && scenario.live;
-        const hidden = "hidden" in scenario && scenario.hidden;
+      async ({
+        homeScope = "agent",
+        preserveNativeModel = false,
+        prepared = true,
+        priorCount = 0,
+        live = false,
+        hidden = false,
+      }) => {
         await withNativeFixture(
           tempDir,
           async (fixture, cleanups) => {
             const pluginConfig = {
               ...fixture.pluginConfig,
-              appServer: { ...fixture.pluginConfig.appServer, homeScope: scenario.homeScope },
+              appServer: { ...fixture.pluginConfig.appServer, homeScope },
             };
             const sourceHome =
-              scenario.homeScope === "user"
+              homeScope === "user"
                 ? fixture.native.codexHome
                 : authBridge.resolveCodexAppServerHomeDir(fixture.agentDir);
-            await writeNativeConfig(fixture, sourceHome, "openai", scenario.homeScope === "user");
+            await writeNativeConfig(fixture, sourceHome, "openai", homeScope === "user");
             const nativeAuthBefore =
-              scenario.homeScope === "user"
+              homeScope === "user"
                 ? await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")
                 : undefined;
             const params = await createRunParams(fixture);
@@ -732,7 +710,7 @@ describe.skipIf(process.platform === "win32")(
               params.timeoutMs = 120_000;
               params.thinkLevel = "low";
             }
-            if (scenario.prepared) {
+            if (prepared) {
               // The prepared key wins over a usable, differently authenticated profile.
               params.authProfileId = OTHER_PROFILE;
               usePreparedApiKey(params, fixture.baseUrl);
@@ -757,7 +735,7 @@ describe.skipIf(process.platform === "win32")(
             }
             expect(initialBinding.model).toBe(NATIVE_MODEL);
             expect(initialBinding.connectionScope).not.toBe("supervision");
-            if (scenario.preserveNativeModel) {
+            if (preserveNativeModel) {
               seedCodexTestBinding(params.sessionFile, {
                 ...initialBinding,
                 preserveNativeModel: true,
@@ -765,7 +743,7 @@ describe.skipIf(process.platform === "win32")(
               params.modelId = HOST_MODEL;
               params.model = { ...params.model, id: HOST_MODEL };
             }
-            for (let index = 0; index < scenario.priorCount; index += 1) {
+            for (let index = 0; index < priorCount; index += 1) {
               await appendSessionTranscriptMessageByIdentity({
                 ...transcriptTarget(params),
                 message: {
@@ -828,7 +806,7 @@ describe.skipIf(process.platform === "win32")(
             expect(() => params.hostCapabilities.assertActive()).not.toThrow();
             closeHost();
             expect(() => params.hostCapabilities.assertActive()).toThrow();
-            const sourceKey = scenario.homeScope === "user" ? NATIVE_KEY : HOST_KEY;
+            const sourceKey = homeScope === "user" ? NATIVE_KEY : HOST_KEY;
             expect(fixture.requests.length).toBeGreaterThan(0);
             for (const { body, account } of fixture.requests) {
               expect({ model: body.model, account }).toEqual({
@@ -843,9 +821,7 @@ describe.skipIf(process.platform === "win32")(
             const bindingBefore = structuredClone(
               await readCodexAppServerBinding(params.sessionFile),
             );
-            const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
-              transcriptTarget(params),
-            );
+            const transcriptBefore = await readTranscript(params);
             if (hidden) {
               expect(
                 transcriptBefore.filter(
@@ -904,43 +880,32 @@ describe.skipIf(process.platform === "win32")(
             );
             expect(sourceRequests).not.toHaveBeenCalled();
             expect(sourceClient.getCloseError()).toBeUndefined();
-            expect(
-              fixture.requests.map(({ body, account }) => ({ model: body.model, account })),
-            ).toEqual([{ model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` }]);
+            expect(requestAccounts(fixture)).toEqual([
+              { model: NATIVE_MODEL, account: `Bearer ${HOST_KEY}` },
+            ]);
             expect(fixture.requests[0]?.body.input).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  role: "developer",
-                  content: expect.arrayContaining([
-                    expect.objectContaining({
-                      type: "input_text",
-                      text: expect.stringContaining(
-                        "Earlier conversation may be omitted; do not infer missing earlier facts.",
-                      ),
-                    }),
-                  ]),
+              containsObject({
+                role: "developer",
+                content: containsObject({
+                  type: "input_text",
+                  text: expect.stringContaining(
+                    "Earlier conversation may be omitted; do not infer missing earlier facts.",
+                  ),
                 }),
-              ]),
+              }),
             );
             expect(
-              summaryRequests?.mock.calls
-                .filter(([method]) => method === "account/login/start")
-                .map(([, request]) => request),
+              callsFor(summaryRequests, "account/login/start")?.map(([, request]) => request),
             ).toEqual([{ type: "apiKey", apiKey: HOST_KEY }]);
-            const startCall = summaryRequests?.mock.calls.find(
-              ([method]) => method === "thread/start",
-            );
+            const startCall = callsFor(summaryRequests, "thread/start")?.[0];
             expect(startCall?.[1]).toMatchObject({
               model: NATIVE_MODEL,
               ephemeral: true,
               environments: [],
               dynamicTools: [],
             });
-            expect(
-              summaryRequests?.mock.calls.filter(([method]) => method === "thread/inject_items"),
-            ).toHaveLength(1);
-            const turns = summaryRequests?.mock.calls.filter(([method]) => method === "turn/start");
-            expect(turns).toHaveLength(1);
+            expect(callsFor(summaryRequests, "thread/inject_items")).toHaveLength(1);
+            expect(callsFor(summaryRequests, "turn/start")).toHaveLength(1);
             expect(finalization).toMatchObject({
               assistantTranscriptOwned: true,
               assistant: {
@@ -955,9 +920,7 @@ describe.skipIf(process.platform === "win32")(
                 ],
               },
             });
-            const transcript = await readVisibleSessionTranscriptMessageEntries(
-              transcriptTarget(params),
-            );
+            const transcript = await readTranscript(params);
             expect(transcript.slice(0, transcriptBefore.length)).toEqual(transcriptBefore);
             expect(transcript.slice(transcriptBefore.length).map((entry) => entry.message)).toEqual(
               [finalization.assistant],
