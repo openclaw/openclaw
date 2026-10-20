@@ -1,6 +1,9 @@
 // Memory Core plugin module implements the synchronous sqlite-vec KNN query body.
 import type { DatabaseSync } from "node:sqlite";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import {
+  decodeMemoryEmbedding,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { buildMemoryModelFilter, type MemorySearchRow } from "./manager-search-shared.js";
 import { vectorToBlob } from "./vector-blob.js";
 
@@ -90,10 +93,19 @@ export function validateVectorKnnRequest(request: VectorKnnRequest): void {
  * not diverge.
  */
 export function runVectorKnnQuery(
-  db: Pick<DatabaseSync, "prepare">,
+  db: Pick<DatabaseSync, "prepare" | "function">,
   request: VectorKnnRequest,
 ): VectorKnnResponse {
   validateVectorKnnRequest(request);
+  // Reading vec0's embedding column loads a whole vector chunk for every
+  // candidate. The joined canonical row already holds the same coordinates;
+  // convert binary64 to the index's binary32 before using the same scorer.
+  db.function("openclaw_memory_embedding_f32", { deterministic: true }, (bytes) => {
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error("memory vector KNN requires a binary canonical embedding");
+    }
+    return vectorToBlob(decodeMemoryEmbedding(bytes));
+  });
   const vectorModelFilter = buildMemoryModelFilter("c.model", request.providerModels);
   const qBlob = vectorToBlob(request.queryVec);
   const snippetByteLimit = request.snippetMaxChars * 4;
@@ -110,7 +122,7 @@ export function runVectorKnnQuery(
           `            THEN CAST(substr(CAST(c.text AS BLOB), 1, ?) AS TEXT)\n` +
           `            ELSE substr(c.text, 1, ?) END AS text,\n` +
           `       c.source,\n` +
-          `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
+          `       vec_distance_cosine(openclaw_memory_embedding_f32(c.embedding), ?) AS dist\n` +
           `  FROM ${request.vectorTable} v\n` +
           `  CROSS JOIN memory_index_chunks c ON c.id = v.id\n` +
           ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${request.sourceFilter.sql}\n` +

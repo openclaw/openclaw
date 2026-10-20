@@ -21,7 +21,12 @@ it.each([
     options: { configuredAgentsOnly: true },
     expectedKeys: ["agent:main:visible", "agent:research:visible"],
   },
-])("returns complete non-incognito entries for $name", async ({ options, expectedKeys }) => {
+  {
+    name: "one requested agent without saved prompts",
+    options: { agentId: "main", projection: "list" as const },
+    expectedKeys: ["agent:main:visible"],
+  },
+])("returns non-incognito entries for $name", async ({ options, expectedKeys }) => {
   await withOpenClawTestState({ label: "plugin-transcript-projection" }, async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -71,9 +76,15 @@ it.each([
     const { store } = loadCombinedSessionStoreForGateway(cfg, options);
 
     expect(Object.keys(store).toSorted()).toEqual(expectedKeys);
-    for (const entry of Object.values(store)) {
-      expect.soft(entry.skillsSnapshot).toEqual(skillsSnapshot);
-      expect.soft(entry.systemPromptReport).toEqual(systemPromptReport);
+    const withoutSnapshots = "projection" in options && options.projection === "list";
+    for (const [key, entry] of Object.entries(store)) {
+      expect.soft(entry.skillsSnapshot).toEqual(
+        withoutSnapshots ? undefined : skillsSnapshot,
+      );
+      expect.soft(entry.systemPromptReport).toEqual(
+        withoutSnapshots ? undefined : systemPromptReport,
+      );
+      expect.soft(entry.sessionId).toBe(`${key.split(":")[1]}-visible`);
     }
   });
 });
