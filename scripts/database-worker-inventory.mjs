@@ -3538,7 +3538,6 @@ const workerModules = new Set([
 
   "src/infra/device-auth-store.kernel.ts", // Shared-state worker SQL; pairing token retirement is supplied only by its worker rotation kernel.
   "src/infra/device-pairing-cloud-worker.ts", // Bootstrap worker dispatcher owns binding checks and completion writes.
-  "src/infra/promotions-feed.kernel.ts", // Promotion claims execute through promotions-feed.worker.
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
