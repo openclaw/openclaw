@@ -100,83 +100,76 @@ it("accounts for conditional encodings after legacy reads and releases shared ro
   });
 });
 
-it("counts each retirement event once across invalidations and bounded evictions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    using fixture = await publicationFixture(true);
-    const { projection, present, invalidate, expectCauses } = fixture;
-    const row: GatewaySessionRow = { ...baseRow, rowMode: "sidebar" };
-    const opts = { rowMode: "sidebar" } as const;
-    invalidate("projection-revision");
-    present();
-    await expectCauses([]);
-    present().list([], opts);
-    invalidate("projection-revision");
-    present();
-    await expectCauses([]);
-    for (const cause of ["config", "identity"] as const) {
-      present().list([row], opts);
-      present().list([row], { ...opts, limit: 2 });
-      invalidate(cause);
+it.each([true, false])(
+  "reports baseline retirement only for sidebar rows (sidebar=%s)",
+  (sidebar) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      using fixture = await publicationFixture(true);
+      const { projection, present, invalidate, expectCauses } = fixture;
+      const opts = { rowMode: sidebar ? "sidebar" : "compact" } as const;
+      const row: GatewaySessionRow = { ...baseRow, ...opts };
+      const populate = () => {
+        if (sidebar) {
+          present().list([row], opts);
+          present().list([row], { ...opts, limit: 2 });
+          return;
+        }
+        present().select({ rowMode: "sidebar" }, () => ({
+          entries: [],
+          totalCount: 0,
+          ownerFacet: [],
+          ownerCount: 0,
+          offset: 0,
+          nextOffset: null,
+          hasMore: false,
+        }));
+        for (const rowMode of [undefined, "compact", "dashboard"] as const) {
+          present().list([{ ...baseRow, rowMode }], { rowMode });
+        }
+      };
+      invalidate("projection-revision");
       present();
+      await expectCauses([]);
+      present().list([], opts);
+      invalidate("projection-revision");
       present();
-      await expectCauses([cause]);
-    }
-
-    const historyView = present();
-    let initialRevision: string | undefined;
-    for (let generation = 0; generation <= 33; generation++) {
-      const { sessions, rowHistory } = historyView.list([{ ...row, updatedAt: generation }], opts);
-      const result = shareSidebarSessionRows(sessions, undefined, rowHistory);
-      initialRevision ??= result.rowsRevision;
-      if (generation === 32) {
-        expect(rowHistory).toHaveLength(32);
-        await expectCauses([]);
-      } else if (generation === 33) {
-        expect(
-          shareSidebarSessionRows(sessions, `delta:${initialRevision}`, rowHistory).rowsDelta,
-        ).toBeUndefined();
-        await expectCauses(["history-evicted"]);
+      await expectCauses([]);
+      for (const cause of ["projection-revision", "config", "identity"] as const) {
+        populate();
+        invalidate(cause);
+        present();
+        present();
+        await expectCauses(sidebar && cause !== "projection-revision" ? [cause] : []);
       }
-    }
-    for (let limit = 1; limit <= 512; limit++) {
-      present().list([row], { ...opts, limit });
-    }
-    await expectCauses(["view-evicted"]);
-    projection.dispose();
-    await expectCauses(["selection-reset"]);
-    projection.dispose();
-    await expectCauses([]);
-  });
-});
-
-it("does not count selection-only or non-sidebar views as retired baselines", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    using fixture = await publicationFixture(true);
-    const { projection, present, invalidate, expectCauses } = fixture;
-    const populate = () => {
-      present().select({ rowMode: "sidebar" }, () => ({
-        entries: [],
-        totalCount: 0,
-        ownerFacet: [],
-        ownerCount: 0,
-        offset: 0,
-        nextOffset: null,
-        hasMore: false,
-      }));
-      for (const rowMode of [undefined, "compact", "dashboard"] as const) {
-        present().list([{ ...baseRow, rowMode }], { rowMode });
+      if (sidebar) {
+        const historyView = present();
+        let initialRevision: string | undefined;
+        for (let generation = 0; generation <= 33; generation++) {
+          const { sessions, rowHistory } = historyView.list(
+            [{ ...row, updatedAt: generation }],
+            opts,
+          );
+          initialRevision ??= shareSidebarSessionRows(sessions, undefined, rowHistory).rowsRevision;
+          if (generation === 32) {
+            expect(rowHistory).toHaveLength(32);
+            await expectCauses([]);
+          } else if (generation === 33) {
+            expect(
+              shareSidebarSessionRows(sessions, `delta:${initialRevision}`, rowHistory).rowsDelta,
+            ).toBeUndefined();
+            await expectCauses(["history-evicted"]);
+          }
+        }
+      } else {
+        populate();
       }
-    };
-    for (const cause of ["projection-revision", "config", "identity"] as const) {
-      populate();
-      invalidate(cause);
-      present();
-    }
-    populate();
-    for (let limit = 1; limit <= 513; limit++) {
-      present().list([], { rowMode: "compact", limit });
-    }
-    projection.dispose();
-    await expectCauses([]);
-  });
-});
+      for (let limit = 1; limit <= (sidebar ? 512 : 513); limit++) {
+        present().list(sidebar ? [row] : [], { ...opts, limit });
+      }
+      await expectCauses(sidebar ? ["view-evicted"] : []);
+      projection.dispose();
+      await expectCauses(sidebar ? ["selection-reset"] : []);
+      projection.dispose();
+      await expectCauses([]);
+    }),
+);

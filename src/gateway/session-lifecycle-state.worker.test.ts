@@ -1,6 +1,7 @@
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { buildCreatedSessionGoal } from "../config/sessions/goals-transitions.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { createSessionCompoundWorkerFixture } from "../config/sessions/session-compound-worker.test-support.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
@@ -35,16 +36,10 @@ it.each(["resumed goal", "another recovery owner"] as const)(
       };
       replaceSessionEntrySync(f.scope, initial);
       routing.load.mockReturnValue({ ...f.scope, ...f.target, entry: initial });
-      const goal: NonNullable<SessionEntry["goal"]> = {
-        schemaVersion: 1,
-        id: "resumed-goal",
-        objective: "Finish the work",
-        status: "active",
-        createdAt: 1_000,
+      const goal = {
+        ...buildCreatedSessionGoal(initial, { objective: "Finish the work" }, 1_000),
         updatedAt: 3_000,
-        tokenStart: 0,
         tokensUsed: 12,
-        continuationTurns: 0,
       };
       const queued: SessionEntry = { ...initial, goal, label: "concurrent metadata" };
       if (recovering) {
