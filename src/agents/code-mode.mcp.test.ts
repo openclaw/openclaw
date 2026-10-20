@@ -559,6 +559,57 @@ function invoiceTool(toolName: string) {
 }
 
 describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) => {
+  it("carries server instructions through search handles and describe()", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const instructions = [
+      ...Array.from({ length: 12 }, (_, index) => `Rule ${index + 1}.`),
+      "Confirm before paid calls.",
+    ].join("\n");
+    const target = mcpTool({
+      name: "research__search",
+      serverName: "research",
+      toolName: "search",
+      description: "Search research sources.",
+      instructions,
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "result" }] }),
+      ),
+    });
+    applyCodeModeCatalog({ tools: [...tools, target], config, catalogRef });
+    const code = `
+      const [tool] = await catalog.search("MCP.research.search", { limit: 1 });
+      const described = await tool.describe();
+      const apiFile = await API.read(tool.apiPath);
+      return {
+        instructions: tool.instructions,
+        serialized: tool.toJSON().instructions,
+        server: described.server,
+        header: described.header,
+        apiFile: apiFile.content,
+      };
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        instructions,
+        serialized: instructions,
+        server: {
+          identifier: "research",
+          serverName: "research",
+          instructions,
+        },
+        header: expect.stringContaining("Confirm before paid calls."),
+        apiFile: expect.stringContaining("Confirm before paid calls."),
+      },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
   it("finds native and MCP capabilities by intent and calls the correct colliding namespace", async () => {
     const { config, catalogRef, ctx, tools } = createCodeModeHarness();
     const native = pluginTool("invoices", "Find overdue invoices locally");
@@ -642,6 +693,48 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
       expect(target.execute).toHaveBeenCalledOnce();
     }
     expect(denied.execute).not.toHaveBeenCalled();
+  });
+
+  it("directs truncated server instructions to handle.describe()", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const instructions = `${"Do not omit this guidance. ".repeat(40)}\nNever retry monthly_quota_exceeded.`;
+    const target = mcpTool({
+      name: "research__search",
+      serverName: "research",
+      toolName: "search",
+      description: "Search research sources.",
+      instructions,
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "result" }] }),
+      ),
+    });
+    applyCodeModeCatalog({ tools: [...tools, target], config, catalogRef });
+    const code = `
+      const [tool] = await catalog.search("MCP.research.search", { limit: 1 });
+      const described = await tool.describe();
+      return {
+        instructions: tool.instructions,
+        hint: tool.instructionsHint,
+        serializedHint: tool.toJSON().instructionsHint,
+        described: described.server.instructions,
+      };
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        instructions: expect.stringMatching(/\.\.\.$/u),
+        hint: "Call handle.describe() before invocation to load the complete server instructions.",
+        serializedHint:
+          "Call handle.describe() before invocation to load the complete server instructions.",
+        described: instructions,
+      },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
   });
 });
 

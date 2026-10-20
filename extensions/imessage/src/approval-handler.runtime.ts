@@ -234,10 +234,7 @@ async function deliverIMessageApprovalPoll(params: {
       // complete text fallback so delivery is not retried and duplicated.
       log.error("imessage approvals: imsg poll response did not return a complete option mapping");
       await iMessageApprovalPollTargets.registerTombstone({
-        accountId: resolveIMessageAccount({
-          cfg: params.cfg,
-          accountId: params.target.accountId,
-        }).accountId,
+        accountId: account.accountId,
         conversation: { chatGuid },
         ...(pollGuid ? { pollGuid } : {}),
         optionIds: sent.pollOptions.map((option) => option.id),
@@ -245,12 +242,8 @@ async function deliverIMessageApprovalPoll(params: {
       });
       return null;
     }
-    const accountId = resolveIMessageAccount({
-      cfg: params.cfg,
-      accountId: params.target.accountId,
-    }).accountId;
     const registered = await iMessageApprovalPollTargets.register({
-      accountId,
+      accountId: account.accountId,
       conversation: { chatGuid },
       ...(pollGuid ? { pollGuid } : {}),
       approvalId: params.approvalId,
@@ -260,7 +253,7 @@ async function deliverIMessageApprovalPoll(params: {
     });
     if (!registered) {
       await iMessageApprovalPollTargets.registerTombstone({
-        accountId,
+        accountId: account.accountId,
         conversation: { chatGuid },
         ...(pollGuid ? { pollGuid } : {}),
         optionIds: optionDecisions.map(([optionId]) => optionId),

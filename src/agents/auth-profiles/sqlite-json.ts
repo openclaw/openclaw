@@ -333,15 +333,10 @@ export function readAuthProfileRows(
 function inspectAuthProfileRow(
   database: EngineConnection,
   target: "store" | "state",
-  databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
   try {
-    return inspectAuthProfileJsonCell(database, target, databaseKind);
-  } catch (error) {
-    // Shared-state read ownership handles native failures and poisoned-handle eviction.
-    if (databaseKind === "shared-state") {
-      throw error;
-    }
+    return inspectAuthProfileJsonCell(database, target, "agent");
+  } catch {
     // A broken state table must not turn an absent credential row into a present source.
     return { status: "unreadable" };
   }
@@ -349,10 +344,10 @@ function inspectAuthProfileRow(
 
 /** The selected worker returns source presence without transferring credential rows. */
 export function hasAgentAuthProfileSourceInDatabase(database: EngineConnection): boolean {
-  const store = inspectAuthProfileRow(database, "store", "agent");
+  const store = inspectAuthProfileRow(database, "store");
   if (store.status !== "missing") {
     return true;
   }
-  const state = inspectAuthProfileRow(database, "state", "agent");
+  const state = inspectAuthProfileRow(database, "state");
   return state.status === "readable" && Boolean(state.raw);
 }

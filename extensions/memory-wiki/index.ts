@@ -6,7 +6,6 @@ import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
-  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
 import { memoryWikiConfigSchema } from "./src/config-schema.js";
@@ -30,6 +29,7 @@ import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./src/prompt-section.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
@@ -149,9 +149,6 @@ export default definePluginEntry({
               identity.vaultGeneration,
               identity.compiledCachePublicationId,
             );
-            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
-              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
-            );
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }
           deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
@@ -171,6 +168,7 @@ export default definePluginEntry({
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
         await waitForMemoryWikiImportedSourceSyncs();
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        await closeMemoryWikiQueryReader();
       },
     });
 

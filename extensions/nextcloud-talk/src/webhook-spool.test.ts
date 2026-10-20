@@ -170,7 +170,7 @@ describe("Nextcloud Talk durable ingress", () => {
       clear: vi.fn(async () => {}),
     };
 
-    await expect(migrateNextcloudTalkLegacyReplayState({ queue, store })).resolves.toBe(1);
+    await migrateNextcloudTalkLegacyReplayState({ queue, store });
     expect((await queue.enqueue("msg-legacy", {} as NextcloudTalkIngressPayload)).kind).toBe(
       "completed",
     );

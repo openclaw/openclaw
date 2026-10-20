@@ -323,7 +323,7 @@ export function startGatewayMaintenanceTimers(params: {
       delayMs,
       run: async () => {
         try {
-          await checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" });
+          await checkTelemetryUpdate(params.getRuntimeConfig);
         } catch {
           // Telemetry retries on its next jittered maintenance deadline.
         } finally {

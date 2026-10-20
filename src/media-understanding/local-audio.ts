@@ -10,7 +10,6 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
   command: string;
-  resolvedCommand?: string;
   available: boolean;
   ready: boolean;
   capableBackend?: "cuda" | "metal" | "mlx";
@@ -281,6 +280,9 @@ export async function inspectLocalAudioSelection(
     "--output-template",
     "{filename}",
   ];
+  // Both Whisper CLIs take bare language codes and reject region tags such as "pt-BR".
+  const languageCode = options.language?.trim().split(/[-_]/, 1)[0];
+  const languageArgs = languageCode ? ["--language", languageCode] : [];
   const whisperArgs = [
     "-m",
     // Args are only executed when whisperReady, which requires a model.
@@ -289,6 +291,8 @@ export async function inspectLocalAudioSelection(
     "-of",
     "{{OutputBase}}",
     "-nt",
+    // whisper.cpp assumes English without a language, unlike Python Whisper's autodetection.
+    ...languageArgs,
     "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
@@ -307,7 +311,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
-    ...(options.language ? ["--language", "{{Language}}"] : []),
+    ...languageArgs,
     "{{AttachmentPath}}",
   ];
 
@@ -356,15 +360,13 @@ export async function inspectLocalAudioSelection(
       reason: undefined,
       args: pythonArgs,
     },
-  ].map(({ args, reason, ...candidate }) =>
+  ].map(({ args, reason, resolvedCommand, ...candidate }) =>
     Object.assign(candidate, {
       command: candidate.id,
-      available: Boolean(candidate.resolvedCommand),
+      available: Boolean(resolvedCommand),
       selected: false,
-      reason: candidate.resolvedCommand ? reason : "command not found",
-      entry: candidate.ready
-        ? { type: "cli", command: candidate.resolvedCommand, args }
-        : undefined,
+      reason: resolvedCommand ? reason : "command not found",
+      entry: candidate.ready ? { type: "cli", command: resolvedCommand, args } : undefined,
     } satisfies Partial<LocalAudioCandidate>),
   );
   candidates.sort((left, right) => rank(left) - rank(right));

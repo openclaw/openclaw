@@ -16,8 +16,6 @@ const zoneOpts: WideAreaGatewayZoneOpts = {
   gatewayPort: 18789,
   displayName: "Mac Studio (OpenClaw)",
   tailnetIPv4: "100.123.224.76",
-  hostLabel: "studio-london",
-  instanceLabel: "studio-london",
 };
 
 describe("wide-area DNS zone writer — unmocked production boundary", () => {

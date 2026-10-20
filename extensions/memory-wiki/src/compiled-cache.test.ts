@@ -9,7 +9,6 @@ import {
   createMemoryWikiCompiledCacheStore,
   loadMemoryWikiCompiledCache,
   readMemoryWikiDashboardState,
-  reconcileMemoryWikiCompiledCacheOwner,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
 } from "./compiled-cache.js";
@@ -206,7 +205,6 @@ describe("Memory Wiki compiled publication ownership", () => {
         identity.vaultGeneration,
         identity.compiledCachePublicationId,
       );
-      await reconcileMemoryWikiCompiledCacheOwner(config, async () => identity);
       const reloaded = await loadMemoryWikiCompiledCache(config);
       assert.ok(reloaded);
       expect(reloaded).toEqual(cached);

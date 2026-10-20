@@ -543,7 +543,39 @@ caller joined an existing load. Only the most recent cache-capacity count of
 evictions is remembered; older evicted keys report `cold`. Different request
 shapes have separate entries, so there is no key-mismatch reason.
 
+Unavailable revisions use bounded `no-revision-*` reasons where known:
+
+| Suffix                        | Cause                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| `environment`                 | Git discovery overrides, a custom runner, or changed worker environment                 |
+| `platform`                    | Native filesystem revision reads are unavailable on this platform                       |
+| `metadata`                    | The checkout or its Git directory pointers could not be resolved                        |
+| `git-installation`            | Git's system config/attributes paths could not be discovered                            |
+| `config`                      | Indirect, oversized, or nonregular config; includes, filters, or external path settings |
+| `reftable`, `alternates`      | Ref or object storage needs fresh Git discovery                                         |
+| `symlink`                     | Git metadata is indirect                                                                |
+| `submodule`, `unmerged`       | Submodule status or unmerged status prevents reuse                                      |
+| `status`                      | Git status failed or its output could not be represented exactly                        |
+| `permission`, `missing`, `io` | Filesystem access failed, a path disappeared, or another read failed                    |
+
+`oversized` retains its existing label for the 10,000-observation metadata budget
+or 1 MiB status-output limit. The optional filesystem inventory includes ignored
+files; exceeding it skips that shortcut, while full diffs can still reuse a
+bounded changed-file revision. Shared Git refs and metadata have the same
+observation budget. Oversized summaries retain their ten-second fallback cache
+without repeating revision probes during that window.
+
+`no-revision-missing` means a revision read encountered `ENOENT` or `ENOTDIR`,
+not necessarily that the checkout itself is gone. Only a diff result reporting
+`not_git` receives a one-second retry window, scoped to the request and Git
+environment. Other unavailable results, such as an unknown commit, remain
+immediately retryable.
+No paths, config values, or error text become metric labels.
+
 Diff revisions use Git's changed-file inventory and relevant file metadata.
+Sessions launched from subdirectories or symlink aliases validate the physical
+checkout root, just as diff collection does. A held `index.lock` does not disable
+revision reads: Git status runs without optional index writes.
 Ignored build output and index stat refreshes do not invalidate a result.
 Unchanged large checkouts still run one read-only Git status check per shared
 validation, but reuse diff collection. Unsupported layouts and inventories that
@@ -790,6 +822,68 @@ sum by (request_class) (rate(openclaw_worker_request_seconds_count{kind="stateRe
 ```
 
 ### Memory and process churn
+
+#### Heap headroom and a sustained-pressure alert
+
+On Node, the following gauges use `thread="main"` or the existing bounded
+worker script names (including `other`). They never label by thread ID, session,
+or path:
+
+| Metric                                        | Meaning                                                                                                                          |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw_heap_size_limit_bytes`              | V8 heap limit; smallest limit among fresh workers of a script                                                                    |
+| `openclaw_heap_used_ratio`                    | Current used heap divided by that isolate's limit; largest ratio among fresh workers of a script                                 |
+| `openclaw_heap_old_generation_after_gc_bytes` | `old_space` plus `large_object_space` at the last observed major-GC epilogue; largest byte count among fresh workers of a script |
+| `openclaw_heap_old_generation_after_gc_ratio` | That post-GC byte count divided by the isolate's limit; largest individual ratio among fresh workers of a script                 |
+
+The existing native GC profiler records the post-GC baseline at collection time,
+then drains on its existing one-second cadence. Allocations between collection
+and the next memory heartbeat do not change that baseline. Minor collections do
+not replace it. No additional timer, forced collection, heap snapshot, or
+per-collection JavaScript callback is installed. Baselines are absent until a
+major collection is observed, and reset when the isolate's last GC observer
+stops. Native-only worker fallback samples cannot report post-GC baselines.
+Bun omits these V8-specific gauges.
+
+Use the exported ratios directly: dividing grouped byte gauges by grouped
+limits can combine different workers. A script's ratio describes its most
+pressured sampled isolate, not an average or a permanently identified worker.
+Workers without a fresh sample are excluded; use the coverage counts below to
+detect missing observations.
+
+For Prometheus alerting (or an equivalent Grafana alert with a 10-minute pending
+period), start with:
+
+```yaml
+groups:
+  - name: openclaw-heap
+    rules:
+      - alert: OpenClawSustainedHeapPressure
+        expr: openclaw_heap_old_generation_after_gc_ratio > 0.70
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenClaw retained heap exceeds 70% of its V8 limit"
+          description: "Inspect heap headroom, worker coverage, GC duration, and external memory before reducing the heap limit."
+```
+
+The last observed post-GC baseline persists between major collections; this rule
+does not require another collection during the pending period. For worker groups,
+different isolates can supply the maximum over that period. External memory and
+ArrayBuffers are separate from the V8 heap limit. Their existing main/worker
+metrics remain necessary, and ArrayBuffers are already included in external
+memory.
+
+Node does not expose a supported JavaScript count-only near-heap-limit callback.
+Consequently these metrics do not include a native near-limit callback count.
+The snapshot/profile near-limit APIs write diagnostic artifacts and are not
+enabled by this exporter. Existing sampled memory-pressure warnings remain
+available, but are not native near-limit notifications and cannot guarantee
+warning before a rapid fatal allocation. Adding the rule to your Prometheus or
+Grafana installation is a separate operator action.
+
+#### Memory samples and worker coverage
 
 `openclaw_memory_bytes` exposes `rss`, `heap_total`, `heap_used`, `external`,
 `array_buffers`, `worker_heap_total`, and `worker_heap_used`. RSS covers the

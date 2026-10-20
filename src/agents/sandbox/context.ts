@@ -18,6 +18,7 @@ import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../
 import {
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { resolveAgentConfig } from "../agent-scope-config.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
@@ -48,6 +49,7 @@ import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxSession } from "./session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
+import { bindStreamSandboxContext } from "./stream-context.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
@@ -211,9 +213,12 @@ async function prepareSandboxWorkspaceSelection(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
   guard?: WorkspaceStateGuard,
+  operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext),
+  persistentExecution = false,
 ) {
   const { rawSessionKey, runtime } = resolved;
-  const operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  params.assertCurrent?.();
+  operatorAuthority?.assertCurrent();
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -224,9 +229,13 @@ async function prepareSandboxWorkspaceSelection(
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
         signal: operatorAuthority?.signal,
-        assertCurrent: params.assertCurrent,
+        // Cleanup retains the workspace owner after execution authorization closes.
+        assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         assertHost: () => {
           guard?.assertHost?.();
+          if (persistentExecution) {
+            return;
+          }
           if (params.admittedRunContext) {
             operatorAuthority?.assertCurrent();
           } else {
@@ -266,9 +275,17 @@ async function prepareSandboxWorkspaceSelection(
 async function resolveProvisionedSandboxContext(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
-  guard?: WorkspaceStateGuard,
+  guard: WorkspaceStateGuard,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  persistentExecution: boolean,
 ): Promise<SandboxContext> {
-  const selected = await prepareSandboxWorkspaceSelection(params, resolved, guard);
+  const selected = await prepareSandboxWorkspaceSelection(
+    params,
+    resolved,
+    guard,
+    operatorAuthority,
+    persistentExecution,
+  );
   try {
     params.assertCurrent?.();
     const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
@@ -382,7 +399,10 @@ async function resolveProvisionedSandboxContext(
                 workspaceSource: "managed-worktree" as const,
               }
             : {}),
-          assertRuntimeCurrent: localWorkspace?.assertCurrent ?? params.assertCurrent,
+          assertRuntimeCurrent: () => {
+            params.assertCurrent?.();
+            localWorkspace?.assertCurrent();
+          },
           agentWorkspaceDir,
           skillsWorkspaceDir,
           readOnlyResourceMounts,
@@ -391,7 +411,7 @@ async function resolveProvisionedSandboxContext(
             ? { requireCurrentConfig: params.requireCurrentConfig }
             : {}),
         },
-        readAdmittedRunOperatorAuthority(params.admittedRunContext),
+        operatorAuthority,
         githubIdentity,
         guard,
       );
@@ -489,6 +509,15 @@ async function resolveProvisionedSandboxContext(
         localWorkspace,
       );
     }
+    bindStreamSandboxContext(sandboxContext, {
+      agentId: runtime.agentId,
+      scopeKey,
+      operatorAuthority,
+      assertCurrent: () => {
+        params.assertCurrent?.();
+        localWorkspace?.assertCurrent();
+      },
+    });
     return sandboxContext;
   } catch (error) {
     selected.localWorkspace?.[Symbol.dispose]();
@@ -498,6 +527,26 @@ async function resolveProvisionedSandboxContext(
 
 export async function resolveSandboxContext(
   params: ResolveSandboxContextParams,
+): Promise<SandboxContext | null> {
+  return await resolveSandboxContextWithAuthority(
+    params,
+    readAdmittedRunOperatorAuthority(params.admittedRunContext),
+    false,
+  );
+}
+
+/** Restart retains the original authority without fabricating a new turn. */
+export async function resolveSandboxContextForPersistentExecution(
+  params: ResolveSandboxContextParams,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+): Promise<SandboxContext | null> {
+  return await resolveSandboxContextWithAuthority(params, operatorAuthority, true);
+}
+
+async function resolveSandboxContextWithAuthority(
+  params: ResolveSandboxContextParams,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  persistentExecution: boolean,
 ): Promise<SandboxContext | null> {
   const preparedRuntimeStatus =
     params.preparedRuntimeStatus ??
@@ -515,6 +564,7 @@ export async function resolveSandboxContext(
   const assertCurrent = () => {
     assertStateOwner();
     assertCallerCurrent?.();
+    operatorAuthority?.assertCurrent();
     assertStateOwner();
   };
   const ownedParams = { ...params, assertCurrent };
@@ -524,10 +574,16 @@ export async function resolveSandboxContext(
   try {
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
     const context = await withWorktreePreparationTiming("sandbox", () =>
-      resolveProvisionedSandboxContext(ownedParams, resolved, {
-        assertHost: assertStateOwner,
-        beforeLegacyApply: assertCurrent,
-      }),
+      resolveProvisionedSandboxContext(
+        ownedParams,
+        resolved,
+        {
+          assertHost: assertStateOwner,
+          beforeLegacyApply: assertCurrent,
+        },
+        operatorAuthority,
+        persistentExecution,
+      ),
     );
     try {
       assertStateOwner();

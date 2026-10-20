@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
@@ -16,14 +17,10 @@ import type { SidebarRegionParams } from "./chat-pane-sidebar-view.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
-import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import {
-  activatePanel,
-  toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
   openSlot,
-  reorderPanel,
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
@@ -77,16 +74,13 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 };
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
-const lazyListeners = new Set<() => void>();
+const lazyListeners = createChangeListeners();
 
 export const lazySidebarElements = {
   get snapshot(): ReadonlyMap<LazyElementKey, LazyPanelRuntime> {
     return lazyRuntimes;
   },
-  subscribe(listener: () => void) {
-    lazyListeners.add(listener);
-    return () => lazyListeners.delete(listener);
-  },
+  subscribe: lazyListeners.subscribe,
 };
 
 export function ensureLazySidebarElement(key: LazyElementKey) {
@@ -117,58 +111,9 @@ export function ensureLazySidebarElement(key: LazyElementKey) {
     })
     .finally(() => {
       delete runtime.pending;
-      lazyListeners.forEach((listener) => listener());
+      lazyListeners.publish();
     });
   return null;
-}
-
-/**
- * Region callbacks: the pure layout moves resolve here, while the pane injects
- * what only it owns — the board dock, the cached discussion url, the persisted
- * resize, and the panel's open state.
- */
-export function sidebarRegionCallbacks(params: {
-  state: ChatPageHost;
-  layout: SidebarLayout;
-  closePanelSlot: (slot: SidebarSlotId) => void;
-  openPanelSlot: (slot: SidebarSlotId) => void;
-  forgetDiscussionUrl: () => void;
-  resizePanel: (columnId: string, size: number) => void;
-  setPanelOpen: (open: boolean) => void;
-}): SidebarRegionCallbacks {
-  const { layout, state } = params;
-  return {
-    activatePanel: (panelId) => {
-      const slot = layout.columns[0]?.panels.find((panel) => panel.id === panelId)?.slot;
-      if (slot === "dashboard" && !isSidebarSlotVisible(layout, "dashboard")) {
-        params.openPanelSlot(slot);
-      } else {
-        state.updateSidebarLayout(activatePanel(layout, panelId));
-      }
-      state.updateSidebarActivePanel(panelId);
-    },
-    togglePanelExpanded: (panelId) => {
-      state.updateSidebarLayout(toggleSidebarPanelExpanded(layout, panelId), {
-        dashboardPresentation: "personal",
-      });
-      state.updateSidebarActivePanel(panelId);
-    },
-    closeSlot: (slot) => {
-      if (slot === "conversation") {
-        params.setPanelOpen(false);
-        return;
-      }
-      if (slot === "discussion") {
-        params.forgetDiscussionUrl();
-      }
-      params.closePanelSlot(slot);
-    },
-    openSlot: params.openPanelSlot,
-    reorderPanel: (panelId, targetPanelId, placement) =>
-      state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
-    resizePanel: params.resizePanel,
-    setOpen: params.setPanelOpen,
-  };
 }
 
 export function renderSidebarRegion(params: SidebarRegionParams) {

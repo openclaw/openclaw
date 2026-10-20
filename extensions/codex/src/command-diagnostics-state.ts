@@ -14,14 +14,9 @@ export type CodexDiagnosticsTarget = {
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
-  channelId?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
 };
 
 export type PendingCodexDiagnosticsConfirmation = {
-  token: string;
   targets: CodexDiagnosticsTarget[];
   note?: string;
   senderId: string;

@@ -6,13 +6,19 @@ import type { ProcessCommand } from "./service-child-group-ownership.js";
 
 let reportedForeignArguments = false;
 
-/** Exact argv, or observed foreign ownership when Darwin denies argument inspection. */
+/** Exact argv, or observed foreign ownership when Darwin denies argument inspection.
+ * Callers that never consult the service marker skip the environment: some macOS
+ * argument images end without the separator that bounds it. */
 export function readDarwinProcessCommand(
   pid: number,
   owner?: "same" | "different" | "unknown",
+  options: { serviceMarker?: boolean } = {},
 ): ProcessCommand | undefined {
   try {
-    const command = readProcessCommand(pid, { environmentKeys: ["OPENCLAW_SERVICE_MARKER"] });
+    const command = readProcessCommand(
+      pid,
+      options.serviceMarker === false ? {} : { environmentKeys: ["OPENCLAW_SERVICE_MARKER"] },
+    );
     if (!command) {
       return undefined;
     }

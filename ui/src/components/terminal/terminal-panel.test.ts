@@ -98,7 +98,6 @@ describe("OpenClawTerminalPanel", () => {
     const element = document.createElement(tagName) as HTMLElement & { available: boolean };
     Object.assign(element, {
       available: true,
-      createTerminalController: createGhosttyTerminalMock,
     });
     document.body.append(element);
 

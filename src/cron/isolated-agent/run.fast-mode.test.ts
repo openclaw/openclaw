@@ -305,7 +305,7 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
         expectedLifecycleRevision: "test-lifecycle-revision",
         expectedSessionUpdatedAt: 0,
       },
-      timeoutMs: 10_000,
+      timeoutMs: null,
     });
   });
 

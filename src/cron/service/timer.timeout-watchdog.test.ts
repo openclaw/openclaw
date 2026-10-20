@@ -115,6 +115,37 @@ async function drain(...runs: Promise<unknown>[]) {
   await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
 }
 
+it("does not spend a main-session execution deadline waiting for event adoption", async () => {
+  const { storePath } = fixtures.makeStorePath();
+  const queued = createDeferred();
+  const adoption = createDeferred<boolean>();
+  const state = createCronRegressionState({
+    storePath,
+    enqueueSystemEvent: () => ({ accepted: true, adopted: adoption.promise }),
+    requestHeartbeat: () => queued.resolve(),
+    runIsolatedAgentJob: vi.fn(),
+  });
+  const settled = vi.fn();
+  const running = executeJobCoreWithTimeout(
+    state,
+    heartbeatJob("deferred-adoption", { wakeMode: "next-heartbeat" }),
+  ).then((result) => {
+    settled();
+    return result;
+  });
+  try {
+    await queued.promise;
+    // The normal heartbeat cadence can exceed Cron's ten-minute execution deadline.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(settled).not.toHaveBeenCalled();
+    adoption.resolve(true);
+    await expect(running).resolves.toMatchObject({ status: "ok" });
+  } finally {
+    adoption.resolve(false);
+    await drain(running);
+  }
+});
+
 it("keeps timed-out cron runs from being overwritten by late cancellation", async () => {
   resetActiveCronTaskRunsForTests();
   const job = agentJob("late-cancel-after-timeout", 1);

@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { IMAGE_BLOCK_TOKENS } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
@@ -14,7 +15,6 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { requireCompactionWriterEntry } from "../embedded-agent-runner/compaction-successor.js";
 import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import { normalizeContextTokenBudget } from "../embedded-agent-runner/utils.js";
 import {
   createCompactionRequestBudget,
   estimateCompactionHistoryTokens,
@@ -57,7 +57,7 @@ export function bindBoundedSeed(
     return undefined;
   }
   const hostTokenBudget =
-    normalizeContextTokenBudget(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
+    floorPositiveFiniteNumber(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
   const sessionTarget = { ...target, agentId, sessionId, sessionKey, storePath };
   const attempt = {
     ...input,
@@ -84,7 +84,7 @@ export function bindBoundedSeed(
     };
     assert();
     const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    const requested = normalizeContextTokenBudget(requestedTokenBudget);
+    const requested = floorPositiveFiniteNumber(requestedTokenBudget);
     const tokenBudget = requested && requested < hostTokenBudget ? requested : hostTokenBudget;
     const maxSeedBytes = Math.min(maxBytes, tokenBudget * 4);
     const admittedKey =

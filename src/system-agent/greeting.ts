@@ -58,12 +58,7 @@ type SystemAgentGreetingConfigAuditStore = Pick<
   "configAuditFacts" | "assertCurrent"
 >;
 
-type SystemAgentGreetingResolution = {
-  text: string;
-  source: "cache" | "model" | "template";
-};
-
-const greetingFlights = new WeakMap<object, Map<string, Promise<SystemAgentGreetingResolution>>>();
+const greetingFlights = new WeakMap<object, Map<string, Promise<string>>>();
 const greetingFailures = new WeakMap<object, { factsHash: string; retryAfter: number }>();
 const defaultGreetingCacheKey = {};
 
@@ -314,7 +309,7 @@ function requiresDeterministicGreeting(overview: SystemAgentOverview): boolean {
 function resolveSystemAgentGreetingFallback(
   overview: SystemAgentOverview,
   facts: SystemAgentGreetingFacts,
-): SystemAgentGreetingResolution {
+): string {
   const alerts: string[] = [];
   if (facts.updateAvailable) {
     alerts.push(`Update ${facts.updateAvailable} is available.`);
@@ -326,12 +321,9 @@ function resolveSystemAgentGreetingFallback(
   }
   // recentExternalEdit is deliberately absent: withHostOwnedAlerts appends the
   // single canonical edit alert to every delivered greeting, template included.
-  return {
-    text: [formatSystemAgentStartupMessage(overview), alerts.join(" ") || undefined]
-      .filter((line): line is string => line !== undefined)
-      .join("\n"),
-    source: "template",
-  };
+  return [formatSystemAgentStartupMessage(overview), alerts.join(" ") || undefined]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
 async function resolveUncachedSystemAgentGreeting(params: {
@@ -343,7 +335,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
   cacheKey: object;
   at: number;
   timeoutMs?: number;
-}): Promise<SystemAgentGreetingResolution> {
+}): Promise<string> {
   const timeoutMs = params.timeoutMs ?? SYSTEM_AGENT_GREETING_TIMEOUT_MS;
   let plan: SystemAgentGreetingPlan | null;
   try {
@@ -389,7 +381,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
     // Cache persistence is diagnostic-only; a successful greeting still wins.
   }
   params.cacheStore.assertCurrent();
-  return { text: groundedText, source: "model" };
+  return groundedText;
 }
 
 type ResolveSystemAgentGreetingParams = {
@@ -408,17 +400,17 @@ type ResolveSystemAgentGreetingParams = {
 
 export async function resolveSystemAgentGreeting(
   params: ResolveSystemAgentGreetingParams,
-): Promise<SystemAgentGreetingResolution> {
-  const resolution = await resolveSystemAgentGreetingText(params);
+): Promise<string> {
+  const text = await resolveSystemAgentGreetingText(params);
   params.cacheStore?.assertCurrent();
   // Host-owned alerts append at delivery, never into the cache: the cached
   // model text must stay valid for deliveries where the fact is absent.
-  return { ...resolution, text: withHostOwnedAlerts(resolution.text, params.facts) };
+  return withHostOwnedAlerts(text, params.facts);
 }
 
 async function resolveSystemAgentGreetingText(
   params: ResolveSystemAgentGreetingParams,
-): Promise<SystemAgentGreetingResolution> {
+): Promise<string> {
   if (requiresDeterministicGreeting(params.overview)) {
     // When the system is broken, precision beats personality: the rescue path
     // must neither depend on nor spend inference, and model text is never cached.
@@ -444,7 +436,7 @@ async function resolveSystemAgentGreetingText(
     typeof cached.modelRef === "string" &&
     typeof cached.at === "number"
   ) {
-    return { text: cached.text, source: "cache" };
+    return cached.text;
   }
   if (params.allowInference === false) {
     return resolveSystemAgentGreetingFallback(params.overview, params.facts);
@@ -485,9 +477,7 @@ async function resolveSystemAgentGreetingText(
   try {
     return await flight;
   } finally {
-    if (flights.get(factsHash) === flight) {
-      flights.delete(factsHash);
-    }
+    flights.delete(factsHash);
   }
 }
 

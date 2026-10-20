@@ -15,6 +15,7 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
+  activePlacementSession,
   createInitializationContext,
   createSessionCapabilityFixture,
   createTestChatPane,
@@ -36,9 +37,11 @@ import {
 } from "../test-helpers/chat-transcript-native.tsx";
 import * as chatMessage from "./chat-message-group-frame.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
+import { createAttachmentBlock } from "./chat-message.test-support.ts";
 import { resetTranscriptSession, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { transcriptContainer, threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   flushDeferredRowPrune,
@@ -46,6 +49,47 @@ import {
   resetTranscriptTestDom,
   threadProps,
 } from "./chat-transcript.test-support.ts";
+
+const msg = <Content>(role: string, content: Content, timestamp = 1_000, extra = {}) => ({
+  role,
+  content,
+  timestamp,
+  ...extra,
+});
+const find = (root: ParentNode, selector: string) => root.querySelector<HTMLElement>(selector);
+const required = (root: ParentNode, selector: string) =>
+  expectDefined(find(root, selector), selector);
+const click = (root: ParentNode, selector: string) => required(root, selector).click();
+const pending = (id: string, runId: string, content: unknown) => ({
+  id,
+  runId,
+  acceptedAt: 3_000,
+  state: "queued" as const,
+  message: content,
+});
+const selectedSession = (
+  props: ReturnType<typeof threadProps>,
+  extra: Partial<NonNullable<typeof props.selectedSession>> = {},
+) => ({ key: props.sessionKey, kind: "direct" as const, updatedAt: 1, ...extra });
+function stubBlobUrls(blobUrl: string, revokeObjectURL = vi.fn()) {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = () => blobUrl;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+}
+function updatingThread(props: ReturnType<typeof threadProps>) {
+  const fixture = threadFixture(props);
+  return {
+    ...fixture,
+    rerender: () => {
+      fixture.rerender();
+      fixture.transcript.update();
+    },
+  };
+}
 
 describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
@@ -62,29 +106,27 @@ describe("chat transcript invalidation", () => {
         { role: "assistant", content: "Ready.", timestamp: 1_000 },
       ]);
       props.currentAgentId = agentId;
-      props.selectedSession = { key: props.sessionKey, kind: "group", updatedAt: 1 };
+      props.selectedSession = selectedSession(props, { kind: "group" });
       props.branding = { ...branding, avatarHat: undefined };
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const rerender = () => render(renderChatThread(props, transcript), container);
+      const { transcript, container, rerender } = threadFixture(props);
       const previousBranding = currentThemeBranding();
       try {
         setCurrentThemeBranding(props.branding);
         rerender();
-        expect(container.querySelector(".identity-avatar--agent")).not.toBeNull();
-        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+        expect(find(container, ".identity-avatar--agent")).not.toBeNull();
+        expect(find(container, ".identity-avatar__hat")).toBeNull();
         props.branding = branding;
         setCurrentThemeBranding(branding);
         rerender();
-        expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+        expect(find(container, ".identity-avatar__hat--fedora")).not.toBeNull();
         props.branding = { ...branding, avatarHat: undefined };
         if (palette === "delayed") {
           rerender();
-          expect(container.querySelector(".identity-avatar__hat--fedora")).not.toBeNull();
+          expect(find(container, ".identity-avatar__hat--fedora")).not.toBeNull();
         }
         setCurrentThemeBranding(props.branding);
         rerender();
-        expect(container.querySelector(".identity-avatar__hat")).toBeNull();
+        expect(find(container, ".identity-avatar__hat")).toBeNull();
       } finally {
         setCurrentThemeBranding(previousBranding);
         render(null, container);
@@ -99,10 +141,7 @@ describe("chat transcript invalidation", () => {
       const paneId = `pane-sender-${peerSource}`;
       const self = { identity: { type: "profile" as const, id: "viewer" }, label: "Alex" };
       const peer = { identity: { type: "profile" as const, id: "peer" }, label: "Riley" };
-      const ownMessage = {
-        role: "user",
-        content: "Review my draft.",
-        timestamp: 1_000,
+      const ownMessage = msg("user", "Review my draft.", 1_000, {
         __openclaw: {
           id: "own-message",
           senderId: self.identity.id,
@@ -110,48 +149,41 @@ describe("chat transcript invalidation", () => {
           senderName: self.label,
           transport: { clients: [{ id: "openclaw-control-ui", mode: "webchat" }] },
         },
-      };
-      const peerMessage = {
-        role: "user",
-        content: "Check the example too.",
-        timestamp: 3_000,
+      });
+      const peerMessage = msg("user", "Check the example too.", 3_000, {
         __openclaw: {
           id: "peer-message",
           senderId: peer.identity.id,
           senderIdentity: peer.identity,
           senderName: peer.label,
         },
-      };
+      });
       const props = threadProps(paneId, "agent:main:dashboard:sender-visibility", [
         ownMessage,
         { role: "assistant", content: "The draft looks good.", timestamp: 2_000 },
       ]);
       props.userId = self.identity.id;
       props.userName = self.label;
-      props.selectedSession = {
-        key: props.sessionKey,
-        kind: "direct",
-        updatedAt: 1,
+      props.selectedSession = selectedSession(props, {
         participants: [self, { identity: { type: "agent", id: "main" }, label: "Molty" }],
         participantCount: 2,
-      };
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const searchContainer = document.body.appendChild(document.createElement("div"));
+      });
+      const { transcript, container } = threadFixture(props);
+      const searchContainer = transcriptContainer();
       const rerender = () => {
         render(renderTranscriptSearch(paneId), searchContainer);
         render(renderChatThread({ ...props, mediaOwner: rerender }, transcript), container);
         transcript.update();
       };
       const ownName = () =>
-        container.querySelector(".chat-group.user:not(.chat-group--peer) .chat-sender-name");
+        find(container, ".chat-group.user:not(.chat-group--peer) .chat-sender-name");
       try {
         rerender();
         transcript.start();
         await flushDeferredRowPrune();
         expect(container.textContent).toContain(ownMessage.content);
         expect(ownName()).toBeNull();
-        expect(container.querySelector(".chat-message-source")).toBeNull();
+        expect(find(container, ".chat-message-source")).toBeNull();
 
         if (peerSource === "session participants") {
           props.selectedSession = {
@@ -160,31 +192,18 @@ describe("chat transcript invalidation", () => {
             participantCount: 3,
           };
         } else {
-          props.pendingInputs = [
-            {
-              id: "queued-peer",
-              runId: "peer-run",
-              acceptedAt: 3_000,
-              state: "queued",
-              message: peerMessage,
-            },
-          ];
+          props.pendingInputs = [pending("queued-peer", "peer-run", peerMessage)];
         }
         rerender();
         await flushDeferredRowPrune();
         expect(ownName()?.textContent).toBe("Alex");
         if (peerSource !== "session participants") {
-          expect(container.querySelector(".chat-group--peer .chat-sender-name")?.textContent).toBe(
-            "Riley",
-          );
+          expect(find(container, ".chat-group--peer .chat-sender-name")?.textContent).toBe("Riley");
         }
 
         toggleTranscriptSearch(paneId);
         flush();
-        const input = expectDefined(
-          searchContainer.querySelector<HTMLInputElement>("input"),
-          "transcript search",
-        );
+        const input = expectDefined(searchContainer.querySelector("input"), "search input");
         input.value = ownMessage.content;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await flushDeferredRowPrune();
@@ -209,38 +228,20 @@ describe("chat transcript invalidation", () => {
       vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
       onOpenSidebar.mockClear();
       revokeObjectURL.mockClear();
-      vi.stubGlobal(
-        "URL",
-        class extends URL {
-          static override createObjectURL = () => "blob:transcript-poster";
-          static override revokeObjectURL = revokeObjectURL;
-        },
-      );
+      stubBlobUrls("blob:transcript-poster", revokeObjectURL);
       props = {
         ...threadProps("video-preview", "agent:main:video", [
-          {
-            role: "user",
-            timestamp: 1_000,
-            content: [
-              { type: "image", url: "/media/reference.png", alt: "Reference" },
-              {
-                type: "attachment",
-                attachment: {
-                  kind: "video",
-                  url: videoUrl,
-                  label: "Recording.mp4",
-                  mimeType: "video/mp4",
-                },
-              },
-              { type: "text", text: "Check this recording." },
-            ],
-          },
+          msg("user", [
+            { type: "image", url: "/media/reference.png", alt: "Reference" },
+            createAttachmentBlock(videoUrl, "video", "Recording.mp4", "video/mp4"),
+            { type: "text", text: "Check this recording." },
+          ]),
         ]),
         presented: false,
         transcriptVisible: true,
         onOpenSidebar,
       };
-      container = document.body.appendChild(document.createElement("div"));
+      container = transcriptContainer();
       transcript = createTestTranscript();
       transcript.start();
     });
@@ -256,11 +257,11 @@ describe("chat transcript invalidation", () => {
 
     it("places mixed user media above text and opens the video in Files without inline playback", async () => {
       await renderPreview();
-      const bubble = container.querySelector(".chat-bubble--with-images");
+      const bubble = find(container, ".chat-bubble--with-images");
       const gallery = bubble?.querySelector(":scope > .chat-message-images");
       expect(gallery?.querySelectorAll(".chat-image-frame")).toHaveLength(2);
       expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
-      expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
+      expect(find(container, "video, openclaw-chat-video-player")).toBeNull();
       gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
       expect(onOpenSidebar).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
@@ -274,7 +275,7 @@ describe("chat transcript invalidation", () => {
           vi.mocked(videoPoster.requestVideoPoster).mockResolvedValue(null);
         }
         await renderPreview();
-        const frame = container.querySelector(".chat-video-preview");
+        const frame = find(container, ".chat-video-preview");
         if (stage === "image") {
           expectDefined(frame?.querySelector("img"), "loaded video poster").dispatchEvent(
             new Event("error"),
@@ -300,7 +301,7 @@ describe("chat transcript invalidation", () => {
           props.transcriptVisible = { owner, isPresented: () => visible };
         }
         await renderPreview();
-        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+        expect(find(container, ".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
         if (parent === "parked") {
           visible = false;
           owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
@@ -310,7 +311,7 @@ describe("chat transcript invalidation", () => {
           await renderPreview();
         }
         flush();
-        expect(container.querySelector(".chat-video-preview img")).toBeNull();
+        expect(find(container, ".chat-video-preview img")).toBeNull();
         expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
         visible = true;
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
@@ -318,7 +319,7 @@ describe("chat transcript invalidation", () => {
           props.transcriptVisible = true;
         }
         await renderPreview();
-        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+        expect(find(container, ".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
       },
     );
   });
@@ -328,9 +329,7 @@ describe("chat transcript invalidation", () => {
       { role: "assistant", content: "ClawSweeper PR **#1576 opened**", timestamp: 1_000 },
     ]);
     props.githubRepo = { owner: "openclaw", repo: "openclaw" };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => render(renderChatThread(props, transcript), container);
+    const { container, rerender } = threadFixture(props);
     const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
     rerender();
     expect(chip()).toBeNull();
@@ -352,9 +351,7 @@ describe("chat transcript invalidation", () => {
     const props = threadProps("pane-github-repository", "agent:main:github-repository", [
       { role: "assistant", content: "PR #141270", timestamp: 1_000 },
     ]);
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => render(renderChatThread(props, transcript), container);
+    const { container, rerender } = threadFixture(props);
     const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
     rerender();
     expect(chip()).toBeNull();
@@ -370,125 +367,92 @@ describe("chat transcript invalidation", () => {
     expect(chip()).toBeNull();
   });
 
-  it.each(["agent:main:dashboard:history"])(
-    "does not normalize historical messages again when their transcript is projected in %s",
-    (sessionKey) => {
-      const messages = Array.from({ length: 30 }, (_, index) => ({
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: `Historical message ${index}`,
-        timestamp: index + 1,
-        __openclaw: { id: `message-${index}` },
-      }));
-      const transcript = createTestTranscript();
-      const props = threadProps("pane-offscreen-history", sessionKey, messages);
-      const project = () =>
-        transcript.renderSession(sessionKey, (session) => {
-          projectChatTranscript(props, session);
-          return null;
-        });
-      project();
+  it("does not renormalize projected historical messages", () => {
+    const sessionKey = "agent:main:dashboard:history";
+    const messages = Array.from({ length: 30 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Historical message ${index}`,
+      timestamp: index + 1,
+      __openclaw: { id: `message-${index}` },
+    }));
+    const transcript = createTestTranscript();
+    const props = threadProps("pane-offscreen-history", sessionKey, messages);
+    const project = () =>
+      transcript.renderSession(sessionKey, (session) => {
+        projectChatTranscript(props, session);
+        return null;
+      });
+    project();
 
-      const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
-      project();
+    const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
+    project();
 
-      const historicalMessages = new Set<unknown>(messages);
-      expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
-        false,
+    const historicalMessages = new Set<unknown>(messages);
+    expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(
+      false,
+    );
+  });
+
+  it("keeps settled run frames idle during stream updates", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const completedRunId = "settled-run";
+    const activeRunId = "active-run";
+    const props = {
+      ...threadProps("pane-settled-stream-only", "agent:main:dashboard:settled", [
+        msg("user", "Inspect the workspace", 1_000, {
+          __openclaw: { id: "settled-user", idempotencyKey: `${completedRunId}:user` },
+        }),
+        msg("toolResult", "Read complete", 2_000, {
+          toolCallId: "settled-read",
+          toolName: "read",
+          runId: completedRunId,
+        }),
+        msg("assistant", "Workspace checked", 3_000, {
+          phase: "final_answer",
+          stopReason: "stop",
+          runId: completedRunId,
+          __openclaw: { id: "settled-final" },
+        }),
+        msg("user", "Continue with the next task", 4_000, {
+          __openclaw: { id: "active-user", idempotencyKey: `${activeRunId}:user` },
+        }),
+      ]),
+      showToolCalls: true,
+      runId: activeRunId,
+      runActive: true,
+      runWorking: true,
+      stream: "Draft next reply",
+      streamStartedAt: 5_000,
+    };
+    const { transcript, container, rerender } = updatingThread(props);
+    const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
+    try {
+      rerender();
+      transcript.start();
+      await flushDeferredRowPrune();
+      const finalBubble = required(container, '[data-entry-id="settled-final"]');
+      const workToggle = expectDefined(
+        finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
+        "completed work disclosure",
       );
-    },
-  );
+      expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+      expect(find(container, ".chat-bubble.streaming")?.textContent).toContain(props.stream);
+      expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(true);
+      prepareFrame.mockClear();
+      props.stream = "Advanced next reply";
+      rerender();
 
-  it.each(["stream-only"] as const)(
-    "keeps settled run frames idle during %s updates",
-    async (update) => {
-      vi.spyOn(Date, "now").mockReturnValue(60_000);
-      const completedRunId = "settled-run";
-      const activeRunId = "active-run";
-      const props = {
-        ...threadProps(`pane-settled-${update}`, "agent:main:dashboard:settled", [
-          {
-            role: "user",
-            content: "Inspect the workspace",
-            timestamp: 1_000,
-            __openclaw: { id: "settled-user", idempotencyKey: `${completedRunId}:user` },
-          },
-          {
-            role: "toolResult",
-            toolCallId: "settled-read",
-            toolName: "read",
-            content: "Read complete",
-            timestamp: 2_000,
-            runId: completedRunId,
-          },
-          {
-            role: "assistant",
-            content: "Workspace checked",
-            phase: "final_answer",
-            stopReason: "stop",
-            timestamp: 3_000,
-            runId: completedRunId,
-            __openclaw: { id: "settled-final" },
-          },
-          {
-            role: "user",
-            content: "Continue with the next task",
-            timestamp: 4_000,
-            __openclaw: { id: "active-user", idempotencyKey: `${activeRunId}:user` },
-          },
-        ]),
-        showToolCalls: true,
-        runId: activeRunId,
-        runActive: true,
-        runWorking: true,
-        stream: "Draft next reply",
-        streamStartedAt: 5_000,
-      };
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const rerender = () => {
-        render(renderChatThread(props, transcript), container);
-        transcript.update();
-      };
-      const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
-      try {
-        rerender();
-        transcript.start();
-        await flushDeferredRowPrune();
-        const finalBubble = expectDefined(
-          container.querySelector('[data-entry-id="settled-final"]'),
-          "settled final reply",
-        );
-        const workToggle = expectDefined(
-          finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
-          "completed work disclosure",
-        );
-        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
-          props.stream,
-        );
-        expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(
-          true,
-        );
-        prepareFrame.mockClear();
-        if (update === "stream-only") {
-          props.stream = "Advanced next reply";
-        }
-        rerender();
-
-        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
-          props.stream,
-        );
-        expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
-        expect(finalBubble.textContent).toContain("Workspace checked");
-        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-        expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
-          [],
-        );
-      } finally {
-        transcript.dispose();
-      }
-    },
-  );
+      expect(find(container, ".chat-bubble.streaming")?.textContent).toContain(props.stream);
+      expect(find(container, '[data-entry-id="settled-final"]')).toBe(finalBubble);
+      expect(finalBubble.textContent).toContain("Workspace checked");
+      expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+      expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
+        [],
+      );
+    } finally {
+      transcript.dispose();
+    }
+  });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -504,28 +468,19 @@ describe("chat transcript invalidation", () => {
       showToolCalls: true,
     };
     const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
-    const itemsA = buildCachedChatItems({
-      ...stableInputs,
-      sessionKey: "agent:main:session-a",
-      messages: messagesA,
-    });
-
+    const build = (sessionKey: string, messages: unknown[]) =>
+      buildCachedChatItems({
+        ...stableInputs,
+        sessionKey,
+        messages,
+      });
+    const itemsA = build("agent:main:session-a", messagesA);
     resetTranscriptSession(paneId);
-    buildCachedChatItems({
-      ...stableInputs,
-      sessionKey: "agent:main:session-b",
-      messages: messagesB,
-    });
+    build("agent:main:session-b", messagesB);
     resetTranscriptSession(paneId);
-    const restoredItemsA = buildCachedChatItems({
-      ...stableInputs,
-      sessionKey: "agent:main:session-a",
-      messages: messagesA,
-    });
-
+    const restoredItemsA = build("agent:main:session-a", messagesA);
     expect(buildSpy).toHaveBeenCalledTimes(2);
     expect(restoredItemsA).toBe(itemsA);
-    expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
   });
 
   it("keeps history cached during worker setup and clears its notice when placement becomes active", async () => {
@@ -534,28 +489,14 @@ describe("chat transcript invalidation", () => {
       { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
     ]);
     props.pendingInputs = [
-      {
-        id: "queued-follow-up",
-        runId: "queued-run",
-        acceptedAt: 3_000,
-        state: "queued",
-        message: { role: "user", content: "Queued follow-up", timestamp: 3_000 },
-      },
+      pending("queued-follow-up", "queued-run", msg("user", "Queued follow-up", 3_000)),
     ];
     const timing = { generation: 1, createdAtMs: 1, updatedAtMs: 1, stateChangedAtMs: 1 };
-    props.selectedSession = {
-      key: props.sessionKey,
-      kind: "direct",
-      updatedAt: 1,
+    props.selectedSession = selectedSession(props, {
       placement: { state: "requested", ...timing },
-    };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
+    });
+    const { transcript, container, rerender } = updatingThread(props);
     const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.update();
-    };
     try {
       rerender();
       transcript.start();
@@ -571,13 +512,8 @@ describe("chat transcript invalidation", () => {
       props.selectedSession = {
         ...props.selectedSession,
         placement: {
-          state: "active",
-          ...timing,
+          ...activePlacementSession(props.sessionKey).placement,
           environmentId: "worker:fixture",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "base-manifest",
-          remoteWorkspaceDir: "/worker/repo",
         },
       };
       rerender();
@@ -595,13 +531,11 @@ describe("chat transcript invalidation", () => {
       { role: "user", senderLabel: "Alex", content: "Hello" },
       { role: "assistant", content: "Hi" },
     ]);
-    props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => render(renderChatThread(props, transcript), container);
+    props.selectedSession = selectedSession(props);
+    const { container, rerender } = threadFixture(props);
     const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
-    const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
+    const userRow = required(container, ".chat-group.user");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
     expect(prepareFrame.mock.calls.some(([group]) => group.role === "user")).toBe(true);
     prepareFrame.mockClear();
@@ -609,13 +543,13 @@ describe("chat transcript invalidation", () => {
     props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
     rerender();
     expect(prepareFrame).not.toHaveBeenCalled();
-    expect(container.querySelector(".chat-group.user")).toBe(userRow);
+    expect(find(container, ".chat-group.user")).toBe(userRow);
 
     props.selectedSession = { ...props.selectedSession, kind: "group" };
     rerender();
     await waitForSolid(() => {
       expect(userRow.isConnected).toBe(true);
-      expect(container.querySelector(".chat-group.user")).toBe(userRow);
+      expect(find(container, ".chat-group.user")).toBe(userRow);
       expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
     });
   });
@@ -623,18 +557,9 @@ describe("chat transcript invalidation", () => {
   it("rechecks visible images when the same session changes workspace protection", async () => {
     const source = "/outside/project/policy-preview.png";
     const props = threadProps("pane-media-policy", "agent:main:media-policy", [
-      {
-        role: "assistant",
-        content: [{ type: "image", url: source, alt: "Policy preview" }],
-        timestamp: 1_000,
-      },
+      msg("assistant", [{ type: "image", url: source, alt: "Policy preview" }]),
     ]);
-    props.selectedSession = {
-      key: props.sessionKey,
-      kind: "direct",
-      updatedAt: 1,
-      permissionMode: "full",
-    };
+    props.selectedSession = selectedSession(props, { permissionMode: "full" });
     const fetchMock = vi.fn(async () => ({
       ok: true,
       json: async () =>
@@ -652,28 +577,21 @@ describe("chat transcript invalidation", () => {
             },
     }));
     vi.stubGlobal("fetch", fetchMock);
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const rerender = () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.update();
-    };
+    const { transcript, container, rerender } = updatingThread(props);
     props.mediaOwner = rerender;
     rerender();
     transcript.start();
     transcript.update();
     await flushDeferredRowPrune();
-    expect(container.querySelector("img.chat-message-image")).not.toBeNull();
+    expect(find(container, "img.chat-message-image")).not.toBeNull();
 
     for (const permissionMode of ["workspace", "full", "workspace"] as const) {
       props.selectedSession = { ...props.selectedSession, permissionMode };
       rerender();
       await flushDeferredRowPrune();
-      expect(Boolean(container.querySelector("img.chat-message-image"))).toBe(
-        permissionMode === "full",
-      );
+      expect(Boolean(find(container, "img.chat-message-image"))).toBe(permissionMode === "full");
       if (permissionMode === "workspace") {
-        expect(container.querySelector(".chat-assistant-attachment-card")?.textContent).toContain(
+        expect(find(container, ".chat-assistant-attachment-card")?.textContent).toContain(
           "Allow image",
         );
       }
@@ -684,15 +602,8 @@ describe("chat transcript invalidation", () => {
   });
 
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
-    const NativeUrl = URL;
     const blobUrl = `blob:transcript-media-${crypto.randomUUID()}`;
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => blobUrl);
-        static override revokeObjectURL = vi.fn();
-      },
-    );
+    stubBlobUrls(blobUrl);
 
     let previousSignal: AbortSignal | undefined;
     const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
@@ -715,25 +626,24 @@ describe("chat transcript invalidation", () => {
 
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
+    const container = transcriptContainer();
     const client = {
       request: vi.fn(async () => null),
     } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
     const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-      phase: "connected",
-      hello: { auth: { deviceToken: "test-auth-token" } } as typeof state.hello,
-    });
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "image", url: source }],
-        timestamp: 1_000,
-      },
-    ];
+    const applyToken = (deviceToken: string) =>
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        client,
+        phase: "connected",
+        hello: {
+          ...pane.context.gateway.snapshot.hello,
+          auth: { deviceToken },
+        } as typeof state.hello,
+      });
+    applyToken("test-auth-token");
+    const messages = [msg("assistant", [{ type: "image", url: source }])];
     const mediaOwner = {};
     const view = mountSolid(
       () => {
@@ -765,17 +675,9 @@ describe("chat transcript invalidation", () => {
       "Bearer test-auth-token",
     );
     expect(previousSignal?.aborted).toBe(false);
-    expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(find(container, ".chat-message-image")).toBeNull();
 
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client,
-      phase: "connected",
-      hello: {
-        ...pane.context.gateway.snapshot.hello,
-        auth: { deviceToken: "test-token" },
-      } as typeof pane.context.gateway.snapshot.hello,
-    });
+    applyToken("test-token");
     flush();
     expect(previousSignal?.aborted).toBe(true);
     await flushDeferredRowPrune();
@@ -811,31 +713,18 @@ describe("chat transcript invalidation", () => {
       ...threadProps("pane-mcp-capability"),
       boardProvider: provider as unknown as BoardProvider,
       messages: [
-        {
-          role: "assistant",
-          timestamp: 1_000,
-          content: [
-            { type: "text", text: "Here is the dashboard app." },
-            {
-              type: "canvas",
-              preview: {
-                kind: "canvas",
-                surface: "assistant_message",
-                render: "url",
-                title: "Dashboard app",
-                viewId: "outer-view-must-not-be-pinned",
-                mcpApp: {
-                  viewId: "view-dashboard-app",
-                  serverName: "dashboard",
-                  toolName: "show",
-                  uiResourceUri: "ui://dashboard/app.html",
-                  toolCallId: "call-dashboard-app",
-                  originSessionKey: "agent:main:main",
-                },
-              },
+        msg("assistant", [
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              viewId: "outer-view-must-not-be-pinned",
+              mcpApp: { viewId: "view-dashboard-app" },
             },
-          ],
-        },
+          },
+        ]),
       ],
     };
     const transcript = createTestTranscript();
@@ -853,22 +742,16 @@ describe("chat transcript invalidation", () => {
     transcript.update();
     await flushDeferredRowPrune();
 
-    expect(container.querySelector('[data-content-kind="mcp-app"]')).not.toBeNull();
-    expect(container.querySelector("[data-pin-widget]")).toBeNull();
+    expect(find(container, '[data-content-kind="mcp-app"]')).not.toBeNull();
+    expect(find(container, "[data-pin-widget]")).toBeNull();
 
-    provider.canPinMcpApps = true;
-    render(renderChatThread(props, transcript), container);
-    transcript.update();
-
-    expect(container.querySelector("[data-pin-widget]")).not.toBeNull();
-    expect(provider.snapshot$.value.revision).toBe(1);
-
-    provider.canPinMcpApps = false;
-    render(renderChatThread(props, transcript), container);
-    transcript.update();
-
-    expect(container.querySelector("[data-pin-widget]")).toBeNull();
-    expect(provider.snapshot$.value.revision).toBe(1);
+    for (const canPin of [true, false]) {
+      provider.canPinMcpApps = canPin;
+      render(renderChatThread(props, transcript), container);
+      transcript.update();
+      expect(find(container, "[data-pin-widget]") !== null).toBe(canPin);
+      expect(provider.snapshot$.value.revision).toBe(1);
+    }
   });
 
   it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
@@ -876,19 +759,19 @@ describe("chat transcript invalidation", () => {
     const props = {
       ...threadProps("retained-pane", sessionKey, [
         { role: "user", content: "long user message ".repeat(100), timestamp: 1 },
-        {
-          role: "assistant",
-          content: [
+        msg(
+          "assistant",
+          [
             { type: "text", text: "assistant reply" },
             { type: "toolcall", id: "retained-call", name: "browser.open" },
           ],
-          timestamp: 2,
-        },
+          2,
+        ),
       ]),
       showToolCalls: true,
     };
     const controller = createTestTranscript();
-    const retainedPane = document.body.appendChild(document.createElement("div"));
+    const retainedPane = transcriptContainer();
     render(renderChatThread(props, controller), retainedPane);
     await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
@@ -897,19 +780,13 @@ describe("chat transcript invalidation", () => {
     const previousUserVersion = getExpansionStateVersion(staleUsers);
 
     for (let index = 0; index < 20; index += 1) {
-      const alternatePane = document.body.appendChild(document.createElement("div"));
-      render(
-        renderChatThread(
-          {
-            ...props,
-            paneId: `alternate-pane-${index}`,
-            sessionKey: `alternate-session-${index}`,
-          },
-          createTestTranscript(),
-        ),
-        alternatePane,
-      );
-      await settleToolBridges(alternatePane);
+      const alternate = threadFixture({
+        ...props,
+        paneId: `alternate-pane-${index}`,
+        sessionKey: `alternate-session-${index}`,
+      });
+      alternate.rerender();
+      await settleToolBridges(alternate.container);
     }
 
     render(renderChatThread(props, controller), retainedPane);
@@ -921,127 +798,91 @@ describe("chat transcript invalidation", () => {
     expect(getExpansionStateVersion(currentTools)).toBe(previousToolVersion);
     expect(getExpansionStateVersion(currentUsers)).toBe(previousUserVersion);
     const toolCardId = expectDefined(currentTools.keys().next().value, "retained tool card");
-    expectDefined(
-      retainedPane.querySelector<HTMLButtonElement>(
-        ".chat-group.user .chat-message-disclosure__toggle",
-      ),
-      "mounted user disclosure",
-    ).click();
-    expectDefined(
-      retainedPane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary"),
-      "mounted tool disclosure",
-    ).click();
-
+    click(retainedPane, ".chat-group.user .chat-message-disclosure__toggle");
+    click(retainedPane, ".chat-tool-msg-summary");
     expect(currentTools.get(toolCardId)).toBe(true);
     expect(staleTools.get(toolCardId)).toBe(false);
     expect(currentUsers.size).toBe(1);
     expect(staleUsers.size).toBe(0);
 
-    const toolVisibilitySession = "tool-visibility-session";
-    const toolVisibilityProps = {
+    const visibleSession = "tool-visibility-session";
+    const visibleProps = {
       ...props,
       paneId: "tool-visibility-pane",
-      sessionKey: toolVisibilitySession,
+      sessionKey: visibleSession,
       transcriptVisible: true,
       messages: [
         { role: "user", content: "tool visibility prompt", timestamp: 1 },
-        {
-          role: "toolResult",
+        msg("toolResult", "Expanded tool result", 2, {
           toolCallId: "expanded-tool",
           toolName: "browser.open",
-          content: "Expanded tool result",
-          timestamp: 2,
-        },
+        }),
         { role: "assistant", content: "The first tool completed.", timestamp: 3 },
         { role: "user", content: "Show the next tool result.", timestamp: 4 },
-        {
-          role: "toolResult",
+        msg("toolResult", "Collapsed tool result", 5, {
           toolCallId: "collapsed-tool",
           toolName: "browser.open",
-          content: "Collapsed tool result",
-          timestamp: 5,
-        },
+        }),
       ],
     };
-    saveChatSessionScrollPosition(toolVisibilityProps.paneId, toolVisibilitySession, {
+    saveChatSessionScrollPosition(visibleProps.paneId, visibleSession, {
       scrollTop: 0,
       anchorToEnd: false,
     });
-    const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
-    onTestFinished(() => toolVisibilityController.dispose());
-    const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
-    const renderToolVisibility = async (next = toolVisibilityProps) => {
-      render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);
-      toolVisibilityController.update();
-      await settleToolBridges(toolVisibilityPane);
+    const visibleTranscript = createTestTranscript(visibleProps.paneId);
+    onTestFinished(() => visibleTranscript.dispose());
+    const visiblePane = transcriptContainer();
+    const drawVisible = async (next = visibleProps) => {
+      render(renderChatThread(next, visibleTranscript), visiblePane);
+      visibleTranscript.update();
+      await settleToolBridges(visiblePane);
     };
-    await renderToolVisibility();
-    toolVisibilityController.start();
-    const visibilityState = getExpandedToolCards(toolVisibilitySession);
+    await drawVisible();
+    visibleTranscript.start();
+    const visibilityState = getExpandedToolCards(visibleSession);
     const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
-    const expandedToolId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
-    const collapsedToolId = expectDefined(visibilityIds[1], "collapsed standalone tool disclosure");
-    const disclosureButtons = () =>
-      Array.from(
-        toolVisibilityPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary"),
-      ).filter((button) => !button.closest(".chat-tool-msg-body"));
-    await waitForSolid(() => expect(disclosureButtons()).toHaveLength(2));
-    expect(disclosureButtons()).toHaveLength(2);
-    expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-      "false",
-      "false",
-    ]);
-    expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
-    await waitForSolid(() =>
-      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-        "true",
-        "false",
-      ]),
-    );
-    expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    await waitForSolid(() =>
-      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-        "true",
-        "true",
-      ]),
-    );
-    expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    await waitForSolid(() =>
-      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-        "true",
-        "false",
-      ]),
-    );
+    const expandedId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
+    const collapsedId = expectDefined(visibilityIds[1], "collapsed standalone tool disclosure");
+    const buttons = () =>
+      Array.from(visiblePane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary")).filter(
+        (button) => !button.closest(".chat-tool-msg-body"),
+      );
+    const expansion = () => buttons().map((button) => button.getAttribute("aria-expanded"));
+    const expectExpansion = (...values: string[]) =>
+      waitForSolid(() => expect(expansion()).toEqual(values));
+    await waitForSolid(() => expect(buttons()).toHaveLength(2));
+    expect(expansion()).toEqual(["false", "false"]);
+    expectDefined(buttons()[0], "first mounted tool disclosure").click();
+    await expectExpansion("true", "false");
+    expectDefined(buttons()[1], "second mounted tool disclosure").click();
+    await expectExpansion("true", "true");
+    expectDefined(buttons()[1], "second mounted tool disclosure").click();
+    await expectExpansion("true", "false");
 
-    await renderToolVisibility({ ...toolVisibilityProps, transcriptVisible: false });
-    setExpansionState(visibilityState, expandedToolId, false);
+    await drawVisible({ ...visibleProps, transcriptVisible: false });
+    setExpansionState(visibilityState, expandedId, false);
     flush();
-    expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("true");
-    await renderToolVisibility();
-    expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("false");
-    setExpansionState(visibilityState, expandedToolId, true);
-    await waitForSolid(() =>
-      expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("true"),
-    );
+    expect(buttons()[0]?.getAttribute("aria-expanded")).toBe("true");
+    await drawVisible();
+    expect(buttons()[0]?.getAttribute("aria-expanded")).toBe("false");
+    setExpansionState(visibilityState, expandedId, true);
+    await waitForSolid(() => expect(buttons()[0]?.getAttribute("aria-expanded")).toBe("true"));
 
-    await renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
-    expect(disclosureButtons()).toHaveLength(0);
-    await renderToolVisibility();
+    await drawVisible({ ...visibleProps, showToolCalls: false });
+    expect(buttons()).toHaveLength(0);
+    await drawVisible();
 
-    expect(disclosureButtons()).toHaveLength(2);
-    expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-      "true",
-      "false",
-    ]);
-    expect(visibilityState.get(expandedToolId)).toBe(true);
-    expect(visibilityState.get(collapsedToolId)).toBe(false);
-    await renderToolVisibility({
-      ...toolVisibilityProps,
-      messages: toolVisibilityProps.messages.filter(
+    expect(buttons()).toHaveLength(2);
+    expect(expansion()).toEqual(["true", "false"]);
+    expect(visibilityState.get(expandedId)).toBe(true);
+    expect(visibilityState.get(collapsedId)).toBe(false);
+    await drawVisible({
+      ...visibleProps,
+      messages: visibleProps.messages.filter(
         (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
       ),
     });
-    expect(visibilityState.get(expandedToolId)).toBe(true);
-    expect(visibilityState.get(collapsedToolId)).toBe(false);
+    expect(visibilityState.get(expandedId)).toBe(true);
+    expect(visibilityState.get(collapsedId)).toBe(false);
   });
 });

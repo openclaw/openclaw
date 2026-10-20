@@ -12,6 +12,7 @@ import {
   loadPersistedTerminalActions,
   persistTerminalActions,
 } from "./terminal-session-storage.ts";
+import { CATALOG_TERMINAL_READY_TIMEOUT_MS } from "./terminal-tab-readiness.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
 type TerminalHandoff = {
@@ -41,7 +42,6 @@ export type TerminalIntentHost = {
   hasTabs: () => boolean;
   publish: () => void;
   setBooting: (booting: boolean) => void;
-  timeoutMs: () => number;
   showTimeout: () => void;
   clearTimeout: () => void;
 };
@@ -216,7 +216,7 @@ export function createTerminalIntentQueue(persistent = true) {
       ownedTimeoutHost = fenceHost;
       fenceHost.showTimeout();
       fenceHost.setBooting(false);
-    }, fenceHost.timeoutMs());
+    }, CATALOG_TERMINAL_READY_TIMEOUT_MS);
   }
   function releaseRefreshFence(host: TerminalIntentHost): void {
     if (ownedFenceHost !== host) {

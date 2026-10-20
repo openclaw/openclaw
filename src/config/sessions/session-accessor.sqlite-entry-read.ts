@@ -169,6 +169,22 @@ export function readSessionEntryRow(
   return scanSessionEntryRows(database, sessionKey, projection, true, includeWindowFacts)?.selected;
 }
 
+/** Select the same canonical row for ordinary accessors and admitted runtime targets. */
+export function readSessionEntrySelectionInDatabase(
+  database: OpenClawAgentDatabaseReader,
+  agentId: string,
+  sessionKey: string,
+  options: {
+    keyFormat?: "agent-qualified";
+    allowCanonicalMove?: boolean;
+    projection?: SessionEntryProjection;
+  } = {},
+) {
+  return options.keyFormat === "agent-qualified"
+    ? readQualifiedSessionEntryRow(database, agentId, sessionKey, options)
+    : readSessionEntryRow(database, sessionKey, options.projection);
+}
+
 /** Identity preparation retains normal alias validation without loading participant display data. */
 export function readSessionEntryIdentity(
   database: OpenClawAgentDatabaseReader,

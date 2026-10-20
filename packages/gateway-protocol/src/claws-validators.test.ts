@@ -20,6 +20,7 @@ const catalogEntry = {
   channel: "official",
   official: true,
   downloads: 0,
+  installs: 0,
   updatedAtMs: 0,
 };
 const basePlan = {
@@ -38,7 +39,7 @@ const checkPlan = (plan: unknown) => expect(validateClawLifecyclePlanResult(plan
 const rejectPlan = (plan: unknown) => expect(validateClawLifecyclePlanResult(plan)).toBe(false);
 
 describe("Claws Gateway contract", () => {
-  it("allows the starter catalog before a search query and only official Add coordinates", () => {
+  it("allows the public catalog and exact publisher Add coordinates", () => {
     expect(validateClawsCatalogSearchParams({})).toBe(true);
     expect(validateClawsCatalogSearchParams({ query: "workflow", limit: 30 })).toBe(true);
     expect(validateClawsCatalogSearchParams({ sourceRoot: "/private/claw" })).toBe(false);
@@ -47,7 +48,38 @@ describe("Claws Gateway contract", () => {
     const preview = { kind: "instruction", name: "AGENTS.md" };
     expect(validateClawsCatalogPreviewParams({ ...coordinate, ...preview })).toBe(true);
     expect(
-      validateClawsCatalogPreviewResult({ preview: { ...preview, content: "# Instructions" } }),
+      validateClawsCatalogSearchResult({
+        entries: [
+          {
+            packageName: "@openclaw/workflow-operator",
+            displayName: "Workflow Operator",
+            channel: "official",
+            official: true,
+            downloads: 0,
+            installs: 0,
+            updatedAtMs: 0,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogDetailParams({
+        packageName: "@openclaw/workflow-operator",
+        version: "1.0.0",
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogPreviewParams({
+        packageName: "@openclaw/workflow-operator",
+        version: "1.0.0",
+        kind: "instruction",
+        name: "AGENTS.md",
+      }),
+    ).toBe(true);
+    expect(
+      validateClawsCatalogPreviewResult({
+        preview: { kind: "instruction", name: "AGENTS.md", content: "# Instructions" },
+      }),
     ).toBe(true);
     expect(
       validateClawsCatalogDetailResult({
@@ -91,7 +123,34 @@ describe("Claws Gateway contract", () => {
         source: { packageName: "@someone-else/workflow-operator", version: "1.0.0" },
         planIntegrity: "sha256:reviewed-plan",
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      validateClawsCatalogSearchResult({
+        entries: [
+          {
+            packageName: "@alice/workflow-operator",
+            displayName: "Workflow Operator",
+            channel: "community",
+            official: false,
+            ownerHandle: "alice",
+            downloads: 0,
+            installs: 0,
+            updatedAtMs: 0,
+          },
+        ],
+      }),
+    ).toBe(true);
+    for (const packageName of [
+      "../local",
+      "https://registry.example/claw",
+      "@alice/claw@latest",
+      "@Alice/claw",
+      "@alice/claw ",
+    ]) {
+      expect(validateClawsAddApplyParams({ source: { packageName, version: "1.0.0" } })).toBe(
+        false,
+      );
+    }
     expect(
       validateClawsUpdateApplyParams({
         agentId: "workflow-operator",

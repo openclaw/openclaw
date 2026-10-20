@@ -1,9 +1,34 @@
 import { buildCronCommandSummary } from "../cron/command-output-summary.js";
 import type { CronService } from "../cron/service.js";
+import type { CronServiceDeps } from "../cron/service/state.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import type { CronExitResult } from "./cron-exit-watchers.js";
 import type { CronStreamFireDisposition } from "./cron-stream-watchers.js";
+
+export function enqueueCronSystemEvent(
+  text: string,
+  opts: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1],
+  target: { agentId?: string; sessionKey?: string },
+) {
+  const { agentId, sessionKey } = target;
+  if (!agentId || !sessionKey) {
+    throw new Error("Cron system event target did not resolve an owner and session key.");
+  }
+  const adoption = createDeferredCore<boolean>();
+  const remove = enqueueSystemEventWithReceipt(
+    text,
+    withSystemEventOwner(
+      { sessionKey, contextKey: opts?.contextKey, deliveryContext: opts?.deliveryContext },
+      agentId,
+    ),
+    { onSettled: adoption.resolve },
+  );
+  return remove ? { accepted: true, remove, adopted: adoption.promise } : { accepted: false };
+}
 
 export function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [

@@ -5,6 +5,7 @@
  */
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { getSandboxBackendManager, usesSandboxRuntimeReservations } from "./backend.js";
@@ -12,7 +13,7 @@ import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
-  assertSandboxBrowserRegistryEntryCurrent,
+  assertSandboxRegistryRetirementCurrent,
   readBrowserRegistry,
   readRegistry,
   removeSandboxRegistryGeneration,
@@ -98,6 +99,7 @@ async function pruneSandboxContainers(config: OpenClawConfig, guard: WorkspaceSt
           reserveRuntime: usesSandboxRuntimeReservations(entry.backendId ?? "docker"),
           prune,
           guard,
+          preservePersistentExecs: true,
         },
       ),
   });
@@ -120,7 +122,7 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
           return;
         }
         try {
-          assertSandboxBrowserRegistryEntryCurrent(entry);
+          await assertSandboxRegistryRetirementCurrent("browser", entry);
         } catch {
           return;
         }
@@ -158,6 +160,14 @@ export async function maybePruneSandboxes(
   lastPruneAtMs = now;
   try {
     const currentConfig = config ?? getRuntimeConfig();
+    const { recoverSandboxPersistentExecOrphans } = await import("./persistent-exec.js");
+    try {
+      await recoverSandboxPersistentExecOrphans();
+    } catch (error) {
+      defaultRuntime.error?.(
+        `Sandbox stream allocation cleanup failed: ${formatErrorMessage(error)}`,
+      );
+    }
     await pruneSandboxContainers(currentConfig, { assertHost, beforeLegacyApply: assertCurrent });
     assertCurrent?.();
     await pruneSandboxBrowsers(currentConfig, assertCurrent);

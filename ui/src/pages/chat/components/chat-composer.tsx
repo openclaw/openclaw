@@ -76,7 +76,7 @@ export function ChatComposer(props: ChatComposerProps) {
   );
   const dictation = projectOwner(voice.dictation, (owner) => owner);
   const microphone = projectOwner(voice.picker, (owner) => owner);
-  const prediction = createComposerPrediction(() => {
+  const readPredictionSource = () => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
     if (!options || !client) {
@@ -106,7 +106,8 @@ export function ChatComposer(props: ChatComposerProps) {
         document.visibilityState !== "hidden",
       idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
     };
-  });
+  };
+  const prediction = createComposerPrediction(readPredictionSource);
   const questionPanel = createComposerQuestionPanel(() => currentProps, state, composition);
   const context = createMemo(() => {
     draftState();
@@ -122,8 +123,8 @@ export function ChatComposer(props: ChatComposerProps) {
     );
   });
   createEffect(
-    () => ({ context: context(), predictions: currentProps.composerPredictions }),
-    ({ context: current }, previous) => {
+    () => ({ context: context(), predictions: readPredictionSource() }),
+    ({ context: current, predictions }, previous) => {
       state.mentionMenu.syncDirectory(current.mentionDirectory);
       if (current.clearSlashMenu) {
         state.slashMenu.reset();
@@ -137,9 +138,11 @@ export function ChatComposer(props: ChatComposerProps) {
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
-      prediction.sync();
+      prediction.sync(predictions);
     },
   );
-  onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
+  onSettled(() =>
+    listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
+  );
   return renderChatComposerView(context, currentProps, state);
 }

@@ -304,7 +304,12 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
     controller.abort(aborted);
     expect(() => run(late)).toThrow(aborted);
     await owner.close();
-    expect(() => other.run(() => run(late))).toThrow("scope closed");
+    expect(() => other.run(() => run(late))).toThrow(
+      expect.objectContaining({
+        message: "SQLite read-only worker scope closed",
+        code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+      }),
+    );
     expect(late).not.toHaveBeenCalled();
   } finally {
     await Promise.all([owner.close(), other.close()]);

@@ -48,18 +48,12 @@ export async function getCanonicalUserPreferences(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<CanonicalUserPreferences | undefined> {
   const context = captureOpenClawStateReadWorkerContext(options);
-  for (;;) {
-    const isCurrent = await captureUserPreferenceRead(context.admission);
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "userPreferences.read", profileId, keys },
-      { context, current: true },
-    );
-    // A preference write or profile merge must not publish an older result afterward.
-    if (isCurrent()) {
-      return reply?.preferences;
-    }
-  }
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userPreferences.read", profileId, keys },
+    { context, current: true },
+  );
+  return reply?.preferences;
 }
 
 export async function setCanonicalUserPreferences(

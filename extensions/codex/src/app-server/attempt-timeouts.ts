@@ -1,4 +1,5 @@
 import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
@@ -68,43 +69,33 @@ export async function withCodexStartupTimeout<T>(params: {
   if (params.signal.aborted) {
     throw new CodexAppServerStartupError("aborted");
   }
-  let timeout: NodeJS.Timeout | undefined;
-  let abortCleanup: (() => void) | undefined;
   let timeoutError: Error | undefined;
   let timeoutCleanup: Promise<void> | undefined;
   try {
-    return await Promise.race([
-      params.operation(),
-      new Promise<never>((_, reject) => {
-        const rejectOnce = (error: Error) => {
-          clearTimeout(timeout);
-          timeout = undefined;
-          reject(error);
-        };
-        timeout = setTimeout(() => {
-          timeoutError = new CodexAppServerStartupError("timed_out");
-          timeoutCleanup = Promise.resolve(params.onTimeout?.()).then(
-            () => undefined,
-            () => undefined,
-          );
-          void timeoutCleanup.finally(() => {
-            rejectOnce(timeoutError!);
-          });
-        }, params.timeoutMs);
-        const abortListener = () => rejectOnce(new CodexAppServerStartupError("aborted"));
-        params.signal.addEventListener("abort", abortListener, { once: true });
-        abortCleanup = () => params.signal.removeEventListener("abort", abortListener);
-      }),
-    ]);
+    return await raceWithTimeout(
+      params.operation,
+      params.timeoutMs,
+      () => {
+        timeoutError = new CodexAppServerStartupError("timed_out");
+        timeoutCleanup = Promise.resolve(params.onTimeout?.()).then(
+          () => undefined,
+          () => undefined,
+        );
+        throw timeoutError;
+      },
+      {
+        signal: params.signal,
+        onAbort: () => {
+          throw new CodexAppServerStartupError("aborted");
+        },
+      },
+    );
   } catch (error) {
     if (timeoutError) {
       await timeoutCleanup;
       throw timeoutError;
     }
     throw error;
-  } finally {
-    clearTimeout(timeout);
-    abortCleanup?.();
   }
 }
 

@@ -78,7 +78,10 @@ export function bindGitHubPublicationSourceLifetime(
   return capability;
 }
 
-export function bindGitHubPublicationSource(capability: GitHubPublicationSourceCapability) {
+export function bindGitHubPublicationSource(
+  capability: GitHubPublicationSourceCapability,
+  assertAdmissionCurrent?: () => void,
+) {
   const binding = bindings.get(capability);
   if (!binding) {
     throw new Error("GitHub publication source capability is unavailable.");
@@ -98,13 +101,20 @@ export function bindGitHubPublicationSource(capability: GitHubPublicationSourceC
             }
             binding.signal.throwIfAborted();
             binding.assertCurrent();
+            assertAdmissionCurrent?.();
             grant();
           }),
           nativeLocations: [binding.context.admission.databasePath],
         };
       }
       return createSqliteSourceFenceAdmission({
-        destination: binding.destination,
+        destination: {
+          ...binding.destination,
+          assertCurrent() {
+            binding.destination.assertCurrent();
+            assertAdmissionCurrent?.();
+          },
+        },
         sources: [binding.source],
         signal: binding.signal,
         deadlineNs: process.hrtime.bigint() + 120_000_000_000n,

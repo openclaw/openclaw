@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../../src/shared/listeners.js";
 import {
   appendChatMediaPlaybackParam,
   waitForChatMediaPlayback,
@@ -31,12 +32,9 @@ export class ChatMediaSourceOwner {
   private playbackSource = "";
   private playbackReadiness: "idle" | "preparing" | "ready" | "unavailable" = "idle";
 
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
-  subscribe(notify: () => void): () => void {
-    this.listeners.add(notify);
-    return () => this.listeners.delete(notify);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   private setPlayback(
     readiness: typeof this.playbackReadiness,
@@ -47,9 +45,7 @@ export class ChatMediaSourceOwner {
     }
     this.playbackReadiness = readiness;
     this.playbackSource = source;
-    for (const notify of this.listeners) {
-      notify();
-    }
+    this.listeners.publish();
   }
 
   get readySource(): string {

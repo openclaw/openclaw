@@ -16,7 +16,7 @@
     "json5": "2.2.3",
     "kysely": "0.29.6",
     "p-limit": "7.3.3",
-    "typebox": "1.3.36"
+    "typebox": "1.3.37"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

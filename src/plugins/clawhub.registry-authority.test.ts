@@ -86,44 +86,39 @@ it.each([
     ]),
   );
   const archiveApi = await import("../infra/archive.js");
-  const hookOwner = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(hookRunner);
+  vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(hookRunner);
   const extraction = vi.spyOn(archiveApi, "extractArchive");
   const artifactReview = vi.fn();
-  try {
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo@2026.3.22",
-      baseUrl,
-      config: {},
-      extensionsDir,
-      env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.3.22" },
-      onInstallPolicyWarning: async () => ({ status: "approved" }),
-      onBeforePluginArtifactCommit: artifactReview,
+  const result = await installPluginFromClawHub({
+    spec: "clawhub:demo@2026.3.22",
+    baseUrl,
+    config: {},
+    extensionsDir,
+    env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.3.22" },
+    onInstallPolicyWarning: async () => ({ status: "approved" }),
+    onBeforePluginArtifactCommit: artifactReview,
+  });
+  expect(mocks.detail).toHaveBeenCalledWith(expect.objectContaining({ baseUrl }));
+  expect(mocks.download).toHaveBeenCalledWith(expect.objectContaining({ baseUrl }));
+  expect(extraction).toHaveBeenCalledOnce();
+  expect(cleanup).toHaveBeenCalledOnce();
+  if (blocked) {
+    expect(result).toMatchObject({
+      ok: false,
+      code: "security_scan_blocked",
+      error: expect.stringContaining("registry policy rejected fixture"),
     });
-    expect(mocks.detail).toHaveBeenCalledWith(expect.objectContaining({ baseUrl }));
-    expect(mocks.download).toHaveBeenCalledWith(expect.objectContaining({ baseUrl }));
-    expect(extraction).toHaveBeenCalledOnce();
-    expect(cleanup).toHaveBeenCalledOnce();
-    if (blocked) {
-      expect(result).toMatchObject({
-        ok: false,
-        code: "security_scan_blocked",
-        error: expect.stringContaining("registry policy rejected fixture"),
-      });
-      expect(rejectInstall).toHaveBeenCalledOnce();
-      expect(artifactReview).not.toHaveBeenCalled();
-      await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    } else {
-      expect(result).toMatchObject({ ok: true, pluginId: "demo" });
-      expect(rejectInstall).not.toHaveBeenCalled();
-      expect(artifactReview).toHaveBeenCalledOnce();
-      expect(await fs.readFile(path.join(extensionsDir, "demo", "index.js"), "utf8")).toBe(
-        DEMO_PLUGIN_ARCHIVE_ENTRIES["index.js"],
-      );
-    }
-  } finally {
-    extraction.mockRestore();
-    hookOwner.mockRestore();
+    expect(rejectInstall).toHaveBeenCalledOnce();
+    expect(artifactReview).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  } else {
+    expect(result).toMatchObject({ ok: true, pluginId: "demo" });
+    expect(rejectInstall).not.toHaveBeenCalled();
+    expect(artifactReview).toHaveBeenCalledOnce();
+    expect(await fs.readFile(path.join(extensionsDir, "demo", "index.js"), "utf8")).toBe(
+      DEMO_PLUGIN_ARCHIVE_ENTRIES["index.js"],
+    );
   }
 });

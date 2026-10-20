@@ -6,10 +6,10 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import {
   loadedCronStoreFromRows,
   resolveCronJobGrantDefinitionGenerationFloor,
-  resolveCronJobGrantDefinitionRevision,
 } from "../cron/store/row-codec.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "../cron/store/run-receipt-read.js";
 import type { CronStoredJob } from "../cron/types.js";

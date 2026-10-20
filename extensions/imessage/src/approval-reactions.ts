@@ -54,12 +54,7 @@ type IMessageApprovalReactionResolution = {
 };
 type IMessageApprovalReactionHandleResult =
   | { handled: false; stopPolling: false }
-  | { handled: true; stopPolling: false }
-  | {
-      handled: true;
-      stopPolling: true;
-      stopPollingReason: "resolved" | "not-found";
-    };
+  | { handled: true; stopPolling: boolean };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
   approvalKind: ChannelApprovalKind;
@@ -520,9 +515,7 @@ export async function handleIMessageApprovalReaction(params: {
     },
     logVerboseMessage: logVerbose,
   });
-  return settlement === "denied"
-    ? { handled: true, stopPolling: false }
-    : { handled: true, stopPolling: true, stopPollingReason: settlement };
+  return { handled: true, stopPolling: settlement !== "denied" };
 }
 
 export function clearIMessageApprovalReactionTargetsForTest(): void {

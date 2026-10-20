@@ -89,14 +89,18 @@ describe("admitted Gateway source identity", () => {
         storePath,
       });
 
-      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      try {
+        await expect(controller.admitUserTurn()).resolves.toBe("admitted");
 
-      const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
-      expect(target).toMatchObject({ sourceTurnId });
-      expect(
-        resolveRestartRecoverySteeringBlockReason(entry, sessionId, target?.sourceTurnId ?? ""),
-      ).toBeUndefined();
-      expect(entry.restartRecoveryTerminalRunIds).toEqual(["gateway-previous-run"]);
+        const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
+        expect(target).toMatchObject({ sourceTurnId });
+        expect(
+          resolveRestartRecoverySteeringBlockReason(entry, sessionId, target?.sourceTurnId ?? ""),
+        ).toBeUndefined();
+        expect(entry.restartRecoveryTerminalRunIds).toEqual(["gateway-previous-run"]);
+      } finally {
+        await controller.clear();
+      }
     },
   );
 });

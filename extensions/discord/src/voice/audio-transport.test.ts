@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/client.js";
 import { VoicePlugin } from "../internal/voice.js";
@@ -64,7 +65,6 @@ describe("Discord audio worker control boundary", () => {
     expect(stopped).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();
     worker.message({ type: "ready" });
-    expect(audio.connectionStatus).toBe("destroyed");
   });
 
   it("stops the allocated worker if gateway adapter registration throws", () => {
@@ -92,6 +92,33 @@ describe("Discord audio worker control boundary", () => {
       },
     });
     expect(worker.sent.at(-1)).toEqual({ type: "gateway-failed" });
+  });
+
+  it("waits for physical termination when the worker exceeds its stop grace", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { audio, worker, destroy } = fixture();
+    const exited = createDeferred<number>();
+    const terminate = vi.spyOn(worker, "terminate").mockReturnValue(exited.promise);
+    worker.message({ type: "ready" });
+    await audio.ready;
+    let settled = false;
+    const stopping = audio.stop().then(() => {
+      settled = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(terminate).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      worker.emit("exit", 0);
+      exited.resolve(0);
+      await stopping;
+      vi.useRealTimers();
+    }
+    expect(destroy).toHaveBeenCalledOnce();
   });
 
   it("settles captures on worker loss and ignores late frames after terminal teardown", async () => {

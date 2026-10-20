@@ -9,7 +9,6 @@ import "../../styles/agent-row-chip.css";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  createEffect,
   createMemo,
   createSignal,
   createStore,
@@ -181,10 +180,13 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   const activityExpiry = createPresenceActivityLifecycle(presence, () =>
     setPresentationTime(Date.now()),
   );
-  createEffect(pageRevision, () => activityExpiry.sync());
   onSettled(() => {
+    const stop = pageProps.page.subscribe(() => activityExpiry.sync());
     activityExpiry.connect();
-    return () => activityExpiry.disconnect();
+    return () => {
+      stop();
+      activityExpiry.disconnect();
+    };
   });
   function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
     function StatusFilter(props: { status: ActivityStatus }) {

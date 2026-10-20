@@ -14,6 +14,7 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   catalogHost,
+  catalogProvider as provider,
   catalogSession,
   expectCatalog,
   expectCatalogHost,
@@ -26,7 +27,6 @@ import {
   createPluginRuntime,
   createSessionCatalogTestContext,
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
   sessionCatalogHandlers,

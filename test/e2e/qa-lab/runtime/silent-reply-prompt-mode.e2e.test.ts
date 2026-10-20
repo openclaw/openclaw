@@ -73,16 +73,19 @@ describe("direct-channel silent-reply prompt contract", () => {
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const artifactDir = path.join(REPO_ROOT, ".artifacts/silent-reply-prompt-mode");
+    const writeArtifact = async (name: string, data: unknown) => {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await fs.writeFile(
+        path.join(artifactDir, name),
+        typeof data === "string" ? data : `${JSON.stringify(data, null, 2)}\n`,
+      );
+    };
     let readGatewayLogs = () =>
       "Gateway did not finish startup; see flow.log for the startup error.";
     cleanups.push(async () => {
       // Diagnostics must run before the Gateway and provider cleanup owners.
-      await fs.mkdir(artifactDir, { recursive: true });
-      await fs.writeFile(path.join(artifactDir, "gateway.log"), readGatewayLogs());
-      await fs.writeFile(
-        path.join(artifactDir, "bus.json"),
-        `${JSON.stringify(state.getSnapshot(), null, 2)}\n`,
-      );
+      await writeArtifact("gateway.log", readGatewayLogs());
+      await writeArtifact("bus.json", state.getSnapshot());
       let providerDiagnostics: unknown;
       try {
         const response = await fetch(`${mock.baseUrl}/debug/requests?after=0`, {
@@ -94,10 +97,7 @@ describe("direct-channel silent-reply prompt contract", () => {
           unavailable: error instanceof Error ? error.message : String(error),
         };
       }
-      await fs.writeFile(
-        path.join(artifactDir, "provider.json"),
-        `${JSON.stringify(providerDiagnostics, null, 2)}\n`,
-      );
+      await writeArtifact("provider.json", providerDiagnostics);
     });
     const gateway = await owner
       .start({
@@ -118,9 +118,8 @@ describe("direct-channel silent-reply prompt contract", () => {
         controlUiEnabled: false,
       })
       .catch(async (error: unknown) => {
-        await fs.mkdir(artifactDir, { recursive: true });
-        await fs.writeFile(
-          path.join(artifactDir, "startup-error.log"),
+        await writeArtifact(
+          "startup-error.log",
           error instanceof Error ? (error.stack ?? error.message) : String(error),
         );
         throw error;
@@ -150,15 +149,16 @@ describe("direct-channel silent-reply prompt contract", () => {
     expect(requestsResponse.ok).toBe(true);
     const requests: MockOpenAiRequestSnapshot[] = await requestsResponse.json();
     expect(requests, "Unexpected provider requests after the scenario cursor").toHaveLength(1);
-    const scenarioRequests = requests.filter((request) => request.allInputText.includes(MARKER));
-    expect(scenarioRequests).toHaveLength(1);
-    const request = scenarioRequests[0];
+    const request = requests[0];
     if (!request) {
       throw new Error("Provider request was not captured");
     }
-    expect(request.model).toBe(MODEL_ID);
-    expect(request.requestKind).toBe("agent-initial");
-    expect(request.outcome).toBe("success");
+    expect(request).toMatchObject({
+      allInputText: expect.stringContaining(MARKER),
+      model: MODEL_ID,
+      requestKind: "agent-initial",
+      outcome: "success",
+    });
     const instructions = promptInstructions(request);
     expect(instructions).toContain("## Tooling");
     expect(instructions).toContain("## Care");
@@ -179,19 +179,15 @@ describe("direct-channel silent-reply prompt contract", () => {
       liveDiscord: false,
       requestKind: request.requestKind,
       providerOutcome: request.outcome,
-      providerRequests: scenarioRequests.length,
+      providerRequests: requests.length,
       visibleReplies: visible.length,
       reply: outbound.text,
       hasTooling: instructions.includes("## Tooling"),
       hasCare: instructions.includes("## Care"),
       hasGenericSilentReplies: instructions.includes("## Silent Replies"),
     };
-    await fs.mkdir(artifactDir, { recursive: true });
-    await fs.writeFile(
-      path.join(artifactDir, "observed.json"),
-      `${JSON.stringify(evidence, null, 2)}\n`,
-    );
-    await fs.writeFile(path.join(artifactDir, "synthetic-instructions.txt"), instructions);
+    await writeArtifact("observed.json", evidence);
+    await writeArtifact("synthetic-instructions.txt", instructions);
     process.stdout.write(`${JSON.stringify(evidence)}\n`);
     expect(evidence.hasGenericSilentReplies, "SILENT_REPLY_GUIDANCE_LEAK").toBe(false);
   }, 180_000);

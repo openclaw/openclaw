@@ -12,6 +12,7 @@ import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { isCronEventSchedule } from "./source-schedule.js";
 import { normalizeCronStaggerMs } from "./stagger.js";
+import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronSchedule } from "./types.js";
 
 type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Record<
@@ -120,7 +121,12 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
       ? schedulePayloadFromRecord(job.schedule as Record<string, unknown>)
       : undefined;
   const pacing = resolvePacingPayload(job);
-  if (!schedule || pacing === null) {
+  const streamSandbox = parseCronStreamSandboxTarget(job.streamSandbox);
+  if (
+    !schedule ||
+    pacing === null ||
+    (job.streamSandbox !== undefined && (!streamSandbox || schedule.kind !== "stream"))
+  ) {
     return undefined;
   }
   return JSON.stringify({
@@ -129,6 +135,7 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
     schedule: schedule.kind === "event" ? JSON.parse(stableStringify(schedule)) : schedule,
     pacing,
     hasTrigger: job.trigger !== undefined && job.trigger !== null,
+    ...(streamSandbox ? { streamSandbox } : {}),
   });
 }
 

@@ -151,9 +151,15 @@ export function watchDirectory(
   listener: Listener,
   recursive = false,
 ): DirectoryWatch {
-  return process.platform === "darwin" && !process.versions.bun
-    ? watchInHost(directoryPath, listener, recursive)
-    : fs.watch(directoryPath, { persistent: false, recursive }, (event, filename) =>
-        listener(event, filename?.toString() ?? undefined),
-      );
+  if (process.platform === "darwin" && !process.versions.bun) {
+    return watchInHost(directoryPath, listener, recursive);
+  }
+  if (recursive) {
+    // Node 24's Linux recursive fallback returns a watch that never reports for a
+    // missing or unreadable root (nodejs/node#65635); callers fall back only on throw.
+    fs.accessSync(directoryPath, fs.constants.R_OK);
+  }
+  return fs.watch(directoryPath, { persistent: false, recursive }, (event, filename) =>
+    listener(event, filename?.toString() ?? undefined),
+  );
 }

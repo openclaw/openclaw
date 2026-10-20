@@ -84,6 +84,7 @@ export type SidebarPanelDefinitionParams = {
   onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   connected: boolean;
   onClearCompanion: () => void;
+  onCreateClaw?: () => void;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;

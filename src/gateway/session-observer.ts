@@ -61,7 +61,6 @@ const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 export function createSessionObserver(deps: SessionObserverDeps): SessionObserverService {
-  const resolveUtilityModelRef = deps.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const prepareModel = deps.prepareModel ?? defaultPrepareModel;
   const completeModel = deps.completeModel ?? defaultCompleteModel;
   const resolveStorePath = (agentId: string) =>
@@ -88,7 +87,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   };
   const lifecycle = createSessionObserverLifecycle({
     getConfig: deps.getConfig,
-    readSession,
     refreshAfterReset: (sessionKey, agentId, consume) =>
       work.refreshAfterReset(sessionKey, agentId, consume),
     isTerminal: (runId) => terminalRuns.has(runId),
@@ -231,7 +229,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   };
   const modelSlots = createSessionObserverModelSlots({
     states,
-    resolve: (agentId) => resolveUtilityModelRef({ cfg: deps.getConfig(), agentId }),
+    resolve: (agentId) => resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId }),
     demote: demoteUtilityModel,
   });
 
@@ -250,7 +248,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       !work.resetting.has(resolveSessionSubscriptionKey(state.sessionKey, state.agentId)) &&
       lifecycle.isTracked(state) &&
       deps.getConfig().gateway?.controlUi?.sessionObserver !== false,
-    resolveUtilityModelRef: (agentId) => resolveUtilityModelRef({ cfg: deps.getConfig(), agentId }),
+    resolveUtilityModelRef: (agentId) =>
+      resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId }),
     suspend: suspendState,
     demote: demoteUtilityModel,
   });
