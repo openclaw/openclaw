@@ -136,11 +136,7 @@ export function createClickClackAgentProgressPublisher(params: {
             },
           });
         } catch (error) {
-          try {
-            params.onError?.(error);
-          } catch {
-            // Progress reporting must never affect the agent turn.
-          }
+          params.onError?.(error);
         }
       }
     })().finally(() => {
