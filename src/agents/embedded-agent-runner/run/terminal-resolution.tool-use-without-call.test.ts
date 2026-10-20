@@ -5,7 +5,13 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import { makeTerminalInput, type TerminalInput } from "./terminal-resolution.test-support.js";
+import {
+  assistantAttempt,
+  expectComplete,
+  makeTerminalInput,
+  resolveTerminal,
+  type TerminalInput,
+} from "./terminal-resolution.test-support.js";
 import { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 
 vi.mock("./auth-profile-success.js", () => ({
@@ -29,10 +35,8 @@ function toolUseStopWithoutCall(overrides: Parameters<typeof makeEmbeddedRunnerA
       { type: "text", text: PSEUDO_TOOL_CALL_TEXT },
     ],
   });
-  const attempt = makeEmbeddedRunnerAttempt({
+  const attempt = assistantAttempt(assistant, {
     assistantTexts: [PSEUDO_TOOL_CALL_TEXT],
-    lastAssistant: assistant,
-    currentAttemptAssistant: assistant,
     currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     ...overrides,
   });
@@ -60,21 +64,14 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
     const activateInternalPrompt = vi.fn();
 
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({ ...turn, sessionPromptState: { activateInternalPrompt } }),
-      ),
+      resolveTerminal({ ...turn, sessionPromptState: { activateInternalPrompt } }),
     ).resolves.toEqual({ action: "retry" });
 
-    const exhausted = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        ...turn,
-        retryState: { ...createEmbeddedRunTerminalRetryState(), emptyResponseAttempts: 1 },
-      }),
-    );
-    expect(exhausted.action).toBe("complete");
-    if (exhausted.action !== "complete") {
-      return;
-    }
+    const exhausted = await resolveTerminal({
+      ...turn,
+      retryState: { ...createEmbeddedRunTerminalRetryState(), emptyResponseAttempts: 1 },
+    });
+    expectComplete(exhausted);
     expect(exhausted.result.meta.error).toMatchObject({
       kind: "incomplete_turn",
       fallbackSafe: true,
@@ -90,10 +87,8 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
         stopReason,
         content: [{ type: "text", text: "NO_REPLY" }],
       });
-      const attempt = makeEmbeddedRunnerAttempt({
+      const attempt = assistantAttempt(assistant, {
         assistantTexts: ["NO_REPLY"],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
         currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
       });
       const input = makeTerminalInput({
@@ -119,10 +114,7 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
         resolved = await resolveEmbeddedRunTerminal(input);
       }
 
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected an incomplete-turn result");
-      }
+      expectComplete(resolved);
       expect(resolved.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
       expect(resolved.result.meta.stopReason).toBe("error");
       expect(resolved.result.sourceReplyDeliveryState).toBe("missing");

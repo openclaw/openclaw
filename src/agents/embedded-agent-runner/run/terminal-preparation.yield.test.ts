@@ -5,13 +5,12 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { createUsageAccumulator } from "../usage-accumulator.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
+import { preparationInput } from "./terminal-preparation.test-support.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import { makeTerminalInput } from "./terminal-resolution.test-support.js";
+import { expectComplete, makeTerminalInput } from "./terminal-resolution.test-support.js";
 
 vi.mock("./auth-profile-success.js", () => ({
   markEmbeddedRunAuthProfileSuccess: vi.fn(),
@@ -58,23 +57,19 @@ function prepareYield(
     runParams: { trigger: input.trigger, authProfileStateMode: "read-only" },
     ...(input.terminalState ? { terminalState: input.terminalState } : {}),
   });
-  const prepared = prepareEmbeddedRunTerminal({
-    runParams: {
-      ...terminal.runParams,
-      admittedRunContext: createTestAdmittedRunContext("run:terminal-resolution"),
-    },
-    attempt,
-    provider: "openai",
-    model: "mock-1",
-    activeErrorContext: { provider: "openai", model: "mock-1" },
-    authProfileStore: { version: 1, profiles: {} },
-    sessionIdUsed: attempt.sessionIdUsed,
-    outerContextTokenMeta: {},
-    usageAccumulator: createUsageAccumulator(),
-    contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-    resolvedToolResultFormat: "markdown",
-    terminalState: terminal.terminalState,
-  });
+  const prepared = prepareEmbeddedRunTerminal(
+    preparationInput({
+      runParams: {
+        ...terminal.runParams,
+        admittedRunContext: createTestAdmittedRunContext("run:terminal-resolution"),
+      },
+      attempt,
+      provider: "openai",
+      model: "mock-1",
+      activeErrorContext: { provider: "openai", model: "mock-1" },
+      terminalState: terminal.terminalState,
+    }),
+  );
   return { attempt, terminal, prepared };
 }
 
@@ -123,10 +118,7 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
         unresolvedError: { toolName: input.lastToolError.toolName },
       });
       const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
-      expect(result.action).toBe("complete");
-      if (result.action !== "complete") {
-        throw new Error("Expected a paused terminal result");
-      }
+      expectComplete(result);
       expect(result.result.meta).toMatchObject({
         yielded: true,
         aborted: false,

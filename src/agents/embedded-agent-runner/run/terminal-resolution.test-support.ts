@@ -29,6 +29,27 @@ export function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerA
   });
 }
 
+export function assistantAttempt(
+  assistant: ReturnType<typeof buildEmbeddedRunnerAssistant> | undefined,
+  overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {},
+) {
+  return makeEmbeddedRunnerAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    ...overrides,
+  });
+}
+
+type Resolution = Awaited<ReturnType<typeof resolveEmbeddedRunTerminal>>;
+export function expectComplete(
+  result: Resolution,
+): asserts result is Extract<Resolution, { action: "complete" }> {
+  expect(result.action).toBe("complete");
+  if (result.action !== "complete") {
+    throw new Error("expected terminal resolution to complete");
+  }
+}
+
 export function makeTerminalInput(overrides: TerminalInputOverrides = {}): TerminalInput {
   const assistant = overrides.attemptAssistant ?? emptyAssistant();
   const attempt =
@@ -140,13 +161,12 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
   };
 }
 
-export async function resolveTerminalText(
-  overrides: TerminalInputOverrides,
-): Promise<string | undefined> {
-  const resolved = await resolveEmbeddedRunTerminal(makeTerminalInput(overrides));
-  expect(resolved.action).toBe("complete");
-  if (resolved.action !== "complete") {
-    throw new Error("expected terminal resolution to complete");
-  }
+export function resolveTerminal(overrides: TerminalInputOverrides) {
+  return resolveEmbeddedRunTerminal(makeTerminalInput(overrides));
+}
+
+export async function resolveTerminalText(overrides: TerminalInputOverrides) {
+  const resolved = await resolveTerminal(overrides);
+  expectComplete(resolved);
   return resolved.result.payloads?.[0]?.text;
 }

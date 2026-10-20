@@ -1,13 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
+import { buildEmbeddedRunnerAssistant } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
-import {
+  assistantAttempt,
+  expectComplete,
   emptyAssistant,
-  makeTerminalInput,
+  resolveTerminal,
   resolveTerminalText,
 } from "./terminal-resolution.test-support.js";
 
@@ -26,21 +24,17 @@ describe("terminal auth resolution", () => {
     const authProfileId = "openai:selected";
     const text = "The turn completed.";
     const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
-    const attempt = makeEmbeddedRunnerAttempt({
+    const attempt = assistantAttempt(assistant, {
       assistantTexts: [text],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
     });
     const onSuccessfulAuthProfile = vi.fn();
-    const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        attempt,
-        attemptAssistant: assistant,
-        payloadsWithToolMedia: [{ text }],
-        authProfileId,
-        runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
-      }),
-    );
+    const resolved = await resolveTerminal({
+      attempt,
+      attemptAssistant: assistant,
+      payloadsWithToolMedia: [{ text }],
+      authProfileId,
+      runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
+    });
 
     expect(resolved.action).toBe("complete");
     expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith(authProfileId);
@@ -69,10 +63,8 @@ describe("terminal auth resolution", () => {
 
   it("does not replace timeout suppression with auth guidance", async () => {
     const assistant = emptyAssistant({ stopReason: "aborted" });
-    const attempt = makeEmbeddedRunnerAttempt({
+    const attempt = assistantAttempt(assistant, {
       terminal: { kind: "timeout", phase: "prompt", source: "external" },
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     await expect(
@@ -86,9 +78,7 @@ describe("terminal auth resolution", () => {
 
   it("keeps the side-effect warning ahead of auth guidance", async () => {
     const assistant = emptyAssistant({ stopReason: "error" });
-    const attempt = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
+    const attempt = assistantAttempt(assistant, {
       replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
@@ -104,29 +94,22 @@ describe("terminal auth resolution", () => {
 
   it("still reports an incomplete turn when auth failure bookkeeping rejects", async () => {
     const assistant = emptyAssistant({ stopReason: "length" });
-    const attempt = makeEmbeddedRunnerAttempt({
+    const attempt = assistantAttempt(assistant, {
       assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     const maybeMarkAuthProfileFailure = vi.fn(async () => {
       throw new Error("injected auth store write failure");
     });
-    const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
-        attempt,
-        attemptAssistant: assistant,
-        authProfileId: "openai:default",
-        assistantProfileFailureReason: "unknown",
-        maybeMarkAuthProfileFailure,
-      }),
-    );
+    const resolved = await resolveTerminal({
+      attempt,
+      attemptAssistant: assistant,
+      authProfileId: "openai:default",
+      assistantProfileFailureReason: "unknown",
+      maybeMarkAuthProfileFailure,
+    });
 
-    expect(resolved.action).toBe("complete");
-    if (resolved.action !== "complete") {
-      return;
-    }
+    expectComplete(resolved);
     expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
     expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
     expect(resolved.result.meta.livenessState).toBe("abandoned");

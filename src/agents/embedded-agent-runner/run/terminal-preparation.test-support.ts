@@ -4,12 +4,10 @@ import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
-import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
 import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 
-export type OuterContextTokenMeta = Parameters<
-  typeof prepareEmbeddedRunTerminal
->[0]["outerContextTokenMeta"];
+type PreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
+export type OuterContextTokenMeta = PreparationInput["outerContextTokenMeta"];
 
 export type TerminalStatsInput = {
   attempt?: Partial<EmbeddedRunAttemptWithReceiptEvidence> & {
@@ -51,8 +49,8 @@ export function assistantMessage(
 
 export function attemptResult(
   overrides: Partial<EmbeddedRunAttemptWithReceiptEvidence> = {},
+  assistant = assistantMessage("error"),
 ): EmbeddedRunAttemptWithReceiptEvidence {
-  const assistant = assistantMessage("error");
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
@@ -73,35 +71,29 @@ export function attemptResult(
   };
 }
 
-export async function prepareAttempt(input: {
-  attempt: EmbeddedRunAttemptWithReceiptEvidence;
-  admittedRunContext?: ReturnType<typeof createTestAdmittedRunContext>;
-  currentAttemptCompletedAssistant?: AssistantMessage;
+type PreparationOverrides = Partial<Omit<PreparationInput, "attempt" | "runParams">> & {
+  attempt: PreparationInput["attempt"];
+  runParams?: Partial<PreparationInput["runParams"]>;
+  admittedRunContext?: PreparationInput["runParams"]["admittedRunContext"];
   sourceReplyDeliveryMode?: "message_tool_only";
   heartbeat?: { continuesConversation: boolean };
-  replyDeliveryState?: Parameters<typeof prepareEmbeddedRunTerminal>[0]["replyDeliveryState"];
-  sourceReplyDeliveryState?: Parameters<
-    typeof prepareEmbeddedRunTerminal
-  >[0]["sourceReplyDeliveryState"];
-  terminalState: EmbeddedRunTerminalState;
-}) {
-  const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-  return prepareEmbeddedRunTerminal({
+};
+
+export function preparationInput(input: PreparationOverrides): PreparationInput {
+  const { admittedRunContext, sourceReplyDeliveryMode, heartbeat, runParams, ...overrides } = input;
+  return {
     runParams: {
-      admittedRunContext: input.admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
+      admittedRunContext: admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
       sessionId: "session-focused",
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: input.heartbeat ? "heartbeat" : "user",
-      ...(input.heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
+      trigger: heartbeat ? "heartbeat" : "user",
+      ...(heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
       timeoutMs: 60_000,
-      ...(input.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: input.sourceReplyDeliveryMode }
-        : {}),
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
+      ...runParams,
     },
-    attempt: input.attempt,
-    currentAttemptCompletedAssistant: input.currentAttemptCompletedAssistant,
     provider: "openai",
     model: "gpt-5.4",
     activeErrorContext: { provider: "openai", model: "gpt-5.4" },
@@ -111,8 +103,15 @@ export async function prepareAttempt(input: {
     usageAccumulator: createUsageAccumulator(),
     contextRecoveryState: createEmbeddedRunContextRecoveryState(),
     resolvedToolResultFormat: "markdown",
-    terminalState: input.terminalState,
-    replyDeliveryState: input.replyDeliveryState,
-    sourceReplyDeliveryState: input.sourceReplyDeliveryState,
-  });
+    terminalState: {
+      outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+      signalOwnedInterruption: false,
+    },
+    ...overrides,
+  };
+}
+
+export async function prepareAttempt(input: PreparationOverrides) {
+  const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+  return prepareEmbeddedRunTerminal(preparationInput(input));
 }
