@@ -1,0 +1,226 @@
+import {
+  runPluginCommandWithTimeout,
+  type PluginCommandRunResult,
+} from "openclaw/plugin-sdk/sandbox";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { ResolvedSmolPluginConfig } from "./config.js";
+
+/** Runs one smol CLI invocation; injected so unit tests never spawn a process. */
+export type SmolCommandRunner = (
+  argv: string[],
+  options: { timeoutMs: number; env: NodeJS.ProcessEnv },
+) => Promise<PluginCommandRunResult>;
+
+export type SmolCliContext = {
+  config: ResolvedSmolPluginConfig;
+  run?: SmolCommandRunner;
+};
+
+export type SmolMachineSummary = {
+  name: string;
+  state: string;
+  image?: string;
+  labels: Record<string, string>;
+};
+
+/**
+ * Two CLIs drive the same engine. `smol` (the product CLI) also manages cloud
+ * machines, so its local verbs take `--local`; the engine CLI `smolvm` is
+ * local-only and rejects that flag. The flavor is derived from the configured
+ * command's basename.
+ */
+export type SmolCliFlavor = "smol" | "smolvm";
+
+export function resolveSmolCliFlavor(command: string): SmolCliFlavor {
+  const base = command
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/\.exe$/iu, "")
+    .toLowerCase();
+  return base === "smolvm" ? "smolvm" : "smol";
+}
+
+/** `--local` for the product CLI, nothing for the engine CLI. */
+export function smolLocalFlag(config: ResolvedSmolPluginConfig): string[] {
+  return resolveSmolCliFlavor(config.command) === "smol" ? ["--local"] : [];
+}
+
+/** Non-interactive `machine rm`: `--yes` on the product CLI, `--force` on the engine CLI. */
+export function smolRemoveFlags(config: ResolvedSmolPluginConfig): string[] {
+  return resolveSmolCliFlavor(config.command) === "smol" ? ["--yes", "--local"] : ["--force"];
+}
+
+export type SmolMachineStatus = {
+  running: boolean;
+  network: boolean;
+};
+
+export const defaultSmolCommandRunner: SmolCommandRunner = (argv, options) =>
+  runPluginCommandWithTimeout({ argv, timeoutMs: options.timeoutMs, env: options.env });
+
+/**
+ * The CLI runs machines on the local engine unless told otherwise. A cloud
+ * token in the Gateway's environment must never move a sandbox that mounts the
+ * Gateway host's workspace onto someone else's hardware.
+ */
+export function smolCommandEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { SMOL_CLOUD_TOKEN: _token, ...env } = base;
+  return env;
+}
+
+/** Lifecycle argv: `smol machine <verb> --name <machine> ...` */
+export function buildSmolMachineArgv(
+  config: ResolvedSmolPluginConfig,
+  verb: string,
+  machineName: string,
+  args: readonly string[] = [],
+): string[] {
+  return [config.command, "machine", verb, "--name", machineName, ...args];
+}
+
+export async function runSmolCli(
+  context: SmolCliContext,
+  argv: string[],
+  timeoutMs = context.config.timeoutMs,
+): Promise<PluginCommandRunResult> {
+  const run = context.run ?? defaultSmolCommandRunner;
+  return await run(argv, { timeoutMs, env: smolCommandEnv() });
+}
+
+export function formatSmolCliFailure(action: string, result: PluginCommandRunResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
+  return `smol ${action} failed: ${detail}`;
+}
+
+/**
+ * `machine ls --json --local` prints one array. It reports the resolved image
+ * under `source`; the engine CLI (`smolvm`) calls it `image`.
+ */
+export function parseSmolMachineList(stdout: string): SmolMachineSummary[] {
+  const parsed = safeParseJson(stdout);
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const summaries: SmolMachineSummary[] = [];
+  for (const entry of parsed) {
+    const record = asOptionalRecord(entry);
+    if (!record || typeof record.name !== "string" || typeof record.state !== "string") {
+      continue;
+    }
+    const image = typeof record.source === "string" ? record.source : record.image;
+    const labels: Record<string, string> = {};
+    const rawLabels = asOptionalRecord(record.labels);
+    if (rawLabels) {
+      for (const [key, value] of Object.entries(rawLabels)) {
+        if (typeof value === "string") {
+          labels[key] = value;
+        }
+      }
+    }
+    summaries.push({
+      name: record.name,
+      state: record.state,
+      image: typeof image === "string" ? image : undefined,
+      labels,
+    });
+  }
+  return summaries;
+}
+
+export async function describeSmolMachine(
+  context: SmolCliContext,
+  machineName: string,
+): Promise<SmolMachineSummary | undefined> {
+  const result = await runSmolCli(context, [
+    context.config.command,
+    "machine",
+    "ls",
+    "--json",
+    ...smolLocalFlag(context.config),
+  ]);
+  if (result.code !== 0) {
+    throw new Error(formatSmolCliFailure("machine ls", result));
+  }
+  return parseSmolMachineList(result.stdout).find((machine) => machine.name === machineName);
+}
+
+/**
+ * The CLI records the image it resolved, usually pinned by digest. A configured
+ * tag matches any digest of that repository and tag; a configured digest must
+ * be the digest the machine actually runs, so `sandbox list` reports drift
+ * from an immutable image.
+ */
+export function smolImageReferencesMatch(actual: string | undefined, configured: string): boolean {
+  if (!actual) {
+    return false;
+  }
+  const configuredDigest = imageDigest(configured);
+  if (configuredDigest !== undefined && imageDigest(actual) !== configuredDigest) {
+    return false;
+  }
+  return normalizeImageReference(actual) === normalizeImageReference(configured);
+}
+
+function imageDigest(reference: string): string | undefined {
+  const at = reference.indexOf("@");
+  return at === -1 ? undefined : reference.slice(at + 1).toLowerCase();
+}
+
+function normalizeImageReference(reference: string): string {
+  const withoutDigest = reference.split("@")[0] ?? reference;
+  const lastSlash = withoutDigest.lastIndexOf("/");
+  const lastColon = withoutDigest.lastIndexOf(":");
+  const hasTag = lastColon > lastSlash;
+  const repository = hasTag ? withoutDigest.slice(0, lastColon) : withoutDigest;
+  const tag = hasTag ? withoutDigest.slice(lastColon + 1) : "latest";
+  const qualified = repository.includes("/") ? repository : `library/${repository}`;
+  const withRegistry = qualified.split("/")[0]?.includes(".")
+    ? qualified
+    : `docker.io/${qualified}`;
+  return `${withRegistry}:${tag}`;
+}
+
+/**
+ * `machine status --json` is the only place the CLI reports a machine's network
+ * setting. The product CLI (`smol`) reports `running` as a boolean; the engine
+ * CLI (`smolvm`) reports a `state` string instead.
+ */
+export function parseSmolMachineStatus(stdout: string): SmolMachineStatus | undefined {
+  const record = asOptionalRecord(safeParseJson(stdout));
+  if (!record || typeof record.network !== "boolean") {
+    return undefined;
+  }
+  const running =
+    typeof record.running === "boolean"
+      ? record.running
+      : typeof record.state === "string"
+        ? record.state === "running"
+        : undefined;
+  if (running === undefined) {
+    return undefined;
+  }
+  return { running, network: record.network };
+}
+
+export async function describeSmolMachineStatus(
+  context: SmolCliContext,
+  machineName: string,
+): Promise<SmolMachineStatus> {
+  const result = await runSmolCli(
+    context,
+    buildSmolMachineArgv(context.config, "status", machineName, [
+      ...smolLocalFlag(context.config),
+      "--json",
+    ]),
+  );
+  if (result.code !== 0) {
+    throw new Error(formatSmolCliFailure("machine status", result));
+  }
+  const status = parseSmolMachineStatus(result.stdout);
+  if (!status) {
+    throw new Error(`smol machine status returned no network state for ${machineName}`);
+  }
+  return status;
+}

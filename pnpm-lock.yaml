@@ -2298,6 +2298,16 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/smol:
+    dependencies:
+      zod:
+        specifier: 4.6.6
+        version: 4.6.6
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/sms:
     dependencies:
       zod:

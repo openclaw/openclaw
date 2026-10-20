@@ -819,6 +819,24 @@
       }
     },
     {
+      "name": "@openclaw/smol-sandbox",
+      "description": "OpenClaw smol machines sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "smol",
+          "label": "smol machines Sandbox"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/smol-sandbox",
+          "npmSpec": "@openclaw/smol-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.5"
+        }
+      }
+    },
+    {
       "name": "@openclaw/subq",
       "description": "OpenClaw SubQ Snap decision provider",
       "source": "official",
