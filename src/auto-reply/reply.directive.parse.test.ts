@@ -55,12 +55,14 @@ describe("directive parsing", () => {
       "/fast inherit",
       { hasFastDirective: true, fastMode: undefined, rawFastMode: "inherit", clearFastMode: true },
     ],
-    [
-      "/think about my deployment plan",
-      { rawThinkLevel: undefined, command: undefined, cleaned: "about my deployment plan" },
-    ],
   ] as const)("parses precedence, clears, and prose: %s", (body, expected) => {
     expect(parse(body)).toMatchObject(expected);
+  });
+  it("preserves prose after a thinking directive", () => {
+    const result = parse("/think about my deployment plan");
+    expect(result.rawThinkLevel).toBeUndefined();
+    expect(result.command).toBeUndefined();
+    expect(result.cleaned).toBe("about my deployment plan");
   });
   it.each([
     ["/think:", extractThinkDirective, { thinkLevel: undefined, rawLevel: undefined, cleaned: "" }],

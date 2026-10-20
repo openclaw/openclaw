@@ -103,7 +103,7 @@ export function createViewRuntime(
     reportError,
     request,
     invalidate,
-    select(value?: ControlUiReplacement) {
+    select: (value?: ControlUiReplacement) => {
       selected = value;
       invalidate();
     },

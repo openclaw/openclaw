@@ -16,7 +16,7 @@ export function makeFakeSupervisor(
   }[] = [];
   const cancelled: string[] = [];
   const runCancels: string[] = [];
-  const spawnGate = createDeferred<void>();
+  const spawnGate = createDeferred();
   if (!opts.deferSpawn) {
     spawnGate.resolve();
   }

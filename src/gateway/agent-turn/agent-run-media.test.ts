@@ -286,7 +286,9 @@ async function runMediaTurn(
       runId,
       dedupeKeys: [],
       abortController: controller,
-      cleanupAbortController: () => rpcSourceTesting.deleteExpected(runId, entry),
+      cleanupAbortController: () => {
+        rpcSourceTesting.deleteExpected(runId, entry);
+      },
       io: {
         emitAcceptance: vi.fn(),
         emitFinal: () => {

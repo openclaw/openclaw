@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -551,6 +552,11 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       } else {
         expectSuccess(result);
         if (scenario === "retained") {
+          assert(result.outputs.prepared_bundle_json, "Expected the prepared bundle output");
+          assert(
+            result.outputs.qualified_preflight_bundle_json,
+            "Expected the qualified preflight bundle output",
+          );
           expect(JSON.parse(result.outputs.prepared_bundle_json)).toEqual(test.raw);
           expect(JSON.parse(result.outputs.qualified_preflight_bundle_json)).toEqual(
             test.qualified,

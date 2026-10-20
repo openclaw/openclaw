@@ -21,15 +21,15 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
-  beforeEach(() =>
+  beforeEach(() => {
     findTranscriptEventMock.mockImplementation(
       completionReader((sessionId) =>
         listedRequesterRuns().find(
           (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
         ),
       ),
-    ),
-  );
+    );
+  });
 
   const settledPrivateChildren = ({
     mixed,
