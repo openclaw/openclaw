@@ -195,8 +195,6 @@ export async function runStatusAllReport(
   } satisfies Awaited<ReturnType<typeof resolveStatusServiceSummaries>>[0];
   mocks.collectStatusScanOverview.mockResolvedValueOnce({
     ...createStatusScanResultFixture(),
-    coldStart: false,
-    hasConfiguredChannels: true,
     skipColdStartNetworkChecks: false,
     gatewaySnapshot: baseStatusGatewaySnapshot,
     runtimeDegradation: null,

@@ -35,11 +35,9 @@ export function normalizeWideAreaDomain(raw?: string | null): string | null {
 }
 
 export function resolveWideAreaDiscoveryDomain(params?: {
-  env?: NodeJS.ProcessEnv;
   configDomain?: string | null;
 }): string | null {
-  const env = params?.env ?? process.env;
-  const candidate = params?.configDomain ?? env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
+  const candidate = params?.configDomain ?? process.env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
   try {
     return normalizeWideAreaDomain(candidate);
   } catch {
@@ -135,8 +133,6 @@ export type WideAreaGatewayZoneOpts = {
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable?: boolean;
-  instanceLabel?: string;
-  hostLabel?: string;
   tailnetDns?: string;
   sshPort?: number;
   cliPath?: string;
@@ -146,8 +142,8 @@ export function renderWideAreaGatewayZoneText(
   opts: WideAreaGatewayZoneOpts & { serial: number },
 ): string {
   const hostname = os.hostname().split(".")[0] ?? "openclaw";
-  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "openclaw");
-  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "openclaw-gw");
+  const hostLabel = dnsLabel(hostname, "openclaw");
+  const instanceLabel = dnsLabel(`${hostname}-gateway`, "openclaw-gw");
   const domain = normalizeWideAreaDomain(opts.domain) ?? "local.";
 
   const txt = [

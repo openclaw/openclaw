@@ -102,10 +102,8 @@ export function analyzeVoiceReceiveError(err: unknown) {
   };
 }
 
-export function noteVoiceDecryptFailure(
-  state: VoiceReceiveRecoveryState,
-  now: number = Date.now(),
-) {
+export function noteVoiceDecryptFailure(state: VoiceReceiveRecoveryState) {
+  const now = Date.now();
   if (now - state.lastDecryptFailureAt > DECRYPT_FAILURE_WINDOW_MS) {
     state.decryptFailureCount = 0;
   }
