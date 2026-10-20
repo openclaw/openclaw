@@ -26,12 +26,6 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionEntry } from "./types.js";
 
-type Fixture = {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-};
-
 export type ClaimTarget = { databaseAgentId: string; databasePath: string; key: string };
 
 export const humanOwner = {
@@ -52,18 +46,18 @@ export function setupLegacyMainSessionMigrationTests() {
   );
   afterEach(() => vi.unstubAllEnvs());
 
-  function createFixture(cfg: OpenClawConfig = { agents: { entries: { ops: {} } } }): Fixture {
-    const rawRoot = tempDirs.make("openclaw-legacy-main-session-");
-    const root = fs.realpathSync.native(rawRoot);
+  function createFixture(cfg: OpenClawConfig = { agents: { entries: { ops: {} } } }) {
+    const root = fs.realpathSync.native(tempDirs.make("openclaw-legacy-main-session-"));
     const stateDir = path.join(root, "state");
     fs.mkdirSync(stateDir, { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    return {
-      cfg,
-      env: { ...process.env, OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir },
-      stateDir,
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_AGENT_DIR: undefined,
+      OPENCLAW_STATE_DIR: stateDir,
     };
+    return { cfg, env, stateDir };
   }
 
   return { tempDirs, createFixture };
@@ -74,17 +68,20 @@ export function databasePath(stateDir: string, agentId: string): string {
 }
 
 export function assignHumanOwner(storePath: string): void {
+  const { actor: owner, ...assignment } = humanOwner;
   expect(
     assignSessionOwner(
       { agentId: "main", sessionKey: "agent:main:chat", storePath },
-      {
-        owner: humanOwner.actor,
-        assignedBy: humanOwner.assignedBy,
-        assignedAt: humanOwner.assignedAt,
-      },
+      { owner, ...assignment },
     ),
   ).toEqual(humanOwner);
 }
+
+const claimScope = ({
+  databaseAgentId: agentId,
+  databasePath: pathname,
+  key: sessionKey,
+}: ClaimTarget) => ({ agentId, path: pathname, sessionKey });
 
 export function seedClaim(
   params: ClaimTarget & {
@@ -92,48 +89,38 @@ export function seedClaim(
     events?: unknown[];
   },
 ): SessionEntry {
+  const scope = claimScope(params);
   const entry = params.entry ?? {
     sessionId: `session-${params.key.replaceAll(":", "-")}`,
     updatedAt: 100,
   };
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      writeSessionEntry(database, params.key, entry, {
-        allowStoredAliases: true,
-        previousEntry: null,
-      });
-      for (const event of params.events ?? [{ type: "message", id: "event-1", text: "hello" }]) {
-        appendTranscriptEventInTransaction(
-          database,
-          {
-            agentId: params.databaseAgentId,
-            path: params.databasePath,
-            sessionId: entry.sessionId,
-            sessionKey: params.key,
-          },
-          event,
-          { allowStoredAlias: true },
-        );
-      }
-    },
-    { agentId: params.databaseAgentId, path: params.databasePath },
-  );
+  runOpenClawAgentWriteTransaction((database) => {
+    writeSessionEntry(database, params.key, entry, {
+      allowStoredAliases: true,
+      previousEntry: null,
+    });
+    for (const event of params.events ?? [{ type: "message", id: "event-1", text: "hello" }]) {
+      appendTranscriptEventInTransaction(
+        database,
+        { ...scope, sessionId: entry.sessionId },
+        event,
+        { allowStoredAlias: true },
+      );
+    }
+  }, claimScope(params));
   return entry;
 }
 
 export function readClaim(params: ClaimTarget) {
-  return runOpenClawAgentWriteTransaction(
-    (database) => {
-      const entry = readExactSessionEntryRowForCanonicalRepair(database, params.key)?.entry;
-      return entry
-        ? {
-            entry,
-            events: readTranscriptEventRows(database, entry.sessionId).map((row) => row.eventJson),
-          }
-        : undefined;
-    },
-    { agentId: params.databaseAgentId, path: params.databasePath },
-  );
+  return runOpenClawAgentWriteTransaction((database) => {
+    const entry = readExactSessionEntryRowForCanonicalRepair(database, params.key)?.entry;
+    return entry
+      ? {
+          entry,
+          events: readTranscriptEventRows(database, entry.sessionId).map((row) => row.eventJson),
+        }
+      : undefined;
+  }, claimScope(params));
 }
 
 export function outcomeKinds(result: Awaited<ReturnType<typeof migrateLegacyMainSessionKeys>>) {

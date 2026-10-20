@@ -15,14 +15,12 @@ import {
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptReaders from "./session-transcript-execution-read.js";
 
-function scopeFor(state: OpenClawTestState) {
-  return {
-    agentId: "main",
-    sessionId: "lifecycle-header",
-    sessionKey: "agent:main:lifecycle-header",
-    storePath: state.statePath("transcript.sqlite"),
-  };
-}
+const scopeFor = (state: OpenClawTestState) => ({
+  agentId: "main",
+  sessionId: "lifecycle-header",
+  sessionKey: "agent:main:lifecycle-header",
+  storePath: state.statePath("transcript.sqlite"),
+});
 
 const header = { type: "session", id: "lifecycle-header", version: 3, timestamp: "2026" };
 
@@ -32,10 +30,13 @@ it("recovers lifecycle timestamps without caller SQL and observes foreign header
     await replaceTranscriptEvents(scope, [header]);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     const entry = { sessionId: scope.sessionId, updatedAt: 42, lastInteractionAt: 7 };
-    const read = async () => {
+    const read = async (currentEntry: typeof entry & { sessionStartedAt?: number } = entry) => {
       const sql = observeHostDataSql();
       try {
-        const result = await resolveSessionLifecycleTimestampsAsync({ ...scope, entry });
+        const result = await resolveSessionLifecycleTimestampsAsync({
+          ...scope,
+          entry: currentEntry,
+        });
         expect(sql.queries).toEqual([]);
         return result;
       } finally {
@@ -58,12 +59,10 @@ it("recovers lifecycle timestamps without caller SQL and observes foreign header
       sessionStartedAt: Date.parse("2027"),
       lastInteractionAt: 7,
     });
-    await expect(
-      resolveSessionLifecycleTimestampsAsync({
-        ...scope,
-        entry: { ...entry, sessionStartedAt: 10 },
-      }),
-    ).resolves.toEqual({ sessionStartedAt: 10, lastInteractionAt: 7 });
+    await expect(read({ ...entry, sessionStartedAt: 10 })).resolves.toEqual({
+      sessionStartedAt: 10,
+      lastInteractionAt: 7,
+    });
   });
 });
 
@@ -72,7 +71,8 @@ it.each(["rewrite", "close"] as const)(
   async (intervention) => {
     await withOpenClawTestState({ label: "lifecycle-header-revocation" }, async (state) => {
       const scope = scopeFor(state);
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 42 });
+      const entry = { sessionId: scope.sessionId, updatedAt: 42 };
+      await upsertSessionEntryCore(scope, entry);
       await replaceTranscriptEvents(scope, [header]);
       const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
       let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
@@ -103,12 +103,9 @@ it.each(["rewrite", "close"] as const)(
           };
         });
       try {
-        await expect(
-          resolveSessionLifecycleTimestampsAsync({
-            ...scope,
-            entry: { sessionId: scope.sessionId, updatedAt: 42 },
-          }),
-        ).rejects.toThrow(/transcript|revoked|closed|current|admission/i);
+        await expect(resolveSessionLifecycleTimestampsAsync({ ...scope, entry })).rejects.toThrow(
+          /transcript|revoked|closed|current|admission/i,
+        );
         expect(intercepted).toBe(true);
       } finally {
         spy.mockRestore();

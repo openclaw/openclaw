@@ -64,6 +64,31 @@ function archiveRow(
   };
 }
 
+function createArchiveStore(label: string, filename = "archive.sqlite") {
+  const env = { OPENCLAW_STATE_DIR: autoTempDirs.make(label) };
+  const storePath = path.join(env.OPENCLAW_STATE_DIR, filename);
+  const options = { agentId: "main", env, path: storePath };
+  const database = openOpenClawAgentDatabase(options);
+  const sql = getSessionKysely(database.db);
+  const write = (query: Parameters<typeof executeSqliteQuerySync>[1]) =>
+    runOpenClawAgentWriteTransaction(() => executeSqliteQuerySync(database.db, query), options);
+  return {
+    env,
+    storePath,
+    options,
+    database,
+    insert: (rows: ReturnType<typeof archiveRow> | ReturnType<typeof archiveRow>[]) =>
+      write(sql.insertInto("session_transcript_archives").values(rows)),
+    update: (
+      id: string,
+      row: Partial<ReturnType<typeof archiveRow>>,
+      column: "generation" | "session_id" = "generation",
+    ) => write(sql.updateTable("session_transcript_archives").set(row).where(column, "=", id)),
+    remove: (generations: string[]) =>
+      write(sql.deleteFrom("session_transcript_archives").where("generation", "in", generations)),
+  };
+}
+
 async function withoutHostSql<T>(read: () => Promise<T>): Promise<T> {
   const hostSql = observeHostDataSql();
   const result = await read().finally(() => hostSql.restore());
@@ -82,10 +107,9 @@ afterEach(() => {
 
 describe("SQLite transcript archive reads", () => {
   it("pages the unique run generation and rejects replaced, deleted, corrupt, or ambiguous continuations", async () => {
-    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-archive-page-read-") };
-    const storePath = path.join(env.OPENCLAW_STATE_DIR, "archive.sqlite");
-    const options = { agentId: "main", env, path: storePath };
-    const database = openOpenClawAgentDatabase(options);
+    const { env, storePath, options, insert, update, remove } = createArchiveStore(
+      "openclaw-archive-page-read-",
+    );
     const sessionId = "reused-session";
     const sessionKey = "agent:main:completed";
     const scope = { agentId: "main", env, storePath, sessionKey };
@@ -136,25 +160,8 @@ describe("SQLite transcript archive reads", () => {
       sessionId,
       [{ ...answer, parentId: "user" }],
     );
-    const write = (run: () => void) => runOpenClawAgentWriteTransaction(run, options);
-    const replaceOriginal = (value: ReturnType<typeof archive>) =>
-      write(() => {
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .updateTable("session_transcript_archives")
-            .set(value)
-            .where("generation", "=", "original"),
-        );
-      });
-    write(() => {
-      executeSqliteQuerySync(
-        database.db,
-        getSessionKysely(database.db)
-          .insertInto("session_transcript_archives")
-          .values([original, successor]),
-      );
-    });
+    const replaceOriginal = (value: ReturnType<typeof archive>) => update("original", value);
+    insert([original, successor]);
     await withSqliteTranscriptArchiveSession(options, async () => {
       const page = await readPage({ limit: 1 });
       expect(page?.entries).toEqual([{ event: answer, seq: 2 }]);
@@ -183,16 +190,7 @@ describe("SQLite transcript archive reads", () => {
           __openclaw: { runId: "next-run" },
         },
       });
-      const replaceSuccessor = (value: typeof successor) =>
-        write(() => {
-          executeSqliteQuerySync(
-            database.db,
-            getSessionKysely(database.db)
-              .updateTable("session_transcript_archives")
-              .set(value)
-              .where("generation", "=", "successor"),
-          );
-        });
+      const replaceSuccessor = (value: typeof successor) => update("successor", value);
       replaceSuccessor(oversizedSuccessor);
       // The capped candidate cannot establish whether the readable match is unique.
       await expectUnavailable(
@@ -218,14 +216,10 @@ describe("SQLite transcript archive reads", () => {
       );
       await expectUnavailable("run is not on the active branch");
 
-      const replaceEvents = (events: unknown[]) => {
-        const bytes = Buffer.from(jsonLines([{ type: "session", id: sessionId }, ...events]));
-        replaceOriginal({
-          ...original,
-          archive_blob: bytes,
-          archive_sha256: digest(bytes),
-        });
-      };
+      const replaceBytes = (bytes: Buffer) =>
+        replaceOriginal({ ...original, archive_blob: bytes, archive_sha256: digest(bytes) });
+      const replaceEvents = (events: unknown[]) =>
+        replaceBytes(Buffer.from(jsonLines([{ type: "session", id: sessionId }, ...events])));
       const root = { ...user, parentId: null };
       const reply = { ...answer, parentId: user.id };
       const contextBefore = { ...answer, id: "context-before" };
@@ -336,62 +330,46 @@ describe("SQLite transcript archive reads", () => {
         details: { runId },
         content: "Original failure",
       };
-      const rawCases = [
-        { raw: JSON.stringify({ ...failure, content: largeText }), omitted: true },
-        {
-          raw: JSON.stringify({ ...failure, content: [{ type: "text", text: largeText }] }),
-          omitted: true,
-        },
-        {
-          raw: JSON.stringify({
+      const rawCases: Array<[string, boolean]> = [
+        [JSON.stringify({ ...failure, content: largeText }), true],
+        [JSON.stringify({ ...failure, content: [{ type: "text", text: largeText }] }), true],
+        [
+          JSON.stringify({
             ...failure,
             content: Array.from({ length: 3 }, () => ({ type: "text", text: "x".repeat(200) })),
           }),
-          omitted: true,
-        },
-        {
-          raw: `{"content":"${largeText}",${JSON.stringify(failure).slice(1)}`,
-          omitted: false,
-        },
-        {
-          raw: `${JSON.stringify(failure).slice(0, -1)},"content":[{"type":"text","text":"${largeText}","text":"Original failure"}]}`,
-          omitted: false,
-        },
-        {
-          raw: JSON.stringify({ ...answer, message: { ...answer.message, content: largeText } }),
-          omitted: true,
-        },
-        {
-          raw: JSON.stringify({
+          true,
+        ],
+        [`{"content":"${largeText}",${JSON.stringify(failure).slice(1)}`, false],
+        [
+          `${JSON.stringify(failure).slice(0, -1)},"content":[{"type":"text","text":"${largeText}","text":"Original failure"}]}`,
+          false,
+        ],
+        [JSON.stringify({ ...answer, message: { ...answer.message, content: largeText } }), true],
+        [
+          JSON.stringify({
             ...answer,
             message: { ...answer.message, content: [{ type: "text", text: largeText }] },
           }),
-          omitted: true,
-        },
-        { raw: `{${" ".repeat(2048)}\n${smallAnswer.slice(1)}`, omitted: false },
-        { raw: `{"message":{"content":"${largeText}"},${smallAnswer.slice(1)}`, omitted: false },
-        {
-          raw: `{"type":"message","id":"answer","message":{"role":"assistant","content":[{"type":"text","text":"${largeText}","text":"Original answer"}],"__openclaw":{"runId":"original-run"}}}`,
-          omitted: false,
-        },
-        {
-          raw: `{"discarded":"${largeText}","discarded":null,"type":"message","id":"answer","m\\u0065ssage":{"role":"assistant","content":"Original answer","__openclaw":{"runId":"wrong","runId":"original-run"}}}`,
-          omitted: false,
-        },
-        { raw: JSON.stringify({ ...answer, opaque: largeText }), omitted: true },
-        { raw: `${smallAnswer.slice(0, -1)},"opaque":"\\u0000\\ud800"}`, omitted: false },
-        {
-          raw: `${smallAnswer.slice(0, -1)},"nested":${"[".repeat(1001)}0${"]".repeat(1001)}}`,
-          omitted: true,
-        },
+          true,
+        ],
+        [`{${" ".repeat(2048)}\n${smallAnswer.slice(1)}`, false],
+        [`{"message":{"content":"${largeText}"},${smallAnswer.slice(1)}`, false],
+        [
+          `{"type":"message","id":"answer","message":{"role":"assistant","content":[{"type":"text","text":"${largeText}","text":"Original answer"}],"__openclaw":{"runId":"original-run"}}}`,
+          false,
+        ],
+        [
+          `{"discarded":"${largeText}","discarded":null,"type":"message","id":"answer","m\\u0065ssage":{"role":"assistant","content":"Original answer","__openclaw":{"runId":"wrong","runId":"original-run"}}}`,
+          false,
+        ],
+        [JSON.stringify({ ...answer, opaque: largeText }), true],
+        [`${smallAnswer.slice(0, -1)},"opaque":"\\u0000\\ud800"}`, false],
+        [`${smallAnswer.slice(0, -1)},"nested":${"[".repeat(1001)}0${"]".repeat(1001)}}`, true],
       ];
-      for (const { raw, omitted: expectsOmission } of rawCases) {
+      for (const [raw, expectsOmission] of rawCases) {
         const bytes = Buffer.from(`${JSON.stringify({ type: "session", id: sessionId })}\n${raw}`);
-        replaceOriginal({
-          ...original,
-          archive_blob: bytes,
-          archive_sha256: digest(bytes),
-        });
+        replaceBytes(bytes);
         const actual = await readPage({ maxBytes: 512 });
         expect(actual?.totalMessages).toBe(1);
         if (expectsOmission) {
@@ -406,11 +384,7 @@ describe("SQLite transcript archive reads", () => {
       const malformedBytes = Buffer.from(
         `${JSON.stringify({ type: "session", id: sessionId })}\n{"broken":!}`,
       );
-      replaceOriginal({
-        ...original,
-        archive_blob: malformedBytes,
-        archive_sha256: digest(malformedBytes),
-      });
+      replaceBytes(malformedBytes);
       await expect(readPage({ maxBytes: 512 })).rejects.toThrow();
 
       replaceOriginal(
@@ -425,26 +399,12 @@ describe("SQLite transcript archive reads", () => {
       await expect(readPage()).rejects.toThrow("header does not match");
 
       replaceOriginal(original);
-      write(() => {
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .insertInto("session_transcript_archives")
-            .values(archive("ambiguous")),
-        );
-      });
+      insert(archive("ambiguous"));
       await expect(readPage()).rejects.toThrow("Multiple archived transcript generations");
       await expect(verifyBinding()).rejects.toThrow(
         /Multiple archived transcript generations|identity changed/,
       );
-      write(() => {
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .deleteFrom("session_transcript_archives")
-            .where("generation", "in", ["original", "ambiguous", "successor"]),
-        );
-      });
+      remove(["original", "ambiguous", "successor"]);
       await expectUnavailable("no longer available", continuation);
       await expect(readPage()).resolves.toBeUndefined();
     });
@@ -509,9 +469,10 @@ describe("SQLite transcript archive reads", () => {
   it.each([false, true])(
     "reads committed archive blobs before file publication (compressed=%s)",
     async (compressed) => {
-      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-archive-blob-read-") };
-      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
-      const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
+      const { env, storePath, database, insert, update } = createArchiveStore(
+        "openclaw-archive-blob-read-",
+        "shared.sqlite",
+      );
       const sessionKey = "agent:ops:completed";
       const message = (id: string, content = id, runId = "completed-run") => ({
         type: "message",
@@ -528,64 +489,44 @@ describe("SQLite transcript archive reads", () => {
           __openclaw: { runId: "completed-run" },
         },
       };
-      const archives = [
-        { sessionId: "old", sessionKey, events: [message("old")] },
-        {
-          sessionId: "new",
+      const archives: Array<[string, string, unknown[], string?]> = [
+        ["old", sessionKey, [message("old")]],
+        [
+          "new",
           sessionKey,
-          events: [
+          [
             message("earlier"),
             answer,
             message("other-run", "unrelated", "other-run"),
             message("silent", "NO_REPLY"),
           ],
-        },
-        { sessionId: "foreign", sessionKey: "agent:main:other", events: [answer] },
-        { sessionId: "invalid", sessionKey: "agent:ops:invalid", events: [answer] },
-        {
-          sessionId: "malformed",
-          sessionKey: "agent:ops:malformed",
-          events: [answer],
-          suffix: '\n{\n"message": !\n}\n',
-        },
-        {
-          sessionId: "truncated",
-          sessionKey: "agent:ops:truncated",
-          events: [answer],
-          suffix: '\n{\n"message": {\n',
-        },
+        ],
+        ["foreign", "agent:main:other", [answer]],
+        ["invalid", "agent:ops:invalid", [answer]],
+        ["malformed", "agent:ops:malformed", [answer], '\\n{\\n"message": !\\n}\\n'],
+        ["truncated", "agent:ops:truncated", [answer], '\\n{\\n"message": {\\n'],
       ];
-      runOpenClawAgentWriteTransaction(
-        () => {
-          for (const [index, archive] of archives.entries()) {
-            const content =
-              [
-                {
-                  type: "session",
-                  id: archive.sessionId === "invalid" ? "wrong" : archive.sessionId,
-                },
-                ...archive.events,
-              ]
-                .map((event) => JSON.stringify(event))
-                .join("\n") + (archive.suffix ?? "");
-            const encoded = compressed
-              ? encodeSessionArchiveContent(content)
-              : { bytes: Buffer.from(content), suffix: "" };
-            executeSqliteQuerySync(
-              database.db,
-              getSessionKysely(database.db)
-                .insertInto("session_transcript_archives")
-                .values(
-                  archiveRow(archive.sessionId, archive.sessionKey, encoded.bytes, {
-                    encoding: encoded.suffix ? "zstd" : "identity",
-                    name: `archive-${index}.jsonl${encoded.suffix}`,
-                    createdAt: index,
-                  }),
-                ),
-            );
-          }
-        },
-        { agentId: "main", env, path: storePath },
+      insert(
+        archives.map(([sessionId, key, events, suffix], index) => {
+          const content =
+            [
+              {
+                type: "session",
+                id: sessionId === "invalid" ? "wrong" : sessionId,
+              },
+              ...events,
+            ]
+              .map((event) => JSON.stringify(event))
+              .join("\n") + (suffix ?? "");
+          const encoded = compressed
+            ? encodeSessionArchiveContent(content)
+            : { bytes: Buffer.from(content), suffix: "" };
+          return archiveRow(sessionId, key, encoded.bytes, {
+            encoding: encoded.suffix ? "zstd" : "identity",
+            name: `archive-${index}.jsonl${encoded.suffix}`,
+            createdAt: index,
+          });
+        }),
       );
       const scope = { agentId: "ops", env, storePath, sessionKey };
       const find = (sessionId?: string, runId = "completed-run") =>
@@ -628,111 +569,79 @@ describe("SQLite transcript archive reads", () => {
       const changedBytes = compressed
         ? encodeSessionArchiveContent(changedContent).bytes
         : Buffer.from(changedContent);
-      runOpenClawAgentWriteTransaction(
-        () => {
-          executeSqliteQuerySync(
-            database.db,
-            getSessionKysely(database.db)
-              .updateTable("session_transcript_archives")
-              .set({ archive_blob: changedBytes })
-              .where("session_id", "=", "new"),
-          );
-        },
-        { agentId: "main", env, path: storePath },
-      );
+      update("new", { archive_blob: changedBytes }, "session_id");
       await expect(find("new")).rejects.toThrow(
         "Archived transcript bytes do not match their registered hash",
       );
 
-      if (!compressed) {
-        const entered = createDeferred();
-        const release = createDeferred();
-        const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-        const factory = vi
-          .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-          .mockImplementation((runRequest) => {
-            const readers = createReaders(runRequest);
-            const readPresence = readers.readArchivePresence;
-            return {
-              ...readers,
-              readArchivePresence: async (input) => {
-                const registered = await readPresence(input);
-                entered.resolve();
-                await release.promise;
-                return registered;
-              },
-            };
-          });
-        const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
-        const outcome = find("old").then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        let closing: Promise<void> | undefined;
-        try {
-          await Promise.race([
-            entered.promise,
-            outcome.then(() => {
-              throw new Error("Archive lookup settled before its metadata hold");
-            }),
-          ]);
-          closing = closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
-          release.resolve();
-          expect(await outcome).toMatchObject({
-            error: { message: expect.stringMatching(/revoked/) },
-          });
-          await closing;
-          expect(archiveRead).not.toHaveBeenCalled();
-        } finally {
-          release.resolve();
-          await Promise.allSettled([outcome, closing]);
-          archiveRead.mockRestore();
-          factory.mockRestore();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const hold = async <T>(value: T) => {
+        entered.resolve();
+        await release.promise;
+        return value;
+      };
+      const replacementPath = `${storePath}.replacement`;
+      const originalPath = `${storePath}.original`;
+      const intercept = async () => {
+        if (!compressed) {
+          const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+          return vi
+            .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+            .mockImplementation((runRequest) => {
+              const readers = createReaders(runRequest);
+              return {
+                ...readers,
+                readArchivePresence: async (input) =>
+                  hold(await readers.readArchivePresence(input)),
+              };
+            });
         }
-      } else {
         await closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
-        const replacementPath = `${storePath}.replacement`;
-        const originalPath = `${storePath}.original`;
         fs.copyFileSync(storePath, replacementPath);
         expect(fs.readFileSync(replacementPath)).toEqual(fs.readFileSync(storePath));
         const scopeOwner = await import("./session-accessor.sqlite-scope.js");
         const prepare = scopeOwner.prepareSqliteScope;
-        const entered = createDeferred();
-        const release = createDeferred();
-        const preparation = vi
+        return vi
           .spyOn(scopeOwner, "prepareSqliteScope")
-          .mockImplementation(async (input) => {
-            const resolved = await prepare(input);
-            entered.resolve();
-            await release.promise;
-            return resolved;
-          });
-        const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
-        const outcome = find("old").then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        let originalMoved = false;
-        let replacementMoved = false;
-        try {
-          await Promise.race([
-            entered.promise,
-            outcome.then(() => {
-              throw new Error("Archive lookup settled before its scope preparation hold");
-            }),
-          ]);
+          .mockImplementation(async (input) => hold(await prepare(input)));
+      };
+      const interception = await intercept();
+      const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
+      const outcome = find("old").then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let closing: Promise<void> | undefined;
+      let originalMoved = false;
+      let replacementMoved = false;
+      try {
+        await Promise.race([
+          entered.promise,
+          outcome.then(() => {
+            throw new Error(
+              `Archive lookup settled before its ${compressed ? "scope preparation" : "metadata"} hold`,
+            );
+          }),
+        ]);
+        if (compressed) {
           fs.renameSync(storePath, originalPath);
           originalMoved = true;
           fs.renameSync(replacementPath, storePath);
           replacementMoved = true;
-          release.resolve();
-          expect(await outcome).toMatchObject({
-            error: { message: expect.stringMatching(/identity changed/) },
-          });
-          expect(archiveRead).not.toHaveBeenCalled();
-        } finally {
-          release.resolve();
-          await outcome;
+        } else {
+          closing = closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+        }
+        release.resolve();
+        expect(await outcome).toMatchObject({
+          error: { message: expect.stringMatching(compressed ? /identity changed/ : /revoked/) },
+        });
+        await closing;
+        expect(archiveRead).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([outcome, closing]);
+        if (compressed) {
           await closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
           if (replacementMoved) {
             fs.renameSync(storePath, replacementPath);
@@ -740,9 +649,9 @@ describe("SQLite transcript archive reads", () => {
           if (originalMoved) {
             fs.renameSync(originalPath, storePath);
           }
-          archiveRead.mockRestore();
-          preparation.mockRestore();
         }
+        archiveRead.mockRestore();
+        interception.mockRestore();
       }
     },
   );
@@ -810,8 +719,7 @@ describe("SQLite transcript archive reads", () => {
   });
 
   it("reads a short final answer beyond the runtime string limit while the caller stays responsive", async () => {
-    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-large-archive-read-") };
-    const storePath = path.join(env.OPENCLAW_STATE_DIR, "archive.sqlite");
+    const { env, storePath, insert } = createArchiveStore("openclaw-large-archive-read-");
     const sessionId = "large-archive";
     const sessionKey = "agent:main:completed";
     const answer = {
@@ -848,23 +756,12 @@ describe("SQLite transcript archive reads", () => {
       },
     );
     const bytes = Buffer.concat(chunks);
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
-    runOpenClawAgentWriteTransaction(
-      () => {
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .insertInto("session_transcript_archives")
-            .values(
-              archiveRow(sessionId, sessionKey, bytes, {
-                encoding: "zstd",
-                name: "large.jsonl.zst",
-                createdAt: 1,
-              }),
-            ),
-        );
-      },
-      { agentId: "main", env, path: storePath },
+    insert(
+      archiveRow(sessionId, sessionKey, bytes, {
+        encoding: "zstd",
+        name: "large.jsonl.zst",
+        createdAt: 1,
+      }),
     );
     let heartbeats = 0;
     const heartbeat = setInterval(() => {

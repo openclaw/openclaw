@@ -3,13 +3,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
+  type OpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import {
@@ -191,9 +195,11 @@ describe("SQLite transcript append", () => {
       { seq: 1, event_json: nextJson },
     ]);
     expect(readTranscriptGenerationInTransaction(database, "append-session")).toBe(generation);
-    expect(policy.counts).toEqual({ policy: 0 });
-    expect(policy.rowCounts).toEqual({ policy: 0 });
-    expect(policy.textBytes).toEqual({ policy: 0 });
+    expect(policy).toMatchObject({
+      counts: { policy: 0 },
+      rowCounts: { policy: 0 },
+      textBytes: { policy: 0 },
+    });
   });
 });
 
@@ -217,74 +223,64 @@ function detailedEvents(details: Record<string, unknown>) {
 }
 
 async function withRewriteFixture(
-  run: (f: {
-    db: DatabaseSync;
-    snapshot: () => {
-      raw: Array<Record<string, unknown>>;
-      storage: Array<Record<string, unknown>>;
-      identities: unknown[];
-      active: unknown[];
-      search: unknown[];
-      generation: string | undefined;
-      updatedAt: number | null;
-    };
-    rewrite: (event: unknown, seq?: number) => void;
-    scope: { agentId: string; sessionId: string; sessionKey: string; env: NodeJS.ProcessEnv };
-  }) => void | Promise<void>,
+  run: (fixture: ReturnType<typeof createRewriteFixture>) => void | Promise<void>,
   events: readonly unknown[] = rewriteEvents,
 ) {
-  await withOpenClawTestState({ label: "exact-rewrite" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "rewrite",
-      sessionKey: "agent:main:rewrite",
-      env: state.env,
-    };
-    const owner = openOpenClawAgentDatabase(scope);
-    const db = requireNativeSqliteDatabase(owner.db);
-    runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventsInTransaction(database, scope, events);
-    }, scope);
-    const snapshot = () => ({
-      raw: readTranscriptStorageRows(owner, scope.sessionId).map((row) => ({
-        session_id: scope.sessionId,
-        seq: row.seq,
-        event_json: row.eventJson,
-        created_at: row.createdAt,
-      })),
-      storage: db
-        .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
-        .all(scope.sessionId),
-      identities: db
-        .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
-        .all(scope.sessionId),
-      active: db
-        .prepare(
-          "SELECT * FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-        )
-        .all(scope.sessionId),
-      search: db
-        .prepare("SELECT * FROM session_transcript_fts WHERE session_id = ? ORDER BY message_id")
-        .all(scope.sessionId),
-      generation: readTranscriptGenerationInTransaction(owner, scope.sessionId),
-      updatedAt: readTranscriptMutationStateInTransaction(owner, scope.sessionId).updatedAt,
-    });
-    const rewrite = (event: unknown, seq = 1) => {
-      const row = readTranscriptEventRows(owner, scope.sessionId).find(
-        (entry) => entry.seq === seq,
-      );
-      if (!row) {
-        throw new Error("missing rewrite row");
-      }
-      const expectedEventJson = row.eventJson;
-      runOpenClawAgentWriteTransaction((database) => {
-        rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
-          { seq, event, expectedEventJson },
-        ]);
-      }, scope);
-    };
-    await run({ db, snapshot, rewrite, scope });
+  await withOpenClawTestState({ label: "exact-rewrite" }, async (state) =>
+    run(createRewriteFixture(state, events)),
+  );
+}
+
+function createRewriteFixture(state: OpenClawTestState, events: readonly unknown[]) {
+  const scope = {
+    agentId: "main",
+    sessionId: "rewrite",
+    sessionKey: "agent:main:rewrite",
+    env: state.env,
+  };
+  const owner = openOpenClawAgentDatabase(scope);
+  const db = requireNativeSqliteDatabase(owner.db);
+  const write = (run: (database: OpenClawAgentDatabase) => void) =>
+    runOpenClawAgentWriteTransaction(run, scope);
+  write((database) => {
+    appendTranscriptEventsInTransaction(database, scope, events);
   });
+  const rows = (table: string, order = "seq") =>
+    db
+      .prepare(`SELECT * FROM ${table} WHERE session_id = ? ORDER BY ${order}`)
+      .all(scope.sessionId);
+  const setKeyOwner = (eventId: string, key: string | null) => {
+    db.prepare(
+      "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
+    ).run(key, scope.sessionId, eventId);
+  };
+  const snapshot = () => ({
+    raw: readTranscriptStorageRows(owner, scope.sessionId).map((row) => ({
+      session_id: scope.sessionId,
+      seq: row.seq,
+      event_json: row.eventJson,
+      created_at: row.createdAt,
+    })),
+    storage: rows("transcript_events"),
+    identities: rows("transcript_event_identities"),
+    active: rows("session_transcript_active_events", "active_position"),
+    search: rows("session_transcript_fts", "message_id"),
+    generation: readTranscriptGenerationInTransaction(owner, scope.sessionId),
+    updatedAt: readTranscriptMutationStateInTransaction(owner, scope.sessionId).updatedAt,
+  });
+  const rewrite = (event: unknown, seq = 1) => {
+    const row = readTranscriptEventRows(owner, scope.sessionId).find((entry) => entry.seq === seq);
+    if (!row) {
+      throw new Error("missing rewrite row");
+    }
+    const expectedEventJson = row.eventJson;
+    write((database) => {
+      rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
+        { seq, event, expectedEventJson },
+      ]);
+    });
+  };
+  return { db, snapshot, rewrite, scope, write, setKeyOwner };
 }
 
 describe("SQLite exact transcript rewrite", () => {
@@ -340,7 +336,7 @@ describe("SQLite exact transcript rewrite", () => {
   it("applies exact bindings across both storage arms", async () => {
     const details = { opaque: "preserved metadata ".repeat(2048) };
     const events = detailedEvents(details);
-    await withRewriteFixture(({ snapshot, scope }) => {
+    await withRewriteFixture(({ snapshot, scope, write }) => {
       const before = snapshot();
       const first = rewriteMessage(2, { provenance: "first" });
       const last = rewriteMessage(2, { provenance: "last", details });
@@ -358,13 +354,13 @@ describe("SQLite exact transcript rewrite", () => {
               : null,
       );
       try {
-        runOpenClawAgentWriteTransaction((database) => {
+        write((database) => {
           rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
             { seq: 2, expectedEventJson: JSON.stringify(events[2]), event: first },
             { seq: 1, expectedEventJson: JSON.stringify(events[1]), event: user },
             { seq: 2, expectedEventJson: JSON.stringify(first), event: last },
           ]);
-        }, scope);
+        });
       } finally {
         work.restore();
       }
@@ -375,9 +371,11 @@ describe("SQLite exact transcript rewrite", () => {
         { ...before.raw[1], event_json: JSON.stringify(user) },
         { ...before.raw[2], event_json: JSON.stringify(last) },
       ]);
-      expect(after.identities).toEqual(before.identities);
-      expect(after.active).toEqual(before.active);
-      expect(after.search).toEqual(before.search);
+      expect({ identities: after.identities, active: after.active, search: after.search }).toEqual({
+        identities: before.identities,
+        active: before.active,
+        search: before.search,
+      });
       expect(after.generation).not.toBe(before.generation);
       expect(after.updatedAt).toBeGreaterThan(before.updatedAt!);
       expect(after.storage[1]?.event_json === null).toBe(false);
@@ -427,11 +425,11 @@ describe("SQLite exact transcript rewrite", () => {
   it("rolls back payload-arm changes and mutation state on later conflict", async () => {
     const details = { opaque: "rollback metadata ".repeat(2048) };
     const events = detailedEvents(details);
-    await withRewriteFixture(({ snapshot, scope }) => {
+    await withRewriteFixture(({ snapshot, scope, write }) => {
       const before = snapshot();
       const stats = readTranscriptStatsSync(scope);
       expect(() =>
-        runOpenClawAgentWriteTransaction((database) => {
+        write((database) => {
           rewriteSqliteTranscriptEventRowsInTransaction(database, scope, [
             {
               seq: 1,
@@ -440,7 +438,7 @@ describe("SQLite exact transcript rewrite", () => {
             },
             { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
           ]);
-        }, scope),
+        }),
       ).toThrow(SqliteTranscriptMutationConflictError);
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(stats);
@@ -573,14 +571,14 @@ function replaceTranscriptSuffixForTest(
 
 describe("SQLite exact transcript suffix replacement", () => {
   it.each([0, 1])("preserves an intervening append before replacing prefix %i", async (prefix) => {
-    await withRewriteFixture(({ snapshot, scope }) => {
-      runOpenClawAgentWriteTransaction((database) => {
+    await withRewriteFixture(({ snapshot, scope, write }) => {
+      write((database) => {
         appendTranscriptEventInTransaction(database, scope, {
           type: "custom",
           id: "intervening",
           parentId: "answer",
         });
-      }, scope);
+      });
       const before = snapshot();
       expect(() =>
         replaceTranscriptSuffixForTest(scope, rewriteEvents, rewriteEvents.slice(0, -1), prefix),
@@ -611,84 +609,24 @@ describe("SQLite exact transcript suffix replacement", () => {
     rewriteMessage(1, { content: "updated question" }),
     rewriteMessage(2, { content: "updated answer" }),
   ];
-  it.each([
-    {
-      name: "a suffix anchored on an inactive branch",
-      events: [rewriteEvents[0], rewriteEvents[1], inactiveParent, inactiveTail],
-      next: [rewriteEvents[0], rewriteEvents[1], inactiveParent],
-      prefix: 3,
-      dirty: false,
-      active: activeRows(0, 1),
-      search: searchRows(["user", "question"]),
-    },
-    {
-      name: "a later suffix redirect above the retained anchor",
-      events: [
-        ...rewriteEvents,
-        activeChild,
-        redirectedRoot,
-        assistant("removed-tail", "redirected-root", "removed tail"),
-      ],
-      next: [
-        ...rewriteEvents,
-        { ...activeChild, message: { role: "assistant", content: "changed active child" } },
-        redirectedRoot,
-      ],
-      prefix: 3,
-      dirty: true,
-      active: activeRows(4),
-      search: searchRows(["redirected-root", "redirected root"]),
-    },
-    {
-      name: "an inactive suffix below an active parent",
-      events: [
-        ...rewriteEvents,
-        assistant("inactive-child", "answer", "inactive child", true),
-        belowParent,
-      ],
-      next: [...rewriteEvents, belowParent],
-      prefix: 3,
-      dirty: false,
-      active: activeRows(0, 1, 2, 3),
-      search: expect.arrayContaining(searchRows(["active-child", "active child"])),
-    },
-    {
-      name: "an active root-level suffix exposing older durable history",
-      events: [...rewriteEvents, assistant("active-root", null, "active root")],
-      next: rewriteEvents,
-      prefix: 3,
-      dirty: true,
-      active: activeRows(0, 1, 2),
-      search: expect.arrayContaining(searchRows(["user", "question"], ["answer", "answer"])),
-    },
-    {
-      name: "an inactive root-level side branch",
-      events: [
-        rewriteEvents[0],
-        rewriteEvents[1],
-        assistant("inactive-root", null, "inactive root", true),
-        siblingChild,
-      ],
-      next: [rewriteEvents[0], rewriteEvents[1], siblingChild],
-      prefix: 2,
-      dirty: false,
-      active: activeRows(0, 1, 2),
-      search: expect.arrayContaining(
-        searchRows(["user", "question"], ["active-child", "active child"]),
-      ),
-    },
-    {
-      name: "a same-length replacement after an unchanged prefix",
-      events: rewriteEvents,
-      next: updatedEvents,
-      prefix: 0,
-      dirty: false,
-      active: activeRows(0, 1, 2),
-      search: expect.arrayContaining(
-        searchRows(["user", "updated question"], ["answer", "updated answer"]),
-      ),
-    },
-  ])("reconciles $name", async ({ events, next, prefix, dirty, active, search }) => {
+  type SuffixCase = {
+    name: string;
+    events: readonly TranscriptEvent[];
+    next: readonly TranscriptEvent[];
+    prefix: number;
+    dirty: boolean;
+    active: unknown;
+    search: unknown;
+  };
+  it.each`
+    name                                                            | events                                                                                                           | next                                                                                                                       | prefix | dirty    | active                    | search
+    ${"a suffix anchored on an inactive branch"}                    | ${[rewriteEvents[0], rewriteEvents[1], inactiveParent, inactiveTail]}                                            | ${[rewriteEvents[0], rewriteEvents[1], inactiveParent]}                                                                    | ${3}   | ${false} | ${activeRows(0, 1)}       | ${searchRows(["user", "question"])}
+    ${"a later suffix redirect above the retained anchor"}          | ${[...rewriteEvents, activeChild, redirectedRoot, assistant("removed-tail", "redirected-root", "removed tail")]} | ${[...rewriteEvents, { ...activeChild, message: { role: "assistant", content: "changed active child" } }, redirectedRoot]} | ${3}   | ${true}  | ${activeRows(4)}          | ${searchRows(["redirected-root", "redirected root"])}
+    ${"an inactive suffix below an active parent"}                  | ${[...rewriteEvents, assistant("inactive-child", "answer", "inactive child", true), belowParent]}                | ${[...rewriteEvents, belowParent]}                                                                                         | ${3}   | ${false} | ${activeRows(0, 1, 2, 3)} | ${expect.arrayContaining(searchRows(["active-child", "active child"]))}
+    ${"an active root-level suffix exposing older durable history"} | ${[...rewriteEvents, assistant("active-root", null, "active root")]}                                             | ${rewriteEvents}                                                                                                           | ${3}   | ${true}  | ${activeRows(0, 1, 2)}    | ${expect.arrayContaining(searchRows(["user", "question"], ["answer", "answer"]))}
+    ${"an inactive root-level side branch"}                         | ${[rewriteEvents[0], rewriteEvents[1], assistant("inactive-root", null, "inactive root", true), siblingChild]}   | ${[rewriteEvents[0], rewriteEvents[1], siblingChild]}                                                                      | ${2}   | ${false} | ${activeRows(0, 1, 2)}    | ${expect.arrayContaining(searchRows(["user", "question"], ["active-child", "active child"]))}
+    ${"a same-length replacement after an unchanged prefix"}        | ${rewriteEvents}                                                                                                 | ${updatedEvents}                                                                                                           | ${0}   | ${false} | ${activeRows(0, 1, 2)}    | ${expect.arrayContaining(searchRows(["user", "updated question"], ["answer", "updated answer"]))}
+  `("reconciles $name", async ({ events, next, prefix, dirty, active, search }: SuffixCase) => {
     await withRewriteFixture(async ({ db, snapshot, scope }) => {
       await waitForSessionTranscriptIndexReconcile(scope);
       replaceTranscriptSuffixForTest(scope, events, next, prefix);
@@ -724,13 +662,13 @@ describe("SQLite exact transcript suffix replacement", () => {
     const expected = [rewriteEvents[0], rewriteEvents[1], plannedTail];
     const next = [rewriteEvents[0], { ...plannedTail, parentId: "root" }];
     const retainedIds = [tail.id];
-    await withRewriteFixture(({ db, snapshot, scope }) => {
+    await withRewriteFixture(({ db, snapshot, scope, write }) => {
       const before = snapshot();
       const beforeStats = readTranscriptStatsSync(scope);
       expect(before.storage[2]?.event_json).toBeNull();
       expect(before.storage[2]?.event_zstd).toBeInstanceOf(Uint8Array);
       expect(() =>
-        runOpenClawAgentWriteTransaction((database) => {
+        write((database) => {
           replaceSqliteTranscriptSuffixInTransaction(database, scope, {
             expectedEvents: expected,
             nextEvents: next,
@@ -738,7 +676,7 @@ describe("SQLite exact transcript suffix replacement", () => {
             retainedCustomDataIds: retainedIds,
           });
           throw new Error("rollback retained suffix");
-        }, scope),
+        }),
       ).toThrow("rollback retained suffix");
       expect(snapshot()).toEqual(before);
       expect(readTranscriptStatsSync(scope)).toEqual(beforeStats);
@@ -783,73 +721,27 @@ describe("SQLite exact transcript suffix replacement", () => {
   const newOwner = keyedAssistant("owner", "duplicate", "new-key", "updated");
   const insertedOwner = keyedAssistant("new-owner", "owner", "old-key");
 
-  it.each([
-    {
-      name: "promotes a prefix duplicate when the retained owner changes its key",
-      events: [rewriteEvents[0], oldDuplicate, oldOwner],
-      next: [rewriteEvents[0], oldDuplicate, newOwner],
-      reassign: true,
-      owners: [
-        { event_id: "duplicate", message_idempotency_key: "old-key" },
-        { event_id: "owner", message_idempotency_key: "new-key" },
-      ],
-    },
-    {
-      name: "preserves a key claimed by an earlier suffix insert",
-      events: [rewriteEvents[0], oldDuplicate, oldOwner, assistant("removed", "owner", "removed")],
-      next: [rewriteEvents[0], oldDuplicate, newOwner, insertedOwner],
-      reassign: true,
-      owners: [
-        { event_id: "duplicate", message_idempotency_key: null },
-        { event_id: "new-owner", message_idempotency_key: "old-key" },
-        { event_id: "owner", message_idempotency_key: "new-key" },
-      ],
-    },
-    {
-      name: "removes a retained event's key",
-      events: [rewriteEvents[0], keyedAssistant("owner", "root", "old-key", "original")],
-      next: [rewriteEvents[0], assistant("owner", "root", "updated")],
-      reassign: false,
-      owners: [{ event_id: "owner", message_idempotency_key: null }],
-    },
-    {
-      name: "reserves the retained owner ahead of a new duplicate",
-      events: [
-        rewriteEvents[0],
-        { type: "custom", id: "removed", parentId: "root" },
-        keyedAssistant("owner", "removed", "retry"),
-      ],
-      next: [
-        rewriteEvents[0],
-        keyedAssistant("new", "root", "retry"),
-        keyedAssistant("owner", "new", "retry"),
-      ],
-      reassign: false,
-      owners: [
-        { event_id: "new", message_idempotency_key: null },
-        { event_id: "owner", message_idempotency_key: "retry" },
-      ],
-    },
-    {
-      name: "promotes a retained duplicate when its owner is removed",
-      events: [
-        rewriteEvents[0],
-        keyedAssistant("owner", "root", "retry"),
-        keyedAssistant("duplicate", "owner", "retry"),
-      ],
-      next: [rewriteEvents[0], keyedAssistant("duplicate", "root", "retry")],
-      reassign: false,
-      owners: [{ event_id: "duplicate", message_idempotency_key: "retry" }],
-    },
-  ])("$name", async ({ events, next, reassign, owners }) => {
-    await withRewriteFixture(({ db, scope }) => {
+  const owners = (...pairs: Array<[string, string | null]>) =>
+    pairs.map(([event_id, message_idempotency_key]) => ({ event_id, message_idempotency_key }));
+  type OwnershipCase = {
+    name: string;
+    events: Array<{ id: string }>;
+    next: Array<{ id: string }>;
+    reassign: boolean;
+    expectedOwners: ReturnType<typeof owners>;
+  };
+  it.each`
+    name                                                                     | events                                                                                                                  | next                                                                                                   | reassign | expectedOwners
+    ${"promotes a prefix duplicate when the retained owner changes its key"} | ${[rewriteEvents[0], oldDuplicate, oldOwner]}                                                                           | ${[rewriteEvents[0], oldDuplicate, newOwner]}                                                          | ${true}  | ${owners(["duplicate", "old-key"], ["owner", "new-key"])}
+    ${"preserves a key claimed by an earlier suffix insert"}                 | ${[rewriteEvents[0], oldDuplicate, oldOwner, assistant("removed", "owner", "removed")]}                                 | ${[rewriteEvents[0], oldDuplicate, newOwner, insertedOwner]}                                           | ${true}  | ${owners(["duplicate", null], ["new-owner", "old-key"], ["owner", "new-key"])}
+    ${"removes a retained event's key"}                                      | ${[rewriteEvents[0], keyedAssistant("owner", "root", "old-key", "original")]}                                           | ${[rewriteEvents[0], assistant("owner", "root", "updated")]}                                           | ${false} | ${owners(["owner", null])}
+    ${"reserves the retained owner ahead of a new duplicate"}                | ${[rewriteEvents[0], { type: "custom", id: "removed", parentId: "root" }, keyedAssistant("owner", "removed", "retry")]} | ${[rewriteEvents[0], keyedAssistant("new", "root", "retry"), keyedAssistant("owner", "new", "retry")]} | ${false} | ${owners(["new", null], ["owner", "retry"])}
+    ${"promotes a retained duplicate when its owner is removed"}             | ${[rewriteEvents[0], keyedAssistant("owner", "root", "retry"), keyedAssistant("duplicate", "owner", "retry")]}          | ${[rewriteEvents[0], keyedAssistant("duplicate", "root", "retry")]}                                    | ${false} | ${owners(["duplicate", "retry"])}
+  `("$name", async ({ events, next, reassign, expectedOwners }: OwnershipCase) => {
+    await withRewriteFixture(({ db, scope, setKeyOwner }) => {
       if (reassign) {
-        db.prepare(
-          "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
-        ).run(scope.sessionId, "duplicate");
-        db.prepare(
-          "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
-        ).run("old-key", scope.sessionId, "owner");
+        setKeyOwner("duplicate", null);
+        setKeyOwner("owner", "old-key");
       }
       const work = trackSqliteStatementExecutions(db, ["identityDeletes", "ownerReads"], (sql) => {
         if (/^delete from "transcript_event_identities" /i.test(sql)) {
@@ -873,8 +765,8 @@ describe("SQLite exact transcript suffix replacement", () => {
         .all(scope.sessionId);
       expect(identities).toEqual(next.map((event, seq) => ({ event_id: event.id, seq })));
       expect(
-        readIdempotencyOwners(db, scope.sessionId, ...owners.map((row) => row.event_id)),
-      ).toEqual(owners);
+        readIdempotencyOwners(db, scope.sessionId, ...expectedOwners.map((row) => row.event_id)),
+      ).toEqual(expectedOwners);
     }, events);
   });
 
@@ -907,14 +799,10 @@ describe("SQLite exact transcript suffix replacement", () => {
     const owner = keyedAssistant("owner", prefix.at(-1)!.id, prefixKey ? "retry" : "unique");
     const events = [rewriteEvents[0], ...prefix, owner];
     const duplicateId = prefix[duplicateIndex]!.id;
-    await withRewriteFixture(({ db, scope }) => {
+    await withRewriteFixture(({ db, scope, setKeyOwner }) => {
       if (prefixKey) {
-        db.prepare(
-          "UPDATE transcript_event_identities SET message_idempotency_key = NULL WHERE session_id = ? AND event_id = ?",
-        ).run(scope.sessionId, duplicateId);
-        db.prepare(
-          "UPDATE transcript_event_identities SET message_idempotency_key = ? WHERE session_id = ? AND event_id = ?",
-        ).run("retry", scope.sessionId, owner.id);
+        setKeyOwner(duplicateId, null);
+        setKeyOwner(owner.id, "retry");
       }
       if (corrupt) {
         db.prepare(
