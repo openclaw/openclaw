@@ -1,12 +1,9 @@
+// Agent runtime target tests cover optional tool credentials without broad command-target fixtures.
 import { describe, expect, it, vi } from "vitest";
 
 const firecrawlPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
 const exaPath = "plugins.entries.exa.config.webSearch.apiKey";
 const dottedExaPath = 'plugins.entries["exa.internal"].config.webSearch.apiKey';
-const secret = (id: string) => ({ source: "env", provider: "default", id });
-const webConfig = (kind: "webFetch" | "webSearch", apiKey: unknown) => ({
-  config: { [kind]: { apiKey } },
-});
 
 vi.mock("../secrets/target-registry.js", () => ({
   listSecretTargetRegistryEntries: () => [
@@ -31,25 +28,41 @@ vi.mock("../secrets/target-registry.js", () => ({
     targetIds: Iterable<string>,
   ) => {
     const ids = new Set(targetIds);
-    return (
-      [
-        [firecrawlPath, "firecrawl", "webFetch"],
-        [exaPath, "exa", "webSearch"],
-        [dottedExaPath, "exa.internal", "webSearch"],
-      ] as const
-    ).flatMap(([path, plugin, capability]) => {
-      const value = config.plugins?.entries?.[plugin]?.config?.[capability]?.apiKey;
-      return ids.has(path) && value !== undefined
+    const firecrawlValue = config.plugins?.entries?.firecrawl?.config?.webFetch?.apiKey;
+    const exaValue = config.plugins?.entries?.exa?.config?.webSearch?.apiKey;
+    const dottedExaValue = config.plugins?.entries?.["exa.internal"]?.config?.webSearch?.apiKey;
+    return [
+      ...(ids.has(firecrawlPath) && firecrawlValue !== undefined
         ? [
             {
-              entry: { id: path },
-              path,
-              pathSegments: ["plugins", "entries", plugin, "config", capability, "apiKey"],
-              value,
+              entry: { id: firecrawlPath },
+              path: firecrawlPath,
+              pathSegments: firecrawlPath.split("."),
+              value: firecrawlValue,
             },
           ]
-        : [];
-    });
+        : []),
+      ...(ids.has(exaPath) && exaValue !== undefined
+        ? [
+            {
+              entry: { id: exaPath },
+              path: exaPath,
+              pathSegments: exaPath.split("."),
+              value: exaValue,
+            },
+          ]
+        : []),
+      ...(ids.has(dottedExaPath) && dottedExaValue !== undefined
+        ? [
+            {
+              entry: { id: dottedExaPath },
+              path: dottedExaPath,
+              pathSegments: ["plugins", "entries", "exa.internal", "config", "webSearch", "apiKey"],
+              value: dottedExaValue,
+            },
+          ]
+        : []),
+    ];
   },
 }));
 
@@ -61,9 +74,25 @@ describe("agent runtime command secret targets", () => {
     const paths = getAgentRuntimeOptionalCommandSecretPaths({
       plugins: {
         entries: {
-          firecrawl: webConfig("webFetch", secret("FIRECRAWL_API_KEY")),
-          exa: webConfig("webSearch", "inline-key"),
-          "exa.internal": webConfig("webSearch", secret("INTERNAL_EXA_API_KEY")),
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+              },
+            },
+          },
+          exa: {
+            config: {
+              webSearch: { apiKey: "inline-key" },
+            },
+          },
+          "exa.internal": {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "INTERNAL_EXA_API_KEY" },
+              },
+            },
+          },
         },
       },
     } as never);

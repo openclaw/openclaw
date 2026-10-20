@@ -44,18 +44,18 @@ describe("outbound payloads", () => {
     const plan = createPlan(
       [
         {
-          text: "Caption ![one](\nhttps://x/one.png\n) ![two](\nhttps://x/two.png\n)",
-          mediaUrl: "https://x/primary.png",
-          mediaUrls: ["https://x/explicit.png", "https://x/one.png"],
+          text: "Caption ![one](\nhttps://x.test/one.png\n) ![two](\nhttps://x.test/two.png\n)",
+          mediaUrl: "https://x.test/primary.png",
+          mediaUrls: ["https://x.test/explicit.png", "https://x.test/one.png"],
         },
       ],
       { extractMarkdownImages: true },
     );
     const mediaUrls = [
-      "https://x/explicit.png",
-      "https://x/one.png",
-      "https://x/primary.png",
-      "https://x/two.png",
+      "https://x.test/explicit.png",
+      "https://x.test/one.png",
+      "https://x.test/primary.png",
+      "https://x.test/two.png",
     ];
 
     expect(toDelivery(plan)).toMatchObject([{ text: "Caption", mediaUrl: undefined, mediaUrls }]);
@@ -66,8 +66,8 @@ describe("outbound payloads", () => {
 
   it("keeps parsed attachment order before an explicit singular attachment", () => {
     const source: ReplyPayload = {
-      text: "MEDIA:https://x/one.png\nMEDIA:https://x/two.png",
-      mediaUrl: "https://x/primary.png",
+      text: "MEDIA:https://x.test/one.png\nMEDIA:https://x.test/two.png",
+      mediaUrl: "https://x.test/primary.png",
       attachments: [{ name: "Explicit photo.png", mimeType: "image/png" }],
     };
     const originalSource = structuredClone(source);
@@ -75,7 +75,7 @@ describe("outbound payloads", () => {
 
     expect(payload).toMatchObject({
       mediaUrl: undefined,
-      mediaUrls: ["https://x/one.png", "https://x/two.png", "https://x/primary.png"],
+      mediaUrls: ["https://x.test/one.png", "https://x.test/two.png", "https://x.test/primary.png"],
     });
     expect(payload?.attachments).toEqual([{}, {}, ...originalSource.attachments!]);
     expect(source).toEqual(originalSource);
@@ -119,8 +119,8 @@ describe("outbound payloads", () => {
     expect(normalizePayloads([{ text }])).toMatchObject([{ text }]);
   });
   it("projects text and media variants to JSON", () => {
-    const mediaUrl = "https://x/a.jpg";
-    const mediaUrls = ["https://x/1.png"];
+    const mediaUrl = "https://x.test/a.jpg";
+    const mediaUrls = ["https://x.test/1.png"];
     const input = [
       { text: "hi" },
       { text: "photo", mediaUrl, audioAsVoice: true },
@@ -141,8 +141,8 @@ describe("outbound payloads", () => {
   const matrix: ReplyPayload[] = [
     { text: "hello" },
     { text: "NO_REPLY", audioAsVoice: true },
-    { text: "NO_REPLY", mediaUrl: "https://x/1.png" },
-    { text: "MEDIA:https://x/2.png\nworld" },
+    { text: "NO_REPLY", mediaUrl: "https://x.test/1.png" },
+    { text: "MEDIA:https://x.test/2.png\nworld" },
     { text: '{"action":"NO_REPLY","note":"keep"}' },
     { text: "reasoning", isReasoning: true },
     { text: " \n", channelData: { mode: "flex" } },
@@ -161,12 +161,12 @@ describe("outbound payloads", () => {
   it("projects literal text and media without reasoning entries", () => {
     const plan = createPlan(matrix);
     expect(toOutbound(plan)).toEqual([
-      { text: "hello", mediaUrls: [] },
+      { text: "hello", mediaUrls: [], audioAsVoice: undefined },
       { text: "NO_REPLY", mediaUrls: [], audioAsVoice: true },
-      { text: "NO_REPLY", mediaUrls: ["https://x/1.png"] },
-      { text: "world", mediaUrls: ["https://x/2.png"] },
-      { text: '{"action":"NO_REPLY","note":"keep"}', mediaUrls: [] },
-      { text: "", mediaUrls: [], channelData: { mode: "flex" } },
+      { text: "NO_REPLY", mediaUrls: ["https://x.test/1.png"], audioAsVoice: undefined },
+      { text: "world", mediaUrls: ["https://x.test/2.png"], audioAsVoice: undefined },
+      { text: '{"action":"NO_REPLY","note":"keep"}', mediaUrls: [], audioAsVoice: undefined },
+      { text: "", mediaUrls: [], channelData: { mode: "flex" }, audioAsVoice: undefined },
     ]);
   });
 
@@ -245,7 +245,7 @@ describe("outbound payloads", () => {
     const visibleText =
       "Here is the config.\n\n```yaml\nserver:\n  host: 0.0.0.0\n  ports:\n    - 80\n```\n\nThe service is ready.";
     const [planned] = createPlan(
-      [{ text: `${visibleText}\n\n![chart](https://x/config.png)`, attachments }],
+      [{ text: `${visibleText}\n\n![chart](https://x.test/config.png)`, attachments }],
       { extractMarkdownImages: true },
     );
 
@@ -253,15 +253,15 @@ describe("outbound payloads", () => {
       planned?.payload.text,
       planned?.payload.mediaUrls,
       planned?.payload.attachments,
-    ]).toEqual([visibleText, ["https://x/config.png"], attachments]);
+    ]).toEqual([visibleText, ["https://x.test/config.png"], attachments]);
   });
   it("text with attachment lines", () => {
     expect(
       formatOutboundPayloadLog({
         text: "hello  ",
-        mediaUrls: ["https://x/a.png", "https://x/b.png"],
+        mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
       }),
-    ).toBe("hello\nAttachment: https://x/a.png\nAttachment: https://x/b.png");
+    ).toBe("hello\nAttachment: https://x.test/a.png\nAttachment: https://x.test/b.png");
   });
   it("surfaces spokenText only as hook content for audio-only payloads", () => {
     const summary = summarize({
@@ -310,7 +310,7 @@ describe("outbound payloads", () => {
     const secondaryPath = path.resolve("media", "secondary.png");
     const payload: ReplyPayload = setReplyPayloadMetadata(
       {
-        text: "[[reply_to:literal]] [[audio_as_voice]]\nMEDIA:https://x/literal.png",
+        text: "[[reply_to:literal]] [[audio_as_voice]]\nMEDIA:https://x.test/literal.png",
         replyToId: "prepared-target",
         replyToTag: false,
         replyToCurrent: false,

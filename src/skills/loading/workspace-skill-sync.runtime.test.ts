@@ -665,11 +665,13 @@ describe("syncWorkspaceSkills", () => {
     expect((await fs.lstat(syncedSkillDir)).isSymbolicLink()).toBe(false);
     expect(await pathExists(path.join(targetWorkspace, "skills", ".hidden-target"))).toBe(false);
     expect(
-      await buildWorkspaceSkillsPrompt(targetWorkspace, {
-        bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
-        managedSkillsDir: path.join(targetWorkspace, ".managed"),
-        skillFilter: [skillName],
-      }),
+      (
+        await buildSkillSnapshot(targetWorkspace, {
+          bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+          managedSkillsDir: path.join(targetWorkspace, ".managed"),
+          skillFilter: [skillName],
+        })
+      ).prompt,
     ).toContain("Managed symlink target");
   });
 });
@@ -717,11 +719,11 @@ describe("syncWorkspaceSkills for plugin skills", () => {
     const syncedSkillMd = path.join(syncedSkillDir, "SKILL.md");
     const syncedStat = await fs.lstat(syncedSkillDir);
     const prompt = (
-      await buildWorkspaceSkillsPrompt(targetWorkspace, {
+      await buildSkillSnapshot(targetWorkspace, {
         bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
         managedSkillsDir: path.join(targetWorkspace, ".managed"),
       })
-    ).replaceAll("\\", "/");
+    ).prompt.replaceAll("\\", "/");
 
     expect(await pathExists(syncedSkillMd)).toBe(true);
     expect(syncedStat.isSymbolicLink()).toBe(false);

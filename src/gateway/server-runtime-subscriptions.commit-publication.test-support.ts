@@ -53,7 +53,8 @@ export function registerCommittedTranscriptPublicationTests(
       });
       const params = createParams();
       params.sessionEventSubscribers.subscribe("conn-transcript");
-      params.broadcastToConnIds = vi.fn(() => published.resolve());
+      const broadcastToConnIds = vi.fn(() => published.resolve());
+      params.broadcastToConnIds = broadcastToConnIds;
       const projection = createSessionRowProjectionFixture({
         cfg: { agents: { entries: { main: {} } } },
         storePath: target.storePath,
@@ -110,7 +111,7 @@ export function registerCommittedTranscriptPublicationTests(
           new Set(["conn-transcript"]),
           expect.objectContaining({ sessionEventSubscriptionKeys: [target.sessionKey] }),
         ];
-        expect(params.broadcastToConnIds.mock.calls).toEqual([
+        expect(broadcastToConnIds.mock.calls).toEqual([
           publication("session.message", {
             messageId: "committed-message-0",
             message: expect.objectContaining({ content: storedMessage.content }),
