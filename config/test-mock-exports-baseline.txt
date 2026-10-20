@@ -1185,7 +1185,6 @@
 ["extensions/telegram/src/audit.test.ts","./fetch.js","550e4a249f3c257cc5602cadb2f126a5bae51b31839e5e201bf346f2a5f6b3ff",1]
 ["extensions/telegram/src/audit.test.ts","openclaw/plugin-sdk/string-coerce-runtime","2363f7ee4906fa2d77f533c290a9b52c7c4921c20291807a56b85dd2b5ae4a2f",1]
 ["extensions/telegram/src/audit.test.ts","openclaw/plugin-sdk/text-utility-runtime","d6480005fddad7235f268c2e25f16f9b77961bf7bbb3fa2f3f0e7c22381d0eee",1]
-["extensions/telegram/src/bot-message-context.media-carriers.test.ts","./sticker-vision.runtime.js","3671a8c8ae48220b894968856071ea9fd258b2607138cf426dba4306da2dc05f",1]
 ["extensions/telegram/src/bot-message-dispatch.test-harness.ts","./bot/delivery.replies.js","1eb8258d2a1df0f3c8e464b42f61823fe4e43e48193c742475e84b0a8642b104",1]
 ["extensions/telegram/src/bot-message-dispatch.test-harness.ts","./send.js","4c259b25bb8a9f86246585b39155fad8b22f961b352e4cc2349dda57d0c4bd07",1]
 ["extensions/telegram/src/bot-message-dispatch.test-harness.ts","./sticker-cache.js","2f5b4c544e6af69d3bedc3182c5f32f905a71b716d9de674a5ba68501f55038d",1]
