@@ -16,8 +16,8 @@ import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
-it("prepares ordinary and failed turns and rejects archived sessions without host row reads", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("prepares active/failed sessions and rejects archives without host row reads", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {};
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
@@ -91,5 +91,4 @@ it("prepares ordinary and failed turns and rejects archived sessions without hos
       }
       expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);
     }
-  });
-});
+  }));

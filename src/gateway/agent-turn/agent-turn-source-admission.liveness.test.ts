@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
@@ -24,9 +25,9 @@ it.each([
   { layout: "custom", admission: "early" },
   { layout: "default", admission: "prepared" },
 ] as const)(
-  "keeps private children with the native requester through $layout storage and $admission admission",
-  async ({ layout, admission }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  "keeps requester custody through $layout storage and $admission admission",
+  ({ layout, admission }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const agentId = "beta";
       const sessionKey = "agent:beta:requester";
       const sessionId = "native-requester-session";
@@ -44,26 +45,19 @@ it.each([
         ...(layout === "custom" && { session: { store: logicalStore } }),
       };
       setRuntimeConfigSnapshot(cfg);
-      await replaceSessionEntry(
-        { agentId, sessionKey, storePath: logicalStore },
-        { sessionId, updatedAt: 1 },
-      );
+      const turn = { sessionKey, sessionId, agentId, storePath: logicalStore };
+      await replaceSessionEntry(turn, { sessionId, updatedAt: 1 });
       const context = createAgentTurnTestContext();
       context.getRuntimeConfig = () => cfg;
       const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };
-      const preflight = expectDefined(
-        await prepareAgentRequestPreflight({
-          request: {
-            message: admission === "prepared" ? "/reset" : "Continue the task",
-            sessionKey,
-            idempotencyKey: runId,
-          },
-          context,
-          client: null,
-          io,
-        }),
-        "native requester preflight",
-      );
+      const message = admission === "prepared" ? "/reset" : "Continue the task";
+      const preflight = await prepareAgentRequestPreflight({
+        request: { message, sessionKey, idempotencyKey: runId },
+        context,
+        client: null,
+        io,
+      });
+      assert(preflight, "native requester preflight");
       const sourceWork = createDeferred();
       const registrations: ReturnType<typeof registerChatAbortController>[] = [];
       const sourceOptions = {
@@ -85,20 +79,18 @@ it.each([
       });
       if (admission === "prepared") {
         expect(registrations).toHaveLength(0);
-        const prepared = expectDefined(
-          await prepareAgentSession({
-            cfg,
-            requestedSessionKey: sessionKey,
-            requestedSessionId: sessionId,
-            expectedExistingSessionId: sessionId,
-            agentId,
-            request: preflight.request,
-            canUseCronRunContinuation: false,
-            lifecycleGeneration: getAgentRunLifecycleGeneration(),
-            respond: vi.fn(),
-          }),
-          "prepared requester session",
-        );
+        const prepared = await prepareAgentSession({
+          cfg,
+          requestedSessionKey: sessionKey,
+          requestedSessionId: sessionId,
+          expectedExistingSessionId: sessionId,
+          agentId,
+          request: preflight.request,
+          canUseCronRunContinuation: false,
+          lifecycleGeneration: getAgentRunLifecycleGeneration(),
+          respond: vi.fn(),
+        });
+        assert(prepared, "prepared requester session");
         registerAgentTurnRunAbort(sourceOptions, {
           cfg: prepared.cfg,
           storeScope: prepared.storePath,
@@ -120,7 +112,6 @@ it.each([
         requesterTurnRunId: runId,
         expectsCompletionMessage: true,
       });
-      const turn = { sessionKey, sessionId, agentId, storePath: logicalStore };
       const foreignChild = { ...child, requesterStorePath: physicalStore + ".other" };
       try {
         expect(io.emitAcceptance).not.toHaveBeenCalled();
@@ -140,6 +131,5 @@ it.each([
         registration.cleanup();
         await source.input.settlement.promise;
       }
-    });
-  },
+    }),
 );

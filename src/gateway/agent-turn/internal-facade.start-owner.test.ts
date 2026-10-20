@@ -64,7 +64,8 @@ it("observes a started owner without reentering its watchdog authority", async (
     timeoutMs: 60_000,
   });
   assert(registration.registered, "Expected recovery source registration");
-  using _ = { [Symbol.dispose]: registration.cleanup };
+  using cleanup = new DisposableStack();
+  cleanup.defer(registration.cleanup);
   let owner: AgentTurnStartOwner | undefined;
   startTurn.mockImplementation(async ({ io }) => {
     io.emitStartOwner?.(request.idempotencyKey, registration.entry);
@@ -94,17 +95,14 @@ it("observes a started owner without reentering its watchdog authority", async (
     }
   });
   const attempt = operation.watchdog.attachAttempt({ assertCurrent });
-  try {
-    assertCurrent.mockClear();
-    expect(observedOwner.observe()).toMatchObject({ executionStarted: true });
-    expect(assertCurrent).not.toHaveBeenCalled();
-    expect(observedOwner.abort()).toBe(false);
-    expect(attempt.isCurrent()).toBe(true);
-    expect(assertCurrent).toHaveBeenCalledOnce();
-    policyCurrent = false;
-    expect(attempt.isCurrent()).toBe(false);
-    expect(assertCurrent).toHaveBeenCalledTimes(2);
-  } finally {
-    attempt.close();
-  }
+  cleanup.defer(() => attempt.close());
+  assertCurrent.mockClear();
+  expect(observedOwner.observe()).toMatchObject({ executionStarted: true });
+  expect(assertCurrent).not.toHaveBeenCalled();
+  expect(observedOwner.abort()).toBe(false);
+  expect(attempt.isCurrent()).toBe(true);
+  expect(assertCurrent).toHaveBeenCalledOnce();
+  policyCurrent = false;
+  expect(attempt.isCurrent()).toBe(false);
+  expect(assertCurrent).toHaveBeenCalledTimes(2);
 });

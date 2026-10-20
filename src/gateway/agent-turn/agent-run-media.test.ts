@@ -66,7 +66,7 @@ async function writeMediaImage(state: OpenClawTestState, name: string) {
 }
 
 const assistantText = (text = "Completed") =>
-  makeAgentAssistantMessage({ content: [{ type: "text", text }], stopReason: "stop" });
+  makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 const displayedImage = (fields: Record<string, unknown> = {}) =>
   expect.arrayContaining([expect.objectContaining({ type: "image", ...fields })]);
 const managedImage = () =>
@@ -76,6 +76,8 @@ const managedImage = () =>
     artifactId: expect.any(String),
   });
 const displayedText = (text: string) => expect.objectContaining({ type: "text", text });
+const expectDisplay = (message: Record<string, unknown> | undefined, ...blocks: unknown[]) =>
+  expect(message?.openclawDisplayContent).toEqual(expect.arrayContaining(blocks));
 const withImage = (
   run: (
     state: OpenClawTestState,
@@ -91,6 +93,7 @@ async function storedImage(sessionKey: string, png?: Buffer) {
   expect(records).toHaveLength(1);
   const record = records[0]?.record;
   assert(record);
+  expect(record.messageId).toBe("progress");
   if (png) {
     expect(await fs.readFile(resolveManagedImageOriginalPath(record))).toEqual(png);
   }
@@ -118,28 +121,26 @@ function expectSuccess({ result, context }: Awaited<ReturnType<typeof runMediaTu
 async function runMediaTurn(
   state: OpenClawTestState,
   authoredMessage: AssistantMessage,
-  final?: MediaFinal,
+  final: MediaFinal = {},
 ) {
   const { runId, sessionKey, entry, context } = createTrackedDispatch();
   const sessionId = getRpcSourceIdentity(entry).sessionId;
   const controller = testRpcSourceController(entry);
-  const logicalStore = final?.retargetBeforeNormalization
-    ? state.statePath("media-session.json")
-    : undefined;
+  const logicalStore = final.retargetBeforeNormalization && state.statePath("media-session.json");
+  const agents: NonNullable<OpenClawConfig["agents"]> = {
+    entries: { main: { workspace: state.workspaceDir } },
+  };
   const cfg: OpenClawConfig = {
-    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    agents,
     plugins: { enabled: false },
   };
   if (logicalStore) {
     cfg.session = { store: logicalStore };
-    cfg.agents = {
-      ...cfg.agents,
-      defaults: {
-        sandbox: {
-          mode: "off",
-          workspaceAccess: "none",
-          workspaceRoot: state.statePath("sandboxes"),
-        },
+    agents.defaults = {
+      sandbox: {
+        mode: "off",
+        workspaceAccess: "none",
+        workspaceRoot: state.statePath("sandboxes"),
       },
     };
   }
@@ -150,7 +151,7 @@ async function runMediaTurn(
     sessionId,
     sessionKey,
     storePath:
-      logicalStore ?? (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
+      logicalStore || (await loadSessionEntryAsync(sessionKey, { agentId: "main" })).storePath,
   };
   const transcriptScope = {
     ...scope,
@@ -163,8 +164,8 @@ async function runMediaTurn(
   const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ runId, sessionId });
   let finalizationStatements = 0;
   const placements =
-    final?.changeAfterPreparation === "placement" ? createWorkerSessionPlacementStore() : undefined;
-  if (final?.retargetBeforeNormalization || final?.changeAfterPreparation) {
+    final.changeAfterPreparation === "placement" ? createWorkerSessionPlacementStore() : undefined;
+  if (final.retargetBeforeNormalization || final.changeAfterPreparation) {
     const prepare = replyMedia.prepareWebchatReplyMediaForDisplay;
     vi.spyOn(replyMedia, "prepareWebchatReplyMediaForDisplay").mockImplementationOnce(
       async (params) => {
@@ -200,7 +201,7 @@ async function runMediaTurn(
       },
     );
   }
-  if (final?.abortAfterCommit) {
+  if (final.abortAfterCommit) {
     const enrich = transcriptMedia.enrichAssistantTranscriptMediaForRun;
     vi.spyOn(transcriptMedia, "enrichAssistantTranscriptMediaForRun").mockImplementationOnce(
       async (params) => {
@@ -228,16 +229,13 @@ async function runMediaTurn(
     const statements = observeParentSqlite();
     try {
       await options.beforeTerminalDelivery?.({
-        payloads: final?.payloads ?? [],
+        payloads: final.payloads ?? [],
         sessionId,
         lifecycleRevision: sessionEntry.lifecycleRevision,
         storePath: scope.storePath,
       });
     } finally {
-      finalizationStatements += Object.values(statements.counts).reduce(
-        (total, count) => total + count,
-        0,
-      );
+      finalizationStatements += Object.values(statements.counts).reduce((sum, n) => sum + n, 0);
       statements.restore();
     }
     return { payloads: [], meta: result.meta };
@@ -283,7 +281,7 @@ async function runMediaTurn(
         abortSignal: entry.input.abortSignal,
         allowModelOverride: false,
         channel: "webchat",
-        ...final?.options,
+        ...final.options,
       },
       runId,
       dedupeKeys: [],
@@ -296,7 +294,7 @@ async function runMediaTurn(
         },
       },
       context,
-      isIncognito: final?.incognito,
+      isIncognito: final.incognito,
     },
     {
       cfg,
@@ -377,10 +375,10 @@ it("preserves agent-run commentary attachments after their source files are remo
         displayedText(`MEDIA:${hookImagePath}`),
       ]),
     });
-    const displayed = Array.isArray(message?.openclawDisplayContent)
-      ? message.openclawDisplayContent.map(asOptionalRecord)
-      : [];
-    const image = displayed.find((block) => block?.type === "image");
+    assert(Array.isArray(message?.openclawDisplayContent));
+    const image = message.openclawDisplayContent
+      .map(asOptionalRecord)
+      .find((b) => b?.type === "image");
     assert(typeof image?.artifactId === "string", "Expected a managed commentary artifact");
     await Promise.all([imagePath, hookImagePath].map((file) => fs.unlink(file)));
     await expect(
@@ -433,19 +431,12 @@ it.each([
     }
     expect(finalizationStatements).toBe(0);
     expect(message?.content).toEqual(authored.content);
-    expect(messageAtFinal?.openclawDisplayContent).toEqual(
-      expect.arrayContaining([displayedText("Completed"), managedImage()]),
-    );
-    expect((await storedImage(sessionKey)).messageId).toBe("progress");
+    expectDisplay(messageAtFinal, displayedText("Completed"), managedImage());
+    await storedImage(sessionKey);
   }),
 );
 
-it.each<{
-  name: string;
-  options?: Partial<AgentCommandGatewayIngressOpts>;
-  payload?: Partial<ReplyPayload>;
-  incognito?: boolean;
-}>([
+it.each<MediaFinal & { name: string; payload?: Partial<ReplyPayload> }>([
   { name: "sensitive media", payload: { sensitiveMedia: true } },
   { name: "reasoning media", payload: { isReasoning: true } },
   { name: "tool-only source reply", options: { sourceReplyDeliveryMode: "message_tool_only" } },
@@ -478,7 +469,7 @@ it.each(["abort", "permission", "placement", "route"] as const)(
       }
       if (change === "route") {
         expect(messageAtFinal?.openclawDisplayContent).toEqual(displayedImage());
-        expect((await storedImage(sessionKey)).messageId).toBe("progress");
+        await storedImage(sessionKey);
       } else {
         expect(message?.openclawDisplayContent).toBeUndefined();
         expect(messageAtFinal?.openclawDisplayContent).toBeUndefined();
@@ -493,5 +484,5 @@ it("settles committed media ownership even when the run aborts before publicatio
       abortAfterCommit: true,
     });
     expect(messageAtFinal?.openclawDisplayContent).toEqual(displayedImage());
-    expect((await storedImage(sessionKey, png)).messageId).toBe("progress");
+    await storedImage(sessionKey, png);
   }));
