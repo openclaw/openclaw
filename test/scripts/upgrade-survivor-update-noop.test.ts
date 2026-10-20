@@ -36,12 +36,6 @@ const noop = {
   root: "/fixture/openclaw",
   steps: [],
 };
-const withStep = (overrides: Record<string, unknown> = {}) => ({
-  ...noop,
-  steps: [{ ...advisory, ...overrides }],
-});
-const withGuidance = (overrides: Record<string, unknown>) =>
-  withStep({ advisory: { ...advisory.advisory, ...overrides } });
 
 // Run the same Node payload used by the shell entry point, not a duplicate assertion.
 // This qualifies the harness; the published-driver cell separately runs the real updater.
@@ -57,34 +51,76 @@ function check(report: Record<string, unknown>) {
 
 describe("legacy-operator already-current update", () => {
   it.each([
-    ["accepts no steps", noop, true],
-    ["accepts the non-default service advisory", withStep(), true],
-    ["accepts reworded service guidance", withGuidance({ message: "Rerun elsewhere." }), true],
-    [
-      "rejects a package mutation",
-      { ...noop, steps: [{ name: "global install swap", exitCode: 0, durationMs: 0 }] },
-    ],
-    [
-      "rejects unrelated maintenance",
-      withStep({ name: "managed-service", command: "openclaw gateway status --deep" }),
-    ],
-    ["rejects a different advisory kind", withGuidance({ kind: "candidate-runtime-unavailable" })],
-    ["rejects an unexplained advisory", withGuidance({ message: " " })],
-    ["rejects an executed service operation", withStep({ advisory: undefined })],
-    ["rejects elapsed service work", withStep({ durationMs: 1 })],
-    ["rejects a failed service receipt", withStep({ exitCode: 1 })],
-    ["rejects a repair request", { ...withStep(), nextAction: "openclaw update repair" }],
-    ["rejects an executed update", { ...noop, status: "ok" }],
-    ["rejects a different skip reason", { ...noop, reason: "no-update-root" }],
-    ["rejects missing steps", { ...noop, steps: undefined }],
-    ["rejects repeated maintenance", { ...noop, steps: [advisory, advisory] }],
-  ] satisfies [string, Record<string, unknown>, boolean?][])(
-    "%s",
-    (_name, report, accepted = false) => {
-      const result = check(report);
-      expect(result.error).toBeUndefined();
-      expect(result.signal).toBeNull();
-      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+    { name: "accepts no steps", report: noop, accepted: true },
+    {
+      name: "accepts the non-default service advisory",
+      report: { ...noop, steps: [advisory] },
+      accepted: true,
     },
-  );
+    {
+      name: "accepts reworded service guidance",
+      report: {
+        ...noop,
+        steps: [{ ...advisory, advisory: { ...advisory.advisory, message: "Rerun elsewhere." } }],
+      },
+      accepted: true,
+    },
+    {
+      name: "rejects a package mutation",
+      report: { ...noop, steps: [{ name: "global install swap", exitCode: 0, durationMs: 0 }] },
+    },
+    {
+      name: "rejects unrelated maintenance",
+      report: {
+        ...noop,
+        steps: [
+          { ...advisory, name: "managed-service", command: "openclaw gateway status --deep" },
+        ],
+      },
+    },
+    {
+      name: "rejects a different advisory kind",
+      report: {
+        ...noop,
+        steps: [
+          {
+            ...advisory,
+            advisory: { ...advisory.advisory, kind: "candidate-runtime-unavailable" },
+          },
+        ],
+      },
+    },
+    {
+      name: "rejects an unexplained advisory",
+      report: {
+        ...noop,
+        steps: [{ ...advisory, advisory: { ...advisory.advisory, message: " " } }],
+      },
+    },
+    {
+      name: "rejects an executed service operation",
+      report: { ...noop, steps: [{ ...advisory, advisory: undefined }] },
+    },
+    {
+      name: "rejects elapsed service work",
+      report: { ...noop, steps: [{ ...advisory, durationMs: 1 }] },
+    },
+    {
+      name: "rejects a failed service receipt",
+      report: { ...noop, steps: [{ ...advisory, exitCode: 1 }] },
+    },
+    {
+      name: "rejects a repair request",
+      report: { ...noop, steps: [advisory], nextAction: "openclaw update repair" },
+    },
+    { name: "rejects an executed update", report: { ...noop, status: "ok" } },
+    { name: "rejects a different skip reason", report: { ...noop, reason: "no-update-root" } },
+    { name: "rejects missing steps", report: { ...noop, steps: undefined } },
+    { name: "rejects repeated maintenance", report: { ...noop, steps: [advisory, advisory] } },
+  ])("$name", ({ report, accepted }) => {
+    const result = check(report);
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+  });
 });
