@@ -27,23 +27,25 @@ it("preserves template defaults and selected thinking through agent exec", async
   const model = "template-fixture/qwen-template";
   const requests: Record<string, unknown>[] = [];
   await withServer(
-    async (request, response) => {
-      const payload = JSON.parse(await text(request)) as Record<string, unknown>;
-      requests.push(payload);
-      const kwargs = payload.chat_template_kwargs as Record<string, unknown>;
-      const effort = kwargs.reasoning_effort;
-      assert(
-        effort === undefined || typeof effort === "string",
-        "expected a string reasoning effort",
-      );
-      const content = kwargs.enable_thinking === false ? "off" : (effort ?? "medium");
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: ${JSON.stringify({
-          id: "chatcmpl_template_fixture",
-          choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: "stop" }],
-        })}\n\ndata: [DONE]\n\n`,
-      );
+    (request, response) => {
+      void (async () => {
+        const payload = JSON.parse(await text(request)) as Record<string, unknown>;
+        requests.push(payload);
+        const kwargs = payload.chat_template_kwargs as Record<string, unknown>;
+        const effort = kwargs.reasoning_effort;
+        assert(
+          effort === undefined || typeof effort === "string",
+          "expected a string reasoning effort",
+        );
+        const content = kwargs.enable_thinking === false ? "off" : (effort ?? "medium");
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            id: "chatcmpl_template_fixture",
+            choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: "stop" }],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      })().catch((error: Error) => response.destroy(error));
     },
     async (baseUrl) => {
       const compat = {

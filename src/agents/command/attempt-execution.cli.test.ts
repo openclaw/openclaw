@@ -472,7 +472,7 @@ describe("CLI attempt execution", () => {
     if (options.binding) {
       sessionEntry.cliSessionBindings!["claude-cli"] = options.binding;
     }
-    return { sessionEntry, ...(await createCliSession(sessionKey, sessionEntry)) };
+    return createCliSession(sessionKey, sessionEntry);
   }
 
   registerCommandCliAdmissionTests({
@@ -1621,14 +1621,16 @@ describe("CLI attempt execution", () => {
 
     const messages = await readSessionMessages(transcriptTarget(sessionKey, sessionEntry));
     const assistant = requireRecord(messages.at(-1), "assistant message");
-    expectRecordFields(requireRecord(assistant.usage, "assistant usage"), {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      contextUsage: { state: "unavailable" },
-    });
+    expect(requireRecord(assistant.usage, "assistant usage")).toEqual(
+      expect.objectContaining({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        contextUsage: { state: "unavailable" },
+      }),
+    );
   });
 
   it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
@@ -1813,10 +1815,12 @@ describe("CLI attempt execution", () => {
     });
 
     const messages = await readSessionMessages(transcriptTarget(sessionKey, sessionEntry));
-    expectRecordFields(requireRecord(messages[0], "transcript user message"), {
-      role: "user",
-      content: "visible ask",
-    });
+    expect(requireRecord(messages[0], "transcript user message")).toEqual(
+      expect.objectContaining({
+        role: "user",
+        content: "visible ask",
+      }),
+    );
   });
 
   it("merges the collector result transport into a restricted CLI toolsAllow", async () => {

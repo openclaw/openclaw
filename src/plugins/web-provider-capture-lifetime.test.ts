@@ -134,7 +134,10 @@ module.exports = { id: "search-fixture", register(api) {
                 query,
                 count: 1,
                 results: [
-                  { title: expect.stringContaining("search-fixture"), url: "https://example.com/" },
+                  expect.objectContaining({
+                    title: expect.stringContaining("search-fixture"),
+                    url: "https://example.com/",
+                  }),
                 ],
               }),
         ),

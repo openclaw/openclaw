@@ -119,7 +119,6 @@ function bindClaim(
     operation,
   });
   const controller = createReplyRestartRecoveryClaimController({
-    agentId: "main",
     ...scope,
     getEntry: () => entry,
     getSessionId,

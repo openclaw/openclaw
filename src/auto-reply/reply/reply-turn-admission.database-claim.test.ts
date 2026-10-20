@@ -276,7 +276,10 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
       assert(signal);
       started.resolve(signal);
       return await new Promise<never>((_resolve, reject) => {
-        const abort = () => reject(signal.reason);
+        const abort = () => {
+          assert(signal.reason instanceof Error);
+          reject(signal.reason);
+        };
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) {
           abort();

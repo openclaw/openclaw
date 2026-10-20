@@ -1308,7 +1308,7 @@ describe("agentCommand", () => {
     vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
       const runId = params.runId ?? "run";
       const data = { text: "hello", delta: "hello" };
-      params.onAgentEvent?.({ stream: "assistant", data });
+      await params.onAgentEvent?.({ stream: "assistant", data });
       emitAgentEvent({ runId, stream: "assistant", data });
       return {
         payloads: [{ text: "hello" }],

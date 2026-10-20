@@ -382,19 +382,19 @@ it("preserves split malformed fenced code", () => {
 });
 
 it("propagates explicit reply ids until the assistant message resets", () => {
-  const { consume, reset } = createStreamingDirectiveAccumulator();
-  expect(consume("[[reply_to: a]]")).toBeNull();
-  expect(consume("Hi")).toMatchObject({ text: "Hi", replyToId: "a", replyToTag: true });
-  expect(consume("test 2")).toMatchObject({ replyToId: "a", replyToTag: true });
-  expect(consume("[[reply_to_current]][[reply_to: b]]")).toBeNull();
-  expect(consume("3")).toMatchObject({
+  const accumulator = createStreamingDirectiveAccumulator();
+  expect(accumulator.consume("[[reply_to: a]]")).toBeNull();
+  expect(accumulator.consume("Hi")).toMatchObject({ text: "Hi", replyToId: "a", replyToTag: true });
+  expect(accumulator.consume("test 2")).toMatchObject({ replyToId: "a", replyToTag: true });
+  expect(accumulator.consume("[[reply_to_current]][[reply_to: b]]")).toBeNull();
+  expect(accumulator.consume("3")).toMatchObject({
     text: "3",
     replyToId: "b",
     replyToCurrent: true,
     replyToTag: true,
   });
-  reset();
-  expect(consume("second")).toMatchObject({
+  accumulator.reset();
+  expect(accumulator.consume("second")).toMatchObject({
     replyToCurrent: false,
     replyToTag: false,
     replyToId: undefined,

@@ -1799,7 +1799,7 @@ export const single = {
       ],
     ],
   ])("routes Docker E2E targets %j to their semantic owners", (targets, owners) => {
-    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
+    expect(unmatchedTargets(targets)).toEqual([]);
     expectChangedTargets(targets, owners);
   });
 

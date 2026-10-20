@@ -324,6 +324,7 @@ it.each([
             entered.resolve();
             return release.promise;
           }
+          return undefined;
         },
       });
     }

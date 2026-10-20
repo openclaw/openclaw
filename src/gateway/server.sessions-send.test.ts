@@ -316,9 +316,9 @@ it(
   },
 );
 const sendDenied = "tools.agentToAgent.send";
-it.each([
-  ["default cross-agent access", undefined],
-  ["send-only, agent-scoped reads", { sessions: { visibility: "agent" } }, ["orion"]],
+it.each<[string, OpenClawConfig["tools"], string[] | undefined, string | undefined]>([
+  ["default cross-agent access", undefined, undefined, undefined],
+  ["send-only, agent-scoped reads", { sessions: { visibility: "agent" } }, ["orion"], undefined],
   ["empty send list, broad reads", allSessions.tools, [], sendDenied],
   ["unlisted destination", allSessions.tools, ["different-agent"], sendDenied],
   [
@@ -333,7 +333,7 @@ it.each([
     undefined,
     "denied by tools.agentToAgent.allow",
   ],
-] satisfies Array<[string, OpenClawConfig["tools"], string[]?, string?]>)(
+])(
   "sessions_send enforces %s when targeting a configured agent main session by agentId",
   async (_name, tools, sendAllow, error) => {
     const config: OpenClawConfig = {

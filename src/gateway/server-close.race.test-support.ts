@@ -12,7 +12,7 @@ export async function createGatewayCloseRace(label: string, signal: AbortSignal)
   const fixture = await createGatewayMetadataCloseFixture(label);
   const entered = createDeferred();
   const release = createDeferred();
-  const cleanup: Array<() => unknown | Promise<unknown>> = [];
+  const cleanup: Array<() => void | Promise<void>> = [];
   let closing: Promise<void> | undefined;
   let accepted: Promise<unknown> | undefined;
   let closed = false;
@@ -33,7 +33,7 @@ export async function createGatewayCloseRace(label: string, signal: AbortSignal)
       get closed() {
         return closed;
       },
-      onCleanup: (run: () => unknown | Promise<unknown>) => {
+      onCleanup: (run: () => void | Promise<void>) => {
         cleanup.push(run);
       },
       dispatch: <T>(method: string, params: unknown) =>
