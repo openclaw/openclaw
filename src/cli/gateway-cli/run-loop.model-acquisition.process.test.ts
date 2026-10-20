@@ -1,13 +1,8 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import {
@@ -15,6 +10,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
+import { observeChild } from "./run-loop.process.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureUrl = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.modelAcquisitionFixture);
@@ -70,36 +66,21 @@ it
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const closed = once(child, "close");
-    void closed.catch(() => {});
-    let output = "";
-    const ready = createDeferred();
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-      if (output.includes("process proof: gateway-ready-degraded")) {
-        ready.resolve();
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    const observed = observeChild(child, signal);
+    const { closed } = observed;
     try {
       // Native queries may run through the spawn broker, so their parent PID is
       // not necessarily the Gateway PID that the loaded job must identify.
       await fs.writeFile(path.join(bin, "launchctl.pid"), String(child.pid));
-      await withinTest(
-        awaitGateBeforeSettlement(
-          ready.promise,
-          closed,
-          "process proof: gateway-ready-degraded was not produced",
-        ),
-        signal,
-      );
-      expect(output).toContain(
+      await observed.waitForOutput("process proof: gateway-ready-degraded");
+      expect(observed.output).toContain(
         `shutdown=${process.platform === "darwin" ? GATEWAY_SHUTDOWN_TIMEOUT_MS : shutdownTimeoutMs}ms`,
       );
       const started = performance.now();
       expect(child.kill("SIGTERM")).toBe(true);
       const exit = await withinTest(closed, signal);
       const elapsed = performance.now() - started;
+      const { output } = observed;
       expect(exit, output).toEqual(mode === "cooperative" ? [0, null] : [null, "SIGKILL"]);
       expect(elapsed, output).toBeLessThan(stopTimeoutMs);
       expect(output).toContain("process proof: acquisition-cancelled");
@@ -117,16 +98,13 @@ it
         expect(output).toContain("process proof: acquisition-joined");
         expect(output).not.toContain("shutdown deadline reached");
         expect(elapsed, output).toBeLessThan(shutdownTimeoutMs);
-      } else {
-        expect(output).not.toContain("process proof: acquisition-joined");
-        expect(output).toContain("shutdown deadline reached");
-        expect(elapsed, output).toBeGreaterThanOrEqual(shutdownTimeoutMs);
-      }
-      if (mode === "cooperative") {
         expect(output.indexOf("acquisition-cancelled")).toBeLessThan(
           output.indexOf("process-exit:0"),
         );
       } else {
+        expect(output).not.toContain("process proof: acquisition-joined");
+        expect(output).toContain("shutdown deadline reached");
+        expect(elapsed, output).toBeGreaterThanOrEqual(shutdownTimeoutMs);
         expect(output).not.toContain("process-exit:");
       }
     } finally {
