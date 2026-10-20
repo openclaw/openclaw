@@ -147,6 +147,32 @@ agents:
       every: "55m"
 ```
 
+## Pre-expiry compaction
+
+Optional [pre-expiry compaction](/concepts/compaction#before-cache-expiry) uses
+positive cache usage, not merely a configured retention preference. It does not
+extend a cache indefinitely or promise that the summarizer will hit the same prefix.
+
+Provider contracts reviewed on **October 20, 2026**:
+
+| Route                                    | Documented lifetime                                                                                                                                          | Automatic compaction timer                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| Direct Anthropic API key                 | Five minutes, or one hour when the effective marker requests it; refresh measured from request start                                                         | Qualified after positive cache usage              |
+| Direct OpenAI API key, GPT-5.6 and newer | At least 30 minutes after write/reuse; may be retained longer                                                                                                | Uses the minimum as an estimate, not exact expiry |
+| Earlier OpenAI API models                | In-memory typically 5–10 minutes, up to an hour; extended retention typically around 30 minutes, up to 24 hours; defaults also depend on organization policy | Skipped: no reliable deadline                     |
+| ChatGPT sign-in and CLI/native harnesses | No equivalent OpenClaw-controlled lifetime contract                                                                                                          | Skipped                                           |
+| Amazon Bedrock                           | Model- and API-specific TTLs; Claude/Nova checkpoints and OpenAI APIs differ                                                                                 | Not qualified by this timer yet                   |
+| Google Gemini explicit resources         | Resource TTL and refresh belong to the resource owner; OpenClaw caches stable system/tools, not the conversation tail                                        | Skipped: not a conversation-expiry trigger        |
+| Vertex AI, OpenRouter and custom proxies | Distinct route/model contracts and routing behavior                                                                                                          | Not qualified by this timer yet                   |
+
+Sources: [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+[OpenAI cache lifetime](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime),
+[Amazon Bedrock prompt caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
+Gemini resource scope is the implemented contract in
+`src/agents/embedded-agent-runner/google-prompt-cache.ts`. This table distinguishes
+provider documentation from OpenClaw’s deliberately narrower qualification;
+“not qualified” does not mean the provider has no cache.
+
 ## Provider behavior
 
 ### Anthropic (direct API and Vertex AI)

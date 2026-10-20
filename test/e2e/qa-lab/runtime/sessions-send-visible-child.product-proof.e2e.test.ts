@@ -8,6 +8,7 @@ import {
   createQaBusState,
   createQaChannelTransport,
   createQaGatewayChild,
+  isInternalRuntimeContextCarrierText,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
@@ -56,6 +57,16 @@ type RequestEvidence = {
   announceStep: boolean;
 };
 
+function inputText(content: unknown): string {
+  return Array.isArray(content)
+    ? content
+        .map((part: { text?: unknown }) => (typeof part?.text === "string" ? part.text : ""))
+        .join("\n")
+    : typeof content === "string"
+      ? content
+      : "";
+}
+
 function toolOutput(body: ProviderRequest, callId: string): ToolReceipt | undefined {
   const output = body.input.find(
     (item) => item.type === "function_call_output" && item.call_id === callId,
@@ -91,13 +102,13 @@ async function startProofProvider() {
       const developerText = JSON.stringify(
         body.input.filter((item) => item.role === "developer" || item.role === "system"),
       );
-      const userText = JSON.stringify(
-        body.input.findLast(
-          (item) =>
-            item.role === "user" &&
-            !JSON.stringify(item.content).includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"),
-        ),
-      );
+      // Compatible Responses endpoints keep runtime context in user-role carriers
+      // after the user turn; select the latest user-authored message instead.
+      const userTexts = body.input
+        .filter((item) => item.role === "user")
+        .map((item) => inputText(item.content));
+      const userText =
+        userTexts.findLast((text) => !isInternalRuntimeContextCarrierText(text)) ?? "";
       const kind = developerText.includes("Generate a concise session title")
         ? "title"
         : body.model === "qa-child"

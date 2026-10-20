@@ -440,7 +440,8 @@ suite.define(() => {
         }
       });
       const auditEvents = managementAuditEvents();
-      expect(auditEvents).toHaveLength(actions.length + 2);
+      // Both configured-owner reads and removal's revision lookup are audited.
+      expect(auditEvents).toHaveLength(actions.length + 3);
       await writeVerdict("verdict.json", {
         admin: adminResults,
         cronRuns: observedCronRuns,

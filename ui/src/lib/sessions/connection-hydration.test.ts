@@ -186,7 +186,7 @@ it.each(["account", "recovery scope"])(
       }
       return method === "sessions.subscribe"
         ? { subscribed: true }
-        : { names: [], sectionOrder: [] };
+        : { groups: [], sectionOrder: [] };
     });
     const source = createApplicationGateway();
     const hello = gatewayHelloForMethods(

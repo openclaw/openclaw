@@ -59,7 +59,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
     "sessionRuntime.buildChannelInboundEventContext",
   ],
   ["tlon/src/monitor/index", "channelIngress,", coreBuilder],
-  ["twitch/src/monitor", "channelIngress,", "channelRuntime.inbound.buildContext"],
+  ["twitch/src/monitor", "channelIngress: exactAccess", "channelRuntime.inbound.buildContext"],
   [
     "whatsapp/src/auto-reply/monitor/inbound-dispatch",
     "channelIngress,",
@@ -100,7 +100,7 @@ const CONTEXT_BINDING_PRODUCERS = [
   "synology-chat/src/security",
   "telegram/src/bot-handlers.inbound-authorization",
   "tlon/src/monitor/utils",
-  "twitch/src/access-control",
+  "twitch/src/monitor",
   "whatsapp/src/inbound-policy",
   "zalo/src/monitor",
   "zalouser/src/monitor",

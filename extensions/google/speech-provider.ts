@@ -76,20 +76,6 @@ function isGoogleTtsRetryableError(err: unknown): boolean {
   );
 }
 
-function composeGoogleTtsText(params: {
-  text: string;
-  audioProfile?: string;
-  speakerName?: string;
-}): string {
-  return [
-    normalizeOptionalString(params.audioProfile),
-    normalizeOptionalString(params.speakerName) ? `Speaker name: ${params.speakerName}` : undefined,
-    params.text,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join("\n\n");
-}
-
 function normalizePromptSectionText(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value?.replace(/\r\n?/g, "\n"));
   if (!trimmed) {
@@ -106,40 +92,6 @@ function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
     text.includes("### TRANSCRIPT") &&
     text.startsWith("Synthesize speech from the TRANSCRIPT section only.")
   );
-}
-
-function renderGoogleAudioProfilePrompt(params: {
-  text: string;
-  persona?: {
-    id: string;
-    label?: string;
-  };
-  personaPrompt?: string;
-}): string {
-  const transcript = params.text.replace(/\r\n?/g, "\n").trim();
-  const personaPrompt = normalizePromptSectionText(params.personaPrompt);
-  const label =
-    normalizePromptSectionText(params.persona?.label) ??
-    normalizePromptSectionText(params.persona?.id);
-
-  const sections = [
-    [
-      "Synthesize speech from the TRANSCRIPT section only. Use the other sections only",
-      "as performance direction. Do not read section titles, notes, labels, or",
-      "configuration aloud.",
-    ].join("\n"),
-  ];
-
-  if (label) {
-    sections.push(`# AUDIO PROFILE: ${label}`);
-  }
-
-  if (personaPrompt) {
-    sections.push(["### DIRECTOR'S NOTES", "Provider notes:", personaPrompt].join("\n"));
-  }
-
-  sections.push(["### TRANSCRIPT", transcript].join("\n"));
-  return sections.join("\n\n");
 }
 
 function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): Buffer {
@@ -176,13 +128,6 @@ function extractOpenClawGoogleAudioProfileTranscript(text: string): string | und
     return undefined;
   }
   return text.slice(match.index + match[0].length).trim() || undefined;
-}
-
-// Gemini 3.8 speaks the transcript verbatim, so a wrapped audio-profile prompt is reduced to
-// its transcript. The persona label is identity, not delivery, and is not sent as style.
-function prepareGoogleInteractionsSynthesis(text: string): { text: string } | undefined {
-  const transcript = extractOpenClawGoogleAudioProfileTranscript(text);
-  return transcript ? { text: transcript } : undefined;
 }
 
 function stripWavContainerToPcm(audio: Buffer): Buffer {
@@ -366,11 +311,15 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
                   role: "user",
                   parts: [
                     {
-                      text: composeGoogleTtsText({
-                        text: params.text,
-                        audioProfile: params.audioProfile,
-                        speakerName: params.speakerName,
-                      }),
+                      text: [
+                        normalizeOptionalString(params.audioProfile),
+                        normalizeOptionalString(params.speakerName)
+                          ? `Speaker name: ${params.speakerName}`
+                          : undefined,
+                        params.text,
+                      ]
+                        .filter((part): part is string => part !== undefined)
+                        .join("\n\n"),
                     },
                   ],
                 },
@@ -500,7 +449,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       const model = normalizeGoogleTtsModel(overrides.model ?? config.model);
       assertSupportedGoogleTtsModel(model);
       if (isGoogleInteractionsTtsModel(model)) {
-        return prepareGoogleInteractionsSynthesis(ctx.text);
+        // Gemini 3.8 speaks the transcript verbatim; the persona label is not delivery style.
+        const transcript = extractOpenClawGoogleAudioProfileTranscript(ctx.text);
+        return transcript ? { text: transcript } : undefined;
       }
       const shouldWrap =
         config.promptTemplate === GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE ||
@@ -508,13 +459,30 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       if (!shouldWrap || isOpenClawGoogleAudioProfilePrompt(ctx.text)) {
         return undefined;
       }
-      return {
-        text: renderGoogleAudioProfilePrompt({
-          text: ctx.text,
-          persona: ctx.persona,
-          personaPrompt: config.personaPrompt,
-        }),
-      };
+      const transcript = ctx.text.replace(/\r\n?/g, "\n").trim();
+      const personaPrompt = normalizePromptSectionText(config.personaPrompt);
+      const label =
+        normalizePromptSectionText(ctx.persona?.label) ??
+        normalizePromptSectionText(ctx.persona?.id);
+
+      const sections = [
+        [
+          "Synthesize speech from the TRANSCRIPT section only. Use the other sections only",
+          "as performance direction. Do not read section titles, notes, labels, or",
+          "configuration aloud.",
+        ].join("\n"),
+      ];
+
+      if (label) {
+        sections.push(`# AUDIO PROFILE: ${label}`);
+      }
+
+      if (personaPrompt) {
+        sections.push(["### DIRECTOR'S NOTES", "Provider notes:", personaPrompt].join("\n"));
+      }
+
+      sections.push(["### TRANSCRIPT", transcript].join("\n"));
+      return { text: sections.join("\n\n") };
     },
     synthesize: async (req) => {
       const pcm = await synthesizeConfiguredGoogleTts(req);

@@ -42,14 +42,19 @@ import {
 } from "./attempt-prompt-submit.js";
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
+import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import {
   createChatGPTV2CompactionBoundary,
   isChatGPTV2CompactionEligible,
 } from "./chatgpt-v2-compaction.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
-import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
+import {
+  estimateToolSchemaTokenPressure,
+  resolveProjectedRequestPressure,
+} from "./preemptive-compaction.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
@@ -519,7 +524,49 @@ export async function runEmbeddedAttemptPromptPhase(
               }),
             }
           : {}),
-        onModelRequest: preparedStreamRuntime.cache.onModelRequest,
+        onModelRequest: async (model, context, signal) => {
+          const previousRequest = await preparedStreamRuntime.cache.onModelRequest?.(
+            model,
+            context,
+            signal,
+          );
+          if (!attempt.compactionRequest?.pending || !compactionEnabled) {
+            return previousRequest;
+          }
+          const { subscription } = preparedStreamRuntime.stream;
+          await subscription.waitForPendingEvents();
+          runAbortController.signal.throwIfAborted();
+          promptAssembly.assertHostActive?.();
+          const evidence = resolveSettledToolBatchEvidence(
+            {
+              messagesSnapshot: activeSession.messages,
+              currentAttemptAssistant: subscription.getCurrentAttemptAssistant(),
+              itemLifecycle: subscription.getItemLifecycle(),
+              toolMetas: subscription.toolMetas,
+              lastToolError: subscription.getLastToolError(),
+            },
+            { midTurn: true },
+          );
+          // Parked Code Mode work and approvals retain their owners; a later safe
+          // boundary (or settled-turn maintenance) can consume the same request.
+          if (
+            !evidence.allToolsProvenSettled ||
+            evidence.intentionalTermination ||
+            hasAsyncActivity(subscription.toolMetas) ||
+            subscription.didSendDeterministicApprovalPrompt()
+          ) {
+            return previousRequest;
+          }
+          const requestedCompaction = attempt.compactionRequest.takePending();
+          const pressure = resolveProjectedRequestPressure({
+            context,
+            previousRequest,
+            contextTokenBudget: promptContext.contextTokenBudget,
+            reserveTokens: settingsManager.getCompactionReserveTokens(),
+          });
+          providerBoundaryPrecheck = { ...pressure, route: "compact_only", requestedCompaction };
+          throw new MidTurnPrecheckSignal(providerBoundaryPrecheck);
+        },
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,

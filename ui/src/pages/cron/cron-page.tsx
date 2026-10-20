@@ -18,7 +18,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     revision();
     return buildCronViewProps(props.page);
   });
-  const header = createMemo(() => {
+  const header = () => {
     revision();
     const page = props.page;
     return {
@@ -30,7 +30,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       agents: page.inventories.agents.read().agentsList?.agents ?? [],
       selectedAgentId: page.context().agentSelection.state.scopeId,
     };
-  });
+  };
   return (
     <>
       <SettingsPageHeader

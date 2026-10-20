@@ -15,7 +15,7 @@ import {
 } from "../../lib/reactive/application.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import {
@@ -34,7 +34,7 @@ import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import { createModelProviderLogin } from "./login-controller.ts";
-import { createModelProvidersState, type ModelProvidersState } from "./page-state.ts";
+import { createModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -51,8 +51,9 @@ export function createModelProviders(
   const gatewayState = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.settingsAgentSelection);
   const overlays = projectOverlays(context.overlays);
-  let publish: (() => void) | undefined;
-  const notify = () => publish?.();
+  const projection = observeState(createModelProvidersState());
+  const state = projection.state;
+  const notify = projection.invalidate;
   const mutationBlockedReason = (): string | null =>
     modelProviderConfigMutationBlockedReason(context) ??
     (state.selectedAgentId ? null : t("agents.noAgents"));
@@ -61,23 +62,11 @@ export function createModelProviders(
   let loaderPending = false;
   let connected = false;
   const accountUsages = new Set<ModelAccountUsageElement>();
-  const state = createModelProvidersState();
   let pendingConnection = false;
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
   let stopCatalog: (() => void) | undefined;
-
-  function setState<Key extends keyof ModelProvidersState>(
-    key: Key,
-    value: ModelProvidersState[Key],
-  ) {
-    if (!Object.is(state[key], value)) {
-      state[key] = value;
-      notify();
-    }
-    return value;
-  }
 
   /** Client the current data was loaded from; a new client means stale data. */
   let dataClient: GatewayBrowserClient | null = null;
@@ -100,11 +89,11 @@ export function createModelProviders(
     },
     onCatalogComplete: (result) => {
       if (state.data) {
-        setState("data", {
+        state.data = {
           ...state.data,
           providerOutcomes: result.providerOutcomes ?? [],
           catalogError: null,
-        });
+        };
       }
     },
   });
@@ -120,7 +109,7 @@ export function createModelProviders(
     getGateway: () => gateway,
     getData: () => state.data,
     getDataClient: () => dataClient,
-    setData: (data) => setState("data", data),
+    setData: (data) => (state.data = data),
     setDataClient: (client) => (dataClient = client),
     refreshPolicy,
   });
@@ -141,7 +130,7 @@ export function createModelProviders(
       if (change.initial) {
         resetConnectionState();
       } else if (change.connectionChanged && !change.identityChanged) {
-        setState("busy", {});
+        state.busy = {};
         installedAgents.reset({ preserveVisibleData: true });
       }
       if (change.snapshot.phase === "connected") {
@@ -174,8 +163,8 @@ export function createModelProviders(
     getClientEpoch: () => gateway.epoch,
     getData: () => state.data,
     getOrders: () => state.profileOrders,
-    setData: (data) => setState("data", data),
-    setOrders: (orders) => setState("profileOrders", orders),
+    setData: (data) => (state.data = data),
+    setOrders: (orders) => (state.profileOrders = orders),
     clearMessage: (cardId) => setMessage(cardId, null),
     canMutate: () => canMutate(),
     cancelRefresh: () => core.invalidate(),
@@ -184,7 +173,7 @@ export function createModelProviders(
     isBusy: (key) => Boolean(state.busy[key]),
     setBusy: (key, value) => setBusy(key, value),
     setProbeResult: (cardId, result) =>
-      setState("probeResults", updateRecordEntry(state.probeResults, cardId, result)),
+      (state.probeResults = updateRecordEntry(state.probeResults, cardId, result)),
     setProbeError: (cardId, error) => setMessage(cardId, { kind: "error", text: error }),
     getConfig: () => context.runtimeConfig,
   });
@@ -217,23 +206,13 @@ export function createModelProviders(
       void discovery.open();
     },
     onApiKey: (provider) => {
-      setState("addProviderId", provider);
-      setState("addProviderKey", "");
+      state.addProviderId = provider;
+      state.addProviderKey = "";
       setAddProviderOpen(true);
       setMessage("add", null);
     },
     canContinue: () => mutationBlockedReason() === null,
     refresh: (providerId) => refresh("replacement", providerId),
-  });
-  const projection = projectSource(state, {
-    read: (value) => value,
-    subscribe: (_, listener) => {
-      publish = listener;
-      return () => {
-        publish = undefined;
-      };
-    },
-    equality: "revision",
   });
   let previousRouteData: ModelProvidersRouteData | undefined;
   let previousLoaderPending: boolean | undefined;
@@ -259,6 +238,12 @@ export function createModelProviders(
       core.invalidate();
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
+      // The catalog can change after preload completes but before this page subscribes.
+      const catalogScope = { agentId: state.selectedAgentId };
+      const catalogCurrent =
+        !data.client ||
+        !modelCatalog.peekModelCatalog(data.client, catalogScope, { allowStale: true }) ||
+        modelCatalog.peekModelCatalog(data.client, catalogScope) !== undefined;
       if (
         readAccess &&
         (data.agentId ?? "") === state.selectedAgentId &&
@@ -266,8 +251,11 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
+        if (!catalogCurrent) {
+          retryCatalog();
+        }
       } else {
-        setState("data", null);
+        state.data = null;
         dataClient = null;
         refreshPolicy.resetPayload();
       }
@@ -337,7 +325,7 @@ export function createModelProviders(
     syncAgent();
     synchronizeRoute(inputs.routeData, inputs.loaderPending ?? false);
     return () => {
-      publish = undefined;
+      projection.dispose();
       connected = false;
       for (const cleanup of cleanups) {
         cleanup();
@@ -403,35 +391,35 @@ export function createModelProviders(
   function resetConnectionState() {
     profilesVisible = false;
     readAccess = false;
-    setState("data", null);
+    state.data = null;
     dataClient = null;
     refreshPolicy.resetPayload();
     discovery.cancelLoading();
     installedAgents.reset();
     resetAgentScopeState();
     profileActions.resetProbes();
-    setState("defaultsDraft", null);
+    state.defaultsDraft = null;
   }
 
   function resetAgentScopeState() {
     pendingCredentialInvalidation = false;
     login.reset();
-    setState("busy", {});
-    setState("messages", {});
-    setState("probeResults", {});
+    state.busy = {};
+    state.messages = {};
+    state.probeResults = {};
     closeKeyEditor();
     profileActions.cancelLogout();
     profileActions.resetOrders();
     setAddProviderOpen(false);
-    setState("addProviderId", "");
-    setState("addProviderKey", "");
+    state.addProviderId = "";
+    state.addProviderKey = "";
   }
 
   function setSelectedAgent(agentId: string): boolean {
     if (agentId === state.selectedAgentId) {
       return false;
     }
-    setState("selectedAgentId", agentId);
+    state.selectedAgentId = agentId;
     agentEpoch += 1;
     resetAgentScopeState();
     return true;
@@ -442,7 +430,7 @@ export function createModelProviders(
       return;
     }
     invalidateRequests();
-    setState("data", null);
+    state.data = null;
     dataClient = null;
     refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
@@ -478,14 +466,14 @@ export function createModelProviders(
   }
 
   const setBusy = (key: string, value: boolean) =>
-    setState("busy", updateRecordEntry(state.busy, key, value ? true : null));
+    (state.busy = updateRecordEntry(state.busy, key, value ? true : null));
 
   const setMessage = (key: string, message: ModelProviderRowMessage | null) =>
-    setState("messages", updateRecordEntry(state.messages, key, message));
+    (state.messages = updateRecordEntry(state.messages, key, message));
 
   function closeKeyEditor() {
-    setState("keyEditorProvider", null);
-    setState("keyDraft", "");
+    state.keyEditorProvider = null;
+    state.keyDraft = "";
   }
 
   async function mutateApiKey(
@@ -515,7 +503,7 @@ export function createModelProviders(
           await refresh("replacement");
           if (isCurrent() && state.data?.error) {
             const warning = state.data.error;
-            setState("data", previous);
+            state.data = previous;
             return warning;
           }
           return state.data?.error ?? state.data?.catalogError ?? null;
@@ -550,9 +538,9 @@ export function createModelProviders(
       if (state.addProviderId === provider && state.addProviderKey.trim() === apiKey) {
         setAddProviderOpen(Boolean(result.warning));
         if (!result.warning) {
-          setState("addProviderId", "");
+          state.addProviderId = "";
         }
-        setState("addProviderKey", "");
+        state.addProviderKey = "";
       }
     } else if (state.keyEditorProvider === provider && state.keyDraft.trim() === apiKey) {
       closeKeyEditor();
@@ -574,7 +562,7 @@ export function createModelProviders(
     });
     // Retry retains rejected writes in the config owner; the picker shows saved defaults.
     if (settled !== null && state.defaultsDraft === defaults) {
-      setState("defaultsDraft", null);
+      state.defaultsDraft = null;
     }
   }
 
@@ -612,10 +600,10 @@ export function createModelProviders(
         defaultsDraft: state.defaultsDraft,
       });
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
-      setState("defaultsDraft", {
+      state.defaultsDraft = {
         ...(state.defaultsDraft ?? configuredDefaults),
         ...patch,
-      });
+      };
       setMessage("defaults", null);
       void saveDefaults();
     };
@@ -668,12 +656,12 @@ export function createModelProviders(
               refresh("forced", core.retryProvider),
             ])),
       onOpenKeyEditor: (provider: string) => {
-        setState("keyEditorProvider", provider);
-        setState("keyDraft", "");
+        state.keyEditorProvider = provider;
+        state.keyDraft = "";
         setMessage(provider, null);
       },
       onCloseKeyEditor: () => closeKeyEditor(),
-      onKeyDraftChange: (value: string) => setState("keyDraft", value),
+      onKeyDraftChange: (value: string) => (state.keyDraft = value),
       onSaveKey: (provider: string, configKey: string) =>
         void mutateApiKey(provider, configKey, state.keyDraft.trim()),
       onRemoveKey: (provider: string, configKey: string) =>
@@ -682,14 +670,13 @@ export function createModelProviders(
         void profileActions.probe(cardId, providers),
       onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
         void profileActions.requestLogout(pending),
-      onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) =>
-        profileActions.setOrder(cardId, provider, profileIds),
+      onProfileOrderChange: profileActions.setOrder,
       onAddProviderToggle: () => {
         setAddProviderOpen((open) => !open);
-        setState("addProviderKey", "");
+        state.addProviderKey = "";
         setMessage("add", null);
       },
-      onAddProviderKeyChange: (value: string) => setState("addProviderKey", value),
+      onAddProviderKeyChange: (value: string) => (state.addProviderKey = value),
       onAddProvider: () => {
         const provider = state.addProviderId;
         if (provider) {

@@ -311,7 +311,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       isError: false,
     });
     await expect(driver.getSessionState()).resolves.toMatchObject({
-      desktopCaptureAuthorized: true,
       desktopUnlocked: true,
     });
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({

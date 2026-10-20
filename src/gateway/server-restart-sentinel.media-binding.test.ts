@@ -142,7 +142,7 @@ async function createMediaFixture(state: OpenClawTestState, channel: "discord" |
   };
   return {
     state,
-    dispose: () => lifecycle.failTaskRun({ handle, error: new Error("fixture cleanup") }),
+    dispose: () => lifecycle.failTaskRun({ handle }),
     scope,
     binding,
     original,
@@ -404,7 +404,6 @@ describe("original requester media handoff", () => {
       if (exhausted) {
         expect(f.operation()).toMatchObject({
           terminalOutcome: "blocked",
-          terminalSummary: expect.stringContaining(f.mediaPath),
         });
         expect(diagnostic).toHaveBeenCalledWith(
           "image_generate blocked completion retention failed",

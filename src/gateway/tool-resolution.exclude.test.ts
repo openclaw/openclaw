@@ -477,7 +477,9 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
     expect(result.tools.map((tool) => tool.name)).toContain("exec");
     expect(readCreateToolsArgs().inheritedToolAllowlist).not.toContain("exec");
-    expect(readCreateToolsArgs().cronCreatorToolAllowlist).not.toContainEqual({ name: "exec" });
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).not.toContainEqual(
+      expect.objectContaining({ name: "exec" }),
+    );
   });
 
   it("captures report-only authority after removing delegation launchers", async () => {

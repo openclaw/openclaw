@@ -2384,7 +2384,7 @@ const reviewedOperations = new Map([
           "rebindRepointedWorkspaceAlias",
         ],
         evidence:
-          "Only src/commands/doctor-workspace-alias.ts:67,107,131 invokes detect/rebind; readWorkspaceMoveState is private at :166,282. Doctor health/lint reaches detection via src/flows/doctor-health-contributions-final.ts:269 and doctor-health-contribution-runners.workspace.ts:77; repair is installed by src/commands/doctor-config-flow.ts:83,93.",
+          "Only src/commands/doctor-workspace-alias.ts:67,107,131 invokes detect/rebind; readWorkspaceMoveState is private at :166,282. Doctor health/lint reaches detection and reporting via doctor:workspace-alias in src/flows/doctor-health-contributions-final.ts; repair is installed by src/commands/doctor-config-flow.ts:83,93.",
       },
     ],
   ],
@@ -2459,13 +2459,13 @@ const reviewedOperations = new Map([
         tier: "T2",
         operations: ["releaseWorktreeRunLeaseInDatabase"],
         evidence:
-          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through registry-run-end.worker.ts.",
+          "Native invocation is registry.ts process-exit lock cleanup; normal release dispatches through worktrees/dispatch.worker.ts.",
       },
       {
         tier: "W",
-        operations: ["admitWorktreeRunLeaseInDatabase"],
+        operations: ["admitWorktreeRunLeaseInDatabase", "readCurrentWorktreeRunState"],
         evidence:
-          "worktrees/dispatch.worker.ts registers admission through WorkerWriteOperationContext.writeAdmitted; src/state/openclaw-state-worker-registry.ts loads the handler. Native exit cleanup is classified separately as a lock primitive.",
+          "worktrees/dispatch.worker.ts owns run admission. Persistent execution reaches the shared worktree check only through local-workspace-store.kernel.ts and stream-source-admission.ts from persistent-exec-store.worker.ts. Native exit cleanup calls only releaseWorktreeRunLeaseInDatabase and remains a separate lock primitive.",
       },
     ],
   ],
@@ -2904,9 +2904,9 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["deleteRestartSentinelRowSync"],
+        operations: ["deleteRestartSentinelRowSync", "readRestartSentinelSnapshotSync"],
         evidence:
-          "Only src/infra/restart-sentinel.worker.ts:79; worker registration src/state/openclaw-state-worker-registry.ts:110.",
+          "Deletion and snapshot reads run in restart-sentinel.worker.ts or restart-sentinel.read.worker.ts; managed-handoff snapshot callers are also worker operations.",
       },
     ],
   ],
@@ -3212,7 +3212,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["repairOpenClawAgentDatabasePaths"],
         evidence:
-          "Only noteDoctorAgentDatabasePathHealth calls the repair, within its Doctor transaction. Entry: runStateIntegrityHealth in src/flows/doctor-health-contribution-runners.state.ts.",
+          "Only noteDoctorAgentDatabasePathHealth calls the repair, within its Doctor transaction. Entry: doctor:state-integrity run callback in src/flows/doctor-health-contributions-initial.ts.",
       },
     ],
   ],
@@ -3426,6 +3426,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/agents/sandbox/persistent-exec-store.kernel.ts", // Mutations and registry removal checks run in persistent-exec-store.worker.ts and registry-write.worker.ts; reads dispatch through openclaw-state-read-operation-registry.ts in the read worker.
   "src/state/openclaw-agent-execution-maintenance.ts", // Only openclaw-agent-execution.worker.ts constructs this owner; admission invokes its startup repair callback solely inside that worker.
   "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.
   "extensions/memory-core/src/memory/manager-publication-postgres.ts", // Only manager-publication.worker.ts binds this adapter to the admitted agent execution worker connection.

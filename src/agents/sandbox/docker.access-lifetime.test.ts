@@ -11,7 +11,7 @@ import { createDockerSandboxBackend } from "./docker-backend.js";
 import { DOCKER_SANDBOX_ENGINE, ensureSandboxContainer } from "./docker.js";
 import type { SandboxRegistryEntry } from "./registry.types.js";
 
-type Container = { id: string; name: string; hash: string; running: boolean };
+type Container = { id: string; name: string; hash: string; running: boolean; generation: number };
 type Inspection = { code: number; stdout: string; stderr: string };
 const fixture = vi.hoisted(() => ({
   containers: new Map<string, Container>(),
@@ -30,6 +30,7 @@ const fixture = vi.hoisted(() => ({
       Running: container.running,
       Paused: paused,
       Pid: container.running || paused ? pid : 0,
+      StartedAt: new Date(container.generation * 1_000).toISOString(),
     }),
   result: (stdout = "", code = 0, stderr = "") => ({ code, stdout, stderr }),
   save: (entry: SandboxRegistryEntry): void => {
@@ -76,6 +77,12 @@ vi.mock("./container-engine.js", () => ({
   execContainer: vi.fn(async (_engine: unknown, args: string[], opts?: ExecContainerRawOptions) => {
     fixture.calls.push(args);
     const { result } = fixture;
+    if (args[0] === "context" && args[1] === "inspect") {
+      return result(JSON.stringify({ Host: "unix:///fixture-docker.sock" }));
+    }
+    if (args[0] === "info") {
+      return result("fixture-daemon");
+    }
     if (args[0] === "image") {
       if (fixture.imageFails) {
         throw new Error("image unavailable");
@@ -91,7 +98,7 @@ vi.mock("./container-engine.js", () => ({
       if (!name || !hash) {
         throw new Error("Container fixture requires its name and config hash");
       }
-      fixture.containers.set(name, { id, name, hash, running: false });
+      fixture.containers.set(name, { id, name, hash, running: false, generation: 0 });
       return result(id);
     }
     const target = args[0] === "exec" ? args[2] : args.at(-1);
@@ -120,6 +127,7 @@ vi.mock("./container-engine.js", () => ({
     }
     if (args[0] === "start") {
       container.running = true;
+      container.generation++;
     } else if (args[0] === "kill") {
       container.running = false;
     } else if (args[0] === "exec") {

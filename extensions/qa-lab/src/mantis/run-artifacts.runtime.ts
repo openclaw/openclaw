@@ -15,7 +15,6 @@ type NormalizedScenarioSummary = {
   details?: string;
   screenshotPath?: string;
   status: string;
-  summaryPath: string;
   videoPath?: string;
 };
 
@@ -24,7 +23,6 @@ export type LaneResult = {
   scenarioDetails?: string;
   screenshotPath?: string;
   status: string;
-  summaryPath: string;
   videoPath?: string;
 };
 
@@ -243,7 +241,6 @@ export function remapMantisLaneResult(params: {
     ...params.result,
     outputDir: params.publishedLaneDir,
     screenshotPath: remap(params.result.screenshotPath),
-    summaryPath: remap(params.result.summaryPath) ?? params.result.summaryPath,
     videoPath: remap(params.result.videoPath),
   };
 }
@@ -290,7 +287,6 @@ async function readNormalizedLaneResult(params: {
           ? (outcome.status ?? "unknown")
           : "unknown"
         : (entry?.result.status ?? "fail"),
-    summaryPath,
     videoPath: artifacts.find((artifact) => artifact.kind === "video")?.path,
   };
 }
@@ -314,7 +310,6 @@ async function readLegacyLaneSummary(params: {
     screenshotPath:
       typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
     status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
-    summaryPath,
     videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
   };
 }
@@ -342,7 +337,6 @@ export async function readMantisLaneResult(params: {
     scenarioDetails: summary.details,
     screenshotPath: resolveArtifact(summary.screenshotPath),
     status: summary.status,
-    summaryPath: summary.summaryPath,
     videoPath: resolveArtifact(summary.videoPath),
   };
 }

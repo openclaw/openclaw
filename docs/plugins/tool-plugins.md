@@ -168,6 +168,20 @@ tool({
 });
 ```
 
+The optional `toolContext.sessionCompaction` capability lets a tool request
+compaction of its current session with `request({ focus?: string })`. It returns
+`{ status: "requested" }` or `{ status: "already_requested" }`, not a completed
+compaction receipt. The host coalesces requests across attempts in the same turn,
+compacts at the next fully settled tool/model-request boundary, and continues
+recorded work without replaying completed tools. If no safe boundary occurs,
+existing cancellable maintenance can handle the request after successful reply settlement. Focus is bounded to 800
+Unicode code points. Retained capabilities fail after the owning turn or tool
+generation closes. The capability is absent when the runtime cannot service it,
+in memory/heartbeat turns, or when proactive compaction is disabled. Return
+`null` from your factory when it is absent; do not emulate it by calling the
+manual Gateway compaction RPC from inside the tool. The optional bundled
+`session-compaction` plugin is a concrete consumer.
+
 Factories can use `toolContext.delivery?.send({ text, mediaUrl })` for outbound
 messages in the active conversation. The host chooses the destination,
 account, thread, and local-media policy; plugins cannot retarget this helper,

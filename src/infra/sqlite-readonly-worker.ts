@@ -26,6 +26,7 @@ import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
 import {
   readOnlyWorkerScope,
+  SqliteReadOnlyWorkerScopeClosedError,
   type SqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker-context.js";
 import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
@@ -159,7 +160,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
       closing ??= (async () => {
         options?.signal.removeEventListener("abort", abort);
         scope.active = false;
-        scope.controller.abort(new Error("SQLite read-only worker scope closed"));
+        scope.controller.abort(new SqliteReadOnlyWorkerScopeClosedError());
         await Promise.allSettled(scope.pending);
         const closed = await Promise.allSettled([
           scope.worker?.close(),
@@ -216,7 +217,7 @@ export function runScopedSqliteInspection<T>(
     return inspect(signal);
   }
   if (!scope.active) {
-    return Promise.reject(new Error("SQLite read-only worker scope closed"));
+    return Promise.reject(new SqliteReadOnlyWorkerScopeClosedError());
   }
   const scopedSignal = signal
     ? AbortSignal.any([signal, scope.controller.signal])

@@ -278,6 +278,17 @@ after its first commit can hit this race and abort the process with
 
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
+Native exec-policy fixtures reuse the Linux job's runtime artifact from the same
+workflow run, verified against the selected checkout SHA. The macOS job installs
+only the root and native-asset dependency closures, keeping platform-specific
+dependencies local. The artifact omits UI, plugin, and sealed remote-worker outputs.
+It waits for the existing Linux build instead of rebuilding
+the runtime and plugins on a macOS runner. The prepared CLI remains the normal
+production launcher, including request validation, state ownership, and cleanup.
+The default suite keeps real CLI coverage in the native cwd, socket half-close,
+and skill-policy commit cases. The larger socket cancellation and Gateway trust
+matrices exercise the in-process execution boundary with prepared authorization;
+they do not launch a CLI for each setup, policy read, and repeated commit.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
 `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
 bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;

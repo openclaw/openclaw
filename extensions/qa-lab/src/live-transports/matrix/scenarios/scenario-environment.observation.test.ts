@@ -17,10 +17,7 @@ vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary }));
 
 import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
-import {
-  createMatrixQaScenarioClient,
-  type MatrixQaScenarioContext,
-} from "./scenario-runtime-shared.js";
+import { createMatrixQaScenarioClient } from "./scenario-runtime-shared.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -99,18 +96,14 @@ describe("matrix scenario observation", () => {
       waitForConfigRestartSettle: vi.fn(),
     };
     const first = await environment.prepareFlow(input);
-    const syncState: MatrixQaScenarioContext["syncState"] = first.scenarioContext.syncState;
-    syncState.driver = "s1";
-    syncState.observer = "s2";
     const staleObserver = { prime: vi.fn() } as never;
-    first.scenarioContext.syncStreams!.driver = staleObserver;
-    first.scenarioContext.syncStreams!.observer = staleObserver;
+    first.scenarioContext.syncStreams.driver = staleObserver;
+    first.scenarioContext.syncStreams.observer = staleObserver;
 
     const second = await environment.prepareFlow(input);
 
-    expect(second.scenarioContext.syncState).toEqual({});
-    expect(second.scenarioContext.syncStreams!.driver).not.toBe(staleObserver);
-    expect(second.scenarioContext.syncStreams!.observer).not.toBe(staleObserver);
+    expect(second.scenarioContext.syncStreams.driver).not.toBe(staleObserver);
+    expect(second.scenarioContext.syncStreams.observer).not.toBe(staleObserver);
     expect(second.scenarioContext.timeoutMs).toBe(8_000);
     expect(input.waitForConfigRestartSettle).not.toHaveBeenCalled();
     expect(runMatrixQaCanary).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
@@ -157,7 +150,6 @@ describe("matrix scenario observation", () => {
         actorId,
         baseUrl: second.scenarioContext.baseUrl,
         observedEvents: second.scenarioContext.observedEvents,
-        syncState: second.scenarioContext.syncState,
         syncStreams: second.scenarioContext.syncStreams,
       });
       await client.primeRoom();

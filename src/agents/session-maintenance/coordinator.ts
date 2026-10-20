@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { sleepWithAbort } from "@openclaw/retry";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
@@ -28,6 +29,7 @@ type MaintenanceOwner = {
   predecessors: readonly MaintenanceOwner[];
   preemptible: boolean;
   running: boolean;
+  sleeping: boolean;
   target?: SessionTarget;
 };
 type SessionMaintenance = {
@@ -68,11 +70,16 @@ function releaseSessionState(key: string, session: SessionMaintenance): void {
 function independentOwners(
   session: SessionMaintenance | undefined,
   current: ReadonlySet<MaintenanceOwner> | undefined,
+  includeSleeping = false,
 ): MaintenanceOwner[] {
   const blocked = new Set(current);
   // Owners are registered in dependency order. Work waiting on an active ancestor
   // cannot precede its child; released writes no longer propagate that dependency.
   return [...(session?.owners ?? [])].filter((owner) => {
+    // An idle timer owns cancellation, not a transcript writer or a read barrier.
+    if (owner.sleeping && !includeSleeping) {
+      return false;
+    }
     if (
       blocked.has(owner) ||
       owner.predecessors.some(
@@ -116,6 +123,8 @@ export function createSessionMaintenanceOwner(params: {
   preemptible?: boolean;
   target?: SessionTarget;
   abortSignal?: AbortSignal;
+  /** Optional idle work remains cancellable without holding the session read barrier. */
+  notBefore?: number;
 }) {
   const key = params.sessionKey.trim();
   const session = sessionState(key);
@@ -142,6 +151,7 @@ export function createSessionMaintenanceOwner(params: {
     predecessors: independentOwners(session, ancestors),
     preemptible: params.preemptible === true,
     running: params.preemptible !== true,
+    sleeping: params.notBefore !== undefined && params.notBefore > Date.now(),
     target: params.target,
   };
   session.owners.add(owner);
@@ -162,6 +172,12 @@ export function createSessionMaintenanceOwner(params: {
         | (() => Promise<T>)
         | { admit: (run: (work: () => Promise<T>) => Promise<T>) => Promise<T> },
     ): Promise<T> => {
+      if (owner.sleeping) {
+        await sleepWithAbort(Math.max(0, (params.notBefore ?? 0) - Date.now()), signal, {
+          ref: false,
+        });
+        owner.sleeping = false;
+      }
       // Waiting on successors would make nested model reads mutually await sibling work.
       await Promise.all(owner.predecessors.map((predecessor) => predecessor.writesDone));
       if (owner.preemptible) {
@@ -225,7 +241,7 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
     releaseSessionState(key, session);
   };
   const current = state.current.getStore();
-  const existing = independentOwners(session, current);
+  const existing = independentOwners(session, current, true);
   const optional = existing.filter((owner) => owner.preemptible);
   for (const owner of optional) {
     owner.controller.abort(createAbortError("Session maintenance yielded to a foreground turn"));

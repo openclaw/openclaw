@@ -8,6 +8,16 @@ title: "openclaw status"
 
 Diagnostics for channels + sessions.
 
+JSON includes `databaseEngines.families` (configured choices) and
+`databaseEngines.stores` (available physical/admitted evidence). The retained
+`databaseEngines.experimental` boolean means an experimental engine/search
+feature is selected. It is `false` for all currently supported family selections,
+including PostgreSQL and mixed engines. It does not certify the server major,
+TLS/SecretRef-provider deployment, native client or upgrade path; see the
+[PostgreSQL support matrix](/gateway/postgresql#support-matrix). An unavailable
+store projection remains unknown even when this flag is false. Run Doctor on the
+Gateway host for fresh per-store inspection and repair guidance.
+
 Task counts and audit totals use a read-only metadata summary. Retained task
 payloads and delivery history are not loaded for each status request, and
 overlapping requests share the pending summary read. Database work runs on the
@@ -179,6 +189,9 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 ## Session and model resolution
 
+- Configured model labels resolve default and per-agent aliases, including
+  `provider/alias` and `alias@profile`, to the selected model ID. These read-only
+  lookups do not start provider discovery.
 - Session status output separates `Execution:` from `Runtime:`. `Execution`
   is the sandbox path (`direct`, `docker/*`), while `Runtime` tells you
   whether the session is using `OpenClaw Default`, `OpenAI Codex`, a CLI

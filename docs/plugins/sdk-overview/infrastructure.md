@@ -28,9 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |

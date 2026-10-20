@@ -186,8 +186,8 @@ export function renderDiarySection(props: DreamingProps) {
     const current = content();
     return typeof current === "string" ? parseDiaryEntries(current).toReversed() : [];
   });
-  const imports = createMemo(() => props.wikiImportInsights);
-  const overview = createMemo(() => props.wikiOverview);
+  const imports = () => props.wikiImportInsights;
+  const overview = () => props.wikiOverview;
   const labels = createMemo(() =>
     activeDiarySubTab() === "dreams"
       ? entries().map((entry) => formatDiaryChipLabel(entry.date))
@@ -221,9 +221,7 @@ export function renderDiarySection(props: DreamingProps) {
         },
       })[activeDiarySubTab()],
   );
-  const memoryWikiUnavailable = createMemo(
-    () => activeDiarySubTab() !== "dreams" && !props.memoryWikiEnabled,
-  );
+  const memoryWikiUnavailable = () => activeDiarySubTab() !== "dreams" && !props.memoryWikiEnabled;
   return (
     <section class="dreams-diary">
       <Show

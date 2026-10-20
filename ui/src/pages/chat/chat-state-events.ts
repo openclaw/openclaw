@@ -63,7 +63,7 @@ import {
   reconcileChatRunFromSessionRow,
   reconcileChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
-import { reconcileSessionApprovalEvent } from "./session-approval-projection.ts";
+import { applySessionApprovalEvent } from "./session-approval-projection.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
@@ -415,18 +415,7 @@ function applyPageGatewayEvent(
     return;
   }
   if (event.event === "session.approval") {
-    const payload = asNullableRecord(event.payload);
-    if (!payload || typeof payload.sessionKey !== "string") {
-      return;
-    }
-    const queue = reconcileSessionApprovalEvent(
-      state.chatSessionApprovalQueue ?? [],
-      payload,
-      state.sessionKey,
-      resolveChatAgentId(state),
-    );
-    if (queue) {
-      state.chatSessionApprovalQueue = queue;
+    if (applySessionApprovalEvent(state, event.payload, resolveChatAgentId(state))) {
       chatRunPresentation(state).publish();
     }
     return;

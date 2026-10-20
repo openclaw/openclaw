@@ -81,7 +81,7 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
-async function expectHoverTooltip(button: Locator, text: string): Promise<void> {
+async function expectHoverTooltip(button: Locator, text: string, side?: "right"): Promise<void> {
   await button.hover();
   await expect
     .poll(() =>
@@ -153,7 +153,12 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
     }
     const bodyRect = body?.getBoundingClientRect();
     const textRect = range?.getBoundingClientRect();
+    const anchorRect = element.getBoundingClientRect();
     return {
+      centerOffset: bodyRect
+        ? bodyRect.top + bodyRect.height / 2 - (anchorRect.top + anchorRect.height / 2)
+        : Number.POSITIVE_INFINITY,
+      gap: bodyRect ? bodyRect.left - anchorRect.right : Number.NEGATIVE_INFINITY,
       height: bodyRect?.height ?? 0,
       textTopInset: bodyRect && textRect ? textRect.top - bodyRect.top : Number.POSITIVE_INFINITY,
       width: bodyRect?.width ?? 0,
@@ -162,6 +167,10 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   expect(bounds.width).toBeGreaterThan(0);
   expect(bounds.height).toBeGreaterThan(0);
   expect(bounds.textTopInset).toBeLessThan(12);
+  if (side === "right") {
+    expect(bounds.gap).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(bounds.centerOffset)).toBeLessThanOrEqual(1);
+  }
 }
 
 async function expectHoverColor(
@@ -770,15 +779,18 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const newSessionShortcut = applePlatform ? "⌘⇧O" : "Ctrl+Shift+O";
       await expectHoverTooltip(
         page.locator(".sidebar-rail .sidebar-new-session"),
-        `New conversation (${newSessionShortcut})`,
+        `New conversation ${newSessionShortcut}`,
+        "right",
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
-        `Open command palette (${commandPaletteShortcut})`,
+        `Open command palette ${commandPaletteShortcut}`,
+        "right",
       );
       await expectHoverTooltip(
         page.locator('[data-navigation-view][aria-pressed="true"]'),
-        `Sessions · Collapse sidebar (${sidebarShortcut})`,
+        `Sessions · Collapse sidebar ${sidebarShortcut}`,
+        "right",
       );
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");

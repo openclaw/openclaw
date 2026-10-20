@@ -25,6 +25,7 @@ import {
   observeLocalWorkspaceStoreSql,
 } from "../worker-environments/local-workspace-store.test-support.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
+import { git, initRepo, fixedStoreConfig } from "./sessions-diff.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -39,6 +40,20 @@ vi.mock("../session-utils-store-worker.js", () => ({
     hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
+  const { createRepositorySessionEntryReader } =
+    await import("./sessions-files.repository.test-support.js");
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
+      actual.readRetainedSessionEntryFacts,
+      (key) => hoisted.loadSessionEntry(key),
+    ),
+  };
+});
+
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
@@ -50,21 +65,6 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-}
-
-function initRepo(root: string, objectFormat?: "sha1" | "sha256"): void {
-  const args = ["init", "-q", "-b", "main"];
-  if (objectFormat) {
-    args.push(`--object-format=${objectFormat}`);
-  }
-  git(root, ...args);
-  git(root, "config", "user.email", "test@openclaw.test");
-  git(root, "config", "user.name", "Test");
-  git(root, "config", "commit.gpgsign", "false");
-}
-
 function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): void {
   hoisted.loadSessionEntry.mockReturnValue({
     agentId: "main",
@@ -74,16 +74,6 @@ function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): v
     canonicalKey: "agent:main:s1",
   });
 }
-
-const fixedStoreConfig = () =>
-  ({
-    session: { store: "/tmp/shared.sqlite", scope: "global" },
-    agents: {
-      ownership: "explicit",
-      defaults: { sessionStore: { agentId: "ops" } },
-      entries: { ops: {}, research: {} },
-    },
-  }) as const;
 
 async function requestDiff(
   params: Record<string, unknown>,
@@ -181,7 +171,7 @@ describe("loadSessionDiff", () => {
       agentId: "main",
       cfg: {},
       entry: undefined,
-      storePath: undefined,
+      storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:missing",
     });
     const result = await loadSessionDiff({ sessionKey: "agent:main:missing" });

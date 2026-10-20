@@ -60,19 +60,6 @@ export class GatewaySendLimiter {
     this.overflowWarningEmitted = false;
   }
 
-  getStatus() {
-    const now = Date.now();
-    this.pruneWindow(now);
-    const oldest = this.outboundSendTimestamps[0] ?? now;
-    return {
-      remainingEvents: Math.max(0, GATEWAY_SEND_LIMIT - this.outboundSendTimestamps.length),
-      resetTime: oldest + GATEWAY_SEND_WINDOW_MS,
-      currentEventCount: this.outboundSendTimestamps.length,
-      queuedEvents: this.outboundQueue.length,
-      droppedEvents: this.droppedEvents,
-    };
-  }
-
   private pruneWindow(now: number): void {
     const windowStart = now - GATEWAY_SEND_WINDOW_MS;
     while (

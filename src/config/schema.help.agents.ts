@@ -142,6 +142,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Compaction behavior for when context nears token limits, including strategy and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.enabled":
     "Enable embedded proactive auto-compaction (default: true). Set false to stop threshold-driven embedded compaction while preserving OpenClaw overflow recovery, preflight compaction, and manual /compact.",
+  "agents.defaults.compaction.cacheExpiry":
+    "Optional one-shot idle compaction based on a qualified provider cache lifetime and positive cache usage. This is not a cache-warming heartbeat or a guarantee of cache hits.",
+  "agents.defaults.compaction.cacheExpiry.enabled":
+    "Enable pre-cache-expiry compaction (default: false). Requires a supported direct API route and successful cache activity; unknown lifetimes are skipped. New foreground input cancels pending work. Also respects compaction.enabled:false.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "safeguard" (the effective default when unset) applies guardrails to preserve recent context, while "default" uses baseline summarization without them. Set "default" only if safeguard summarization causes problems for your provider.',
   "agents.defaults.compaction.provider":

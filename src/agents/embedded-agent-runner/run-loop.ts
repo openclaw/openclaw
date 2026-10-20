@@ -11,6 +11,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import type { FailoverReason } from "../failover/signal.js";
+import { createSessionCompactionRequest } from "../session-maintenance/request.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
@@ -111,6 +112,7 @@ export async function runPreparedEmbeddedLoop(
     ...input,
     runParams: params,
     modelCallSequence: getAgentRunContext(params.runId)?.modelCallSequence ?? { value: 0 },
+    compactionRequest: params.postTurnMaintenance ? createSessionCompactionRequest() : undefined,
   };
   ({ provider, modelId } = preparedRuntime);
   const {

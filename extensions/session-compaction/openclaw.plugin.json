@@ -1,0 +1,10 @@
+{
+  "id": "session-compaction",
+  "name": "Session Compaction",
+  "description": "Let the model request host-owned compaction at useful conversation boundaries.",
+  "categories": ["agent-orchestration"],
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+  "contracts": { "tools": ["session_compact"] },
+  "toolMetadata": { "session_compact": { "optional": true, "workspaceAccess": false } }
+}

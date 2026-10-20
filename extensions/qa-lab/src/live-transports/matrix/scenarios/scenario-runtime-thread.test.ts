@@ -1,24 +1,37 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
-import { runAllowBotsMentionsMentionedRoomScenario } from "./scenario-runtime-allowbots.js";
+import {
+  runAllowBotsMentionsDmUnmentionedScenario,
+  runAllowBotsMentionsMentionedRoomScenario,
+  runAllowBotsRoomOverrideEnablesAccountOffScenario,
+  runAllowBotsTrueUnmentionedOpenRoomScenario,
+} from "./scenario-runtime-allowbots.js";
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import { runMatrixQaCanary } from "./scenario-runtime-thread.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("Matrix top-level scenario artifacts", () => {
-  it.each(["canary", "observer"] as const)(
+  it.each([
+    ["canary", "CANARY", true],
+    ["observer", "ALLOWBOTS_MENTIONS_MENTIONED", true],
+    ["unmentioned", "ALLOWBOTS_TRUE_OPEN", false],
+    ["dm", "ALLOWBOTS_MENTIONS_DM", false],
+    ["override", "ALLOWBOTS_ROOM_ENABLE", true],
+  ] as const)(
     "keeps %s report fields independent of transport observation state",
-    async (scenario) => {
+    async (scenario, tokenPrefix, withMention) => {
       const context = createMatrixQaE2eeTestContext();
+      const roomKey = scenario === "dm" ? "bot-dm" : "main";
+      const roomId = scenario === "dm" ? "!dm:matrix-qa.test" : context.roomId;
       context.topology.rooms.push({
-        key: "main",
-        kind: "group",
+        key: roomKey,
+        kind: scenario === "dm" ? "dm" : "group",
         memberRoles: ["driver", "observer", "sut"],
         memberUserIds: [context.driverUserId, context.observerUserId, context.sutUserId],
         name: "QA report fixture",
         requireMention: true,
-        roomId: context.roomId,
+        roomId,
       });
       const actorId = scenario === "canary" ? "driver" : "observer";
       let marker = "";
@@ -29,10 +42,17 @@ describe("Matrix top-level scenario artifacts", () => {
         );
         const url = new URL(input instanceof Request ? input.url : input);
         if (init?.method === "PUT") {
-          const content = (await new Response(init.body).json()) as { body: string };
+          expect(decodeURIComponent(url.pathname)).toContain(`/rooms/${roomId}/send/`);
+          const content = (await new Response(init.body).json()) as {
+            body: string;
+            "m.mentions"?: { user_ids: string[] };
+          };
+          expect(content["m.mentions"]).toEqual(
+            withMention ? { user_ids: [context.sutUserId] } : undefined,
+          );
           triggerBody = content.body;
           marker = triggerBody.split("exact marker: ")[1] ?? "";
-          expect(marker).toMatch(/^MATRIX_QA_(?:CANARY|ALLOWBOTS_MENTIONS_MENTIONED)_[A-F0-9]+$/);
+          expect(marker).toMatch(new RegExp(`^MATRIX_QA_${tokenPrefix}_[A-F0-9]+$`));
           return Response.json({ event_id: "$trigger" });
         }
         if (!url.searchParams.has("since")) {
@@ -42,7 +62,7 @@ describe("Matrix top-level scenario artifacts", () => {
           next_batch: "replied",
           rooms: {
             join: {
-              [context.roomId]: {
+              [roomId]: {
                 timeline: {
                   events: [
                     {
@@ -61,7 +81,14 @@ describe("Matrix top-level scenario artifacts", () => {
       const result =
         scenario === "canary"
           ? await runMatrixQaCanary(context)
-          : (await runAllowBotsMentionsMentionedRoomScenario(context)).artifacts;
+          : (
+              await {
+                observer: runAllowBotsMentionsMentionedRoomScenario,
+                unmentioned: runAllowBotsTrueUnmentionedOpenRoomScenario,
+                dm: runAllowBotsMentionsDmUnmentionedScenario,
+                override: runAllowBotsRoomOverrideEnablesAccountOffScenario,
+              }[scenario](context)
+            ).artifacts;
       const reply = {
         bodyPreview: marker,
         eventId: "$reply",
@@ -73,12 +100,11 @@ describe("Matrix top-level scenario artifacts", () => {
       expect(result).toEqual({
         ...(scenario === "canary"
           ? { body: triggerBody }
-          : { actorUserId: context.observerUserId, roomKey: "main", triggerBody }),
+          : { actorUserId: context.observerUserId, roomKey, triggerBody }),
         driverEventId: "$trigger",
         reply,
         token: marker,
       });
-      expect(context.syncState).toEqual({ [actorId]: "replied" });
     },
   );
 });

@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -11,13 +15,16 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { sessionControllers } from "../../sessions/session-controller.state.js";
-import { waitForSessionMaintenance } from "./coordinator.js";
+import { beginForegroundSessionMaintenance, waitForSessionMaintenance } from "./coordinator.js";
 import { createSessionMaintenanceFollowup, scheduleSessionMaintenance } from "./run.js";
 
 const maintenanceRuntime = vi.hoisted(() => ({
   entry: undefined as SessionEntry | undefined,
   flushOperations: [] as Array<{ operation: ReplyOperation | undefined; current: boolean }>,
   compactions: 0,
+  forcedFlushes: 0,
+  advanceClockDuringFlush: false,
+  requestedCompactions: [] as Array<{ focus?: string }>,
 }));
 
 vi.mock("../../utils/provider-utils.js", () => ({
@@ -44,7 +51,16 @@ vi.mock("../command/runtime-loaders.js", async (importOriginal) => ({
     },
   }),
   loadAgentRunnerMemoryRuntime: async () => ({
-    runMemoryFlushIfNeeded: async (params: { replyOperation?: ReplyOperation }) => {
+    runMemoryFlushIfNeeded: async (params: {
+      replyOperation?: ReplyOperation;
+      force?: boolean;
+    }) => {
+      if (params.force) {
+        maintenanceRuntime.forcedFlushes += 1;
+        if (maintenanceRuntime.advanceClockDuringFlush) {
+          vi.setSystemTime(Date.now() + 40_000);
+        }
+      }
       maintenanceRuntime.flushOperations.push({
         operation: params.replyOperation,
         current: params.replyOperation
@@ -53,8 +69,11 @@ vi.mock("../command/runtime-loaders.js", async (importOriginal) => ({
       });
       return {};
     },
-    runSessionCompactionIfNeeded: async () => {
+    runSessionCompactionIfNeeded: async (params: { requestedCompaction?: { focus?: string } }) => {
       maintenanceRuntime.compactions += 1;
+      if (params.requestedCompaction) {
+        maintenanceRuntime.requestedCompactions.push(params.requestedCompaction);
+      }
     },
   }),
 }));
@@ -63,8 +82,105 @@ afterEach(() => {
   maintenanceRuntime.entry = undefined;
   maintenanceRuntime.flushOperations = [];
   maintenanceRuntime.compactions = 0;
+  maintenanceRuntime.forcedFlushes = 0;
+  maintenanceRuntime.advanceClockDuringFlush = false;
+  maintenanceRuntime.requestedCompactions = [];
   sessionControllers.clear();
   resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
+  vi.useRealTimers();
+});
+
+it.each([
+  "expiry",
+  "window-elapsed-during-flush",
+  "expired-before-admission",
+  "self-request",
+  "foreground",
+  "model-change",
+  "account-change",
+  "config-change",
+  "compacted",
+  "failed-delivery",
+  "disabled",
+] as const)("serves optional compaction safely for %s", async (mode) => {
+  vi.useFakeTimers();
+  requireActivePluginRegistry();
+  const sessionKey = "agent:main:idle-compaction";
+  const entry: SessionEntry = {
+    sessionId: "idle-compaction",
+    updatedAt: Date.now(),
+    model: "fixture",
+    compactionCount: 0,
+  };
+  maintenanceRuntime.entry = entry;
+  const cfg = {
+    agents: {
+      defaults: { compaction: { enabled: mode !== "disabled", cacheExpiry: { enabled: true } } },
+    },
+  };
+  const followupRun = createTestFollowupRun({
+    sessionKey,
+    sessionId: entry.sessionId,
+    timeoutMs: 60_000,
+    config: cfg,
+  });
+  setRuntimeConfigSnapshot(cfg);
+  scheduleSessionMaintenance(
+    {
+      prepared: {
+        cfg,
+        sessionKey,
+        storePath: "/synthetic/idle-compaction/sessions.json",
+        timeoutMs: 60_000,
+      },
+      followupRun,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      startedAt: Date.now(),
+      expectedCompactionCount: 0,
+      expectedSelection: { model: "fixture" },
+      cacheExpiry: { observedAt: Date.now(), windowMs: 300_000, basis: "anthropic-ttl" },
+      requestedCompaction: mode === "self-request" ? { focus: "Keep pending work" } : undefined,
+    },
+    Promise.resolve(mode !== "failed-delivery"),
+  );
+  await waitForSessionMaintenance(sessionKey);
+  if (mode === "foreground") {
+    (await beginForegroundSessionMaintenance(sessionKey))();
+  }
+  if (mode === "model-change") {
+    entry.model = "different-model";
+  }
+  if (mode === "account-change") {
+    entry.authProfileOverride = "different-account";
+  }
+  if (mode === "config-change") {
+    setRuntimeConfigSnapshot({ agents: { defaults: { compaction: { enabled: false } } } });
+  }
+  if (mode === "compacted") {
+    entry.compactionCount = 1;
+  }
+  maintenanceRuntime.advanceClockDuringFlush = mode === "window-elapsed-during-flush";
+  if (mode === "expired-before-admission") {
+    vi.setSystemTime(Date.now() + 300_000);
+  }
+  await vi.advanceTimersByTimeAsync(270_000);
+  await waitForSessionMaintenance(sessionKey);
+  expect(maintenanceRuntime.requestedCompactions).toEqual(
+    mode === "expiry" || mode === "window-elapsed-during-flush"
+      ? [{}]
+      : mode === "self-request"
+        ? [{ focus: "Keep pending work" }]
+        : [],
+  );
+  expect(maintenanceRuntime.forcedFlushes).toBe(
+    mode === "expiry" || mode === "self-request" || mode === "window-elapsed-during-flush" ? 1 : 0,
+  );
+  const count = maintenanceRuntime.compactions;
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  expect(maintenanceRuntime.compactions).toBe(count);
 });
 
 it("preserves prepared model facts and restrictive policy without foreground authority", async () => {

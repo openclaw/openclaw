@@ -223,6 +223,8 @@ executable over its structured stdio protocol. Claude Code owns its existing loc
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
+Gateway shutdown closes these warm subprocesses and waits for their process trees
+and retained runtime resources to finish cleanup.
 A changed model, system prompt, or configured tool surface starts a
 new subprocess. Persisted Claude session IDs still provide
 conversation continuity when the Gateway or subprocess restarts.
@@ -359,6 +361,10 @@ openclaw models auth paste-token --provider anthropic
 ```
 
 A native login alone is an opaque CLI login for saved-history recovery: OpenClaw sees no account identity for it, and `--method cli` saves no auth profile. When a chat on it needs a fresh Claude session (an invalidated binding or a missing native transcript), OpenClaw logs `cli session history refused across auth boundary: reason=auth-unknown` and the new session receives only the metadata notice about earlier messages, not the saved transcript. Native resume of the same Claude session is unaffected. A saved subscription token is a resolved static credential, so chats started while it is selected recover their saved history in a fresh Claude session. See [History account boundaries](#history-account-boundaries).
+
+`auth-unknown` describes saved-history recovery, not a failed native login or a tool approval denial. Native tool approvals retain the originating turn and recheck its authority before allowing execution. A separate `approval-request-failed` exec denial means the approval decision could not be retrieved; inspect the Gateway's approval error rather than changing the history boundary.
+
+Native login makes the Claude CLI route available; it does not supply an Anthropic HTTP API key. If an HTTP caller selects that login, OpenClaw refuses the request before sending its discovery marker and reports that native authentication belongs to the `claude-cli` runtime. Select that runtime or configure an API credential for HTTP access.
 
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
@@ -560,16 +566,26 @@ Gemini CLI output notes:
 - The default `stream-json` parser reads assistant `message` events, tool events, final `result` usage, and fatal Gemini error events.
 - Usage falls back to `stats` when `usage` is absent or empty. `stats.cached` normalizes into OpenClaw `cacheRead`, and if `stats.input` is missing, input tokens derive from `stats.input_tokens - stats.cached`.
 
-## Text transform overlays
+<a id="text-transform-overlays" />
 
-Plugins that need small prompt/message compatibility shims can declare bidirectional text transforms without replacing a provider or CLI backend:
+## Backend text transforms
+
+Declare bidirectional `textTransforms` on the CLI backend that owns the compatibility rewrite:
 
 ```typescript
-api.registerTextTransforms({
-  input: [{ from: /red basket/g, to: "blue basket" }],
-  output: [{ from: /blue basket/g, to: "red basket" }],
+api.registerCliBackend({
+  id: "my-cli",
+  config: { command: "my-cli" },
+  textTransforms: {
+    input: [{ from: /red basket/g, to: "blue basket" }],
+    output: [{ from: /blue basket/g, to: "red basket" }],
+  },
 });
 ```
+
+These transforms apply only to this backend. The removed global
+`api.registerTextTransforms(...)` overlay has no equivalent replacement.
+Provider plugins can declare their own `textTransforms` on `registerProvider`.
 
 `input` rewrites the system prompt and user prompt passed to the CLI. `output` rewrites streamed assistant text and parsed final text before OpenClaw handles its own control markers and channel delivery. For provider-backed model calls it also restores string values inside structured tool-call arguments after stream repair and before tool execution. Raw provider JSON fragments are left unchanged. Consumers should use the structured partial, end, or result payload.
 

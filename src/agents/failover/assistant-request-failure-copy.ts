@@ -3,6 +3,7 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
   CONTEXT_OVERFLOW_ERROR_MESSAGE,
@@ -56,6 +57,8 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
+  session_actor_reconciliation:
+    "OpenClaw couldn't confirm the last update to this conversation. Wait for current work to finish, then reopen the conversation. If it still fails, restart OpenClaw.",
 };
 
 const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
@@ -313,6 +316,7 @@ export function renderRecordedAssistantFailureCopy(message: {
     return formatCopy;
   }
   const classifiedCopy = renderAssistantRequestFailureCopy({
+    storageFailure: classifyGatewayStorageFailure(message),
     code,
     status,
     // The legacy timeout retry bucket also includes explicit server failures.

@@ -26,7 +26,6 @@ public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
 public enum OpenClawNativeStateCanonicalTable: Sendable {
     case deviceAuthTokens
     case deviceIdentities
-    case execApprovalsConfig
     case macosPortGuardianRecords
 }
 
@@ -170,43 +169,9 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             IndexColumn(name: "timestamp", descending: true),
         ])
 
-    private static let execApprovalsConfig = CanonicalTable(
-        name: "exec_approvals_config",
-        indexName: nil,
-        createSQL: """
-        CREATE TABLE IF NOT EXISTS exec_approvals_config (
-          config_key TEXT NOT NULL PRIMARY KEY,
-          raw_json TEXT NOT NULL,
-          socket_path TEXT,
-          has_socket_token INTEGER NOT NULL,
-          default_security TEXT,
-          default_ask TEXT,
-          default_ask_fallback TEXT,
-          auto_allow_skills INTEGER,
-          agent_count INTEGER NOT NULL,
-          allowlist_count INTEGER NOT NULL,
-          updated_at_ms INTEGER NOT NULL
-        ) STRICT;
-        """,
-        columns: [
-            Column(name: "config_key", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
-            Column(name: "raw_json", type: "TEXT", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "socket_path", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "has_socket_token", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "default_security", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "default_ask", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "default_ask_fallback", type: "TEXT", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "auto_allow_skills", type: "INTEGER", notNull: false, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "agent_count", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "allowlist_count", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-            Column(name: "updated_at_ms", type: "INTEGER", notNull: true, primaryKeyPosition: 0, hidden: 0),
-        ],
-        indexColumns: [])
-
     private static let canonicalTables = [
         OpenClawNativeStateSQLite.deviceAuthTokens,
         OpenClawNativeStateSQLite.deviceIdentities,
-        OpenClawNativeStateSQLite.execApprovalsConfig,
         OpenClawNativeStateSQLite.macosPortGuardianRecords,
     ]
 
@@ -352,7 +317,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
                 throw OpenClawNativeStateError(
                     "Client credentials moved to the local credential owner; " +
                         "use a compatible app and run openclaw doctor --fix")
-            case .execApprovalsConfig, .macosPortGuardianRecords: break
+            case .macosPortGuardianRecords: break
             }
             guard userVersion <= Self.maximumSupportedSchemaVersion else {
                 throw OpenClawNativeStateError("The shared state database requires a newer OpenClaw app")
@@ -386,7 +351,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             switch table {
             case .deviceIdentities, .deviceAuthTokens:
                 try self.validateLegacyCredentialContract(descriptor)
-            case .execApprovalsConfig, .macosPortGuardianRecords: break
+            case .macosPortGuardianRecords: break
             }
         }
     }
@@ -490,7 +455,6 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         switch table {
         case .deviceAuthTokens: self.deviceAuthTokens
         case .deviceIdentities: self.deviceIdentities
-        case .execApprovalsConfig: self.execApprovalsConfig
         case .macosPortGuardianRecords: self.macosPortGuardianRecords
         }
     }
@@ -793,14 +757,6 @@ public final class OpenClawNativeStateSQLiteStatement {
         try self.connection.withConnectionLock {
             guard sqlite3_bind_int64(self.statement, index, value) == SQLITE_OK else {
                 throw self.connection.databaseError(operation: "bind SQLite integer")
-            }
-        }
-    }
-
-    public func bindNull(at index: Int32) throws {
-        try self.connection.withConnectionLock {
-            guard sqlite3_bind_null(self.statement, index) == SQLITE_OK else {
-                throw self.connection.databaseError(operation: "bind SQLite null")
             }
         }
     }

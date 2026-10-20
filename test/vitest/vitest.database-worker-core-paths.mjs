@@ -1,6 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
+  "src/gateway/server-methods/chat-send-admission.reads.test.ts",
+  "src/sessions/background-session-result.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
@@ -58,6 +60,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/pending-input.conformance.test.ts",
   "src/infra/database-engine/subagent-registry.conformance.test.ts",
   "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts",
+  "src/infra/database-engine/session-group-catalog.conformance.test.ts",
   "src/infra/database-engine/post-ready.conformance.test.ts",
   "src/infra/database-engine/model-catalog.conformance.test.ts",
   "src/infra/database-engine/cli-owner.conformance.test.ts",
@@ -290,6 +293,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/before-deliver.test.ts",
   "src/auto-reply/reply/route-reply.delivery-result.test.ts",
   "src/auto-reply/reply/queue.pending-inputs.test.ts",
+  "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+  "src/auto-reply/reply/agent-runner.stalled-turn.test.ts",
   "src/agents/sandbox/runtime-status.session-override.test.ts",
   "src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts",
   "src/auto-reply/reply/followup-turn-execution.steering.test.ts",

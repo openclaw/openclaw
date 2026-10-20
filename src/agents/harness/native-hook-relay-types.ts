@@ -79,6 +79,7 @@ export type NativeHookRelayRegistration = {
   allowedEvents: readonly NativeHookRelayEvent[];
   /** Keep host policy active for every native tool even without plugin hooks. */
   requirePreToolUse?: boolean;
+  /** Wall-clock epoch expiry shared through the cross-process bridge record. */
   expiresAtMs: number;
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
@@ -315,6 +316,8 @@ export type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
   policyReady: Promise<void>;
+  /** Process-local monotonic expiry used only by the in-process rearm timer. */
+  expiresAtMonotonicMs?: number;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   executionAdmission?: NativeHookRelayExecutionAdmission;

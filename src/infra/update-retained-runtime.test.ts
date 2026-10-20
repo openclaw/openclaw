@@ -257,6 +257,7 @@ const workerSource = (moduleUrl: string) =>
   );
 const retainOptions = (root: string) => ({
   mutationRoots: [root],
+  env: {},
   timeoutMs: 30_000,
   assertCurrent() {},
 });
@@ -823,8 +824,8 @@ it("refuses unsafe fallback storage without changing the installed runtime", asy
   expect(await fs.readdir(base)).toEqual(["manager-project"]);
 });
 
-it.each(["alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env"] as const)(
-  "retains %s on the source filesystem outside the complete replacement boundary",
+it.each(["alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env", "tmpdir"] as const)(
+  "retains %s outside the complete replacement boundary on the selected filesystem",
   async (layout) => {
     const base = await fs.realpath(tempDirs.make("openclaw-retained-placement-"));
     const project = path.join(base, "installation");
@@ -859,19 +860,29 @@ it.each(["alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun", "bun-no-env"] as
     const moduleUrl = moduleUrlFor(layout === "alias" ? alias : root).href;
     const original = path.join(root, "dist/state/store.js");
     const originalStat = await stat(original);
-    vi.spyOn(os, "tmpdir").mockReturnValue(temporary);
+    if (layout === "tmpdir") {
+      await fs.mkdir(path.join(base, "unselected-temp"));
+    }
+    vi.spyOn(os, "tmpdir").mockReturnValue(
+      layout === "tmpdir" ? path.join(base, "unselected-temp") : temporary,
+    );
     let retained: string | undefined;
     let retainedStore: SqliteWorkerStore<Operations> | undefined;
     await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
       await retain({
         ...retainOptions(mutationRoot),
         installTarget,
-        env: layout === "bun-no-env" ? {} : { BUN_INSTALL_GLOBAL_DIR: project },
+        env:
+          layout === "tmpdir"
+            ? { TMPDIR: temporary }
+            : layout === "bun-no-env"
+              ? {}
+              : { BUN_INSTALL_GLOBAL_DIR: project },
       });
       const source = workerSource(moduleUrl);
       retained = fileURLToPath(source.moduleUrl);
       expect(retained.startsWith(`${replacementRoot}${path.sep}`)).toBe(false);
-      expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(false);
+      expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(layout === "tmpdir");
       expect(await stat(retained)).toMatchObject({
         dev: originalStat.dev,
         ino: originalStat.ino,

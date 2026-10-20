@@ -29,6 +29,7 @@ import * as summarySource from "./session-activity-summary-source.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 
 let testState: OpenClawTestState;
 let cfg: OpenClawConfig;
@@ -47,8 +48,6 @@ const createService = () =>
     scheduler: createTestGatewayScheduler(),
     getConfig: () => cfg,
     onChanged: changed,
-    prepareModel: async () => preparedActivityRecapModel,
-    completeModel: complete,
   });
 const ensure = async (entry = read()) => {
   const work = new AsyncWorkScope();
@@ -69,12 +68,15 @@ beforeEach(async () => {
   cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
   testState = await createActivityRecapSessionFixture(cfg);
   complete.mockReset().mockResolvedValue(activityRecapResult(recap));
+  vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue(preparedActivityRecapModel);
+  vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
   changed.mockReset();
   service = createService();
 });
 afterEach(async () => {
   await service.dispose();
   await testState.cleanup();
+  vi.restoreAllMocks();
 });
 
 it("keeps committed recap progress across stale requests and summarizes new activity once", async () => {

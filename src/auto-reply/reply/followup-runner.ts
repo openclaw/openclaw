@@ -508,9 +508,13 @@ export function createFollowupRunner(
       if (admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);
       }
-      operation?.complete();
-      defaults.typing.markRunComplete();
-      defaults.typing.markDispatchIdle();
+      try {
+        await admittedTurn?.releaseSourceAdmission?.();
+      } finally {
+        operation?.complete();
+        defaults.typing.markRunComplete();
+        defaults.typing.markDispatchIdle();
+      }
     }
 
     if (disposition.kind === "retry") {

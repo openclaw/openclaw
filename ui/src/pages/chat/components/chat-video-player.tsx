@@ -45,7 +45,6 @@ function ChatVideoPlayerContent(
   let mediaVisible = false;
   let expandButton: HTMLButtonElement | undefined;
   let active = true;
-  let sourceSyncQueued = false;
   const syncSource = () => {
     const currentMedia = media;
     if (!active || !currentMedia || !host.isConnected || !mediaVisible) {
@@ -78,15 +77,7 @@ function ChatVideoPlayerContent(
         media.pause();
       }
     }
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);

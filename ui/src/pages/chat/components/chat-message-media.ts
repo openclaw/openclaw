@@ -472,11 +472,8 @@ export function resolveAttachmentImageKind(
     : "raster";
 }
 
-export function projectMessageMedia(
-  message: unknown,
-  content: readonly MessageContentItem[],
-  nowMs = Date.now(),
-) {
+export function projectMessageMedia(message: unknown, content: readonly MessageContentItem[]) {
+  const nowMs = Date.now();
   const record = asNonArrayRecord(message);
   const images: ImageBlock[] = [];
   const attachments: AssistantAttachmentItem[] = [];

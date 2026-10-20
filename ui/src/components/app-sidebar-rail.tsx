@@ -17,10 +17,7 @@ import {
   beginNativeWindowDrag,
   beginNativeWindowDragFromTopInset,
 } from "../app/native-window-drag.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
@@ -35,11 +32,13 @@ import {
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
+import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import {
   SessionGlyph,
@@ -76,6 +75,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     <nav
       class="sidebar-rail"
       aria-label={t("nav.pages")}
+      data-tooltip-placement="right"
       onMouseDown={beginNativeWindowDragFromTopInset}
     >
       {renderSidebarAgentCard(host)}
@@ -95,63 +95,84 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       </div>
       <div class="sidebar-rail__views">
         <For each={views}>
-          {(view) => (
-            <button
-              ref={[
-                elementRef((element: HTMLButtonElement) => {
-                  host.navigationViewElements.set(view, element);
-                  return () => {
-                    if (host.navigationViewElements.get(view) === element) {
-                      host.navigationViewElements.delete(view);
+          {(view) => {
+            const toggleHint = () => host.navigationView === view && view !== "online";
+            return (
+              <openclaw-tooltip prop:content={toggleHint() ? undefined : viewLabel(view)}>
+                <Show when={toggleHint()}>
+                  <span slot="content">
+                    <ShortcutHint
+                      label={`${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")}`}
+                      combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
+                    />
+                  </span>
+                </Show>
+                <button
+                  ref={[
+                    elementRef((element: HTMLButtonElement) => {
+                      host.navigationViewElements.set(view, element);
+                      return () => {
+                        if (host.navigationViewElements.get(view) === element) {
+                          host.navigationViewElements.delete(view);
+                        }
+                      };
+                    }),
+                  ]}
+                  type="button"
+                  class="sidebar-rail__button"
+                  data-navigation-view={view}
+                  aria-label={viewLabel(view)}
+                  aria-pressed={
+                    host.navigationVisible &&
+                    !host.navigationCollapsed &&
+                    host.navigationView === view
+                      ? "true"
+                      : "false"
+                  }
+                  onClick={() => {
+                    const active = host.navigationView === view;
+                    host.navigationView = view;
+                    if (
+                      !isMobileNavLayout() &&
+                      ((active && view !== "online") || host.navigationCollapsed)
+                    ) {
+                      host.onToggleSidebar?.();
                     }
-                  };
-                }),
-              ]}
-              type="button"
-              class="sidebar-rail__button"
-              title={
-                host.navigationView === view && view !== "online"
-                  ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
-                  : viewLabel(view)
-              }
-              data-navigation-view={view}
-              aria-label={viewLabel(view)}
-              aria-pressed={
-                host.navigationVisible && !host.navigationCollapsed && host.navigationView === view
-                  ? "true"
-                  : "false"
-              }
-              onClick={() => {
-                const active = host.navigationView === view;
-                host.navigationView = view;
-                if (
-                  !isMobileNavLayout() &&
-                  ((active && view !== "online") || host.navigationCollapsed)
-                ) {
-                  host.onToggleSidebar?.();
-                }
-                host.invalidate();
-              }}
-            >
-              <Icon
-                name={
-                  view === "pages" ? "layoutGrid" : view === "sessions" ? "messageCircle" : "users"
-                }
-              />
-            </button>
-          )}
+                    host.invalidate();
+                  }}
+                >
+                  <Icon
+                    name={
+                      view === "pages"
+                        ? "layoutGrid"
+                        : view === "sessions"
+                          ? "messageCircle"
+                          : "users"
+                    }
+                  />
+                </button>
+              </openclaw-tooltip>
+            );
+          }}
         </For>
       </div>
-      <button
-        type="button"
-        class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
-        title={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-        aria-label={t("chat.openCommandPalette")}
-        disabled={!host.onOpenPalette}
-        onClick={() => host.onOpenPalette?.()}
-      >
-        <Icon name="search" />
-      </button>
+      <openclaw-tooltip>
+        <span slot="content">
+          <ShortcutHint
+            label={t("chat.openCommandPalette")}
+            combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+          />
+        </span>
+        <button
+          type="button"
+          class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+          aria-label={t("chat.openCommandPalette")}
+          disabled={!host.onOpenPalette}
+          onClick={() => host.onOpenPalette?.()}
+        >
+          <Icon name="search" />
+        </button>
+      </openclaw-tooltip>
       <div
         class={[
           "sidebar-rail__pins",
@@ -531,7 +552,7 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         <span>{t("nav.pages")}</span>
         <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
-      <openclaw-mcp-app-catalog surface="sidebar" />
+      <McpAppCatalog surface="sidebar" />
       <For each={entries()} keyed={serializeSidebarEntry}>
         {(entry) => {
           // The For key is the complete serialized identity; labels stay live in the renderer.

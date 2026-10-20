@@ -586,6 +586,7 @@ suite.define(() => {
         }
         await collapse.click();
         expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        await waitForLayoutSettled(page, ".chat-message-disclosure__content");
         expect(await content.evaluate((element) => element.clientHeight)).toBe(
           initialCollapsedHeight,
         );

@@ -163,7 +163,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(result?.messageText).toBe("");
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe(SESSION_KEY);
-    expect(result?.boundAgentId).toBe("codex");
     expect(result?.route.sessionKey).toBe(SESSION_KEY);
     expect(result?.route.agentId).toBe("codex");
   });

@@ -1,0 +1,10 @@
+{
+  "name": "openclaw-test-session-compaction-proof",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.mjs"
+    ]
+  }
+}

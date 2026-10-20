@@ -80,7 +80,9 @@ While the requester executes a settle-wake continuation, its own completion
 batch can still be marked dispatching. The yield tool excludes that exact batch
 from older pending children: it must not promise another wake for the results
 already being processed. Unrelated pending batches and newly spawned work keep
-their existing completion ownership.
+their existing completion ownership. Newly spawned announcing children can
+steer their results into the active continuation. Settlement uses those confirmed
+delivery receipts: it does not repeat results the requester already consumed.
 
 Settlement dispatch uses `subagent_settle` input provenance. Individual
 announcements and the older descendant-wake path retain `subagent_announce`:
@@ -201,7 +203,17 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   operation settles and its kill owner finishes. A yield claims only children
   that still owe a completion; with none left, `sessions_yield` reports nothing
   pending.
-- **The requester that already knows is not woken.** A Stop, reset, or deletion
+- **The requester that already knows is not woken.** A non-yielded wave whose
+  results were all confirmed delivered retires without another continuation,
+  regardless of its size. A mixed wave delivers only its undelivered results;
+  already delivered children are referenced in one short line without their
+  payloads. An explicit `sessions_yield` still owes one continuation, using the
+  same rule even when every result was already delivered.
+  Restart-interrupted children still need reconciliation: their retained partial
+  results remain in the continuation even if an earlier result was delivered.
+  The unfinished-child roster is independent of result delivery and includes
+  only children whose captured requester identity still matches.
+  A Stop, reset, or deletion
   of the parent itself retires its children without a report. So does a kill
   that lands while the parent's own turn still holds the child. Descendants of a
   stopped child are retired without a report to that child. The registry does not
@@ -210,9 +222,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
 - **Descendant settlement.** Active descendants resume settlement through
   completion events, without periodic wake retries or retry-state writes.
   A wave that owes no requester continuation retires before waiting on other
-  descendants. In particular, an individually delivered single child without a
-  yielded continuation does not retain a wake behind running siblings. Delivered
-  members of a grouped or yielded continuation remain owned by that batch.
+  descendants. In particular, an entirely delivered wave without a yielded
+  continuation does not retain a wake behind running siblings. Delivered members
+  remain owned by a mixed or yielded batch until it settles, but their payloads
+  are not delivered again.
   A frozen batch with terminal descendants whose delivery remains unresolved
   gets one fallback timer, five minutes after the latest recorded completion
   in the batch's descendant tree. Settlement events can release the wait

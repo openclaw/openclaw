@@ -7,7 +7,9 @@ import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import * as cliGrants from "../../agents/cli-runner/mcp-grant-context.js";
 import * as cronAuthority from "../../agents/cron-creator-authority-context.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
+import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
+import type { PreparedSessionPermissionPolicy } from "../../agents/tool-fs-policy.js";
 import * as cronTools from "../../agents/tools/cron-tool.js";
 import * as gatewayCaller from "../../agents/tools/gateway-caller-context.js";
 import * as runtimeConfig from "../../config/config.js";
@@ -29,6 +31,7 @@ import { json, prepareAdmission, request } from "../mcp-http-request.test-suppor
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
+import type { GatewayUiCommandTarget } from "../ui-command-target.types.js";
 import * as cronAdmission from "./cron-creator-authority-admission.js";
 import type { GatewayClient } from "./types.js";
 
@@ -187,7 +190,12 @@ export async function createCreatorTransportTools(params: {
   admitted: runContext.AdmittedRunContext;
   creator?: cronAuthority.CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
+  forceRestartSafeTools?: boolean;
   workspaceDir?: string;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
+  sandbox?: SandboxContext;
+  turnSourceChannel?: string;
+  gatewayUiCommandTarget?: GatewayUiCommandTarget;
 }): Promise<CreatorTransportTools> {
   const { transport, config, admitted, creator, senderIsOwner } = params;
   const workspaceDir = params.workspaceDir ?? stateDir;
@@ -278,8 +286,14 @@ export async function createCreatorTransportTools(params: {
         agentId: "main",
         ...session,
         agentHarnessId: "openclaw",
+        messageChannel: params.turnSourceChannel,
       },
-      async () => gatewayCaller.getGatewayToolCallerIdentity(),
+      async () => {
+        const identity = gatewayCaller.getGatewayToolCallerIdentity();
+        return identity
+          ? { ...identity, gatewayUiCommandTarget: params.gatewayUiCommandTarget }
+          : undefined;
+      },
     ),
     "embedded Gateway caller",
   );
@@ -290,11 +304,14 @@ export async function createCreatorTransportTools(params: {
       config,
       agentId: "main",
       ...toolContext,
+      forceRestartSafeTools: params.forceRestartSafeTools,
+      sessionPermissionPolicy: params.sessionPermissionPolicy,
+      sandbox: params.sandbox,
       cronCreatorToolAllowlistRef: creatorTools,
       cronCreatorToolAllowlistCaptureRef: creatorCapture,
       toolConstructionPlan: {
         includeBaseCodingTools: toolsAllow.includes("write"),
-        includeShellTools: false,
+        includeShellTools: toolsAllow.includes("exec"),
         includeChannelTools: false,
         includeOpenClawTools: true,
         includePluginTools: false,
@@ -308,6 +325,9 @@ export async function createCreatorTransportTools(params: {
     getPluginToolMeta,
   );
   expect(tools).toEqual(expectedTools);
+  if (toolsAllow.includes("exec")) {
+    expect(creatorTools).toContainEqual({ name: "exec", execOrigin: "openclaw" });
+  }
   return {
     invoke: (name, args) => {
       const tool = expectDefined(

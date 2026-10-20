@@ -541,7 +541,7 @@ export class TelegramPollingSession {
       }
       if (restartRequested) {
         this.opts.log(
-          `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields("error")}`,
+          `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields()}`,
         );
         return await this.#waitBeforeRestart(
           (delay) => `Telegram isolated polling ingress restart requested; restarting in ${delay}.`,

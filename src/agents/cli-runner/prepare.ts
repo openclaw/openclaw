@@ -1,10 +1,7 @@
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  buildHarnessVisibleReplyGuidance,
-  messageToolOwnsVisibleReply,
-} from "../../auto-reply/source-reply-delivery-mode.js";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -144,6 +141,7 @@ import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
+  buildCliVisibleReplyGuidance,
   composeCliPromptContext,
   createCliCurrentPromptRenderer,
   prepareCliSystemPrompt,
@@ -1486,8 +1484,7 @@ async function prepareCliRunContextWithinReadFence(
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
-        : buildHarnessVisibleReplyGuidance({
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        : buildCliVisibleReplyGuidance(params, {
             messageToolAvailable,
             requireExplicitMessageTarget,
           });

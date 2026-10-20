@@ -59,7 +59,7 @@ import {
 import {
   canManageChatSessionSharing,
   type ChatSessionSharingProps,
-} from "./components/chat-session-sharing.ts";
+} from "./components/chat-session-sharing.solid.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 

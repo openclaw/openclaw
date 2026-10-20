@@ -8,6 +8,7 @@ import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "./runtime/internal-hooks.js";
+import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
@@ -335,7 +336,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
       description:
-        "Load the full schema and metadata, including complete server instructions, for one search result. Use this when the input is not already clear or when discovery returned instructionsHint.",
+        "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
@@ -348,7 +349,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
-      description: "Call an exact Tool Search result id or name through OpenClaw.",
+      description:
+        "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
       parameters: callParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (
@@ -398,5 +400,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         }
       },
     },
-  ];
+  ].map((tool) =>
+    tool.name === TOOL_CALL_RAW_TOOL_NAME ? bindAgentToolReplaySafety(tool, "dispatcher") : tool,
+  );
 }

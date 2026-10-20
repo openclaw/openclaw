@@ -80,8 +80,6 @@ async function prepareDeletionStatusOverview(
   const local = await collectStatusLocalSnapshot(cfg);
   return {
     ...createStatusScanResultFixture({ cfg, sourceConfig: cfg, env: process.env }),
-    coldStart: false,
-    hasConfiguredChannels: false,
     skipColdStartNetworkChecks: false,
     runtimeDegradation: null,
     channelsStatus: null,

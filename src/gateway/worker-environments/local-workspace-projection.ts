@@ -16,6 +16,7 @@ import { captureSessionEntryMetadataRead } from "../../config/sessions/session-e
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -45,6 +46,42 @@ export async function withSettledLocalWorkspace<T>(
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
+  const persistentRetirements: Array<{ finish: () => Promise<void> }> = [];
+  if (params.retireRuntime) {
+    // Stream finalization checkpoints acquire the projection lease themselves.
+    // Settle them before taking that lease; its quiescence owner rechecks custody below.
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.get", input: { id: params.worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    if (reply && (!reply.ok || reply.type !== "localWorkspace.get")) {
+      throw new Error("Unexpected local workspace retirement lookup");
+    }
+    if (reply?.row) {
+      const { readRegistry } = await import("../../agents/sandbox/registry.js");
+      const { prepareSandboxPersistentExecRetirement } =
+        await import("../../agents/sandbox/persistent-exec-retirement.js");
+      for (const runtime of (await readRegistry({ path: context.admission.databasePath, env }))
+        .entries) {
+        if (runtime.workspaceDir === reply.row.projection_path) {
+          persistentRetirements.push(
+            await prepareSandboxPersistentExecRetirement({
+              containerName: runtime.containerName,
+              env,
+              assertCurrent: () => {
+                context.admission.assertCurrent();
+                params.assertCurrent?.();
+                params.workerAuthority?.assertCurrent?.();
+              },
+            }),
+          );
+        }
+      }
+    }
+  }
   return await withLocalWorkspaceStore(
     { ...params, env, worktreeId: params.worktree.id },
     async (store) => {
@@ -100,6 +137,9 @@ export async function withSettledLocalWorkspace<T>(
           }
         }
         if (params.retireRuntime) {
+          for (const retirement of persistentRetirements) {
+            await retirement.finish();
+          }
           await quiescence?.retire();
         }
         owner.assertCurrent();
@@ -203,6 +243,7 @@ async function runLocalWorkspaceProjection<T>(
   const quiescence =
     previous && !options.provision
       ? await quiesceLocalWorkspace({
+          env: owner.env,
           workspaceDir: previous.projection_path,
           retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
           persist: (runtimes) =>

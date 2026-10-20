@@ -68,17 +68,14 @@ function diffStat(file: Pick<SessionDiffFile, "additions" | "deletions">) {
   return { added: file.additions - modified, removed: file.deletions - modified, modified };
 }
 function totalDiffStat(files: readonly SessionDiffFile[]) {
-  return files.reduce(
-    (total, file) => {
-      const stat = diffStat(file);
-      return {
-        added: total.added + stat.added,
-        removed: total.removed + stat.removed,
-        modified: total.modified + stat.modified,
-      };
-    },
-    { added: 0, removed: 0, modified: 0 },
-  );
+  const total = { added: 0, removed: 0, modified: 0 };
+  for (const file of files) {
+    const stat = diffStat(file);
+    total.added += stat.added;
+    total.removed += stat.removed;
+    total.modified += stat.modified;
+  }
+  return total;
 }
 function splitPath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");

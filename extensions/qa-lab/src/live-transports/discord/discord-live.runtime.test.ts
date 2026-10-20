@@ -301,12 +301,8 @@ describe("discord live qa runtime", () => {
     ).toEqual({
       messageId: "523456789012345678",
       channelId: "223456789012345678",
-      guildId: "123456789012345678",
       senderId: "423456789012345678",
-      senderIsBot: true,
-      senderUsername: "driver",
       text: "hello",
-      replyToMessageId: "323456789012345678",
       timestamp: "2026-04-22T12:00:00.000Z",
     });
   });
@@ -321,7 +317,6 @@ describe("discord live qa runtime", () => {
           messageId: "523456789012345678",
           channelId: "223456789012345678",
           senderId: "323456789012345678",
-          senderIsBot: true,
           text: "reply DISCORD_QA_ECHO_TOKEN",
         },
       }),
@@ -335,7 +330,6 @@ describe("discord live qa runtime", () => {
           messageId: "523456789012345679",
           channelId: "223456789012345678",
           senderId: "423456789012345678",
-          senderIsBot: true,
           text: "reply DISCORD_QA_ECHO_TOKEN",
         },
       }),
@@ -356,20 +350,20 @@ describe("discord live qa runtime", () => {
           {
             elapsedMs: 0,
             observedAt: "2026-05-03T12:00:00.000Z",
-            reactions: [{ emoji: "👀", count: 1, me: true }],
+            reactions: [{ emoji: "👀", count: 1 }],
           },
           {
             elapsedMs: 250,
             observedAt: "2026-05-03T12:00:00.250Z",
             reactions: [
-              { emoji: "👀", count: 1, me: true },
-              { emoji: "🤔", count: 1, me: true },
+              { emoji: "👀", count: 1 },
+              { emoji: "🤔", count: 1 },
             ],
           },
           {
             elapsedMs: 500,
             observedAt: "2026-05-03T12:00:00.500Z",
-            reactions: [{ emoji: "👍", count: 1, me: true }],
+            reactions: [{ emoji: "👍", count: 1 }],
           },
         ],
         ["👀", "🤔", "👍"],
@@ -395,8 +389,8 @@ describe("discord live qa runtime", () => {
       elapsedMs: 1000,
       observedAt: "2026-05-03T12:00:01.000Z",
       reactions: [
-        { emoji: "👀", count: 2, me: false },
-        { emoji: "🤔", count: 1, me: true },
+        { emoji: "👀", count: 2 },
+        { emoji: "🤔", count: 1 },
       ],
     });
   });
@@ -410,7 +404,7 @@ describe("discord live qa runtime", () => {
         {
           elapsedMs: 0,
           observedAt: "2026-05-03T12:00:00.000Z",
-          reactions: [{ emoji: "👀", count: 1, me: true }],
+          reactions: [{ emoji: "👀", count: 1 }],
         },
       ],
     });

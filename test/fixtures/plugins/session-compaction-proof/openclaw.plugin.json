@@ -1,0 +1,23 @@
+{
+  "id": "session-compaction-proof",
+  "name": "Session Compaction Proof",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "contracts": {
+    "tools": [
+      "capture_compaction_capability"
+    ]
+  },
+  "toolMetadata": {
+    "capture_compaction_capability": {
+      "optional": true,
+      "workspaceAccess": false
+    }
+  }
+}

@@ -221,9 +221,7 @@ function emitDiagnosticLivenessWarning(
   const phase = getCurrentDiagnosticPhase();
   // Attribute only phases completed during this measured liveness interval.
   // The retained ring is capacity-bounded history, not a temporal recency signal.
-  const recentPhases = getRecentDiagnosticPhases(6, {
-    completedAfter: now - Math.max(0, sample.intervalMs),
-  });
+  const recentPhases = getRecentDiagnosticPhases(now - Math.max(0, sample.intervalMs));
   const recentPhaseSummary = formatRecentDiagnosticPhases(recentPhases);
   const workLabelSummary = formatDiagnosticWorkLabels(work);
   const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(

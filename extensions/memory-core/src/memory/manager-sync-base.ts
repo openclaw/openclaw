@@ -425,14 +425,6 @@ export abstract class MemoryManagerSyncBase {
     }
   }
 
-  protected hasIndexedChunks(): boolean {
-    return this.database.facts.hasIndexedChunks;
-  }
-
-  protected hasSemanticChunks(): boolean {
-    return this.database.facts.hasSemanticChunks;
-  }
-
   protected resolveConfiguredIndexIdentity() {
     if (this.settings.provider === "none") {
       return undefined;
@@ -492,7 +484,7 @@ export abstract class MemoryManagerSyncBase {
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
     return resolveMemoryIndexIdentityState({
-      meta: params.meta === undefined ? this.readMeta() : params.meta,
+      meta: params.meta === undefined ? this.database.facts.meta : params.meta,
       provider,
       providerKey: configuredProviderKeyKnown
         ? providerIdentities[0]?.providerKey
@@ -510,7 +502,7 @@ export abstract class MemoryManagerSyncBase {
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,
-      hasIndexedChunks: params.hasIndexedChunks ?? this.hasIndexedChunks(),
+      hasIndexedChunks: params.hasIndexedChunks ?? this.database.facts.hasIndexedChunks,
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
   }
@@ -651,13 +643,5 @@ export abstract class MemoryManagerSyncBase {
   ): MemorySourceFilter {
     const sources = sourcesOverride ?? Array.from(this.sources);
     return buildMemorySourceFilter(alias, sources, excludedSessionPaths);
-  }
-
-  protected readMeta(): MemoryIndexMeta | null {
-    return this.database.facts.meta;
-  }
-
-  protected writeMeta(meta: MemoryIndexMeta): Promise<void> {
-    return this.database.writeMetadata(meta);
   }
 }

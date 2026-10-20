@@ -3,10 +3,8 @@ import type { PluginCompatRecord } from "./types.js";
 const ACTIVATION_HINT_METADATA = {
   status: "active",
   owner: "plugin-execution",
-  introduced: "2026-04-24",
   docsPath: "/plugins/manifest",
   diagnostics: ["activation plan compat reason"],
-  tests: ["src/plugins/activation-planner.test.ts"],
 } as const;
 
 export const ACTIVATION_HINT_COMPAT_RECORDS = [
@@ -44,10 +42,8 @@ export const ACTIVATION_HINT_COMPAT_RECORDS = [
   {
     code: "activation-config-path-hint",
     ...ACTIVATION_HINT_METADATA,
-    introduced: "2026-04-27",
     replacement: "manifest contribution ownership for root config surfaces",
     surfaces: ["activation.onConfigPaths", "startup plugin selection"],
-    tests: ["src/plugins/channel-plugin-ids.test.ts"],
   },
   {
     code: "activation-capability-hint",

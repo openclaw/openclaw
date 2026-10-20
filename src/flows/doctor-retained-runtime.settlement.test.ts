@@ -16,7 +16,7 @@ import type { RetainedNativeWorkerSource } from "../infra/worker-native-lifecycl
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runRetainedUpdateRuntimesHealth } from "./doctor-health-contribution-runners.state.js";
+import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
 import { useDoctorHealthFixture } from "./doctor-health.fixture.test-support.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -163,7 +163,7 @@ it.each([
           readSource = captureRetainedNativeWorkerSource();
           expect(readSource.hasActiveWorkers).toBe(true);
         }
-        await runRetainedUpdateRuntimesHealth(ctx);
+        await initialDoctorHealthContribution("doctor:retained-update-runtimes").run(ctx);
         expect(fs.existsSync(artifact)).toBe(true);
         checksFinished = true;
       });

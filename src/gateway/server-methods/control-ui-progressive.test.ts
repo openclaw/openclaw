@@ -6,7 +6,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
-import { createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import type { RespondFn } from "./types.js";
 
 const requestOptions = createControlUiRequestOptions(() => ({ agents: { entries: { main: {} } } }));
@@ -48,10 +48,7 @@ describe("progressive controlUi.githubDetail", () => {
       return new Response(null, { status: 503 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const handler = expectDefined(
-      createControlUiHandlers()["controlUi.githubDetail"],
-      "detail handler",
-    );
+    const handler = expectDefined(controlUiHandlers["controlUi.githubDetail"], "detail handler");
     const respond = vi.fn<RespondFn>();
     await handler(
       requestOptions(
@@ -91,7 +88,7 @@ describe("progressive controlUi.githubDetail", () => {
       vi.stubGlobal("fetch", fetchMock);
       const respond = vi.fn<RespondFn>();
       await expectDefined(
-        createControlUiHandlers()["controlUi.githubDetail"],
+        controlUiHandlers["controlUi.githubDetail"],
         "detail handler",
       )(
         requestOptions(

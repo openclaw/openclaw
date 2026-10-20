@@ -425,22 +425,30 @@ OpenClaw also filters returned identities to that scope. An absent scope
 means the caller requested the full catalog.
 
 If the upstream provider uses different control tokens than OpenClaw, add a
-small bidirectional text transform instead of replacing the stream path:
+small bidirectional `textTransforms` declaration on that provider instead of replacing the stream path:
 
 ```typescript
-api.registerTextTransforms({
-  input: [
-    { from: /red basket/g, to: "blue basket" },
-    { from: /paper ticket/g, to: "digital ticket" },
-    { from: /left shelf/g, to: "right shelf" },
-  ],
-  output: [
-    { from: /blue basket/g, to: "red basket" },
-    { from: /digital ticket/g, to: "paper ticket" },
-    { from: /right shelf/g, to: "left shelf" },
-  ],
+api.registerProvider({
+  id: "my-provider",
+  label: "My provider",
+  auth: [],
+  textTransforms: {
+    input: [
+      { from: /red basket/g, to: "blue basket" },
+      { from: /paper ticket/g, to: "digital ticket" },
+      { from: /left shelf/g, to: "right shelf" },
+    ],
+    output: [
+      { from: /blue basket/g, to: "red basket" },
+      { from: /digital ticket/g, to: "paper ticket" },
+      { from: /right shelf/g, to: "left shelf" },
+    ],
+  },
 });
 ```
+
+These transforms apply only to this provider. The removed
+`api.registerTextTransforms(...)` global overlay has no equivalent replacement.
 
 `input` rewrites the final system prompt and text message content before
 transport. `output` rewrites assistant text deltas and final text before

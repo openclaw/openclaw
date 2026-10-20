@@ -1,4 +1,5 @@
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import type { CapturedSessionEntryCurrentRead } from "../../config/sessions/session-entry-current.types.js";
 import { listSqliteTargetCandidatePathsForSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -20,6 +21,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { getActiveSecretsRuntimeSnapshotRevisionState } from "../../secrets/runtime-state.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   beginSessionEffect,
@@ -27,13 +29,18 @@ import {
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
 import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "../auth-profiles/runtime-snapshots.js";
 import { createCommandBudget } from "../command/maintenance-budget.js";
 import {
   loadAgentRunnerMemoryRuntime,
   loadSessionStoreRuntime,
 } from "../command/runtime-loaders.js";
+import { resolveCompactionTimeoutMs } from "../embedded-agent-runner/compaction-safety-timeout.js";
+import type { PromptCacheExpiryEstimate } from "../embedded-agent-runner/prompt-cache-expiry.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import { planCacheExpiryCompaction } from "./cache-expiry.js";
 import { createSessionMaintenanceOwner } from "./coordinator.js";
+import type { SessionCompactionRequest } from "./request.js";
 
 const log = createSubsystemLogger("agents/session-maintenance");
 export type SessionMaintenanceRequest = {
@@ -52,6 +59,14 @@ export type SessionMaintenanceRequest = {
   oneShotCliRun?: boolean;
   agentHarnessId?: string;
   compactionRequestBudget?: CompactionRequestBudget;
+  requestedCompaction?: SessionCompactionRequest;
+  cacheExpiry?: PromptCacheExpiryEstimate;
+  expectedCompactionCount?: number;
+  /** Selection captured by the successful foreground owner, not chosen by the timer. */
+  expectedSelection?: Pick<
+    SessionEntry,
+    "model" | "modelProvider" | "modelOverride" | "providerOverride" | "authProfileOverride"
+  >;
 };
 
 /** Copy data only: turn callbacks, tool grants, delivery context and writer custody stay behind. */
@@ -139,6 +154,26 @@ export function scheduleSessionMaintenance(
   request: SessionMaintenanceRequest,
   afterOwnerSettles?: Promise<boolean>,
 ): void {
+  if (request.prepared.cfg.agents?.defaults?.compaction?.enabled === false) {
+    return;
+  }
+  scheduleMaintenanceWork(request, afterOwnerSettles);
+  const cachePlan =
+    !request.requestedCompaction &&
+    request.prepared.cfg.agents?.defaults?.compaction?.cacheExpiry?.enabled === true &&
+    request.cacheExpiry
+      ? planCacheExpiryCompaction(request.cacheExpiry)
+      : undefined;
+  if (cachePlan) {
+    scheduleMaintenanceWork(request, afterOwnerSettles, cachePlan);
+  }
+}
+
+function scheduleMaintenanceWork(
+  request: SessionMaintenanceRequest,
+  afterOwnerSettles?: Promise<boolean>,
+  cachePlan?: { notBefore: number; expiresAt: number },
+): void {
   const { prepared, followupRun } = request;
   const sessionKey = prepared.sessionKey;
   if (!sessionKey) {
@@ -174,13 +209,23 @@ export function scheduleSessionMaintenance(
     log.warn(`Optional session maintenance source unavailable: ${formatErrorMessage(error)}`);
     return;
   }
-  const budget = createCommandBudget(request.startedAt, prepared.timeoutMs);
+  // Cache lifetime gates admission, not paid work already in flight. Keep the normal
+  // bounded compaction budget once started, even if the estimated window passes.
+  const budget = createCommandBudget(
+    cachePlan?.notBefore ?? request.startedAt,
+    cachePlan
+      ? Math.min(prepared.timeoutMs, resolveCompactionTimeoutMs(prepared.cfg))
+      : prepared.timeoutMs,
+  );
   if (budget.remainingMs() === 0) {
     budget.dispose();
     return;
   }
   let readSource: CapturedSessionEntryCurrentRead | undefined;
   const interrupted = new AbortController();
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const credentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+  const secretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
   const target = captureSessionTarget({
     storeScope: prepared.storePath,
     sessionKey,
@@ -191,15 +236,27 @@ export function scheduleSessionMaintenance(
     sessionKey,
     target,
     preemptible: true,
+    notBefore: cachePlan?.notBefore,
     abortSignal: AbortSignal.any([interrupted.signal, budget.signal]),
   });
   const assertCurrent = () => {
     owner.assertCurrent();
+    if (getRuntimeConfigSnapshot()?.agents?.defaults?.compaction?.enabled === false) {
+      throw createAbortError("Optional compaction was disabled");
+    }
     assertAgentRunLifecycleGenerationCurrent(request.lifecycleGeneration);
     if (resolveGatewayContext && !resolveGatewayContext()) {
       throw createAbortError("Optional maintenance Gateway instance retired");
     }
     readSource?.assertSourceCurrent();
+    if (
+      cachePlan &&
+      (getRuntimeConfigSnapshot() !== runtimeConfig ||
+        getRuntimeAuthProfileStoreCredentialsRevision() !== credentialsRevision ||
+        getActiveSecretsRuntimeSnapshotRevisionState() !== secretsRevision)
+    ) {
+      throw createAbortError("Cache-expiry maintenance estimate is no longer current");
+    }
   };
   // Scheduled from the foreground turn's async context, this work runs after that turn
   // retires; it leaves the turn's controller context so withSessionTurn admits a fresh turn.
@@ -311,6 +368,27 @@ export function scheduleSessionMaintenance(
                               "Optional maintenance skipped while final delivery is pending",
                             );
                           }
+                          const selectionKeys = [
+                            "model",
+                            "modelProvider",
+                            "modelOverride",
+                            "providerOverride",
+                            "authProfileOverride",
+                          ] as const;
+                          if (
+                            cachePlan &&
+                            (Date.now() >= cachePlan.expiresAt ||
+                              (entry.compactionCount ?? 0) !==
+                                (request.expectedCompactionCount ?? 0) ||
+                              (request.expectedSelection &&
+                                selectionKeys.some(
+                                  (key) => entry?.[key] !== request.expectedSelection?.[key],
+                                )))
+                          ) {
+                            throw createAbortError(
+                              "Cache-expiry maintenance window or session selection changed before admission",
+                            );
+                          }
                         },
                       });
                       try {
@@ -336,11 +414,20 @@ export function scheduleSessionMaintenance(
                             storePath: prepared.storePath,
                             isHeartbeat: false,
                             replyOperation: operation,
+                            force: Boolean(request.requestedCompaction || cachePlan),
                             abortSignal: operationSignal,
                           });
                           // Flush reports aborted attempts as failed outcomes; cancellation still forbids compaction.
                           assertTurnCurrent();
                           entry = flushed.sessionEntry ?? entry;
+                          if (
+                            (request.requestedCompaction || cachePlan) &&
+                            (flushed.outcome === "failed" || flushed.outcome === "exhausted")
+                          ) {
+                            throw createAbortError(
+                              "Optional compaction skipped because memory checkpointing failed",
+                            );
+                          }
                           followupRun.run.sessionId = entry.sessionId;
                           followupRun.run.timeoutMs = budget.remainingMs();
                           assertTurnCurrent();
@@ -360,6 +447,8 @@ export function scheduleSessionMaintenance(
                             defaultModel: followupRun.run.model,
                             isHeartbeat: false,
                             agentHarnessId: request.agentHarnessId,
+                            requestedCompaction:
+                              request.requestedCompaction ?? (cachePlan ? {} : undefined),
                             abortSignal: operationSignal,
                             authorize: () => {
                               assertTurnCurrent();

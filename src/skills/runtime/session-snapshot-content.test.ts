@@ -52,7 +52,7 @@ const hash = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0]?.co
 const skillFile = (result: SnapshotResult) => result.snapshot.resolvedSkills?.[0]?.filePath;
 function expectUnchanged(result: SnapshotResult, previous: SnapshotResult) {
   expect(result.snapshot).toBe(previous.snapshot);
-  expect(result).toMatchObject({ shouldRefresh: false, snapshotVersion: previous.snapshotVersion });
+  expect(result.shouldRefresh).toBe(false);
 }
 
 async function completePassiveScan() {
@@ -111,7 +111,7 @@ it("reuses session snapshots after unchanged rebuilds and refreshes instruction-
     await completePassiveScan();
     const edited = await readSnapshot(first.snapshot);
     expect(edited.shouldRefresh).toBe(true);
-    expect(edited.snapshotVersion).toBeGreaterThan(version);
+    expect(edited.snapshot.version).toBeGreaterThan(version);
     expect(edited.snapshot.prompt).toBe(first.snapshot.prompt);
     expect(hash(edited)).not.toBe(hash(first));
     expect(changed).toHaveBeenCalledOnce();

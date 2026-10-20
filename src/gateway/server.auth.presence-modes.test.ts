@@ -29,6 +29,8 @@ const webCapabilities = [
   "tool-events",
   "chat-only-assistant-text",
   "hello-health-on-demand",
+  "health-summary",
+  "hello-presence-self",
   "session-scoped-events",
   "presence-deltas",
   "session-row-deltas",

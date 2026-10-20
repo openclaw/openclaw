@@ -35,6 +35,5 @@ export type MSTeamsGraphMediaResult = {
   attachmentCount?: number;
   hostedStatus?: number;
   attachmentStatus?: number;
-  messageUrl?: string;
   tokenError?: boolean;
 };

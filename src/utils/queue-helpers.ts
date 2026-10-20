@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { QueueDropPolicy } from "../config/types.queue.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
+import { sleep } from "./sleep.js";
 
 type QueueSummaryState = {
   droppedCount: number;
@@ -129,7 +130,7 @@ export function applyQueueDropPolicy<T>(params: {
   return true;
 }
 
-export function waitForQueueDebounce(
+export async function waitForQueueDebounce(
   queue: {
     debounceMs: number;
     lastEnqueuedAt: number;
@@ -138,48 +139,28 @@ export function waitForQueueDebounce(
 ): Promise<void> {
   if (isFastTestRuntimeEnv()) {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
-    return Promise.resolve();
+    return;
   }
   const debounceMs = Math.max(0, queue.debounceMs);
-  if (debounceMs <= 0) {
-    return Promise.resolve();
+  if (debounceMs <= 0 || abortSignal?.aborted) {
+    return;
   }
-  if (abortSignal?.aborted) {
-    return Promise.resolve();
+  let observedEnqueuedAt: number | undefined;
+  let observedAtMs = 0;
+  while (true) {
+    const nowMs = performance.now();
+    if (queue.lastEnqueuedAt !== observedEnqueuedAt) {
+      observedEnqueuedAt = queue.lastEnqueuedAt;
+      observedAtMs = nowMs;
+    }
+    // Wall time counts quiet time before this wait; elapsed time keeps a
+    // backward wall-clock step from extending the window until wall time catches up.
+    const since = Math.max(Date.now() - queue.lastEnqueuedAt, nowMs - observedAtMs);
+    if (abortSignal?.aborted || since >= debounceMs) {
+      return;
+    }
+    await sleep(debounceMs - since, abortSignal).catch(() => undefined);
   }
-  return new Promise<void>((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let observedEnqueuedAt: number | undefined;
-    let observedAtMs = 0;
-    const finish = () => {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-      abortSignal?.removeEventListener("abort", finish);
-      resolve();
-    };
-    const check = () => {
-      if (abortSignal?.aborted) {
-        finish();
-        return;
-      }
-      const nowMs = performance.now();
-      if (queue.lastEnqueuedAt !== observedEnqueuedAt) {
-        observedEnqueuedAt = queue.lastEnqueuedAt;
-        observedAtMs = nowMs;
-      }
-      // Wall time counts quiet time before this wait; elapsed time keeps a
-      // backward wall-clock step from extending the window until wall time catches up.
-      const since = Math.max(Date.now() - queue.lastEnqueuedAt, nowMs - observedAtMs);
-      if (since >= debounceMs) {
-        finish();
-        return;
-      }
-      timer = setTimeout(check, debounceMs - since);
-    };
-    abortSignal?.addEventListener("abort", finish, { once: true });
-    check();
-  });
 }
 
 /** Render a collect prompt from queued items and optional overflow summary. */

@@ -39,21 +39,10 @@ export function getCurrentDiagnosticPhase(): string | undefined {
   return activePhaseStack.at(-1)?.name;
 }
 
-export function getRecentDiagnosticPhases(
-  limit = 8,
-  options?: { completedAfter?: number },
-): DiagnosticPhaseSnapshot[] {
-  if (!Number.isFinite(limit) || limit <= 0) {
-    return [];
-  }
-  const completedAfter = options?.completedAfter;
-  const eligiblePhases =
-    completedAfter === undefined
-      ? recentPhases
-      : recentPhases.filter(
-          (phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter,
-        );
-  return eligiblePhases.slice(-Math.floor(limit)).map((phase) => Object.assign({}, phase));
+export function getRecentDiagnosticPhases(completedAfter: number): DiagnosticPhaseSnapshot[] {
+  return recentPhases
+    .filter((phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter)
+    .slice(-6);
 }
 
 function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {

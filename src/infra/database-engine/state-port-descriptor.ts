@@ -8,6 +8,8 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
+import { ensureAgentDeletionJournalPhaseSchema } from "../../state/openclaw-state-db-schema-additive.js";
+import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
@@ -138,7 +140,22 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      return { version, migrationRequired: false, pendingColumns: {} };
+      const needsPhaseColumn =
+        tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
+        !tableHasColumn(db, "agent_deletion_journal", "phase");
+      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
+        ? { agent_deletion_journal: ["phase"] }
+        : {};
+      // First-use columns are valid absent; porting completes them in its private copy.
+      return { version, migrationRequired: false, pendingColumns };
+    },
+    migrateSqliteSource(file, _version, assertCurrent) {
+      using db = openNodeSqliteDatabase(file);
+      admitSqliteSchema(db);
+      if (tableHasColumn(db, "agent_deletion_journal", "agent_id")) {
+        assertCurrent();
+        ensureAgentDeletionJournalPhaseSchema(db);
+      }
     },
     async admit(file, input) {
       // Historical SQLite images use their descriptor; restored PG anchors still
@@ -169,7 +186,7 @@ export async function loadStatePortDescriptor(
     return descriptor;
   }
   if (sourceVersion >= 27) {
-    return { ...descriptor, inspectSqliteSource: undefined };
+    return { ...descriptor, inspectSqliteSource: undefined, migrateSqliteSource: undefined };
   }
   const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
   const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
@@ -190,5 +207,6 @@ export async function loadStatePortDescriptor(
         : fact,
     ),
     inspectSqliteSource: undefined,
+    migrateSqliteSource: undefined,
   };
 }

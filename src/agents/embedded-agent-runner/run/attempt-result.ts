@@ -213,6 +213,8 @@ export function completeEmbeddedAttemptResult(
     successfulNestedToolNames: settled.successfulNestedToolNames,
     attemptUsage: settled.attemptUsage,
     promptCache: sessionRuntime.state.promptCache,
+    requestedCompaction: input.prepared.toolBase.requestedCompaction,
+    cacheExpiry: settled.cacheExpiry,
     contextBudgetStatus: prompt.contextBudgetStatus,
     yieldDetected: input.lifecycle.readYieldState().yieldDetected,
     yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,

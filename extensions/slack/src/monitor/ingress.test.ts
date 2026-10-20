@@ -340,7 +340,7 @@ describe("Slack durable ingress", () => {
               claim: async () => ({ kind: "inflight", pending: duplicate.promise }),
             } as unknown as Parameters<typeof claimSlackMessageDispatchReplay>[0]["guard"],
             key: "logical-message",
-            onWaiting: lifecycle.onDispatchWaiting,
+            onWaiting: () => lifecycle.onDispatchWaiting?.(),
           });
           starts.push(id);
           return;
@@ -408,7 +408,7 @@ describe("Slack durable ingress", () => {
             typeof claimSlackMessageDispatchReplay
           >[0]["guard"],
           key: "logical-message",
-          onWaiting: lifecycle.onDispatchWaiting,
+          onWaiting: () => lifecycle.onDispatchWaiting?.(),
         });
         retrySignal = lifecycle.abortSignal;
         // A newly admitted owner must still be covered while routing stalls.

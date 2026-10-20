@@ -1,11 +1,11 @@
-import { Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import type {
   ThemeBranding,
   ThemeMascot,
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../../../app/theme-branding.ts";
-import "../../../components/elapsed-time.tsx";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
 import "../../../components/working-phrase.ts";
@@ -65,7 +65,17 @@ function outputTokensLabel(outputTokens: number): string {
     : t("chat.turnRecap.tokens", { count: formatCompactTokenCount(outputTokens) });
 }
 
+// The New Session preview hands its claw to Chat, and keyed rerenders replace
+// it in place. A claw that mounts right after another retired continues that
+// work instead of popping in again.
+const CONTINUED_CLAW_WINDOW_MS = 400;
+let clawRetiredAt = Number.NEGATIVE_INFINITY;
+
 function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
+  const continued = performance.now() - clawRetiredAt < CONTINUED_CLAW_WINDOW_MS;
+  onSettled(() => () => {
+    clawRetiredAt = performance.now();
+  });
   const waitingApproval = () => props.options.waitingApproval === true;
   const working = () => !waitingApproval() && !props.options.startupLabel;
   const continuation = () => props.options.presentation === "continuation";
@@ -90,6 +100,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
       class={[
         "chat-working-indicator",
         {
+          "chat-working-indicator--continued": continued,
           "chat-working-indicator--continuation": continuation(),
           "chat-working-indicator--supporting": props.options.subagentActivity !== undefined,
         },
@@ -152,10 +163,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
           <Show when={props.options.startupLabel || props.options.outputTokens != null}>
             <span aria-hidden="true">·</span>
           </Show>
-          <openclaw-elapsed-time
-            class="chat-working-indicator__elapsed"
-            prop:startMs={props.part.startedAt}
-          />
+          <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.part.startedAt} />
         </Show>
         <Show when={props.options.outputTokens == null && working()}>
           <openclaw-working-phrase

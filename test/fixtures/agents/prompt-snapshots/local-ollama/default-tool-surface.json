@@ -64,7 +64,7 @@
     },
     {
       "name": "tool_describe",
-      "description": "Load the full schema and metadata, including complete server instructions, for one search result. Use this when the input is not already clear or when discovery returned instructionsHint.",
+      "description": "Load the full schema and metadata for one tool id or name when its input is not already clear.",
       "parameters": {
         "type": "object",
         "required": ["id"],
@@ -78,7 +78,7 @@
     },
     {
       "name": "dispatch_action",
-      "description": "Call an exact Tool Search result id or name through OpenClaw.",
+      "description": "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
       "parameters": {
         "type": "object",
         "required": ["id"],

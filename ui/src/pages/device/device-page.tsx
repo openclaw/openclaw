@@ -6,6 +6,7 @@ import type {
   NativeDeviceSettingsSnapshot,
   SettingKey,
 } from "../../app/native-device-settings.ts";
+import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -24,16 +25,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import "../../components/native-chrome-setup.tsx";
 import "./device.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
 
 registerEnglishCatalog(registerAppsEnglish);
 registerEnglishCatalog(registerSettingsEnglish);
@@ -256,7 +248,7 @@ export function DevicePage() {
             stacked
             control={
               <div class="device-extension-setup">
-                <openclaw-native-chrome-setup />
+                <NativeChromeSetup />
                 <div class="device-extension-setup__actions">
                   <a
                     href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"

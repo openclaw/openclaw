@@ -21,11 +21,11 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processAncestry from "../infra/restart-stale-pids.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
-import * as sqliteWorkerStores from "../infra/sqlite-worker-store.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -526,8 +526,8 @@ async function runInstallationCase(params: {
         });
         await closeOpenClawStateDatabaseAsync();
       }
-      const authWorkerOpen = pairedDeviceDatabasePath
-        ? vi.spyOn(sqliteWorkerStores, "openSqliteWorkerStore")
+      const authWorkerRun = pairedDeviceDatabasePath
+        ? vi.spyOn(WorkerTaskPool.prototype, "run")
         : undefined;
       const admission = beginDoctorMaintenance({
         root: mocks.activeRoot,
@@ -539,14 +539,21 @@ async function runInstallationCase(params: {
         },
         runtime,
       });
-      if (pairedDeviceDatabasePath && authWorkerOpen) {
-        const openedAuthWorkers = () =>
-          authWorkerOpen.mock.settledResults.flatMap((result, index) =>
-            result.type === "fulfilled" &&
-            result.value &&
-            authWorkerOpen.mock.calls[index]?.[0].databasePath === pairedDeviceCredentialPath
-              ? [result.value]
-              : [],
+      if (pairedDeviceDatabasePath && authWorkerRun) {
+        const usedAuthPools = () =>
+          authWorkerRun.mock.contexts.filter(
+            (pool, index): pool is WorkerTaskPool<unknown, unknown> => {
+              const input = authWorkerRun.mock.calls[index]?.[0];
+              return (
+                pool instanceof WorkerTaskPool &&
+                typeof input === "object" &&
+                input !== null &&
+                "root" in input &&
+                typeof input.root === "string" &&
+                resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.root }) ===
+                  pairedDeviceCredentialPath
+              );
+            },
           );
         try {
           await expect(admission).rejects.toThrow("Synthetic native stop failure");
@@ -561,17 +568,15 @@ async function runInstallationCase(params: {
                   request.preparedDeviceAuth?.token === "synthetic-maintenance-device-token",
               ),
           ).toBe(true);
-          const authWorkers = openedAuthWorkers();
-          expect(authWorkers.length).toBeGreaterThan(0);
-          expect(
-            authWorkers.every((worker) => !sqliteWorkerStores.isSqliteWorkerStoreAvailable(worker)),
-          ).toBe(true);
+          const authPools = usedAuthPools();
+          expect(authPools.length).toBeGreaterThan(0);
+          expect(authPools.every((pool) => pool.isClosed)).toBe(true);
           const nextOwner = tryAcquireGatewayStateOwner(pairedDeviceDatabasePath);
           expect(nextOwner).not.toBeNull();
           nextOwner?.release();
         } finally {
           try {
-            await Promise.all(openedAuthWorkers().map((worker) => worker.close()));
+            await Promise.all(usedAuthPools().map((pool) => pool.close()));
           } finally {
             await closeOpenClawStateDatabaseAsync();
           }

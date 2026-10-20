@@ -1,8 +1,10 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
+import { MEMORY_SEARCH_FIELD_LABELS } from "./memory-search-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
+import { COMPACTION_FIELD_LABELS } from "./schema.labels.compaction.js";
 import { ENVIRONMENT_FIELD_LABELS } from "./schema.labels.environment.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { MESSAGE_FIELD_LABELS } from "./schema.labels.messages.js";
@@ -335,35 +337,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.startupContext.maxFileBytes": "Startup Context Max File Bytes",
   "agents.defaults.startupContext.maxFileChars": "Startup Context Max File Chars",
   "agents.defaults.startupContext.maxTotalChars": "Startup Context Max Total Chars",
-  "memory.search": "Memory Search",
-  "memory.search.enabled": "Enable Memory Search",
-  "memory.search.rememberAcrossConversations": "Remember Across Conversations",
-  "memory.search.sources": "Memory Search Sources",
-  "memory.search.extraPaths": "Extra Memory Paths",
-  "memory.search.extraPaths.*.path": "Extra Memory Path",
-  "memory.search.extraPaths.*.pattern": "Extra Memory Path Pattern",
-  "memory.search.multimodal": "Memory Search Multimodal",
-  "memory.search.multimodal.enabled": "Enable Memory Search Multimodal",
-  "memory.search.multimodal.modalities": "Memory Search Multimodal Modalities",
-  "memory.search.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
-  "memory.search.experimental.sessionMemory": "Memory Search Session Index (Experimental)",
-  "memory.search.provider": "Memory Search Provider",
-  "memory.search.remote.baseUrl": "Remote Embedding Base URL",
-  "memory.search.remote.apiKey": "Remote Embedding API Key",
-  "memory.search.remote.headers": "Remote Embedding Headers",
-  "memory.search.remote.batch.enabled": "Remote Batch Embedding Enabled",
-  "memory.search.model": "Memory Search Model",
-  "memory.search.inputType": "Memory Search Input Type",
-  "memory.search.queryInputType": "Memory Search Query Input Type",
-  "memory.search.documentInputType": "Memory Search Document Input Type",
-  "memory.search.outputDimensionality": "Memory Search Output Dimensionality",
-  "memory.search.fallback": "Memory Search Fallback",
-  "memory.search.local.modelPath": "Local Embedding Model Path",
-  "memory.search.store.vector.enabled": "Memory Search Vector Index",
-  "memory.search.store.vector.extensionPath": "Memory Search Vector Extension Path",
-  "memory.search.query.maxResults": "Memory Search Max Results",
-  "memory.search.query.minScore": "Memory Search Min Score",
-  "memory.search.cache.enabled": "Memory Search Embedding Cache",
+  ...MEMORY_SEARCH_FIELD_LABELS,
   memory: "Memory",
   "memory.citations": "Memory Citations Mode",
   auth: "Auth",
@@ -463,33 +437,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
-  "agents.defaults.compaction": "Compaction",
-  "agents.defaults.compaction.enabled": "Embedded Auto-Compaction",
-  "agents.defaults.compaction.mode": "Compaction Mode",
-  "agents.defaults.compaction.provider": "Compaction Provider",
-  "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
-  "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
-  "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
-  "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
-  "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",
-  "agents.defaults.compaction.qualityGuard.enabled": "Compaction Quality Guard Enabled",
-  "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
-  "agents.defaults.compaction.midTurnPrecheck": "Compaction Mid-turn Precheck",
-  "agents.defaults.compaction.midTurnPrecheck.enabled": "Compaction Mid-turn Precheck Enabled",
-  "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
-  "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
-  "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",
-  "agents.defaults.compaction.model": "Compaction Model Override",
-  "agents.defaults.compaction.maxActiveTranscriptBytes":
-    "Compaction Active Transcript Size Threshold",
-  "agents.defaults.compaction.notifyUser": "Compaction Notify User",
-  "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
-  "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
-  "agents.defaults.compaction.memoryFlush.model": "Compaction Memory Flush Model Override",
-  "agents.defaults.compaction.memoryFlush.softThresholdTokens":
-    "Compaction Memory Flush Soft Threshold",
-  "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    "Compaction Memory Flush Transcript Size Threshold",
+  ...COMPACTION_FIELD_LABELS,
   "agents.defaults.embeddedAgent": "Embedded OpenClaw",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
     "Embedded OpenClaw Project Settings Policy",
@@ -737,4 +685,3 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

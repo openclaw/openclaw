@@ -128,6 +128,7 @@ candidate_version=""
 candidate_contract=""
 candidate_tarball=""
 restart_fixture_version=""
+restart_plugin_fixture_dir=""
 restart_fixture_evidence=""
 installed_version=""
 candidate_install_mode="updater"
@@ -706,7 +707,8 @@ assert_prepublish_fixture_idle() {
 
 prepublish_capability_consent_supported=""
 assert_prepublish_plugin_install() {
-  local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
+  local allow_pending="${1:-0}" expected_version="${2:-$candidate_version}"
+  local expected_archive_root="${3:-}" plugin_id="whatsapp" help consent
   local pending_args=("" "" "") published_companion_tarball=""
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     [ "$baseline_companion_availability" != "unavailable" ] || return 0
@@ -723,21 +725,24 @@ assert_prepublish_plugin_install() {
   if [ "$allow_pending" = "1" ] && [ "$update_repair_required" = "1" ]; then
     pending_args=("$UPDATE_JSON" "$initial_update_observation_root" "$baseline_version")
   fi
-  if [ -n "$baseline_plugin_tarball" ] && [ "$baseline_plugin_version" = "$candidate_version" ]; then
+  if [ -n "$expected_archive_root" ]; then
+    published_companion_tarball="$expected_archive_root/$plugin_id.tgz"
+  elif [ -n "$baseline_plugin_tarball" ] && [ "$baseline_plugin_version" = "$expected_version" ]; then
     published_companion_tarball="$baseline_plugin_tarball"
   fi
   local index
   for ((index = 0; index < ${#published_plugin_registry_args[@]}; index += 3)); do
     if [ "${published_plugin_registry_args[index]}" = "@openclaw/$plugin_id" ] &&
-      [ "${published_plugin_registry_args[index + 1]}" = "$candidate_version" ]; then
+      [ "${published_plugin_registry_args[index + 1]}" = "$expected_version" ]; then
       published_companion_tarball="${published_plugin_registry_args[index + 2]}"
     fi
   done
   # Verify the selected archive, including a retained published companion. An empty
   # ClawHub ledger alone cannot prove that the npm primary installed successfully.
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
-    "$prepublish_capability_consent_supported" "${pending_args[@]}" "$published_companion_tarball" || return "$?"
+    assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$expected_version" \
+    "$prepublish_capability_consent_supported" "${pending_args[@]}" "$published_companion_tarball" \
+    "$candidate_version" || return "$?"
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   assert_prepublish_fixture_idle
 }
@@ -1007,7 +1012,7 @@ initialize_state() {
 }
 
 seed_state() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed "$(package_root)"
 }
 
 apply_baseline_config_recipe() {
@@ -1919,6 +1924,7 @@ prepare_restart_fixture() {
     node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-tarball \
     "$candidate_tarball" "$fixture_package" >"$fixture_dir/receipt.json" || return "$?"
   restart_fixture_version="$(node -p 'require(process.argv[1]).targetVersion' "$fixture_dir/receipt.json")" || return "$?"
+  restart_plugin_fixture_dir="$fixture_dir"
   mv "$fixture_dir/receipt.json" "$ARTIFACT_ROOT/restart-fixture.json" || return "$?"
   restart_fixture_evidence="$ARTIFACT_ROOT/restart-fixture.json"
   restart_fixture_package="$fixture_package"
@@ -2062,7 +2068,12 @@ repair_fixture_plugin_consent() {
   fi
   repair_update_restart_auth || return "$?"
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
-    phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
+    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && [ "$SCENARIO" != "legacy-operator-state" ]; then
+      phase assert-prepublish-recovery-requests \
+        assert_prepublish_plugin_install 0 "$restart_fixture_version" "$restart_plugin_fixture_dir" || return "$?"
+    else
+      phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
+    fi
   fi
 }
 

@@ -132,6 +132,8 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       /** Enable embedded proactive auto-compaction. Default: true. */
       enabled: z.boolean().optional(),
       mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
+      /** One idle compaction before a qualified provider-cache window ends. Default: disabled. */
+      cacheExpiry: z.strictObject({ enabled: z.boolean().optional() }).optional(),
       /**
        * Id of a registered compaction provider plugin.
        * When set, the provider's summarize() is called instead of the
