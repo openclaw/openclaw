@@ -14,6 +14,15 @@ function createHelp(context: Parameters<typeof createPluginHelp>[0]) {
     return { help: createPluginHelp(context), dispose };
   });
 }
+function installedModel(id: string): Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] {
+  return {
+    connected: true,
+    result: createResult(createPlugin({ id, name: id })),
+    detail: { pluginId: id },
+    catalogDetail: null,
+    installedDetailTab: "configuration",
+  };
+}
 
 afterEach(() => {
   window.history.replaceState({}, "", "/");
@@ -26,22 +35,15 @@ it.each(["plugin", "route", "connection", "disconnect"])(
     const { context, setPathname, setGatewayToken } = createContext(vi.fn());
     setPathname("/settings/plugins/first");
     const { help, dispose } = createHelp(context);
-    const model = (id: string) =>
-      ({
-        connected: true,
-        result: { plugins: [{ id, name: id, installed: true }] },
-        detail: { pluginId: id },
-        installedDetailTab: "configuration",
-      }) as unknown as Parameters<ReturnType<typeof createPluginHelp>["update"]>[0];
-    help.update(model("first"));
+    help.update(installedModel("first"));
     const ask = help.ask;
     if (change === "plugin") {
-      help.update(model("second"));
+      help.update(installedModel("second"));
     } else if (change === "route") {
       setPathname("/agents");
     } else if (change === "connection") {
       setGatewayToken("replacement-operator");
-      help.update(model("first"));
+      help.update(installedModel("first"));
     } else {
       dispose();
     }
@@ -91,7 +93,7 @@ it.each<{
   ({ id, name, local, contracts, install }) => {
     const { context, setPathname } = createContext(vi.fn());
     setPathname(`/plugins/${id}`);
-    const { help, dispose } = createHelp(context);
+    const { help } = createHelp(context);
     const catalog = createDiscoveryDetail(createPlugin({ id, name }));
     catalog.plugin.id = "catalog-workboard";
     catalog.plugin.local.pluginId = local ? id : undefined;
@@ -112,35 +114,31 @@ it.each<{
       installedDetailTab: "readme",
       catalogDetail: { result: catalog },
     };
-    try {
-      help.update(model);
-      expect(currentPluginHelpReference(context)).toEqual({
-        id,
-        name,
-        installed: false,
-        declared: {
-          providers: [],
-          channels: [],
-          skills: [],
-          mcpServers: [],
-          ...(contracts ? { contracts: install ? [] : ["videoGenerationProviders: video"] } : {}),
-          ...(install ? { tools: ["known_tool"] } : {}),
-        },
+    help.update(model);
+    expect(currentPluginHelpReference(context)).toEqual({
+      id,
+      name,
+      installed: false,
+      declared: {
+        providers: [],
+        channels: [],
+        skills: [],
+        mcpServers: [],
+        ...(contracts ? { contracts: install ? [] : ["videoGenerationProviders: video"] } : {}),
+        ...(install ? { tools: ["known_tool"] } : {}),
+      },
+    });
+    if (install) {
+      help.update({
+        ...model,
+        result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
+        detail: { pluginId: id, inspection: null },
       });
-      if (install) {
-        help.update({
-          ...model,
-          result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
-          detail: { pluginId: id, inspection: null },
-        });
-        expect(currentPluginHelpReference(context)).toMatchObject({
-          id,
-          installed: true,
-          declared: { tools: ["known_tool"] },
-        });
-      }
-    } finally {
-      dispose();
+      expect(currentPluginHelpReference(context)).toMatchObject({
+        id,
+        installed: true,
+        declared: { tools: ["known_tool"] },
+      });
     }
   },
 );
@@ -165,27 +163,18 @@ it.each([
   async ({ path, label, value, expected, sensitive }) => {
     const { context, setPathname } = createContext(vi.fn());
     setPathname("/settings/plugins/workboard");
-    const { help, dispose } = createHelp(context);
-    help.update({
-      connected: true,
-      result: { plugins: [{ id: "workboard", name: "Workboard", installed: true }] },
-      detail: { pluginId: "workboard" },
-      installedDetailTab: "configuration",
-    } as unknown as Parameters<ReturnType<typeof createPluginHelp>["update"]>[0]);
-    try {
-      await help.ask({
-        path,
-        label,
-        value,
-        schema: {},
-        hints: sensitive ? { [path.join(".")]: { sensitive: true } } : {},
-      } as PluginSettingsField);
-      expect(currentPluginHelpReference(context)?.setting?.path).toEqual(path);
-      const draft = takePluginHelpDraft(context);
-      expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
-      expect(draft).not.toContain("synthetic-sensitive-value");
-    } finally {
-      dispose();
-    }
+    const { help } = createHelp(context);
+    help.update(installedModel("workboard"));
+    await help.ask({
+      path,
+      label,
+      value,
+      schema: {},
+      hints: sensitive ? { [path.join(".")]: { sensitive: true } } : {},
+    } as PluginSettingsField);
+    expect(currentPluginHelpReference(context)?.setting?.path).toEqual(path);
+    const draft = takePluginHelpDraft(context);
+    expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
+    expect(draft).not.toContain("synthetic-sensitive-value");
   },
 );

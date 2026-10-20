@@ -2,7 +2,6 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCredentialInspection } from "../../../../packages/gateway-protocol/src/schema/plugin-credentials.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -22,6 +21,26 @@ const descriptor = {
   signupUrl: "https://example.com/keys",
   placeholder: "example-…",
 };
+const reference = (
+  ref: Extract<PluginCredentialInspection, { kind: "reference" }>["ref"] = {
+    source: "env",
+    provider: "default",
+    id: "ORIGINAL_KEY",
+  },
+  unresolved = false,
+): PluginCredentialInspection => ({ kind: "reference", ref, unresolved });
+const retiredGateway = () =>
+  ({
+    epoch: 2,
+    connected: false,
+    capture: () => null,
+    isCurrent: () => false,
+  }) as unknown as GatewayPageBinding;
+const dialogInputs = (editor: Element) =>
+  editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input");
+const modal = (editor: Element) => editor.querySelector("openclaw-modal-dialog");
+const revealButton = (editor: Element, action = "Show") =>
+  editor.querySelector<HTMLButtonElement>(`[aria-label="${action} API key: Example API key"]`)!;
 
 async function mount(state: PluginCredentialInspection = { kind: "literal" }, width = 390) {
   const { page } = await import("vitest/browser");
@@ -95,9 +114,9 @@ async function open(editor: HTMLElement, text = "Edit reference") {
   trigger.focus();
   trigger.click();
   flush();
-  const modal = editor.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
-  await modal.updateComplete;
-  const dialog = modal.querySelector("dialog")!;
+  const host = modal(editor)!;
+  await host.updateComplete;
+  const dialog = host.querySelector("dialog")!;
   await vi.waitFor(() => expect(dialog.open).toBe(true));
   await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
   return { dialog, trigger };
@@ -113,9 +132,7 @@ describe("plugin credential authoring controls", () => {
     const input = editor.querySelector<HTMLInputElement>("input")!;
     editInput(input, "synthetic-unsaved-key");
     await open(editor, "Use a secret reference");
-    const referenceInput = editor.querySelectorAll<HTMLInputElement>(
-      ".plugin-credential__dialog input",
-    )[1]!;
+    const referenceInput = dialogInputs(editor)[1]!;
     editInput(referenceInput, "DRAFT_KEY");
     const gateway = context.gateway;
     Object.assign(gateway, {
@@ -126,9 +143,8 @@ describe("plugin credential authoring controls", () => {
     });
     field.disabled = true;
     await update();
-    expect(input.value).toBe("synthetic-unsaved-key");
-    expect(referenceInput.value).toBe("DRAFT_KEY");
-    expect(editor.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect([input.value, referenceInput.value]).toEqual(["synthetic-unsaved-key", "DRAFT_KEY"]);
+    expect(modal(editor)).not.toBeNull();
     expect(button(editor, "Save").disabled).toBe(true);
     Object.assign(gateway, {
       epoch: 3,
@@ -139,23 +155,18 @@ describe("plugin credential authoring controls", () => {
     field.disabled = false;
     await update();
     await vi.waitFor(() => expect(button(editor, "Save").disabled).toBe(false));
-    expect(input.value).toBe("synthetic-unsaved-key");
-    expect(referenceInput.value).toBe("DRAFT_KEY");
+    expect([input.value, referenceInput.value]).toEqual(["synthetic-unsaved-key", "DRAFT_KEY"]);
     expect(context.onCommit).not.toHaveBeenCalled();
     context.pluginId = "replacement";
     await update();
     expect(input.value).toBe("");
-    expect(editor.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modal(editor)).toBeNull();
   });
 
   it.each(["button", "modal"])(
     "keeps the dialog open for a pending Save via %s dismissal",
     async (dismissal) => {
-      const { editor, context } = await mount({
-        kind: "reference",
-        ref: { source: "env", provider: "default", id: "ORIGINAL_KEY" },
-        unresolved: false,
-      });
+      const { editor, context } = await mount(reference());
       const pending = createDeferred<boolean>();
       vi.mocked(context.onCommit).mockReturnValue(pending.promise);
       await open(editor);
@@ -166,13 +177,13 @@ describe("plugin credential authoring controls", () => {
         button(editor, "Cancel").click();
       } else {
         const event = new CustomEvent("modal-cancel", { bubbles: true, cancelable: true });
-        editor.querySelector("openclaw-modal-dialog")!.dispatchEvent(event);
+        modal(editor)!.dispatchEvent(event);
         expect(event.defaultPrevented).toBe(true);
       }
       flush();
-      expect(editor.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      expect(modal(editor)).not.toBeNull();
       pending.resolve(true);
-      await vi.waitFor(() => expect(editor.querySelector("openclaw-modal-dialog")).toBeNull());
+      await vi.waitFor(() => expect(modal(editor)).toBeNull());
     },
   );
 
@@ -203,9 +214,7 @@ describe("plugin credential authoring controls", () => {
     const input = first.editor.querySelector<HTMLInputElement>("input")!;
     input.focus();
     editInput(input, "synthetic-first-key");
-    first.editor
-      .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
-      .focus();
+    revealButton(first.editor).focus();
     expect(first.context.onCommit).not.toHaveBeenCalled();
     second.editor.querySelector<HTMLInputElement>("input")!.focus();
     await vi.waitFor(() => expect(first.context.onCommit).toHaveBeenCalledOnce());
@@ -216,9 +225,7 @@ describe("plugin credential authoring controls", () => {
   it("reveals a stored literal only on request without committing it, and clears it on hide", async () => {
     const { editor, scope, context } = await mount();
     const input = editor.querySelector<HTMLInputElement>("input")!;
-    const reveal = editor.querySelector<HTMLButtonElement>(
-      '[aria-label="Show API key: Example API key"]',
-    )!;
+    const reveal = revealButton(editor);
     expect(input.value).toBe("");
     expect(scope.client.request).toHaveBeenCalledWith("plugins.credentials.inspect", {
       pluginId: "example",
@@ -242,12 +249,9 @@ describe("plugin credential authoring controls", () => {
     input.focus();
     input.blur();
     expect(context.onCommit).not.toHaveBeenCalled();
-    editor
-      .querySelector<HTMLButtonElement>('[aria-label="Hide API key: Example API key"]')!
-      .click();
+    revealButton(editor, "Hide").click();
     flush();
-    expect(input.value).toBe("");
-    expect(input.type).toBe("password");
+    expect(input).toMatchObject({ value: "", type: "password" });
   });
 
   it.each(["revision", "connection", "permission", "field"])(
@@ -259,9 +263,7 @@ describe("plugin credential authoring controls", () => {
         baseHash: "new-revision",
         credential: { kind: "literal" },
       });
-      editor
-        .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
-        .click();
+      revealButton(editor).click();
       await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(2));
       if (change === "revision") {
         context.baseHash = "new-revision";
@@ -273,12 +275,7 @@ describe("plugin credential authoring controls", () => {
         field.path = [...path.slice(0, -1), "otherKey"];
       }
       if (change === "connection") {
-        context.gateway = {
-          epoch: 2,
-          connected: false,
-          capture: () => null,
-          isCurrent: () => false,
-        } as unknown as GatewayPageBinding;
+        context.gateway = retiredGateway();
       }
       await update();
       pending.resolve({
@@ -297,20 +294,16 @@ describe("plugin credential authoring controls", () => {
     const { editor, context } = await mount();
     const field = editor.querySelector<HTMLInputElement>("input")!;
     expect(field.getAttribute("aria-describedby")).toBe("credential-help");
-    expect(field.value).toBe("");
-    expect(field.placeholder).toBe("••••••••");
+    expect(field).toMatchObject({ value: "", placeholder: "••••••••" });
     expect(editor.querySelector("a")?.href).toBe("https://example.com/keys");
     field.focus();
     field.blur();
     expect(context.onCommit).not.toHaveBeenCalled();
     editInput(field, "synthetic-new-key");
     flush();
-    editor
-      .querySelector<HTMLButtonElement>('[aria-label="Show API key: Example API key"]')!
-      .click();
+    revealButton(editor).click();
     flush();
-    expect(field.type).toBe("text");
-    expect(field.value).toBe("synthetic-new-key");
+    expect(field).toMatchObject({ type: "text", value: "synthetic-new-key" });
     field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await vi.waitFor(() =>
       expect(context.onCommit).toHaveBeenCalledWith(path, "synthetic-new-key"),
@@ -321,24 +314,19 @@ describe("plugin credential authoring controls", () => {
     "inspects and edits the exact %s pointer; Cancel never patches",
     async (source) => {
       const id = source === "file" ? "/original/key" : "ORIGINAL_KEY";
-      const { editor, context } = await mount({
-        kind: "reference",
-        ref: { source, provider: "original", id },
-        unresolved: false,
-      });
+      const { editor, context } = await mount(reference({ source, provider: "original", id }));
       const { trigger } = await open(editor);
       expect(trigger.getAttribute("aria-describedby")).toBe("credential-help");
       expect(editor.querySelector<HTMLSelectElement>("select")!.value).toBe(source);
-      const inputs = editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input");
-      expect(inputs[0]!.value).toBe("original");
-      expect(inputs[1]!.value).toBe(id);
+      const inputs = dialogInputs(editor);
+      expect([...inputs].map((input) => input.value)).toEqual(["original", id]);
       editInput(inputs[0]!, "changed");
       button(editor, "Cancel").click();
       flush();
       expect(context.onCommit).not.toHaveBeenCalled();
       expect(document.activeElement).toBe(trigger);
       await open(editor);
-      const next = editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input");
+      const next = dialogInputs(editor);
       expect(next[0]!.value).toBe("original");
       editInput(next[0]!, "changed");
       flush();
@@ -350,14 +338,10 @@ describe("plugin credential authoring controls", () => {
   );
 
   it("retains the reference draft and Cancel on write failure until the existing owner acknowledges retry", async () => {
-    const { editor, context } = await mount({
-      kind: "reference",
-      ref: { source: "env", provider: "default", id: "ORIGINAL_KEY" },
-      unresolved: true,
-    });
+    const { editor, context } = await mount(reference(undefined, true));
     vi.mocked(context.onCommit).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     await open(editor);
-    const id = editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input")[1]!;
+    const id = dialogInputs(editor)[1]!;
     editInput(id, "CHANGED_KEY");
     flush();
     button(editor, "Save").click();
@@ -367,7 +351,7 @@ describe("plugin credential authoring controls", () => {
     expect(id.value).toBe("CHANGED_KEY");
     expect(button(editor, "Cancel")).toBeDefined();
     button(editor, "Save").click();
-    await vi.waitFor(() => expect(editor.querySelector("openclaw-modal-dialog")).toBeNull());
+    await vi.waitFor(() => expect(modal(editor)).toBeNull());
   });
 
   it("keeps environment fallback inspect-only and validates source-specific identifiers", async () => {
@@ -386,7 +370,7 @@ describe("plugin credential authoring controls", () => {
     expect(rect.left).toBeGreaterThanOrEqual(0);
     expect(rect.right).toBeLessThanOrEqual(width);
     expect(rect.bottom).toBeLessThanOrEqual(844);
-    const input = editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input")[1]!;
+    const input = dialogInputs(editor)[1]!;
     input.value = "invalid lower-case env id";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
@@ -394,35 +378,24 @@ describe("plugin credential authoring controls", () => {
   });
 
   it("rejects stale open-reference edits after config revision changes, and clears inspection on Gateway retirement", async () => {
-    const { editor, context, update } = await mount({
-      kind: "reference",
-      ref: { source: "env", provider: "default", id: "ORIGINAL_KEY" },
-      unresolved: false,
-    });
+    const { editor, context, update } = await mount(reference());
     await open(editor);
     context.baseHash = "different";
     await update();
     expect(editor.textContent).toContain("Configuration changed");
     expect(button(editor, "Save").disabled).toBe(true);
-    context.gateway = {
-      epoch: 2,
-      connected: false,
-      capture: () => null,
-      isCurrent: () => false,
-    } as unknown as GatewayPageBinding;
+    context.gateway = retiredGateway();
     await update();
-    expect(editor.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modal(editor)).toBeNull();
     expect(context.onCommit).not.toHaveBeenCalled();
   });
 
   it.each(["plugin", "permission"])(
     "clears private reference metadata after %s identity changes",
     async (change) => {
-      const { editor, context, update } = await mount({
-        kind: "reference",
-        ref: { source: "file", provider: "vault", id: "/private/key" },
-        unresolved: false,
-      });
+      const { editor, context, update } = await mount(
+        reference({ source: "file", provider: "vault", id: "/private/key" }),
+      );
       await open(editor);
       if (change === "plugin") {
         context.pluginId = "different";
@@ -430,27 +403,21 @@ describe("plugin credential authoring controls", () => {
         context.canInspect = false;
       }
       await update();
-      expect(editor.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(modal(editor)).toBeNull();
       expect(editor.querySelector("input")?.value).not.toBe("/private/key");
       expect(context.onCommit).not.toHaveBeenCalled();
     },
   );
 
   it("lets an administrator inspect a read-only reference without changing it", async () => {
-    const { editor, context, field, update } = await mount({
-      kind: "reference",
-      ref: { source: "env", provider: "default", id: "EXAMPLE_KEY" },
-      unresolved: false,
-    });
+    const { editor, context, field, update } = await mount(
+      reference({ source: "env", provider: "default", id: "EXAMPLE_KEY" }),
+    );
     field.disabled = true;
     await update();
     await open(editor);
     expect(button(editor, "Save").disabled).toBe(true);
-    expect(
-      [...editor.querySelectorAll<HTMLInputElement>(".plugin-credential__dialog input")].every(
-        (input) => input.disabled,
-      ),
-    ).toBe(true);
+    expect([...dialogInputs(editor)].every((input) => input.disabled)).toBe(true);
     expect(context.onCommit).not.toHaveBeenCalled();
   });
 });

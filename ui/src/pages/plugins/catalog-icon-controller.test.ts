@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 
 const fetchIcon = vi.hoisted(() => vi.fn());
@@ -108,8 +109,7 @@ describe("catalog icon lifecycle", () => {
       controller.syncCatalog([entry]);
       await vi.waitFor(() => expect(controller.isLoading(entry.catalog.imageUrl)).toBe(false));
       vi.useFakeTimers();
-      let resolveSlow!: (value: string) => void;
-      let rejectSlow!: (error: Error) => void;
+      const pending = createDeferred<string>();
       const slow = "https://cdn.example.com/slow.png";
       let signal!: AbortSignal;
       fetchIcon.mockImplementationOnce((params: { signal: AbortSignal }) => {
@@ -117,10 +117,7 @@ describe("catalog icon lifecycle", () => {
         signal.addEventListener("abort", () => {
           events.push("abort");
         });
-        return new Promise<string>((resolve, reject) => {
-          resolveSlow = resolve;
-          rejectSlow = reject;
-        });
+        return pending.promise;
       });
       controller.syncCatalog([entry], [slow]);
       await vi.advanceTimersByTimeAsync(60_000);
@@ -133,9 +130,9 @@ describe("catalog icon lifecycle", () => {
       controller.reset();
       events.length = 0;
       if (outcome === "success") {
-        resolveSlow("blob:late");
+        pending.resolve("blob:late");
       } else {
-        rejectSlow(new Error("aborted"));
+        pending.reject(new Error("aborted"));
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(events).toEqual(outcome === "success" ? ["revoke:blob:late"] : []);

@@ -20,6 +20,21 @@ function render(content: () => JSX.Element, container: HTMLDivElement) {
   flush();
 }
 afterEach(cleanupSolid);
+const notice = {
+  code: "deprecated-sdk-api" as const,
+  severity: "info" as const,
+  message:
+    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+  removalDate: "2026-12-31",
+  migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+  apis: [
+    {
+      id: "channel-pairing-sync-allowlist",
+      displayName: "readChannelAllowFromStoreSync",
+      replacement: "Await readChannelAllowFromStore instead.",
+    },
+  ],
+};
 
 it("omits compatibility notices for plugins without observed deprecated API usage", () => {
   const container = document.createElement("div");
@@ -28,21 +43,6 @@ it("omits compatibility notices for plugins without observed deprecated API usag
 });
 
 it("shows neutral compatibility copy and adds API replacements only in plugin details", () => {
-  const notice = {
-    code: "deprecated-sdk-api" as const,
-    severity: "info" as const,
-    message:
-      "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
-    removalDate: "2026-12-31",
-    migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
-    apis: [
-      {
-        id: "channel-pairing-sync-allowlist",
-        displayName: "readChannelAllowFromStoreSync",
-        replacement: "Await readChannelAllowFromStore instead.",
-      },
-    ],
-  };
   const notices = [notice];
   const container = document.createElement("div");
   render(() => renderPluginCompatibilityNotices(notices), container);
@@ -82,14 +82,7 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   render(
     () =>
       renderPluginCompatibilityNotices([
-        {
-          code: "deprecated-sdk-api",
-          severity: "info",
-          message: "Server-only English fallback",
-          removalDate: "2026-12-31",
-          migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
-          apis: [],
-        },
+        { ...notice, message: "Server-only English fallback", apis: [] },
       ]),
     container,
   );
@@ -106,13 +99,7 @@ it("uses catalog copy when a compatibility notice has no removal date", () => {
   render(
     () =>
       renderPluginCompatibilityNotices([
-        {
-          code: "deprecated-sdk-api",
-          severity: "info",
-          message: "Server-only English fallback",
-          migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
-          apis: [],
-        },
+        { ...notice, message: "Server-only English fallback", removalDate: undefined, apis: [] },
       ]),
     container,
   );

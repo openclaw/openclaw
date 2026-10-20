@@ -1,5 +1,5 @@
 import { flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -17,55 +17,47 @@ function mount(
   result: PluginDiscoveryDetailResult,
   overrides: Partial<PluginCatalogDetailProps> = {},
 ) {
-  const view = mountSolid(() => (
-    <PluginCatalogDetail
-      {...{
-        connected: true,
-        result,
-        error: null,
-        backHref: "/plugins",
-        onBack: vi.fn(),
-        onRetry: vi.fn(),
-        canInstall: true,
-        installBlockedReason: null,
-        onInstall: vi.fn(),
-        iconUrls: {},
-        ...overrides,
-      }}
-    />
-  ));
+  const props: PluginCatalogDetailProps = {
+    connected: true,
+    result,
+    error: null,
+    backHref: "/plugins",
+    onBack: vi.fn(),
+    onRetry: vi.fn(),
+    canInstall: true,
+    installBlockedReason: null,
+    onInstall: vi.fn(),
+    iconUrls: {},
+    ...overrides,
+  };
+  const view = mountSolid(() => <PluginCatalogDetail {...props} />);
   flush();
   return view.container;
 }
 
-describe("catalog README", () => {
-  it("keeps long README tails and wires fenced-code controls", () => {
-    const tail = "README_TAIL";
-    const result = createDiscoveryDetail(
-      createPlugin({ id: "demo", name: "Demo", installed: false, state: "not-installed" }),
-    );
-    result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
-    const container = mount(result);
+it("keeps long README tails and wires fenced-code controls", () => {
+  const tail = "README_TAIL";
+  const result = createDiscoveryDetail(
+    createPlugin({ id: "demo", name: "Demo", installed: false, state: "not-installed" }),
+  );
+  result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
+  const container = mount(result);
 
-    expect(container.querySelector(".code-block-copy")).not.toBeNull();
-    expect(container.textContent).toContain(tail);
-    expect(
-      container.querySelector(".plugin-catalog-detail__readme-section > h2")?.textContent,
-    ).toBe("README");
-  });
+  expect(container.querySelector(".code-block-copy")).not.toBeNull();
+  expect(container.textContent).toContain(tail);
+  const heading = container.querySelector(".plugin-catalog-detail__readme-section > h2");
+  expect(heading?.textContent).toBe("README");
 });
 
-describe("renderPluginCatalogDetail", () => {
-  it("uses a white tile for an official package icon", () => {
-    const imageUrl = "https://example.com/icon.png";
-    const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
-    result.plugin.catalog.imageUrl = imageUrl;
-    const container = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
+it("uses a white tile for an official package icon", () => {
+  const imageUrl = "https://example.com/icon.png";
+  const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
+  result.plugin.catalog.imageUrl = imageUrl;
+  const container = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
 
-    expect(
-      container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
-    ).not.toBeNull();
-  });
+  expect(
+    container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
+  ).not.toBeNull();
 });
 
 it.each([
