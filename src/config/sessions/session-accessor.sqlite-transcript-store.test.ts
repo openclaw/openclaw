@@ -124,32 +124,29 @@ describe("SQLite transcript append", () => {
   it("canonicalizes assistant media at the generic transcript append owner", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-append-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
+    const scope = {
+      agentId: "main",
+      env,
+      sessionId: "append-session",
+      sessionKey: "agent:main:append-session",
+    };
     const committedJson = runOpenClawAgentWriteTransaction(
       (database) =>
-        appendTranscriptEventInTransaction(
-          database,
-          {
-            agentId: "main",
-            env,
-            sessionId: "append-session",
-            sessionKey: "agent:main:append-session",
+        appendTranscriptEventInTransaction(database, scope, {
+          type: "message",
+          id: "event-1",
+          parentId: null,
+          timestamp: 1000,
+          message: {
+            role: "assistant",
+            content: "append",
+            MediaPaths: ["/media/a.png"],
+            MediaTypes: ["image/png"],
           },
-          {
-            type: "message",
-            id: "event-1",
-            parentId: null,
-            timestamp: 1000,
-            message: {
-              role: "assistant",
-              content: "append",
-              MediaPaths: ["/media/a.png"],
-              MediaTypes: ["image/png"],
-            },
-          },
-        ),
-      { agentId: "main", env },
+        }),
+      scope,
     );
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const database = openOpenClawAgentDatabase(scope);
     const row = database.db
       .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? AND seq = 0")
       .get("append-session") as { event_json: string };
@@ -178,18 +175,8 @@ describe("SQLite transcript append", () => {
     let nextJson: string | false;
     try {
       nextJson = runOpenClawAgentWriteTransaction(
-        (writer) =>
-          appendTranscriptEventInTransaction(
-            writer,
-            {
-              agentId: "main",
-              env,
-              sessionId: "append-session",
-              sessionKey: "agent:main:append-session",
-            },
-            next,
-          ),
-        { agentId: "main", env },
+        (writer) => appendTranscriptEventInTransaction(writer, scope, next),
+        scope,
       );
     } finally {
       policy.restore();
@@ -220,6 +207,14 @@ const rewriteEvents = [
     message: { role: "assistant", content: "answer" },
   },
 ] as const;
+
+function rewriteMessage(index: 1 | 2, message: Record<string, unknown>) {
+  return { ...rewriteEvents[index], message: { ...rewriteEvents[index].message, ...message } };
+}
+
+function detailedEvents(details: Record<string, unknown>) {
+  return [rewriteEvents[0], rewriteMessage(1, { details }), rewriteMessage(2, { details })];
+}
 
 async function withRewriteFixture(
   run: (f: {
@@ -300,17 +295,16 @@ describe("SQLite exact transcript rewrite", () => {
         ...rewriteEvents[1].message,
         __openclaw: { modelPromptProjection: { version: 1, text: "question" } },
       };
-      rewrite({ ...rewriteEvents[1], message });
+      rewrite(rewriteMessage(1, message));
       const captured = snapshot();
       expect(captured.generation).toBe(before.generation);
       expect(captured.raw[1]?.event_json).toBe(JSON.stringify({ ...rewriteEvents[1], message }));
-      rewrite({
-        ...rewriteEvents[1],
-        message: {
+      rewrite(
+        rewriteMessage(1, {
           ...message,
           __openclaw: { modelPromptProjection: { version: 1, text: "changed" } },
-        },
-      });
+        }),
+      );
       expect(snapshot().generation).not.toBe(captured.generation);
     });
   });
@@ -345,41 +339,12 @@ describe("SQLite exact transcript rewrite", () => {
 
   it("applies exact bindings across both storage arms", async () => {
     const details = { opaque: "preserved metadata ".repeat(2048) };
-    const events = [
-      rewriteEvents[0],
-      {
-        ...rewriteEvents[1],
-        message: { ...rewriteEvents[1].message, details },
-      },
-      {
-        ...rewriteEvents[2],
-        message: { ...rewriteEvents[2].message, details },
-      },
-    ];
+    const events = detailedEvents(details);
     await withRewriteFixture(({ snapshot, scope }) => {
       const before = snapshot();
-      const first = {
-        ...rewriteEvents[2],
-        message: {
-          ...rewriteEvents[2].message,
-          provenance: "first",
-        },
-      };
-      const last = {
-        ...rewriteEvents[2],
-        message: {
-          ...rewriteEvents[2].message,
-          provenance: "last",
-          details,
-        },
-      };
-      const user = {
-        ...rewriteEvents[1],
-        message: {
-          ...rewriteEvents[1].message,
-          provenance: "user",
-        },
-      };
+      const first = rewriteMessage(2, { provenance: "first" });
+      const last = rewriteMessage(2, { provenance: "last", details });
+      const user = rewriteMessage(1, { provenance: "user" });
       expect(before.storage[1]?.event_json === null).toBe(true);
       expect(before.storage[2]?.event_zstd instanceof Uint8Array).toBe(true);
       const work = trackSqliteStatementExecutions(
@@ -461,17 +426,7 @@ describe("SQLite exact transcript rewrite", () => {
 
   it("rolls back payload-arm changes and mutation state on later conflict", async () => {
     const details = { opaque: "rollback metadata ".repeat(2048) };
-    const events = [
-      rewriteEvents[0],
-      {
-        ...rewriteEvents[1],
-        message: { ...rewriteEvents[1].message, details },
-      },
-      {
-        ...rewriteEvents[2],
-        message: { ...rewriteEvents[2].message, details },
-      },
-    ];
+    const events = detailedEvents(details);
     await withRewriteFixture(({ snapshot, scope }) => {
       const before = snapshot();
       const stats = readTranscriptStatsSync(scope);
@@ -481,10 +436,7 @@ describe("SQLite exact transcript rewrite", () => {
             {
               seq: 1,
               expectedEventJson: JSON.stringify(events[1]),
-              event: {
-                ...rewriteEvents[1],
-                message: { role: "user", content: "edited" },
-              },
+              event: rewriteMessage(1, { content: "edited" }),
             },
             { seq: 2, expectedEventJson: JSON.stringify(events[2], null, 2), event: events[2] },
           ]);
@@ -544,17 +496,11 @@ describe("SQLite exact transcript rewrite", () => {
       const updates = [
         {
           seq: 2,
-          eventJson: JSON.stringify({
-            ...rewriteEvents[2],
-            message: { role: "assistant", content: "repaired answer" },
-          }),
+          eventJson: JSON.stringify(rewriteMessage(2, { content: "repaired answer" })),
         },
         {
           seq: 1,
-          eventJson: JSON.stringify({
-            ...rewriteEvents[1],
-            message: { role: "user", content: "repaired" },
-          }),
+          eventJson: JSON.stringify(rewriteMessage(1, { content: "repaired" })),
         },
       ] as const;
       const work = trackSqliteStatementExecutions(db, ["deletes"], (sql) =>
@@ -662,8 +608,8 @@ describe("SQLite exact transcript suffix replacement", () => {
   const siblingChild = assistant("active-child", "user", "active child");
   const updatedEvents = [
     rewriteEvents[0],
-    { ...rewriteEvents[1], message: { role: "user", content: "updated question" } },
-    { ...rewriteEvents[2], message: { role: "assistant", content: "updated answer" } },
+    rewriteMessage(1, { content: "updated question" }),
+    rewriteMessage(2, { content: "updated answer" }),
   ];
   it.each([
     {

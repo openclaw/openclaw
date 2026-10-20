@@ -30,19 +30,17 @@ describe("terminal main session transcript freshness", () => {
     status?: SessionEntry["status"];
     updatedAt: number;
   }): Promise<{ entry: SessionEntry; sessionKey: string }> {
-    const sessionKey = params.sessionKey ?? "agent:main:main";
+    const { sessionKey = "agent:main:main", sessionFile, ...metadata } = params;
     const sessionId = `session-${params.status ?? "ended"}-${sessionKey.replaceAll(":", "-")}`;
     const sessionEntry = {
+      ...metadata,
+      sessionId,
       sessionFile:
-        params.sessionFile ??
+        sessionFile ??
         `sqlite:main:${sessionId}:${resolveOpenClawAgentSqlitePath({
           agentId: "main",
           env: { OPENCLAW_STATE_DIR: stateDir },
         })}`,
-      sessionId,
-      updatedAt: params.updatedAt,
-      ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
-      ...(params.status !== undefined ? { status: params.status } : {}),
     };
     await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
     await appendTranscriptEvent(
@@ -52,20 +50,18 @@ describe("terminal main session transcript freshness", () => {
         timestamp: "1970-01-01T00:00:00.001Z",
       },
     );
-    const storedEntry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-    if (!storedEntry) {
-      throw new Error("expected session entry");
-    }
     return {
-      entry: {
-        ...storedEntry,
-        sessionFile: sessionEntry.sessionFile,
-        updatedAt: params.updatedAt,
-        ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
-        ...(params.status !== undefined ? { status: params.status } : {}),
-      },
+      entry: { ...loadEntry(sessionKey), ...metadata, sessionFile: sessionEntry.sessionFile },
       sessionKey,
     };
+  }
+
+  function loadEntry(sessionKey: string): SessionEntry {
+    const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    if (!entry) {
+      throw new Error("expected session entry");
+    }
+    return entry;
   }
 
   function check(entry: SessionEntry, sessionKey: string): Promise<boolean> {
@@ -151,12 +147,9 @@ describe("terminal main session transcript freshness", () => {
     expect(await check(entry, sessionKey)).toBe(true);
 
     await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
-    const refreshed = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    const refreshed = loadEntry(sessionKey);
     dateNow.mockRestore();
 
-    if (!refreshed) {
-      throw new Error("expected refreshed session entry");
-    }
     expect(await check(refreshed, sessionKey)).toBe(false);
   });
 
@@ -174,14 +167,7 @@ describe("terminal main session transcript freshness", () => {
       { agentId: "main", sessionKey: newerRegistry.sessionKey, storePath },
       newerRegistry.entry,
     );
-    const refreshedRegistry = loadSessionEntry({
-      agentId: "main",
-      sessionKey: newerRegistry.sessionKey,
-      storePath,
-    });
-    if (!refreshedRegistry) {
-      throw new Error("expected refreshed registry entry");
-    }
+    const refreshedRegistry = loadEntry(newerRegistry.sessionKey);
 
     expect(await check(nonMain.entry, nonMain.sessionKey)).toBe(false);
     expect(await check(refreshedRegistry, newerRegistry.sessionKey)).toBe(false);

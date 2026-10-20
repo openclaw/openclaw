@@ -40,6 +40,29 @@ import {
 import * as historyReaders from "./session-transcript-worker-readers.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const jsonLines = (events: readonly unknown[]) =>
+  events.map((event) => JSON.stringify(event)).join("\n");
+const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+function archiveRow(
+  sessionId: string,
+  sessionKey: string,
+  bytes: Buffer,
+  options: { generation?: string; encoding?: "identity" | "zstd"; name: string; createdAt: number },
+) {
+  return {
+    session_id: sessionId,
+    session_key: sessionKey,
+    generation: options.generation ?? "generation",
+    reason: "deleted" as const,
+    encoding: options.encoding ?? "identity",
+    archive_blob: bytes,
+    archive_sha256: digest(bytes),
+    archive_name: options.name,
+    created_at: options.createdAt,
+    published_at: null,
+  };
+}
 
 async function withoutHostSql<T>(read: () => Promise<T>): Promise<T> {
   const hostSql = observeHostDataSql();
@@ -67,6 +90,11 @@ describe("SQLite transcript archive reads", () => {
     const sessionKey = "agent:main:completed";
     const scope = { agentId: "main", env, storePath, sessionKey };
     const runId = "original-run";
+    const readPage = (
+      request: Omit<Parameters<typeof readSessionTaskArchivePageReadOnly>[1], "runId"> & {
+        runId?: string;
+      } = {},
+    ) => readSessionTaskArchivePageReadOnly(scope, { runId, ...request });
     const user = {
       type: "message",
       id: "user",
@@ -84,22 +112,13 @@ describe("SQLite transcript archive reads", () => {
       middle: unknown[] = [],
     ) => {
       const bytes = Buffer.from(
-        [{ type: "session", id: headerId }, user, ...middle, reply]
-          .map((event) => JSON.stringify(event))
-          .join("\n"),
+        jsonLines([{ type: "session", id: headerId }, user, ...middle, reply]),
       );
-      return {
-        session_id: sessionId,
-        session_key: sessionKey,
+      return archiveRow(sessionId, sessionKey, bytes, {
         generation,
-        reason: "deleted" as const,
-        encoding: "identity" as const,
-        archive_blob: bytes,
-        archive_sha256: createHash("sha256").update(bytes).digest("hex"),
-        archive_name: `${generation}.jsonl`,
-        created_at: generation === "original" ? 1 : 2,
-        published_at: null,
-      };
+        name: `${generation}.jsonl`,
+        createdAt: generation === "original" ? 1 : 2,
+      });
     };
     const original = archive("original");
     const successor = archive(
@@ -137,7 +156,7 @@ describe("SQLite transcript archive reads", () => {
       );
     });
     await withSqliteTranscriptArchiveSession(options, async () => {
-      const page = await readSessionTaskArchivePageReadOnly(scope, { runId, limit: 1 });
+      const page = await readPage({ limit: 1 });
       expect(page?.entries).toEqual([{ event: answer, seq: 2 }]);
       expect(page?.totalMessages).toBe(2);
       expect(page?.binding.generation).toBe("original");
@@ -146,10 +165,16 @@ describe("SQLite transcript archive reads", () => {
         throw new Error("Expected an older archive page");
       }
       const continuation = { runId, limit: 1, cursor: page.nextCursor };
-      const older = await readSessionTaskArchivePageReadOnly(scope, continuation);
+      const verifyBinding = () =>
+        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding);
+      const expectUnavailable = async (message: string | RegExp, request = {}) => {
+        await expect(readPage(request)).rejects.toThrow(message);
+        await expect(verifyBinding()).rejects.toThrow(message);
+      };
+      const older = await readPage(continuation);
       expect(older?.entries).toEqual([{ event: user, seq: 1 }]);
       expect(older?.nextCursor).toBeUndefined();
-      await verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding);
+      await verifyBinding();
       const oversizedSuccessor = archive("successor", {
         ...answer,
         message: {
@@ -170,18 +195,13 @@ describe("SQLite transcript archive reads", () => {
         });
       replaceSuccessor(oversizedSuccessor);
       // The capped candidate cannot establish whether the readable match is unique.
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
-      );
-      await expect(
-        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow(
+      await expectUnavailable(
         "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
       );
       replaceSuccessor(successor);
-      await expect(
-        readSessionTaskArchivePageReadOnly(scope, { ...continuation, runId: "next-run" }),
-      ).rejects.toThrow("Invalid archived transcript cursor");
+      await expect(readPage({ ...continuation, runId: "next-run" })).rejects.toThrow(
+        "Invalid archived transcript cursor",
+      );
 
       replaceOriginal(
         archive(
@@ -196,23 +216,14 @@ describe("SQLite transcript archive reads", () => {
           [{ ...answer, parentId: "user" }],
         ),
       );
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        "run is not on the active branch",
-      );
-      await expect(
-        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow("run is not on the active branch");
+      await expectUnavailable("run is not on the active branch");
 
       const replaceEvents = (events: unknown[]) => {
-        const bytes = Buffer.from(
-          [{ type: "session", id: sessionId }, ...events]
-            .map((event) => JSON.stringify(event))
-            .join("\n"),
-        );
+        const bytes = Buffer.from(jsonLines([{ type: "session", id: sessionId }, ...events]));
         replaceOriginal({
           ...original,
           archive_blob: bytes,
-          archive_sha256: createHash("sha256").update(bytes).digest("hex"),
+          archive_sha256: digest(bytes),
         });
       };
       const root = { ...user, parentId: null };
@@ -220,7 +231,7 @@ describe("SQLite transcript archive reads", () => {
       const contextBefore = { ...answer, id: "context-before" };
       const contextSelected = { ...answer, id: "context-selected" };
       replaceEvents([user, contextBefore, contextSelected, answer]);
-      const contextTail = await readSessionTaskArchivePageReadOnly(scope, { runId, limit: 1 });
+      const contextTail = await readPage({ limit: 1 });
       if (!contextTail?.nextCursor) {
         throw new Error("Expected a bounded projection-context page");
       }
@@ -228,8 +239,7 @@ describe("SQLite transcript archive reads", () => {
         JSON.stringify(contextSelected) + JSON.stringify(answer),
       );
       for (const maxBytes of [4096, selectedAndNewerBytes]) {
-        const pageWithContext = await readSessionTaskArchivePageReadOnly(scope, {
-          runId,
+        const pageWithContext = await readPage({
           limit: 1,
           contextMaxMessages: 2,
           maxBytes,
@@ -251,13 +261,13 @@ describe("SQLite transcript archive reads", () => {
         })),
         reply,
       ]);
-      expect((await readSessionTaskArchivePageReadOnly(scope, { runId }))?.entries).toEqual([
+      expect((await readPage())?.entries).toEqual([
         { event: root, seq: 1 },
         { event: reply, seq: 1027 },
       ]);
       // Duplicate IDs resolve to the latest node; a cycle discards the whole path.
       replaceEvents([root, reply, { ...reply, message: { ...reply.message, content: "Latest" } }]);
-      expect((await readSessionTaskArchivePageReadOnly(scope, { runId }))?.entries).toEqual([
+      expect((await readPage())?.entries).toEqual([
         { event: root, seq: 1 },
         {
           event: { ...reply, message: { ...reply.message, content: "Latest" } },
@@ -265,9 +275,7 @@ describe("SQLite transcript archive reads", () => {
         },
       ]);
       replaceEvents([root, reply, { ...root, parentId: answer.id }]);
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        "run is not on the active branch",
-      );
+      await expect(readPage()).rejects.toThrow("run is not on the active branch");
 
       for (const invalidControl of [{ appendMode: false }, { appendParentId: { invalid: true } }]) {
         replaceEvents([
@@ -281,15 +289,13 @@ describe("SQLite transcript archive reads", () => {
             ...invalidControl,
           },
         ]);
-        expect((await readSessionTaskArchivePageReadOnly(scope, { runId }))?.entries).toEqual([
+        expect((await readPage())?.entries).toEqual([
           { event: root, seq: 1 },
           { event: reply, seq: 2 },
         ]);
       }
       replaceEvents([root, { ...reply, parentId: false }]);
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        "run is not on the active branch",
-      );
+      await expect(readPage()).rejects.toThrow("run is not on the active branch");
 
       replaceOriginal(
         archive("original", answer, sessionId, [
@@ -300,12 +306,11 @@ describe("SQLite transcript archive reads", () => {
           },
         ]),
       );
-      const tail = await readSessionTaskArchivePageReadOnly(scope, { runId, maxBytes: 512 });
+      const tail = await readPage({ maxBytes: 512 });
       expect(tail?.entries).toEqual([{ event: answer, seq: 3 }]);
       expect(tail?.omittedOversized).toBeUndefined();
       expect(tail?.nextCursor).toEqual(expect.any(String));
-      const omitted = await readSessionTaskArchivePageReadOnly(scope, {
-        runId,
+      const omitted = await readPage({
         maxBytes: 512,
         cursor: tail?.nextCursor,
       });
@@ -313,8 +318,7 @@ describe("SQLite transcript archive reads", () => {
       expect(omitted?.omittedOversized).toBe(true);
       expect(omitted?.nextCursor).toEqual(expect.any(String));
       expect(omitted?.nextCursor).not.toBe(tail?.nextCursor);
-      const beginning = await readSessionTaskArchivePageReadOnly(scope, {
-        runId,
+      const beginning = await readPage({
         maxBytes: 512,
         cursor: omitted?.nextCursor,
       });
@@ -386,9 +390,9 @@ describe("SQLite transcript archive reads", () => {
         replaceOriginal({
           ...original,
           archive_blob: bytes,
-          archive_sha256: createHash("sha256").update(bytes).digest("hex"),
+          archive_sha256: digest(bytes),
         });
-        const actual = await readSessionTaskArchivePageReadOnly(scope, { runId, maxBytes: 512 });
+        const actual = await readPage({ maxBytes: 512 });
         expect(actual?.totalMessages).toBe(1);
         if (expectsOmission) {
           expect(actual?.entries).toEqual([]);
@@ -405,34 +409,20 @@ describe("SQLite transcript archive reads", () => {
       replaceOriginal({
         ...original,
         archive_blob: malformedBytes,
-        archive_sha256: createHash("sha256").update(malformedBytes).digest("hex"),
+        archive_sha256: digest(malformedBytes),
       });
-      await expect(
-        readSessionTaskArchivePageReadOnly(scope, { runId, maxBytes: 512 }),
-      ).rejects.toThrow();
+      await expect(readPage({ maxBytes: 512 })).rejects.toThrow();
 
       replaceOriginal(
         archive("original", { ...answer, message: { ...answer.message, content: "Replacement" } }),
       );
-      await expect(readSessionTaskArchivePageReadOnly(scope, continuation)).rejects.toThrow(
-        "identity changed",
-      );
-      await expect(
-        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow("identity changed");
+      await expectUnavailable("identity changed", continuation);
 
       replaceOriginal({ ...original, archive_blob: Buffer.from("corrupt") });
-      await expect(readSessionTaskArchivePageReadOnly(scope, continuation)).rejects.toThrow(
-        "registered hash",
-      );
-      await expect(
-        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow("registered hash");
+      await expectUnavailable("registered hash", continuation);
 
       replaceOriginal(archive("original", answer, "wrong-session"));
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        "header does not match",
-      );
+      await expect(readPage()).rejects.toThrow("header does not match");
 
       replaceOriginal(original);
       write(() => {
@@ -443,12 +433,10 @@ describe("SQLite transcript archive reads", () => {
             .values(archive("ambiguous")),
         );
       });
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).rejects.toThrow(
-        "Multiple archived transcript generations",
+      await expect(readPage()).rejects.toThrow("Multiple archived transcript generations");
+      await expect(verifyBinding()).rejects.toThrow(
+        /Multiple archived transcript generations|identity changed/,
       );
-      await expect(
-        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow(/Multiple archived transcript generations|identity changed/);
       write(() => {
         executeSqliteQuerySync(
           database.db,
@@ -457,13 +445,8 @@ describe("SQLite transcript archive reads", () => {
             .where("generation", "in", ["original", "ambiguous", "successor"]),
         );
       });
-      await expect(readSessionTaskArchivePageReadOnly(scope, continuation)).rejects.toThrow(
-        "no longer available",
-      );
-      await expect(
-        verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding),
-      ).rejects.toThrow("no longer available");
-      await expect(readSessionTaskArchivePageReadOnly(scope, { runId })).resolves.toBeUndefined();
+      await expectUnavailable("no longer available", continuation);
+      await expect(readPage()).resolves.toBeUndefined();
     });
   });
 
@@ -592,62 +575,41 @@ describe("SQLite transcript archive reads", () => {
               database.db,
               getSessionKysely(database.db)
                 .insertInto("session_transcript_archives")
-                .values({
-                  session_id: archive.sessionId,
-                  session_key: archive.sessionKey,
-                  generation: "generation",
-                  reason: "deleted",
-                  encoding: encoded.suffix ? "zstd" : "identity",
-                  archive_blob: encoded.bytes,
-                  archive_sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
-                  archive_name: `archive-${index}.jsonl${encoded.suffix}`,
-                  created_at: index,
-                  published_at: null,
-                }),
+                .values(
+                  archiveRow(archive.sessionId, archive.sessionKey, encoded.bytes, {
+                    encoding: encoded.suffix ? "zstd" : "identity",
+                    name: `archive-${index}.jsonl${encoded.suffix}`,
+                    createdAt: index,
+                  }),
+                ),
             );
           }
         },
         { agentId: "main", env, path: storePath },
       );
       const scope = { agentId: "ops", env, storePath, sessionKey };
-      const filesBefore = fs
-        .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
-        .toSorted((left, right) => left.localeCompare(right));
-
-      expect(
-        await withoutHostSql(() =>
-          findSessionTranscriptArchiveEventReadOnly(scope, "completed-run"),
-        ),
-      ).toEqual({ event: answer });
-      expect(
-        await findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "old" },
-          "completed-run",
-        ),
-      ).toEqual({ event: message("old") });
-      expect(
-        await findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "foreign" },
-          "completed-run",
-        ),
-      ).toBeUndefined();
-      expect(await findSessionTranscriptArchiveEventReadOnly(scope, "missing-run")).toBeUndefined();
-      await expect(
+      const find = (sessionId?: string, runId = "completed-run") =>
         findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "invalid" },
-          "completed-run",
-        ),
-      ).rejects.toThrow("Archived transcript header does not match its registered session");
-      for (const sessionId of ["malformed", "truncated"]) {
-        await expect(
-          findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, "completed-run"),
-        ).rejects.toThrow();
-      }
-      expect(
+          { ...scope, ...(sessionId ? { sessionId } : {}) },
+          runId,
+        );
+      const files = () =>
         fs
           .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
-          .toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(filesBefore);
+          .toSorted((left, right) => left.localeCompare(right));
+      const filesBefore = files();
+
+      expect(await withoutHostSql(() => find())).toEqual({ event: answer });
+      expect(await find("old")).toEqual({ event: message("old") });
+      expect(await find("foreign")).toBeUndefined();
+      expect(await find(undefined, "missing-run")).toBeUndefined();
+      await expect(find("invalid")).rejects.toThrow(
+        "Archived transcript header does not match its registered session",
+      );
+      for (const sessionId of ["malformed", "truncated"]) {
+        await expect(find(sessionId)).rejects.toThrow();
+      }
+      expect(files()).toEqual(filesBefore);
       expect(
         executeSqliteQuerySync(
           database.db,
@@ -678,9 +640,9 @@ describe("SQLite transcript archive reads", () => {
         },
         { agentId: "main", env, path: storePath },
       );
-      await expect(
-        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "new" }, "completed-run"),
-      ).rejects.toThrow("Archived transcript bytes do not match their registered hash");
+      await expect(find("new")).rejects.toThrow(
+        "Archived transcript bytes do not match their registered hash",
+      );
 
       if (!compressed) {
         const entered = createDeferred();
@@ -702,10 +664,7 @@ describe("SQLite transcript archive reads", () => {
             };
           });
         const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
-        const outcome = findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "old" },
-          "completed-run",
-        ).then(
+        const outcome = find("old").then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
@@ -749,10 +708,7 @@ describe("SQLite transcript archive reads", () => {
             return resolved;
           });
         const archiveRead = vi.spyOn(archiveWorker, "runSqliteTranscriptArchiveReadWorker");
-        const outcome = findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "old" },
-          "completed-run",
-        ).then(
+        const outcome = find("old").then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
@@ -899,18 +855,13 @@ describe("SQLite transcript archive reads", () => {
           database.db,
           getSessionKysely(database.db)
             .insertInto("session_transcript_archives")
-            .values({
-              session_id: sessionId,
-              session_key: sessionKey,
-              generation: "generation",
-              reason: "deleted",
-              encoding: "zstd",
-              archive_blob: bytes,
-              archive_sha256: createHash("sha256").update(bytes).digest("hex"),
-              archive_name: "large.jsonl.zst",
-              created_at: 1,
-              published_at: null,
-            }),
+            .values(
+              archiveRow(sessionId, sessionKey, bytes, {
+                encoding: "zstd",
+                name: "large.jsonl.zst",
+                createdAt: 1,
+              }),
+            ),
         );
       },
       { agentId: "main", env, path: storePath },

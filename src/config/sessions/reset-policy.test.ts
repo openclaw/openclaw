@@ -1,4 +1,3 @@
-// Session reset policy tests cover defaults, opt-in schedules, and compatibility overrides.
 import { describe, expect, it } from "vitest";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { SessionSchema } from "../zod-schema.session.js";
@@ -17,71 +16,16 @@ describe("session reset policy", () => {
     });
   });
 
-  it.each([
-    {
-      name: "before New York's spring gap",
-      timezone: "America/New_York",
-      now: "2027-03-14T06:00:00Z",
-      startedAt: "2027-03-13T07:30:00Z",
-      atHour: 2,
-      boundary: "2027-03-13T07:00:00Z",
-      fresh: true,
-    },
-    {
-      name: "before Lord Howe's half-hour spring gap",
-      timezone: "Australia/Lord_Howe",
-      now: "2026-10-03T14:30:00Z",
-      startedAt: "2026-10-02T15:45:00Z",
-      atHour: 2,
-      boundary: "2026-10-02T15:30:00Z",
-      fresh: true,
-    },
-    {
-      name: "after New York's spring gap",
-      timezone: "America/New_York",
-      now: "2027-03-14T07:15:00Z",
-      startedAt: "2027-03-14T06:30:00Z",
-      atHour: 2,
-      boundary: "2027-03-14T07:00:00Z",
-      fresh: false,
-    },
-    {
-      name: "the day after New York's spring gap",
-      timezone: "America/New_York",
-      now: "2027-03-15T05:00:00Z",
-      startedAt: "2027-03-14T07:30:00Z",
-      atHour: 2,
-      boundary: "2027-03-14T07:00:00Z",
-      fresh: true,
-    },
-    {
-      name: "during New York's repeated hour",
-      timezone: "America/New_York",
-      now: "2026-11-01T06:15:00Z",
-      startedAt: "2026-11-01T05:30:00Z",
-      atHour: 1,
-      boundary: "2026-11-01T05:00:00Z",
-      fresh: true,
-    },
-    {
-      name: "before Nuuk's spring gap crosses midnight",
-      timezone: "America/Nuuk",
-      now: "2027-03-28T00:30:00Z",
-      startedAt: "2027-03-27T01:30:00Z",
-      atHour: 23,
-      boundary: "2027-03-27T01:00:00Z",
-      fresh: true,
-    },
-    {
-      name: "after Troll's two-hour fold rewinds past the reset hour",
-      timezone: "Antarctica/Troll",
-      now: "2026-10-25T01:30:00Z",
-      startedAt: "2026-10-24T23:30:00Z",
-      atHour: 2,
-      boundary: "2026-10-25T00:00:00Z",
-      fresh: false,
-    },
-  ])(
+  it.each`
+    name                                                         | timezone                 | now                       | startedAt                 | atHour | boundary                  | fresh
+    ${"before New York's spring gap"}                            | ${"America/New_York"}    | ${"2027-03-14T06:00:00Z"} | ${"2027-03-13T07:30:00Z"} | ${2}   | ${"2027-03-13T07:00:00Z"} | ${true}
+    ${"before Lord Howe's half-hour spring gap"}                 | ${"Australia/Lord_Howe"} | ${"2026-10-03T14:30:00Z"} | ${"2026-10-02T15:45:00Z"} | ${2}   | ${"2026-10-02T15:30:00Z"} | ${true}
+    ${"after New York's spring gap"}                             | ${"America/New_York"}    | ${"2027-03-14T07:15:00Z"} | ${"2027-03-14T06:30:00Z"} | ${2}   | ${"2027-03-14T07:00:00Z"} | ${false}
+    ${"the day after New York's spring gap"}                     | ${"America/New_York"}    | ${"2027-03-15T05:00:00Z"} | ${"2027-03-14T07:30:00Z"} | ${2}   | ${"2027-03-14T07:00:00Z"} | ${true}
+    ${"during New York's repeated hour"}                         | ${"America/New_York"}    | ${"2026-11-01T06:15:00Z"} | ${"2026-11-01T05:30:00Z"} | ${1}   | ${"2026-11-01T05:00:00Z"} | ${true}
+    ${"before Nuuk's spring gap crosses midnight"}               | ${"America/Nuuk"}        | ${"2027-03-28T00:30:00Z"} | ${"2027-03-27T01:30:00Z"} | ${23}  | ${"2027-03-27T01:00:00Z"} | ${true}
+    ${"after Troll's two-hour fold rewinds past the reset hour"} | ${"Antarctica/Troll"}    | ${"2026-10-25T01:30:00Z"} | ${"2026-10-24T23:30:00Z"} | ${2}   | ${"2026-10-25T00:00:00Z"} | ${false}
+  `(
     "uses the configured local reset hour $name",
     ({ timezone, now, startedAt, atHour, boundary, fresh }) => {
       // Native Date captures the host timezone in each process; Vitest workers
@@ -104,20 +48,13 @@ describe("session reset policy", () => {
     },
   );
 
-  it.each([
-    {
-      name: "a type override above a disabled base policy",
-      sessionCfg: {
-        reset: { mode: "none" as const },
-        resetByType: { group: { atHour: 6 } },
-      },
-      resetType: "group" as const,
-    },
-  ])("preserves the daily fallback when $name omits mode", ({ sessionCfg, resetType }) => {
-    expect(resolveSessionResetPolicy({ sessionCfg, resetType })).toMatchObject({
-      mode: "daily",
-      atHour: 6,
-    });
+  it("preserves the daily fallback when a type override above a disabled base omits mode", () => {
+    expect(
+      resolveSessionResetPolicy({
+        sessionCfg: { reset: { mode: "none" }, resetByType: { group: { atHour: 6 } } },
+        resetType: "group",
+      }),
+    ).toMatchObject({ mode: "daily", atHour: 6 });
   });
 
   it("inherits an active base mode for partial type overrides", () => {
