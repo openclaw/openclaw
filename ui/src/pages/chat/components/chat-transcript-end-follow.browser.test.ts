@@ -120,6 +120,12 @@ async function settleFrames() {
   });
 }
 
+async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, height: number) {
+  host.viewportHeight = height;
+  host.requestRender();
+  await expect.poll(() => thread.clientHeight).toBe(height);
+}
+
 async function commitTask(host: EndFollowFixture, change: () => void) {
   await new Promise<void>((resolve) => {
     setTimeout(() => {
@@ -401,18 +407,14 @@ it.each([
       thread.scrollTop -= readerMovement;
     }
 
-    host.viewportHeight = 500;
-    host.requestRender();
-    await expect.poll(() => thread.clientHeight).toBe(500);
+    await resizeViewport(host, thread, 500);
     expect(thread.scrollTop).toBe(original - 100);
     if (!beforeClamp) {
       thread.scrollTop -= readerMovement;
     }
     const readerPosition = thread.scrollTop;
 
-    host.viewportHeight = 400;
-    host.requestRender();
-    await expect.poll(() => thread.clientHeight).toBe(400);
+    await resizeViewport(host, thread, 400);
     await settleFrames();
     expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
 
@@ -467,17 +469,13 @@ it.each([
     });
     try {
       thread.scrollTop -= 8;
-      host.viewportHeight = 500;
-      host.requestRender();
-      await expect.poll(() => thread.clientHeight).toBe(500);
+      await resizeViewport(host, thread, 500);
       expect(thread.scrollTop).toBe(original - 100);
       const readerPosition = thread.scrollTop;
       // The existing native observer must settle while layout holds the reader
       // at a temporary end, not after the original viewport has returned.
       await expect.poll(() => idleAtClamp).toBe(true);
-      host.viewportHeight = 400;
-      host.requestRender();
-      await expect.poll(() => thread.clientHeight).toBe(400);
+      await resizeViewport(host, thread, 400);
       await settleFrames();
       expect(thread.scrollTop).toBe(readerPosition);
       host.lastRowHeight += 48;
