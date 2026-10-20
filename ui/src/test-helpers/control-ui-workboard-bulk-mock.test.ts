@@ -15,17 +15,21 @@ const card = {
   metadata: { automation: { boardId: "default" } },
 };
 
+function installBoard(page: { execute(script: string): void }, cards: (typeof card)[]) {
+  const seed = {
+    boards: [{ id: "default" }],
+    cards,
+    tasks: [],
+    methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
+  };
+  page.execute(createControlUiMockGatewayInitScript());
+  page.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+}
+
 it.for(["move", "archive", "delete"] as const)(
   "rejects stale %s through the serialized Workboard mock without changing cards or emitting events",
   async (action, { gatewayPage }) => {
-    const seed = {
-      boards: [{ id: "default" }],
-      cards: [card],
-      tasks: [],
-      methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
-    };
-    gatewayPage.execute(createControlUiMockGatewayInitScript());
-    gatewayPage.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+    installBoard(gatewayPage, [card]);
     const socket = gatewayPage.connect();
     await flushMockTimers();
     const before = await socket.request("before", "workboard.cards.list", {});
@@ -70,15 +74,8 @@ it("returns link cleanup revisions so the next guarded mock delete can succeed",
       links: [{ id: "link", type: "parent", targetCardId: parent.id, createdAt: 1 }],
     },
   };
-  const seed = {
-    boards: [{ id: "default" }],
-    cards: [parent, child],
-    tasks: [],
-    methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
-  };
   gatewayPage.execute("Date.now = () => 10;");
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  gatewayPage.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+  installBoard(gatewayPage, [parent, child]);
   const socket = gatewayPage.connect();
   await flushMockTimers();
   expect(

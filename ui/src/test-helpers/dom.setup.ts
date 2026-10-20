@@ -8,6 +8,12 @@ afterEach(cleanupSolid);
 
 installPopoverPolyfill();
 
+function defineMissing(target: object | undefined, key: string, descriptor: PropertyDescriptor) {
+  if (target && !(key in target)) {
+    Object.defineProperty(target, key, { configurable: true, ...descriptor });
+  }
+}
+
 if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   // mock-isolation: JSDOM rendering tests assume admission; the real browser gate has E2E coverage.
   vi.doMock("../app/boot-capabilities.ts", () => ({ unsupportedControlUiBrowser: false }));
@@ -104,70 +110,46 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
     });
   }
 
-  if (!("checkVisibility" in Element.prototype)) {
-    Object.defineProperty(Element.prototype, "checkVisibility", {
-      configurable: true,
-      writable: true,
-      value(this: Element) {
-        return getComputedStyle(this).display !== "none";
-      },
-    });
-  }
+  defineMissing(Element.prototype, "checkVisibility", {
+    writable: true,
+    value(this: Element) {
+      return getComputedStyle(this).display !== "none";
+    },
+  });
 
-  if (!("scrollTo" in Element.prototype)) {
-    Object.defineProperty(Element.prototype, "scrollTo", {
-      configurable: true,
-      writable: true,
-      value(this: Element, optionsOrX?: ScrollToOptions | number, y?: number) {
-        const options = typeof optionsOrX === "number" ? { left: optionsOrX, top: y } : optionsOrX;
-        if (options?.left !== undefined) {
-          this.scrollLeft = options.left;
-        }
-        if (options?.top !== undefined) {
-          this.scrollTop = Math.max(
-            0,
-            Math.min(options.top, this.scrollHeight - this.clientHeight),
-          );
-        }
-      },
-    });
-  }
+  defineMissing(Element.prototype, "scrollTo", {
+    writable: true,
+    value(this: Element, optionsOrX?: ScrollToOptions | number, y?: number) {
+      const options = typeof optionsOrX === "number" ? { left: optionsOrX, top: y } : optionsOrX;
+      if (options?.left !== undefined) {
+        this.scrollLeft = options.left;
+      }
+      if (options?.top !== undefined) {
+        this.scrollTop = Math.max(0, Math.min(options.top, this.scrollHeight - this.clientHeight));
+      }
+    },
+  });
 }
 
 // JSDOM has no Web Animations API; native overlay tests use an empty animation list.
-if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
-  Object.defineProperty(Element.prototype, "getAnimations", {
-    configurable: true,
-    value: () => [],
-  });
-}
+const elementPrototype = typeof Element === "undefined" ? undefined : Element.prototype;
+defineMissing(elementPrototype, "getAnimations", { value: () => [] });
 
 // JSDOM has no layout or scrolling; browser tests retain the native method.
-if (typeof Element !== "undefined" && !("scrollIntoView" in Element.prototype)) {
-  Object.defineProperty(Element.prototype, "scrollIntoView", {
-    configurable: true,
-    writable: true,
-    value: () => {},
-  });
-}
+defineMissing(elementPrototype, "scrollIntoView", { writable: true, value: () => {} });
 
-if (typeof HTMLDialogElement !== "undefined" && !("showModal" in HTMLDialogElement.prototype)) {
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    },
-  });
-}
-
-if (typeof HTMLDialogElement !== "undefined" && !("close" in HTMLDialogElement.prototype)) {
-  Object.defineProperty(HTMLDialogElement.prototype, "close", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.removeAttribute("open");
-    },
-  });
-}
+const dialogPrototype =
+  typeof HTMLDialogElement === "undefined" ? undefined : HTMLDialogElement.prototype;
+defineMissing(dialogPrototype, "showModal", {
+  value(this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  },
+});
+defineMissing(dialogPrototype, "close", {
+  value(this: HTMLDialogElement) {
+    this.removeAttribute("open");
+  },
+});
 
 // Node 25+ exposes accessor-backed WebStorage that can be disabled or inert.
 // Vitest intentionally rejects all storage accessors, so jsdom needs an owned
