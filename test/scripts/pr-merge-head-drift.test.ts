@@ -1,18 +1,19 @@
 import { expect, it } from "vitest";
-import { configureMerge, expectExit } from "./pr-merge-assertions.test-support.js";
+import * as proof from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
+const retainedIntent =
+  "head-drift receipt requires the exact current retained accepted non-queue auto intent";
 
 function mergedAfterPush(variant = "") {
-  const f = fixture();
   const immediate = variant === "immediate";
   const accepted = !["unaccepted", "immediate"].includes(variant);
-  configureMerge(f, {
+  const f = proof.configuredFixture(fixture, {
     mode: variant === "unaccepted" ? "pending-error" : immediate ? "unapplied" : "pending",
     pr: { mergeStateStatus: immediate ? "CLEAN" : "BEHIND" },
   });
-  const first = expectExit(f.run(!immediate), accepted ? 0 : 1);
+  const first = proof.expectExit(f.run(!immediate), accepted ? 0 : 1);
   expect(f.record()).toMatchObject({
     phase: "intent",
     route: immediate ? "immediate" : "auto",
@@ -26,7 +27,7 @@ function mergedAfterPush(variant = "") {
   }
   let oid = f.git(["rev-parse", outcomeRef]);
   if (variant === "cancelled") {
-    expectExit(f.cancel(oid));
+    proof.expectExit(f.cancel(oid));
     expect(f.record().cancellation.state).toBe("confirmed");
     expect(f.state().cancellations).toBe(1);
     oid = f.git(["rev-parse", outcomeRef]);
@@ -55,7 +56,7 @@ function mergedAfterPush(variant = "") {
   if (variant !== "not-on-main") {
     f.git(["push", "-q", "origin", `${landed}:refs/heads/main`]);
   }
-  configureMerge(f, {
+  proof.configureMerge(f, {
     pr: {
       state: "MERGED",
       headRefOid: pushed,
@@ -71,20 +72,20 @@ describePosix("native merged head-drift receipt", () => {
   it("records the pushed head without dispatch and completes after source cleanup and GC", () => {
     const { f, oid, pushed, landed } = mergedAfterPush();
     const original = f.git(["show", `${oid}:outcome.json`]);
-    const reconcile = expectExit(f.run(true), 1);
+    const reconcile = proof.expectExit(f.run(true), 1);
     expect(reconcile.output).toContain("PR identity/head/base drift from the retained attempt");
     expect(reconcile.output).toContain(
       `scripts/pr merge-recover 123 ${oid} --confirmed-operator-recovery --merged-head ${pushed}`,
     );
     expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
-    expectExit(f.cancel(oid), 1);
+    proof.expectExit(f.cancel(oid), 1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
     expect(f.state().cancellations).toBe(0);
-    const incomplete = expectExit(f.complete(oid), 1);
+    const incomplete = proof.expectExit(f.complete(oid), 1);
     expect(incomplete.output).toContain("completion requires the exact verified merge receipt");
 
-    const accepted = expectExit(f.acceptHeadDrift(oid, pushed));
+    const accepted = proof.expectExit(f.acceptHeadDrift(oid, pushed));
     expect(accepted.output).toContain(`MERGED pushed head ${pushed}`);
     expect(f.record()).toMatchObject({
       phase: "merged",
@@ -99,9 +100,9 @@ describePosix("native merged head-drift receipt", () => {
     expect(f.git(["show", `${oid}:outcome.json`])).toBe(original);
     expect(f.git(["show", "-s", "--format=%P", receipt]).split(" ")).toContain(pushed);
     expect(f.state()).toMatchObject({ mutations: 1, posts: 0, cancellations: 0 });
-    expectExit(f.acceptHeadDrift(oid, pushed), 1);
+    proof.expectExit(f.acceptHeadDrift(oid, pushed), 1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(receipt);
-    const resumed = expectExit(f.run());
+    const resumed = proof.expectExit(f.run());
     expect(resumed.output).toContain("Merge confirmed; completion pending");
     expect(f.state().mutations).toBe(1);
 
@@ -112,7 +113,7 @@ describePosix("native merged head-drift receipt", () => {
     f.git(["reflog", "expire", "--expire=now", "--all"]);
     f.git(["gc", "--prune=now"]);
     f.git(["cat-file", "-e", `${pushed}^{commit}`]);
-    expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
+    proof.expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
     expect(f.record().phase).toBe("complete");
     expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
     const body = f.state().comments[0]!.body;
@@ -128,10 +129,7 @@ describePosix("native merged head-drift receipt", () => {
   });
 
   it.each([
-    [
-      "stale-oid",
-      "head-drift receipt requires the exact current retained accepted non-queue auto intent",
-    ],
+    ["stale-oid", retainedIntent],
     ["same-head", "selected merged head equals the retained auto head"],
     ["unselected-head", "explicitly selected merged head"],
     ["identity", "explicitly selected merged head"],
@@ -142,17 +140,11 @@ describePosix("native merged head-drift receipt", () => {
     ["tree", "landed tree does not match the prepared source"],
     ["not-on-main", "not reachable from authoritative main"],
     ["cancelled", "without a cancellation record"],
-    [
-      "unaccepted",
-      "head-drift receipt requires the exact current retained accepted non-queue auto intent",
-    ],
-    [
-      "immediate",
-      "head-drift receipt requires the exact current retained accepted non-queue auto intent",
-    ],
+    ["unaccepted", retainedIntent],
+    ["immediate", retainedIntent],
   ])("refuses %s without changing the retained intent or remote state", (variant, refusal) => {
     const { f, oid, pushed } = mergedAfterPush(variant);
-    configureMerge(f, {
+    proof.configureMerge(f, {
       pr: {
         ...(variant === "identity" ? { id: "other-pr" } : {}),
         ...(variant === "base" ? { baseRefName: "release" } : {}),

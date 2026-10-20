@@ -57,7 +57,10 @@ const nativeExecFileSync = childProcess.execFileSync;
 const nativeSpawn = childProcess.spawn;
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
-function resolvesToFixture(file, options) {
+function resolvesToFixture(file, args, options) {
+  if (typeof file !== "string" || !Array.isArray(args) ||
+      options.timeout !== undefined || options.signal !== undefined ||
+      (options.cwd !== undefined && path.resolve(options.cwd) !== process.cwd())) return false;
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   if (file.includes("/")) return path.resolve(cwd, file) === env.FIXTURE_GH_BIN;
@@ -69,23 +72,21 @@ function resolvesToFixture(file, options) {
   }
   return false;
 }
+function runFixture(args, options, input) {
+  const env = options.env ?? process.env;
+  return require(env.FIXTURE_GH)("direct", args, { env, input });
+}
 childProcess.execFileSync = function(file, args, options = {}) {
   // Other child boundaries, working directories and stream shapes remain native.
-  if (typeof file !== "string" || !Array.isArray(args) || typeof options !== "object" ||
-      options.timeout !== undefined || options.signal !== undefined ||
-      (options.cwd !== undefined && path.resolve(options.cwd) !== process.cwd()) ||
+  if (typeof options !== "object" || !resolvesToFixture(file, args, options) ||
       (options.stdio !== undefined && (!Array.isArray(options.stdio) ||
-        options.stdio[1] !== "pipe" || options.stdio[2] !== "pipe")) ||
-      !resolvesToFixture(file, options)) return nativeExecFileSync(file, args, options);
-  const env = options.env ?? process.env;
+        options.stdio[1] !== "pipe" || options.stdio[2] !== "pipe"))) return nativeExecFileSync(file, args, options);
   const stdin = options.stdio?.[0];
   if (stdin !== undefined && !["pipe", "ignore", "inherit", 0].includes(stdin)) {
     return nativeExecFileSync(file, args, options);
   }
-  const result = require(env.FIXTURE_GH)("direct", args, {
-    env,
-    input: options.input ?? (stdin === "inherit" || stdin === 0 ? undefined : Buffer.alloc(0)),
-  });
+  const result = runFixture(args, options,
+    options.input ?? (stdin === "inherit" || stdin === 0 ? undefined : Buffer.alloc(0)));
   const encode = (value) => options.encoding && options.encoding !== "buffer"
     ? Buffer.from(value).toString(options.encoding) : Buffer.from(value);
   const stdout = encode(result.stdout), stderr = encode(result.stderr);
@@ -97,10 +98,7 @@ childProcess.execFileSync = function(file, args, options = {}) {
   return stdout;
 };
 childProcess.spawn = function(file, args, options = {}) {
-  if (typeof file !== "string" || !Array.isArray(args) ||
-      options.timeout !== undefined || options.signal !== undefined ||
-      (options.cwd !== undefined && path.resolve(options.cwd) !== process.cwd()) ||
-      !resolvesToFixture(file, options)) return nativeSpawn(file, args, options);
+  if (!resolvesToFixture(file, args, options)) return nativeSpawn(file, args, options);
   const child = new EventEmitter();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
@@ -109,10 +107,7 @@ childProcess.spawn = function(file, args, options = {}) {
   // The existing fake server owns one JSON state. Run each in-process request
   // in a microtask so concurrent transport reads cannot overwrite that state.
   queueMicrotask(() => {
-    const result = require((options.env ?? process.env).FIXTURE_GH)("direct", args, {
-      env: options.env ?? process.env,
-      input: Buffer.alloc(0),
-    });
+    const result = runFixture(args, options, Buffer.alloc(0));
     child.stdout.end(result.stdout);
     child.stderr.end(result.stderr);
     child.emit("close", result.status, null);

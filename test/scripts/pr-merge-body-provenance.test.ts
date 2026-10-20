@@ -99,21 +99,31 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     { auto: false, admin: true, mergeState: "BLOCKED", route: "admin" },
     { auto: true, admin: false, mergeState: "BEHIND", route: "auto" },
     { auto: true, admin: false, mergeState: "CLEAN", route: "immediate", pendingGates: true },
+    { auto: true, admin: false, mergeState: "BEHIND", route: "auto", missingHeadline: true },
   ])(
-    "submits verified attribution with pinned head for %j",
-    ({ auto, admin, mergeState, route, pendingGates }) => {
+    "requires verified attribution and headline for %j",
+    ({ auto, admin, mergeState, route, pendingGates, missingHeadline }) => {
       const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
       const f = fixture(`Source change\n\n${credit}\n`);
       configureMerge(f, {
         admin,
         ...(pendingGates ? { requiredCheckName: "openclaw/ci-gate" } : {}),
+        ...(missingHeadline ? { previewHeadline: null } : {}),
         gates: admin ? "fail" : "pass",
         pr: { mergeStateStatus: mergeState },
       });
       if (pendingGates) {
         writePendingGates(f);
       }
-      const run = expectExit(f.run(auto));
+      const run = expectExit(f.run(auto), missingHeadline ? 1 : 0);
+      if (missingHeadline) {
+        expect(run.output).toContain(
+          "Cannot prepare squash subject: require the current-head merge headline",
+        );
+        expect(f.state().mutations).toBe(0);
+        expect(() => f.record()).toThrow();
+        return;
+      }
       const submissions = f.state().calls.filter((call) => call[1] === "pr" && call[2] === "merge");
       if (route === "immediate") {
         expect(submissions).toHaveLength(0);
@@ -131,18 +141,4 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.record(), run.output).toMatchObject({ route, phase: "complete" });
     },
   );
-  it("rejects a missing auto-merge headline before intent", () => {
-    const f = fixture();
-    configureMerge(f, {
-      previewHeadline: null,
-      pr: { mergeStateStatus: "BEHIND" },
-    });
-    const run = f.run(true);
-    expect(run.status, run.output).toBe(1);
-    expect(run.output).toContain(
-      "Cannot prepare squash subject: require the current-head merge headline",
-    );
-    expect(f.state().mutations).toBe(0);
-    expect(() => f.record()).toThrow();
-  });
 });

@@ -25,14 +25,11 @@ exit "$command_status"
 `;
 
 const temporaryDirectory = () => tempDirs.make("openclaw-gate-transport-");
+const execution = { bin: process.execPath, env: process.env };
+const literal = "$HOME `false` $(false)";
 
 function execute(input: string, program: string, ...args: string[]) {
-  return executeCrabbox({
-    args: ["-e", program, ...args],
-    bin: process.execPath,
-    env: process.env,
-    input,
-  });
+  return executeCrabbox({ ...execution, args: ["-e", program, ...args], input });
 }
 
 function launch(
@@ -47,48 +44,38 @@ function launch(
   return spawnSync("/bin/bash", [script, ...transport.args], { encoding: "utf8" });
 }
 
-describe("Crabbox gate payload identity", () => {
-  it("streams an expanded plan without changing its canonical command or using oversized argv", () => {
-    const targets = Array.from(
-      { length: 12_000 },
-      (_, index) => `src/features/feature-${String(index).padStart(5, "0")}.test.ts`,
-    );
-    const command = buildCrabboxGateCommand(
-      {
-        baseSha: "c".repeat(40),
-        changedPaths: [{ path: "src/features/index.ts", status: "M" }],
-        headSha,
-        targets,
-        version: 1,
-      },
-      digest(bootstrap),
-    );
-    const transport = buildCrabboxGateTransport({ bootstrap, command, headSha });
-    expect(Buffer.byteLength(command)).toBeGreaterThan(128 * 1024);
-    expect(transport.args).toEqual([
+it("streams an expanded plan without changing its canonical command or using oversized argv", () => {
+  const targets = Array.from(
+    { length: 12_000 },
+    (_, index) => `src/features/feature-${String(index).padStart(5, "0")}.test.ts`,
+  );
+  const command = buildCrabboxGateCommand(
+    {
+      baseSha: "c".repeat(40),
+      changedPaths: [{ path: "src/features/index.ts", status: "M" }],
       headSha,
-      digest(bootstrap),
-      digest(command),
-      digest(transport.input),
-    ]);
-    expect(Math.max(...transport.args.map((arg) => Buffer.byteLength(arg)))).toBe(64);
-    expect(transport.input).toContain(`${command}\nOPENCLAW_GATE_${digest(command)}\n`);
-    expect(transport.input).toContain(`${bootstrap}\n}`);
-    expect(transport.uploadPath).toBe(
-      `.crabbox/scripts/${digest(transport.input).slice(0, 12)}-script.sh`,
-    );
+      targets,
+      version: 1,
+    },
+    digest(bootstrap),
+  );
+  const transport = buildCrabboxGateTransport({ bootstrap, command, headSha });
+  const commandHash = digest(command),
+    payloadHash = digest(transport.input);
+  expect(Buffer.byteLength(command)).toBeGreaterThan(128 * 1024);
+  expect(transport).toMatchObject({
+    args: [headSha, digest(bootstrap), commandHash, payloadHash],
+    uploadPath: `.crabbox/scripts/${payloadHash.slice(0, 12)}-script.sh`,
   });
+  expect(Math.max(...transport.args.map((arg) => Buffer.byteLength(arg)))).toBe(64);
+  expect(transport.input).toContain(`${command}\nOPENCLAW_GATE_${commandHash}\n`);
+  expect(transport.input).toContain(`${bootstrap}\n}`);
 });
 
 // The production launcher targets the Linux AWS guest's Bash and sha256sum.
 describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {
   it.each([
-    [
-      "literal bytes",
-      "set -euo pipefail; printf '%s\\n' '$HOME `false` $(false)'",
-      0,
-      "$HOME `false` $(false)\n",
-    ],
+    ["literal bytes", `set -euo pipefail; printf '%s\\n' '${literal}'`, 0, `${literal}\n`],
     ["child errexit", "set -euo pipefail; /bin/bash -c 'exit 37'; printf unreachable", 37],
     [
       "early bootstrap errexit",
@@ -101,13 +88,11 @@ describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {
     "preserves %s and EXIT cleanup",
     (_label, command, exitCode, output = "", source = bootstrap) => {
       const result = launch(command, source);
-      expect(result.status).toBe(exitCode);
-      expect(result.stdout).toBe(
-        `head:${headSha} command:openclaw_gate\n${output}cleanup:${exitCode}\n`,
-      );
-      if (exitCode === 0) {
-        expect(result.stderr).toBe("");
-      }
+      expect(result).toMatchObject({
+        status: exitCode,
+        stdout: `head:${headSha} command:openclaw_gate\n${output}cleanup:${exitCode}\n`,
+        ...(exitCode === 0 ? { stderr: "" } : {}),
+      });
     },
   );
 
