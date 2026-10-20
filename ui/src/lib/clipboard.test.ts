@@ -19,15 +19,9 @@ afterEach(() => {
 });
 
 describe("copyToClipboard", () => {
-  it("returns false without touching the clipboard for empty text", async () => {
-    expect(await copyToClipboard("")).toBe(false);
-    expect(writeText).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
-  });
-
-  it("uses the async Clipboard API in secure contexts", async () => {
-    expect(await copyToClipboard("hello")).toBe(true);
-    expect(writeText).toHaveBeenCalledWith("hello");
+  it.each(["", "hello"])("uses only the Clipboard API for %j", async (text) => {
+    expect(await copyToClipboard(text)).toBe(text !== "");
+    expect(writeText.mock.calls).toEqual(text ? [[text]] : []);
     expect(exec).not.toHaveBeenCalled();
   });
 
@@ -106,14 +100,10 @@ describe("copyToClipboard", () => {
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 0);
       });
-      if (state === "restore") {
-        expect(document.activeElement).toBe(button);
-        expect(focus).toHaveBeenCalledWith({ preventScroll: true });
-      } else {
-        expect(document.activeElement).toBe(state === "newer focus" ? input : document.body);
-        expect(focus).not.toHaveBeenCalled();
-      }
-
+      const expectedFocus =
+        state === "restore" ? button : state === "newer focus" ? input : document.body;
+      expect(document.activeElement).toBe(expectedFocus);
+      expect(focus.mock.calls).toEqual(state === "restore" ? [[{ preventScroll: true }]] : []);
       button.remove();
       input.remove();
     },

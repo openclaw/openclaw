@@ -33,27 +33,26 @@ describe("shared public link metadata", () => {
     expect(request.mock.calls[0]?.[1]).toEqual({ url: "https://example.com/page" });
   });
 
-  it.each(["connectionGeneration", "recoveryScope", "policy"])(
-    "retires late replies after %s changes",
-    async (change) => {
-      const { client, load, request, state } = fixture();
-      const pending = createDeferred<unknown>();
-      request.mockReturnValueOnce(pending.promise);
-      const old = load();
-      if (change === "connectionGeneration") {
-        state.connectionGeneration++;
-      } else if (change === "recoveryScope") {
-        state.recoveryScope = "new";
-      } else {
-        clearLinkPreviews(client);
-      }
-      expect(await load()).toMatchObject(fieldGuide);
-      pending.resolve({ title: "Old authority" });
-      expect(await old).toEqual({});
-      expect(await load()).toMatchObject(fieldGuide);
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
+  it.each([
+    ["connectionGeneration", 2],
+    ["recoveryScope", "new"],
+    ["policy", null],
+  ] as const)("retires late replies after %s changes", async (change, value) => {
+    const { client, load, request, state } = fixture();
+    const pending = createDeferred<unknown>();
+    request.mockReturnValueOnce(pending.promise);
+    const old = load();
+    if (change === "policy") {
+      clearLinkPreviews(client);
+    } else {
+      Object.assign(state, { [change]: value });
+    }
+    expect(await load()).toMatchObject(fieldGuide);
+    pending.resolve({ title: "Old authority" });
+    expect(await old).toEqual({});
+    expect(await load()).toMatchObject(fieldGuide);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
 
   it("bounds untrusted presentation and never returns remote images", async () => {
     const { load, request } = fixture();
@@ -63,22 +62,21 @@ describe("shared public link metadata", () => {
       imageDataUrl: "https://tracker.example/image.png",
       faviconDataUrl: "data:image/svg+xml;base64,AAAA",
     });
-    const preview = await load();
-    expect(preview.title).toHaveLength(180);
-    expect(preview.description).toHaveLength(400);
-    expect(preview.imageDataUrl).toBeUndefined();
-    expect(preview.faviconDataUrl).toBeUndefined();
+    expect(await load()).toMatchObject({
+      title: "x".repeat(180),
+      description: "y".repeat(400),
+      imageDataUrl: undefined,
+      faviconDataUrl: undefined,
+    });
   });
 
   it("keeps settled metadata through disconnect and reconnect but retires a changed identity", async () => {
     const { load, request, state } = fixture();
     const preview = await load();
-    state.connected = false;
-    state.connectionGeneration++;
+    Object.assign(state, { connected: false, connectionGeneration: 2 });
     expect(await load()).toBe(preview);
     expect(request).toHaveBeenCalledOnce();
-    state.connected = true;
-    state.connectionGeneration++;
+    Object.assign(state, { connected: true, connectionGeneration: 3 });
     expect(await load()).toMatchObject(preview);
     expect(request).toHaveBeenCalledTimes(2);
     state.recoveryScope = "another-account";

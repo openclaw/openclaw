@@ -3,11 +3,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIdleImport } from "./idle-import.ts";
 
-const importModule = vi.fn<() => Promise<string>>();
+const loadedModule = { ready: true };
+const importModule = vi.fn<() => Promise<typeof loadedModule>>();
 const onLoaded = vi.fn();
-let idleImport: ReturnType<typeof createIdleImport<string>>;
+let idleImport: ReturnType<typeof createIdleImport<typeof loadedModule>>;
 beforeEach(() => {
-  importModule.mockReset().mockResolvedValue("loaded");
+  importModule.mockReset().mockResolvedValue(loadedModule);
   onLoaded.mockReset();
   idleImport = createIdleImport(importModule, onLoaded);
   vi.useFakeTimers();
@@ -32,30 +33,21 @@ describe("createIdleImport", () => {
     expect(requestIdleCallback).toHaveBeenCalledWith(expect.any(Function), { timeout: 3000 });
     await vi.runAllTimersAsync();
     expect(importModule).toHaveBeenCalledTimes(1);
-    expect(onLoaded).toHaveBeenCalledWith("loaded");
+    expect(onLoaded).toHaveBeenCalledWith(loadedModule);
   });
 
-  it("clears a failed import and re-arms it when the browser comes online", async () => {
-    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
-    importModule.mockRejectedValueOnce(new Error("offline"));
-    idleImport.schedule();
-    await vi.runAllTimersAsync();
-
-    expect(importModule).toHaveBeenCalledTimes(1);
-
-    window.dispatchEvent(new Event("online"));
-    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledWith("loaded"));
-
-    expect(importModule).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries one failed import while the browser remains online", async () => {
+  it.each([true, false])("retries a failed import (initially online: %s)", async (online) => {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(online);
     importModule.mockRejectedValueOnce(new Error("transient"));
     idleImport.schedule();
     await vi.runAllTimersAsync();
-
+    if (!online) {
+      expect(importModule).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(new Event("online"));
+      await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledWith(loadedModule));
+    }
     expect(importModule).toHaveBeenCalledTimes(2);
-    expect(onLoaded).toHaveBeenCalledWith("loaded");
+    expect(onLoaded).toHaveBeenCalledWith(loadedModule);
   });
 
   it("removes its online retry listener when disposed", async () => {
@@ -75,16 +67,12 @@ describe("createIdleImport", () => {
   });
 
   it("shares and retains a successful module promise", async () => {
-    const module = { ready: true };
-    const importObject = vi.fn(async () => module);
-    const objectLoaded = vi.fn();
-    const objectImport = createIdleImport(importObject, objectLoaded);
-    const first = objectImport.load();
-    const second = objectImport.load();
-    await expect(first).resolves.toBe(module);
-    await expect(second).resolves.toBe(module);
-    await expect(objectImport.load()).resolves.toBe(module);
-    expect(importObject).toHaveBeenCalledTimes(1);
-    expect(objectLoaded).toHaveBeenCalledTimes(1);
+    const first = idleImport.load();
+    const second = idleImport.load();
+    await expect(first).resolves.toBe(loadedModule);
+    await expect(second).resolves.toBe(loadedModule);
+    await expect(idleImport.load()).resolves.toBe(loadedModule);
+    expect(importModule).toHaveBeenCalledTimes(1);
+    expect(onLoaded).toHaveBeenCalledTimes(1);
   });
 });
