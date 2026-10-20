@@ -73,6 +73,12 @@ function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
     execution,
   };
 }
+const runMap = (...runs: SubagentRunRecord[]) => new Map(runs.map((run) => [run.runId, run]));
+function publishLive(...runs: SubagentRunRecord[]) {
+  for (const run of runs) {
+    mocks.liveRuns.set(run.runId, run);
+  }
+}
 
 describe("subagent registry scoped reads", () => {
   let mod: typeof import("./subagent-registry-read.js");
@@ -94,18 +100,8 @@ describe("subagent registry scoped reads", () => {
     const childSessionKey = "agent:main:subagent:child";
     const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
     const latest = createRun({ runId: "latest", childSessionKey, generation: 2, createdAt: 100 });
-    mocks.getSubagentRunsSnapshotForChildSession.mockResolvedValue(
-      new Map([
-        [older.runId, older],
-        [latest.runId, latest],
-      ]),
-    );
-    mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(
-      new Map([
-        [older.runId, older],
-        [latest.runId, latest],
-      ]),
-    );
+    mocks.getSubagentRunsSnapshotForChildSession.mockResolvedValue(runMap(older, latest));
+    mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(runMap(older, latest));
 
     expect(await mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
     expect(mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey)).toEqual(
@@ -153,9 +149,7 @@ describe("subagent registry scoped reads", () => {
           requesterStorePath: "store-a",
         }),
       ];
-      for (const run of runs) {
-        mocks.liveRuns.set(run.runId, run);
-      }
+      publishLive(...runs);
       expect(
         mod
           .listSubagentRunsForRequester(root, {
@@ -182,8 +176,7 @@ describe("subagent registry scoped reads", () => {
     const childSessionKey = "agent:main:subagent:child";
     const older = createRun({ runId: "older", childSessionKey, generation: 1, createdAt: 200 });
     const latest = createRun({ runId: "latest", childSessionKey, generation: 2, createdAt: 100 });
-    mocks.liveRuns.set(older.runId, older);
-    mocks.liveRuns.set(latest.runId, latest);
+    publishLive(older, latest);
 
     expect(mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey)).toEqual(
       projectSubagentRunForSessionList(latest),
@@ -209,8 +202,7 @@ describe("subagent registry scoped reads", () => {
       createdAt: Date.now(),
       execution: { status: "terminal", endedAt: Date.now() },
     });
-    mocks.liveRuns.set(older.runId, older);
-    mocks.liveRuns.set(latest.runId, latest);
+    publishLive(older, latest);
     mocks.getSubagentSessionListRunsSnapshotForChildSessions.mockReturnValue(
       new Map([older, latest].map((row) => [row.runId, projectSubagentRunForSessionList(row)])),
     );
@@ -250,9 +242,7 @@ describe("subagent registry scoped reads", () => {
       controllerSessionKey: "agent:main:other-controller",
       requesterSessionKey: controllerSessionKey,
     });
-    for (const entry of [explicit, legacy, other]) {
-      mocks.liveRuns.set(entry.runId, entry);
-    }
+    publishLive(explicit, legacy, other);
     expect(listRunsForControllerFromRuns(mocks.liveRuns, controllerSessionKey)).toEqual([
       explicit,
       legacy,
@@ -266,86 +256,68 @@ describe("subagent registry scoped reads", () => {
     const controller = "agent:main:controller";
     const reusedChild = "agent:main:subagent:reused";
     const parent = "agent:main:subagent:parent";
-    const pendingChild = "agent:main:subagent:pending";
-    const settledChild = "agent:main:subagent:settled";
-    const suspendedChild = "agent:main:subagent:suspended";
-    const oldActive = createRun({
-      runId: "run-reused-active",
-      childSessionKey: reusedChild,
-      requesterSessionKey: root,
+    const row = (
+      runId: string,
+      childSessionKey: string,
+      requesterSessionKey: string,
+      createdAgo: number,
+      overrides: Partial<SubagentRunRecord> = {},
+    ) =>
+      createRun({
+        runId,
+        childSessionKey,
+        requesterSessionKey,
+        createdAt: now - createdAgo,
+        execution: { status: "running", startedAt: now - createdAgo + 100 },
+        ...overrides,
+      });
+    const oldActive = row("run-reused-active", reusedChild, root, 5_000, {
       controllerSessionKey: controller,
       generation: 1,
-      createdAt: now - 5_000,
-      execution: { status: "running", startedAt: now - 4_900 },
     });
-    const freshTerminal = createRun({
-      runId: "run-reused-terminal",
-      childSessionKey: reusedChild,
-      requesterSessionKey: root,
+    const freshTerminal = row("run-reused-terminal", reusedChild, root, 4_000, {
       requesterOrigin: { channel: "discord", to: " room " },
       controllerSessionKey: controller,
       generation: 2,
-      createdAt: now - 4_000,
       spawnMode: "run",
       cleanupCompletedAt: now - 1_000,
       execution: { status: "terminal", startedAt: now - 3_900, endedAt: now - 2_000 },
     });
-    const parentRun = createRun({
-      runId: "run-parent",
-      childSessionKey: parent,
-      requesterSessionKey: root,
+    const parentRun = row("run-parent", parent, root, 3_000, {
       requesterAgentId: "main",
       controllerSessionKey: controller,
-      createdAt: now - 3_000,
-      execution: { status: "running", startedAt: now - 2_900 },
     });
-    const foreignActive = createRun({
-      runId: "run-foreign-active",
-      childSessionKey: "agent:research:subagent:foreign",
-      requesterSessionKey: root,
-      requesterAgentId: "research",
-      createdAt: now - 2_500,
-      execution: { status: "running", startedAt: now - 2_400 },
-    });
-    const pendingRun = createRun({
-      runId: "run-pending",
-      childSessionKey: pendingChild,
-      requesterSessionKey: parent,
-      createdAt: now - 2_000,
+    const foreignActive = row(
+      "run-foreign-active",
+      "agent:research:subagent:foreign",
+      root,
+      2_500,
+      {
+        requesterAgentId: "research",
+      },
+    );
+    const pendingRun = row("run-pending", "agent:main:subagent:pending", parent, 2_000, {
       execution: { status: "terminal", startedAt: now - 1_900, endedAt: now - 1_500 },
     });
-    const settledRun = createRun({
-      runId: "run-settled",
-      childSessionKey: settledChild,
-      requesterSessionKey: parent,
-      createdAt: now - 1_800,
+    const settledRun = row("run-settled", "agent:main:subagent:settled", parent, 1_800, {
       cleanupCompletedAt: now - 1_200,
       execution: { status: "terminal", startedAt: now - 1_700, endedAt: now - 1_300 },
     });
-    const suspendedRun = createRun({
-      runId: "run-suspended",
-      childSessionKey: suspendedChild,
-      requesterSessionKey: parent,
-      createdAt: now - 1_600,
+    const suspendedRun = row("run-suspended", "agent:main:subagent:suspended", parent, 1_600, {
       delivery: { status: "suspended", disposition: "permanent_failure" },
       execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_100 },
     });
-    const snapshot = new Map(
-      [
-        oldActive,
-        freshTerminal,
-        parentRun,
-        foreignActive,
-        pendingRun,
-        settledRun,
-        suspendedRun,
-      ].map((run) => [run.runId, run] as const),
+    const snapshot = runMap(
+      oldActive,
+      freshTerminal,
+      parentRun,
+      foreignActive,
+      pendingRun,
+      settledRun,
+      suspendedRun,
     );
-    const childSnapshot = new Map(
-      [oldActive, freshTerminal].map((run) => [run.runId, run] as const),
-    );
-    mocks.liveRuns.set(freshTerminal.runId, freshTerminal);
-    mocks.liveRuns.set(parentRun.runId, parentRun);
+    const childSnapshot = runMap(oldActive, freshTerminal);
+    publishLive(freshTerminal, parentRun);
     mocks.getSubagentRunsForChildSession.mockImplementation((childSessionKey) =>
       [...mocks.liveRuns.values()].filter((run) => run.childSessionKey === childSessionKey),
     );

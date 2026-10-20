@@ -43,6 +43,28 @@ function run(runId = "retained", createdAt = 100): SubagentRunRecord {
     delivery: { status: "not_required" },
   };
 }
+const runMap = (...runs: SubagentRunRecord[]) => new Map(runs.map((row) => [row.runId, row]));
+const readSnapshot = () => getSubagentRunsSnapshotForRead(new Map());
+const restore = () => restoreSubagentRunsFromDisk({ runs: new Map() });
+const refuseWrites = (message: string) =>
+  configureMockSubagentRegistryPersistence({
+    persistRegistryRows: () => {
+      throw new Error(message);
+    },
+  });
+async function expectRefusedMutation(
+  runs: Map<string, SubagentRunRecord>,
+  postimages: Array<[string, SubagentRunRecord | null]>,
+  message: string,
+) {
+  await expect(
+    mutateSubagentRuns(
+      postimages.map(([id]) => id),
+      () => ({ value: undefined, postimages: new Map(postimages) }),
+      { runs },
+    ),
+  ).rejects.toThrow(message);
+}
 function readLatest() {
   return withSubagentRunReadSnapshot(
     subagentRuns,
@@ -135,46 +157,34 @@ describe("prepared subagent publication ownership", () => {
     async ({ warm, preparedFirst }) => {
       const first = run("first", 100);
       const second = run("second", 200);
-      const committed = new Map([
-        [first.runId, first],
-        [second.runId, second],
-      ]);
+      const committed = runMap(first, second);
       saveSubagentRegistryToSqlite(committed);
       if (warm) {
-        await restoreSubagentRunsFromDisk({ runs: new Map() });
+        await restore();
       }
-      const fail = await configureMockSubagentRegistryPersistence({
-        persistRegistryRows: () => {
-          throw new Error("Synthetic disk failure");
-        },
-      });
+      const fail = await refuseWrites("Synthetic disk failure");
       try {
-        await expect(
-          mutateSubagentRuns(
-            [first.runId, second.runId],
-            () => ({
-              value: undefined,
-              postimages: new Map([
-                [first.runId, null],
-                [second.runId, null],
-              ]),
-            }),
-            { runs: committed },
-          ),
-        ).rejects.toThrow("Synthetic disk failure");
+        await expectRefusedMutation(
+          committed,
+          [
+            [first.runId, null],
+            [second.runId, null],
+          ],
+          "Synthetic disk failure",
+        );
       } finally {
         fail.mockRestore();
       }
       if (preparedFirst) {
         expect(await readLatest()).toMatchObject(second);
       }
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-      expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(2);
+      await restore();
+      expect(readSnapshot().size).toBe(2);
       expect(loadSubagentRegistryFromSqlite().size).toBe(2);
       expect(await readLatest()).toMatchObject(second);
       persistRegistryFixture(new Map(), [second.runId]);
       expect(await readLatest()).toMatchObject(first);
-      expect(getSubagentRunsSnapshotForRead(new Map()).has(second.runId)).toBe(false);
+      expect(readSnapshot().has(second.runId)).toBe(false);
     },
   );
 
@@ -182,32 +192,20 @@ describe("prepared subagent publication ownership", () => {
     const removed = run("removed", 900);
     const retained = run("retained", 100);
     const intended = run("intended", 300);
-    const original = new Map([
-      [removed.runId, removed],
-      [retained.runId, retained],
-    ]);
+    const original = runMap(removed, retained);
     saveSubagentRegistryToSqlite(original);
-    await restoreSubagentRunsFromDisk({ runs: new Map() });
-    const fail = await configureMockSubagentRegistryPersistence({
-      persistRegistryRows: () => {
-        throw new Error("Synthetic replacement failure");
-      },
-    });
+    await restore();
+    const fail = await refuseWrites("Synthetic replacement failure");
     try {
-      await expect(
-        mutateSubagentRuns(
-          [removed.runId, retained.runId, intended.runId],
-          () => ({
-            value: undefined,
-            postimages: new Map<string, SubagentRunRecord | null>([
-              [removed.runId, null],
-              [retained.runId, retained],
-              [intended.runId, intended],
-            ]),
-          }),
-          { runs: original },
-        ),
-      ).rejects.toThrow("Synthetic replacement failure");
+      await expectRefusedMutation(
+        original,
+        [
+          [removed.runId, null],
+          [retained.runId, retained],
+          [intended.runId, intended],
+        ],
+        "Synthetic replacement failure",
+      );
     } finally {
       fail.mockRestore();
     }
@@ -217,51 +215,39 @@ describe("prepared subagent publication ownership", () => {
     }).toThrow(TypeError);
     expect(await readLatest()).toBe(copy);
     expect(await readLatest()).toMatchObject(removed);
-    expect(getSubagentRunsSnapshotForRead(new Map()).has(intended.runId)).toBe(false);
+    expect(readSnapshot().has(intended.runId)).toBe(false);
     const committed = { ...retained, createdAt: 1_000 };
-    persistRegistryFixture(new Map([[committed.runId, committed]]), [committed.runId]);
+    persistRegistryFixture(runMap(committed), [committed.runId]);
     expect(await readLatest()).toMatchObject(committed);
-    expect(getSubagentRunsSnapshotForRead(new Map()).has(removed.runId)).toBe(true);
-    persistRegistryFixture(new Map([[retained.runId, retained]]));
+    expect(readSnapshot().has(removed.runId)).toBe(true);
+    persistRegistryFixture(runMap(retained));
     expect(await readLatest()).toMatchObject(retained);
-    expect(getSubagentRunsSnapshotForRead(new Map()).has(removed.runId)).toBe(false);
+    expect(readSnapshot().has(removed.runId)).toBe(false);
   });
 
   it("keeps committed snapshots with their database after refused writes and source switches", async () => {
     const retained = run();
-    const original = new Map([[retained.runId, retained]]);
+    const original = runMap(retained);
     saveSubagentRegistryToSqlite(original);
-    await restoreSubagentRunsFromDisk({ runs: new Map() });
-    const fail = await configureMockSubagentRegistryPersistence({
-      persistRegistryRows: () => {
-        throw new Error("Synthetic database failure");
-      },
-    });
+    await restore();
+    const fail = await refuseWrites("Synthetic database failure");
     const other = await createOpenClawTestState({
       prefix: "openclaw-subagent-other-",
       applyEnv: false,
     });
     try {
-      await expect(
-        mutateSubagentRuns(
-          [retained.runId],
-          () => ({ value: undefined, postimages: new Map([[retained.runId, null]]) }),
-          { runs: original },
-        ),
-      ).rejects.toThrow("Synthetic database failure");
+      await expectRefusedMutation(original, [[retained.runId, null]], "Synthetic database failure");
       const otherDurable = { ...retained, task: "Other database durable row" };
       const otherIntent = { ...retained, task: "Other database refused owner intent" };
       await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-        const otherRows = new Map([[otherDurable.runId, otherDurable]]);
+        const otherRows = runMap(otherDurable);
         saveSubagentRegistryToSqlite(otherRows);
         expect(await readLatest()).toMatchObject(otherDurable);
-        await expect(
-          mutateSubagentRuns(
-            [otherIntent.runId],
-            () => ({ value: undefined, postimages: new Map([[otherIntent.runId, otherIntent]]) }),
-            { runs: otherRows },
-          ),
-        ).rejects.toThrow("Synthetic database failure");
+        await expectRefusedMutation(
+          otherRows,
+          [[otherIntent.runId, otherIntent]],
+          "Synthetic database failure",
+        );
         const copy = expectDefined(await readLatest(), "other database committed row");
         expect(() => {
           copy.task = "Caller must not mutate committed facts";
