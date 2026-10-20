@@ -54,28 +54,13 @@ describe("system-presence version fallback", () => {
     spawnSyncMock.mockReset();
   });
 
-  it("ignores legacy service metadata and uses runtime VERSION", async () => {
-    const self = await readSelfPresence({
-      OPENCLAW_SERVICE_VERSION: "2.4.6-service",
-      npm_package_version: "1.0.0-package",
-    });
-    expect(self?.version).toBe(runtimeVersion);
-  });
-
-  it("prefers OPENCLAW_VERSION over runtime VERSION", async () => {
-    const self = await readSelfPresence({
-      OPENCLAW_VERSION: "9.9.9-cli",
-      npm_package_version: "1.0.0-package",
-    });
-    expect(self?.version).toBe("9.9.9-cli");
-  });
-
-  it("uses runtime VERSION when OPENCLAW_VERSION is blank despite npm_package_version", async () => {
-    const self = await readSelfPresence({
-      OPENCLAW_VERSION: " ",
-      npm_package_version: "1.0.0-package",
-    });
-    expect(self?.version).toBe(runtimeVersion);
+  it.each([
+    ["OPENCLAW_SERVICE_VERSION", "2.4.6-service", runtimeVersion],
+    ["OPENCLAW_VERSION", "9.9.9-cli", "9.9.9-cli"],
+    ["OPENCLAW_VERSION", " ", runtimeVersion],
+  ])("resolves presence version with %s=%j", async (key, value, expected) => {
+    const self = await readSelfPresence({ [key]: value, npm_package_version: "1.0.0-package" });
+    expect(self?.version).toBe(expected);
   });
 
   it("falls back to hostname when self-presence LAN discovery throws", async () => {

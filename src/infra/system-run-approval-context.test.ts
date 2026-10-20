@@ -98,15 +98,11 @@ describe("parsePreparedSystemRunPayload", () => {
     });
   });
 
-  test("rejects legacy payloads missing argv or command text", () => {
-    expect(parsePreparedSystemRunPayload({ plan: { argv: [] }, commandText: "jq --version" })).toBe(
-      null,
-    );
-    expect(
-      parsePreparedSystemRunPayload({
-        plan: { argv: ["jq", "--version"] },
-      }),
-    ).toBeNull();
+  test.each([
+    { plan: { argv: [] }, commandText: "jq --version" },
+    { plan: { argv: ["jq", "--version"] } },
+  ])("rejects incomplete legacy payload %j", (payload) => {
+    expect(parsePreparedSystemRunPayload(payload)).toBeNull();
   });
 });
 
@@ -116,16 +112,19 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
     expect(resolveSystemRunApprovalRuntimeContext({ plan })).toEqual({ ok: true, plan, ...jqPlan });
   });
 
-  test("falls back to command/rawCommand validation without a plan", () => {
-    const argv = Object.freeze(["bash", "-lc", "jq --version"]);
-    const commandText = 'bash -lc "jq --version"';
+  test.each([
+    [["bash", "-lc", "jq --version"], 'bash -lc "jq --version"', "/tmp"],
+    [["echo", "hi"], "echo hi", "/srv/data "],
+  ] as const)("validates fallback %j (%j) and preserves cwd %j", (args, commandText, cwd) => {
+    const argv = Object.freeze([...args]);
     expect(
       resolveSystemRunApprovalRuntimeContext({
         command: argv,
         rawCommand: commandText,
         ...identity,
+        cwd,
       }),
-    ).toEqual({ ok: true, plan: null, argv, commandText, ...identity });
+    ).toEqual({ ok: true, plan: null, argv, commandText, ...identity, cwd });
   });
 
   test("returns request validation errors from command fallback", () => {
@@ -137,23 +136,6 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
       ok: false,
       message: "rawCommand requires params.command",
       details: { code: "MISSING_COMMAND" },
-    });
-  });
-
-  test("preserves whitespace in cwd when falling back without a plan", () => {
-    const context = resolveSystemRunApprovalRuntimeContext({
-      ...identity,
-      command: ["echo", "hi"],
-      rawCommand: "echo hi",
-      cwd: "/srv/data ",
-    });
-    expect(context).toEqual({
-      ...identity,
-      ok: true,
-      plan: null,
-      argv: ["echo", "hi"],
-      cwd: "/srv/data ",
-      commandText: "echo hi",
     });
   });
 });
