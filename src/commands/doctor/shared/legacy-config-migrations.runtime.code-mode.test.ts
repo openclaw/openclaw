@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -27,60 +27,51 @@ function checkMigration(raw: unknown, key: string, message: string) {
   return migrated;
 }
 
-describe("Code Mode JavaScript config migration", () => {
-  it.each(["entries", "list"])(
-    "removes retired language settings from global config and the %s roster without changing activation or limits",
-    (roster) => {
-      const agent = {
-        tools: { codeMode: { enabled: false, languages: ["typescript"], timeoutMs: 2500 } },
-      };
-      const raw = {
-        tools: { codeMode: { languages: null, maxOutputBytes: 4096 } },
-        agents: agentRoster(roster, agent),
-      };
-      const migrated = checkMigration(raw, "languages", "JavaScript only");
-      expect(migrated.config?.tools?.codeMode).toEqual({ maxOutputBytes: 4096 });
-      expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
-        enabled: false,
-        timeoutMs: 2500,
-      });
-    },
-  );
-});
-
-describe("Code Mode executor config migration", () => {
-  it.each(["entries", "list"])(
-    "preserves an explicit QuickJS runtime and newer executor selections in the %s roster",
-    (roster) => {
-      const agent = {
-        tools: {
-          codeMode: {
-            enabled: false,
-            runtime: "quickjs-wasi",
-            executor: "node",
-            timeoutMs: 2500,
-          },
-        },
-      };
-      const raw = {
-        tools: {
-          codeMode: { enabled: "auto", runtime: "quickjs-wasi", maxOutputBytes: 4096 },
-        },
-        plugins: roster === "entries" ? { enabled: false } : { allow: ["openai"] },
-        agents: agentRoster(roster, agent),
-      };
-      const migrated = checkMigration(raw, "runtime", "tools.codeMode.executor");
-      expect(migrated.config?.tools?.codeMode).toEqual({
-        enabled: "auto",
-        executor: "quickjs",
-        maxOutputBytes: 4096,
-      });
-      expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
-        enabled: false,
-        executor: "node",
-        timeoutMs: 2500,
-      });
-      expect(migrated.sourceConfig?.plugins).toEqual(raw.plugins);
-    },
-  );
-});
+const migrations = [
+  {
+    key: "languages",
+    message: "JavaScript only",
+    global: { languages: null },
+    agent: { languages: ["typescript"] },
+    globalAfter: {},
+    agentAfter: {},
+  },
+  {
+    key: "runtime",
+    message: "tools.codeMode.executor",
+    global: { enabled: "auto", runtime: "quickjs-wasi" },
+    agent: { runtime: "quickjs-wasi", executor: "node" },
+    globalAfter: { enabled: "auto", executor: "quickjs" },
+    agentAfter: { executor: "node" },
+  },
+];
+const cases = migrations.flatMap((migration) =>
+  ["entries", "list"].map((roster) => ({ migration, roster })),
+);
+it.each(cases)(
+  "Code Mode migrates $migration.key in $roster without changing activation or limits",
+  ({ migration: entry, roster }) => {
+    const globalLimits = { maxOutputBytes: 4096 };
+    const agentLimits = { enabled: false, timeoutMs: 2500 };
+    const plugins =
+      entry.key === "runtime"
+        ? { plugins: roster === "entries" ? { enabled: false } : { allow: ["openai"] } }
+        : {};
+    const raw = {
+      tools: { codeMode: { ...globalLimits, ...entry.global } },
+      agents: agentRoster(roster, {
+        tools: { codeMode: { ...agentLimits, ...entry.agent } },
+      }),
+      ...plugins,
+    };
+    const migrated = checkMigration(raw, entry.key, entry.message);
+    expect(migrated.config?.tools?.codeMode).toEqual({ ...globalLimits, ...entry.globalAfter });
+    expect(migrated.config?.agents?.entries?.main?.tools?.codeMode).toEqual({
+      ...agentLimits,
+      ...entry.agentAfter,
+    });
+    if (entry.key === "runtime") {
+      expect(migrated.sourceConfig?.plugins).toEqual(plugins.plugins);
+    }
+  },
+);

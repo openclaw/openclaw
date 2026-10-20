@@ -58,9 +58,6 @@ describe("doctor invalid plugin config repair", () => {
 
     expect(maybeRepairInvalidPluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
   });
-});
-
-describe("legacy migration with invalid plugin config", () => {
   it("keeps safe migrations when unrelated plugin validation issues remain (#76798)", () => {
     invalidConfig(
       "plugins.entries.brave.config.webSearch.mode",

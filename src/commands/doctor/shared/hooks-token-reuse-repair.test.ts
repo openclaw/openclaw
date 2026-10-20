@@ -10,17 +10,16 @@ const envProvider = { default: { source: "env" as const } };
 function repair(cfg: OpenClawConfig, env: NodeJS.ProcessEnv = {}) {
   return repairHooksTokenReuseGatewayAuth(cfg, env, () => ROTATED_HOOKS_TOKEN);
 }
+function authConfig(
+  auth: NonNullable<OpenClawConfig["gateway"]>["auth"],
+  secrets: OpenClawConfig["secrets"] = { providers: envProvider },
+): OpenClawConfig {
+  return { secrets, gateway: { auth }, hooks: hooks() };
+}
 
 describe("repairHooksTokenReuseGatewayAuth", () => {
   it("rotates hooks.token when it reuses active gateway token auth from env", async () => {
-    const result = await repair(
-      {
-        hooks: hooks(),
-      },
-      {
-        OPENCLAW_GATEWAY_TOKEN: SHARED_TOKEN,
-      },
-    );
+    const result = await repair({ hooks: hooks() }, { OPENCLAW_GATEWAY_TOKEN: SHARED_TOKEN });
 
     expect(result.config.hooks?.token).toBe(ROTATED_HOOKS_TOKEN);
     expect(result.changes).toContain(
@@ -29,23 +28,18 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
   });
 
   it("does not abort when active gateway auth SecretRef is unavailable", async () => {
-    const cfg = {
-      secrets: { providers: envProvider },
-      gateway: {
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
-        },
-      },
-      hooks: hooks(),
-    } satisfies OpenClawConfig;
+    const cfg = authConfig({
+      mode: "password",
+      password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+    });
 
     await expect(repair(cfg)).resolves.toEqual({ config: cfg, changes: [] });
   });
 
   it("does not execute gateway auth SecretRefs during repair", async () => {
-    const cfg = {
-      secrets: {
+    const cfg = authConfig(
+      { mode: "password", password: { source: "exec", provider: "vault", id: "GW_PASSWORD" } },
+      {
         providers: {
           vault: {
             source: "exec",
@@ -54,31 +48,18 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
           },
         },
       },
-      gateway: {
-        auth: {
-          mode: "password",
-          password: { source: "exec", provider: "vault", id: "GW_PASSWORD" },
-        },
-      },
-      hooks: hooks(),
-    } satisfies OpenClawConfig;
+    );
 
     await expect(repair(cfg)).resolves.toEqual({ config: cfg, changes: [] });
   });
 
   it("rotates hooks.token when it reuses trusted-proxy password auth from a SecretRef", async () => {
     const result = await repair(
-      {
-        secrets: { providers: envProvider },
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: { userHeader: "x-forwarded-user" },
-            password: { source: "env", provider: "default", id: "GW_PASSWORD" },
-          },
-        },
-        hooks: hooks(),
-      },
+      authConfig({
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-forwarded-user" },
+        password: { source: "env", provider: "default", id: "GW_PASSWORD" },
+      }),
       {
         GW_PASSWORD: SHARED_TOKEN, // pragma: allowlist secret
       },
