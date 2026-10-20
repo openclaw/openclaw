@@ -32,9 +32,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await Promise.allSettled(pendingWork);
     for (const pending of admissions) {
       const result = await pending.catch(() => undefined);
-      if (result?.status === "owned") {
-        result.operation.complete();
-      }
+      complete(result);
     }
     testing.resetSessionControllerForTest();
     await closeOpenClawAgentDatabasesAsync();
@@ -49,17 +47,31 @@ const sessionKey = "global";
 const sessionId = "copied-session-id";
 const successorId = "compacted-session-id";
 
+function request(
+  storePath: string | undefined,
+  overrides: Partial<Parameters<typeof admitReplyTurn>[0]> = {},
+) {
+  return admitReplyTurn({
+    sessionKey,
+    sessionId,
+    storePath,
+    kind: "visible",
+    resetTriggered: false,
+    ...overrides,
+  });
+}
+function complete(result: Admission | undefined) {
+  if (result?.status === "owned") {
+    result.operation.complete();
+  }
+}
 function seed(storePath: string, id = sessionId, key = sessionKey) {
   replaceSessionEntrySync({ storePath, sessionKey: key }, { sessionId: id, updatedAt: 1 });
 }
 
 async function admitOwner(storePath?: string, id = sessionId) {
-  const result = await admitReplyTurn({
-    sessionKey,
+  const result = await request(storePath, {
     sessionId: id,
-    storePath,
-    kind: "visible",
-    resetTriggered: false,
   });
   if (result.status !== "owned") {
     throw new Error("fixture requires a genuinely admitted parent operation");
@@ -74,14 +86,8 @@ it.each(
 )(
   "follows $barrier rotation only in its physical store, sameStore=$sameStore",
   async ({ barrier, sameStore }) => {
-    const ownerStore = path.join(tempDirs.make("reply-owner-"), "sessions.json");
-    const targetStore = sameStore
-      ? ownerStore
-      : path.join(tempDirs.make("reply-target-"), "sessions.json");
-    seed(ownerStore);
-    if (!sameStore) {
-      seed(targetStore);
-    }
+    const ownerStore = store();
+    const targetStore = sameStore ? ownerStore : store();
     const owner = await admitOwner(ownerStore);
     const released = createDeferred();
     const entered = createDeferred();
@@ -129,13 +135,9 @@ it.each(
       rotate(owner);
       owner.completeWithAfterClearBarrier(released.promise);
     }
-    const pending = admitReplyTurn({
-      sessionKey,
-      sessionId,
+    const pending = request(targetStore, {
       expectedSessionId: sessionId,
-      storePath: targetStore,
       kind: "queued_followup",
-      resetTriggered: false,
     });
     try {
       // Another physical store must neither wait on this owner nor borrow
@@ -163,9 +165,7 @@ it.each(
       owner.complete();
       released.resolve();
       const result = await pending;
-      if (result.status === "owned") {
-        result.operation.complete();
-      }
+      complete(result);
     }
   },
 );
@@ -173,21 +173,10 @@ it.each(
 it.each([true, false])(
   "follows a rotation completed during foreground maintenance only in its physical store, sameStore=%s",
   async (sameStore) => {
-    const ownerStore = path.join(tempDirs.make("reply-maintenance-owner-"), "sessions.json");
-    const targetStore = sameStore
-      ? ownerStore
-      : path.join(tempDirs.make("reply-maintenance-foreign-"), "sessions.json");
-    seed(ownerStore);
-    if (!sameStore) {
-      seed(targetStore);
-    }
-    const admitted = await admitReplyTurn({
-      sessionKey,
-      sessionId,
+    const ownerStore = store();
+    const targetStore = sameStore ? ownerStore : store();
+    const admitted = await request(ownerStore, {
       agentId: "main",
-      storePath: ownerStore,
-      kind: "visible",
-      resetTriggered: false,
     });
     if (admitted.status !== "owned" || !admitted.databaseClaim) {
       throw new Error("fixture requires a reply owner with its physical database claim");
@@ -205,14 +194,9 @@ it.each([true, false])(
     await maintenanceStarted.promise;
     const controller = new AbortController();
     let settled = false;
-    const pending = admitReplyTurn({
-      sessionKey,
-      sessionId,
+    const pending = request(targetStore, {
       agentId: "main",
       expectedSessionId: sessionId,
-      storePath: targetStore,
-      kind: "visible",
-      resetTriggered: false,
       upstreamAbortSignal: controller.signal,
     }).finally(() => {
       settled = true;
@@ -251,9 +235,7 @@ it.each([true, false])(
       await work;
 
       const result = await pending.catch(() => undefined);
-      if (result?.status === "owned") {
-        result.operation.complete();
-      }
+      complete(result);
     }
   },
 );
@@ -270,14 +252,7 @@ function deferred() {
   return value;
 }
 function admit(storePath?: string, overrides: Partial<Parameters<typeof admitReplyTurn>[0]> = {}) {
-  const pending = admitReplyTurn({
-    sessionKey,
-    sessionId,
-    storePath,
-    kind: "visible",
-    resetTriggered: false,
-    ...overrides,
-  });
+  const pending = request(storePath, overrides);
   admissions.push(pending);
   void pending.catch(() => {});
   return pending;
@@ -312,10 +287,8 @@ function rotateOwnedOperation(
 it.each(["before", "after"] as const)(
   "keeps same-store rotation when a foreign barrier is installed %s the rotation",
   async (foreignOrder) => {
-    const ownerStore = path.join(tempDirs.make("reply-rotation-owner-"), "sessions.json");
-    const foreignStore = path.join(tempDirs.make("reply-rotation-foreign-"), "sessions.json");
-    seed(ownerStore);
-    seed(foreignStore);
+    const ownerStore = store();
+    const foreignStore = store();
     const owner = await admitOwner(ownerStore);
     const ownerDelivery = createDeferred();
     const foreignDelivery = createDeferred();
@@ -335,13 +308,9 @@ it.each(["before", "after"] as const)(
       if (foreignOrder === "after") {
         await installForeignBarrier();
       }
-      pending = admitReplyTurn({
-        sessionKey,
-        sessionId,
+      pending = request(ownerStore, {
         expectedSessionId: sessionId,
-        storePath: ownerStore,
         kind: "queued_followup",
-        resetTriggered: false,
       });
       await vi.waitFor(() => expect(waited).toHaveBeenCalled());
       ownerDelivery.resolve();
@@ -356,9 +325,7 @@ it.each(["before", "after"] as const)(
       ownerDelivery.resolve();
       foreignDelivery.resolve();
       const result = await pending;
-      if (result?.status === "owned") {
-        result.operation.complete();
-      }
+      complete(result);
     }
   },
 );
@@ -366,8 +333,7 @@ it.each(["before", "after"] as const)(
 it.each(["completed", "user-aborted", "restart-aborted"] as const)(
   "follows connected serialized compactions only with valid predecessor lineage: %s",
   async (terminal) => {
-    const storePath = path.join(tempDirs.make("reply-serialized-lineage-"), "sessions.json");
-    seed(storePath);
+    const storePath = store();
     const first = await admitOwner(storePath);
     first.updateSessionId(successorId);
     seed(storePath, successorId);
@@ -385,13 +351,9 @@ it.each(["completed", "user-aborted", "restart-aborted"] as const)(
     });
     const secondAdmission = claimSessionControllerTask(firstSource, () => {}).then(
       async (claim) => {
-        const admitted = await admitReplyTurn({
-          sessionKey,
+        const admitted = await request(storePath, {
           sessionId: successorId,
-          storePath,
           mailboxClaim: claim,
-          kind: "visible",
-          resetTriggered: false,
         });
         if (admitted.status !== "owned") {
           throw new Error("successor must be admitted");
@@ -418,15 +380,11 @@ it.each(["completed", "user-aborted", "restart-aborted"] as const)(
     releaseSessionControllerClaim(firstSource.claim!);
     await firstSource.claim!.settlement.promise;
     const selected = await claimSessionControllerTask(waitingSource, () => {});
-    const result = await admitReplyTurn({
-      sessionKey,
-      sessionId,
+    const result = await request(storePath, {
       expectedSessionId: sessionId,
       mailboxClaim: selected,
       expectedActiveOperations: [first, second],
-      storePath,
       kind: "queued_followup",
-      resetTriggered: false,
     });
     if (terminal === "restart-aborted") {
       expect(result).toMatchObject({ status: "skipped", reason: "lifecycle-invalidated" });
@@ -443,8 +401,7 @@ it.each(["completed", "user-aborted", "restart-aborted"] as const)(
 );
 
 it("rejects a replacement committed while the predecessor delivery retains custody", async () => {
-  const storePath = path.join(tempDirs.make("reply-replaced-custody-"), "sessions.json");
-  seed(storePath);
+  const storePath = store();
   const owner = await admitOwner(storePath);
   const delivery = createDeferred();
   owner.completeWithAfterClearBarrier(delivery.promise);
@@ -455,13 +412,9 @@ it("rejects a replacement committed while the predecessor delivery retains custo
     waiting.resolve();
     return result;
   });
-  const pending = admitReplyTurn({
-    sessionKey,
-    sessionId,
+  const pending = request(storePath, {
     expectedSessionId: sessionId,
-    storePath,
     kind: "queued_followup",
-    resetTriggered: false,
   });
   await waiting.promise;
   seed(storePath, "unrelated-session");
@@ -516,10 +469,8 @@ it("keeps rekeyed source lineage separate from the adopted target", async () => 
   ]);
 });
 it("admits selected mailbox claims independently for identical keys in two stores", async () => {
-  const firstStore = path.join(tempDirs.make("reply-physical-first-"), "sessions.json");
-  const secondStore = path.join(tempDirs.make("reply-physical-second-"), "sessions.json");
-  seed(firstStore);
-  seed(secondStore);
+  const firstStore = store();
+  const secondStore = store();
   const firstSource = reserveSessionControllerSource(sessionKey, {
     target: captureSessionTarget({ storeScope: firstStore, sessionKey }),
     policy: { mode: "followup" },
@@ -530,21 +481,11 @@ it("admits selected mailbox claims independently for identical keys in two store
   });
   const firstClaim = tryClaimSessionControllerTask(firstSource)!;
   const secondClaim = tryClaimSessionControllerTask(secondSource)!;
-  const first = await admitReplyTurn({
-    sessionKey,
-    sessionId,
-    storePath: firstStore,
+  const first = await request(firstStore, {
     mailboxClaim: firstClaim,
-    kind: "visible",
-    resetTriggered: false,
   });
-  const second = await admitReplyTurn({
-    sessionKey,
-    sessionId,
-    storePath: secondStore,
+  const second = await request(secondStore, {
     mailboxClaim: secondClaim,
-    kind: "visible",
-    resetTriggered: false,
   });
   expect(first.status).toBe("owned");
   expect(second.status).toBe("owned");

@@ -173,6 +173,33 @@ function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
   };
 }
 
+function cycle(chargedAttempts: number): NonNullable<SessionEntry["mainRestartRecovery"]> {
+  return { cycleId: "cycle-1", revision: 1, chargedAttempts };
+}
+function fencedRecovery(
+  runId = "admitted-recovery",
+  chargedAttempts = 1,
+  overrides: Partial<SessionEntry> = {},
+) {
+  return recoveryFixture({
+    status: undefined,
+    abortedLastRun: false,
+    mainRestartRecovery: cycle(chargedAttempts),
+    restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
+    ...overrides,
+  });
+}
+function observeRecoveryClaim() {
+  const attempted = createDeferred();
+  const claim = recoveryStore.claimMainSessionRecoveryOwner;
+  vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
+    const result = await claim(params);
+    attempted.resolve();
+    return result;
+  });
+  return attempted.promise;
+}
+
 it("keeps new input and followups behind a concurrent recovery winner", async () => {
   const delivery = {
     restartRecoveryDeliveryRunId: "old-channel-claim",
@@ -393,31 +420,18 @@ it("does not consume startup recovery's source while monitoring", async () => {
 it.each(["settled", "cancelled", "replaced"] as const)(
   "keeps visible input behind an admitted recovery fence until %s",
   async (outcome) => {
-    const f = recoveryFixture({
-      status: undefined,
-      abortedLastRun: false,
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 1 },
-      restartRecoveryRuns: [
-        { runId: "admitted-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-      ],
-    });
+    const f = fencedRecovery("admitted-recovery", 1);
     const selected = await f.claim();
     const predecessor = await f.begin();
     const stored = f.read();
-    const attempted = createDeferred();
-    const claim = recoveryStore.claimMainSessionRecoveryOwner;
-    vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
-      const result = await claim(params);
-      attempted.resolve();
-      return result;
-    });
+    const attempted = observeRecoveryClaim();
     const context = createRecoveryGatewayContext(f.storePath);
     const admission = f.wait({
       mailboxClaim: selected,
       resolveGatewayContext: () => context,
       waitForActive: false,
     });
-    await attempted.promise;
+    await attempted;
     await setImmediate();
     expect(admission.failure).toBeUndefined();
     expect(admission.result).toBeUndefined();
@@ -447,14 +461,7 @@ it.each(["settled", "cancelled", "replaced"] as const)(
 );
 
 it("rejects command adoption without waiting behind a live recovery fence", async () => {
-  const f = recoveryFixture({
-    status: undefined,
-    abortedLastRun: false,
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-    restartRecoveryRuns: [
-      { runId: "active-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
-  });
+  const f = fencedRecovery("active-run", 0);
   const context = createRecoveryGatewayContext(f.storePath);
   await f.begin();
   const blocker = createReplyOperation({
@@ -476,19 +483,13 @@ it("rejects command adoption without waiting behind a live recovery fence", asyn
     () => reservation.complete(),
   );
   const before = f.read();
-  const attempted = createDeferred();
-  const claim = recoveryStore.claimMainSessionRecoveryOwner;
-  vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
-    const result = await claim(params);
-    attempted.resolve();
-    return result;
-  });
+  const attempted = observeRecoveryClaim();
   const admission = f.wait({
     sessionId: reservation.sessionId,
     waitForActive: false,
     adoptOperation: reservation,
   });
-  await attempted.promise;
+  await attempted;
   await setImmediate();
   expect(admission.failure).toMatchObject({
     code: "SESSION_WORK_START_CHANGED",
@@ -502,13 +503,7 @@ it("rejects command adoption without waiting behind a live recovery fence", asyn
 });
 
 it("reconciles an orphaned recovery fence before admitting channel input", async () => {
-  const f = recoveryFixture({
-    status: undefined,
-    abortedLastRun: false,
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 1 },
-    restartRecoveryRuns: [
-      { runId: "admitted-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
+  const f = fencedRecovery("admitted-recovery", 1, {
     restartRecoveryDeliveryRunId: "old-channel-claim",
     restartRecoveryDeliverySourceRunId: "old-channel-source",
   });
@@ -535,13 +530,7 @@ it("reconciles an orphaned recovery fence before admitting channel input", async
 it("revalidates channel authority before reclaiming an orphaned recovery fence", async ({
   signal,
 }) => {
-  const f = recoveryFixture({
-    status: undefined,
-    abortedLastRun: false,
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 1 },
-    restartRecoveryRuns: [
-      { runId: "admitted-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
+  const f = fencedRecovery("admitted-recovery", 1, {
     restartRecoveryDeliveryRunId: "old-channel-claim",
     restartRecoveryDeliverySourceRunId: "old-channel-source",
   });
@@ -754,7 +743,7 @@ it("keeps a successor behind an acquired turn's delayed durable claim", async ({
 
 it("returns the foreground recovery claim and releases it when visible reply work clears", async () => {
   const f = recoveryFixture({
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 2 },
+    mainRestartRecovery: cycle(2),
   });
   const admission = owned(await f.admit());
   const claimedEntry = f.read();
@@ -778,7 +767,7 @@ it("settles a committed recovery claim without replay when preparation changes",
   signal,
 }) => {
   const f = recoveryFixture({
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    mainRestartRecovery: cycle(0),
   });
   const predecessor = createReplyOperation({
     sessionKey,
