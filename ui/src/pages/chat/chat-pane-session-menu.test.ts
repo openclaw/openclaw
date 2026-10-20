@@ -419,7 +419,11 @@ describe("chat pane session menu boundary", () => {
       updatedAt: 1,
     };
     const pendingList = createDeferred<ReturnType<typeof sessionsResult>>();
-    const { sessions, context, mount } = createMountedPanes([row], "main", undefined, {
+    const {
+      sessions,
+      pane: primaryPane,
+      mount,
+    } = createMountedPanes([row], "main", undefined, {
       "sessions.list": () => pendingList.promise,
       "sessions.patch": () => ({
         ok: true,
@@ -437,9 +441,9 @@ describe("chat pane session menu boundary", () => {
       undefined,
       { resultAgentId: "main" },
     );
-    const connected = context.gateway.snapshot;
-    context.publishGatewaySnapshot({ ...connected, phase: "reconnecting" });
-    context.publishGatewaySnapshot(connected);
+    const connected = primaryPane.context.gateway.snapshot;
+    primaryPane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
+    primaryPane.applyGatewaySnapshot(connected);
     const pane = mount(row.key);
     const container = document.createElement("div");
     const title = () => {
