@@ -119,6 +119,10 @@ kubectl rollout restart -n openclaw deploy/openclaw
 
 Deployments created from the previous template applied ConfigMap edits on every pod start (and discarded any config changes made through OpenClaw). If you relied on that flow, use the reseed commands above after ConfigMap edits.
 
+### Custom /tmp mounts
+
+A custom volume mounted at `/tmp` must be sticky-protected (mode `1777`-style). The filesystem guard validates temp roots and their ancestors, so a group/world-writable `/tmp` without the sticky bit breaks temp-workspace creation. The shipped manifest handles this with a `gateway-tmp` subdirectory prepared by the init container and mounted at `/tmp` via `subPath`; keep that layout if you customize the temp volume. The volume must be writable by the pod's fsGroup/UID so the init container can create it (a plain `emptyDir` always is); otherwise the init container fails loudly naming the UID requirement instead of starting a broken Gateway. The init container must run with the same effective UID as the Gateway so it can create and chmod `gateway-tmp`. The shipped manifest pins UID/GID 1000 (runAsUser, runAsGroup, fsGroup) for both; platforms that assign arbitrary UIDs (for example OpenShift restricted SCCs) must adapt all of those security-context fields together so both containers still share one effective identity.
+
 ### Add providers
 
 Re-run with additional keys exported:
