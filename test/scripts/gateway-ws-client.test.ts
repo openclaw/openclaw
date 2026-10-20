@@ -71,34 +71,23 @@ async function openClient(handler: (ws: WebSocket) => void = () => {}) {
 }
 
 describe("createGatewayWsClient", () => {
-  it("rejects pending RPC requests when the client closes", async () => {
-    const client = await openClient();
-
-    const pending = client.request("health", {}, 1000);
-    client.close();
-
-    await expect(pending).rejects.toThrow("gateway websocket client closed");
-  });
-
-  it("rejects pending RPC requests when the gateway closes the socket", async () => {
+  it.each([
+    ["client closes", "gateway websocket client closed"],
+    ["gateway closes", "gateway websocket closed (1011): boom"],
+    ["socket errors", "socket exploded"],
+  ])("rejects pending RPC requests when the %s", async (cause, error) => {
     const client = await openClient((ws) => {
-      ws.on("message", () => {
-        ws.close(1011, "boom");
-      });
+      if (cause === "gateway closes") {
+        ws.on("message", () => ws.close(1011, "boom"));
+      }
     });
-
-    await expect(client.request("health", {}, 1000)).rejects.toThrow(
-      "gateway websocket closed (1011): boom",
-    );
-  });
-
-  it("rejects pending RPC requests when the socket errors", async () => {
-    const client = await openClient();
-
     const pending = client.request("health", {}, 1000);
-    client.ws.emit("error", new Error("socket exploded"));
-
-    await expect(pending).rejects.toThrow("socket exploded");
+    if (cause === "client closes") {
+      client.close();
+    } else if (cause === "socket errors") {
+      client.ws.emit("error", new Error(error));
+    }
+    await expect(pending).rejects.toThrow(error);
   });
 
   it("rejects websocket closes before opening", async () => {

@@ -28,19 +28,8 @@ function fixture(directory = "donor") {
   };
 }
 
-function link(target: string, destination: string) {
+const link = (target: string, destination: string) =>
   fs.symlinkSync(target, destination, process.platform === "win32" ? "junction" : "dir");
-}
-
-function expectRefused({ donor, run }: ReturnType<typeof fixture>, env: NodeJS.ProcessEnv) {
-  const before = fs.statSync(donor);
-  expect(run(env)).toMatchObject({
-    status: 1,
-    stderr: expect.stringContaining("Refusing to reconcile dependencies"),
-  });
-  expect(fs.statSync(donor)).toMatchObject({ ino: before.ino, mtimeMs: before.mtimeMs });
-  expect(fs.readFileSync(path.join(donor, "sentinel"), "utf8")).toBe(sentinel);
-}
 
 it.each(["absent", "physical"])("admits %s without changing the checkout", (kind) => {
   const { checkout, modules, run } = fixture();
@@ -72,7 +61,13 @@ it.each(["modules", "virtual-store", "unrelated-config", "empty-uppercase", ...c
       env.PNPM_CONFIG_MODULES_DIR = "";
       env.pnpm_config_modules_dir = donor;
     }
-    expectRefused(f, env);
+    const before = fs.statSync(donor);
+    expect(f.run(env)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining("Refusing to reconcile dependencies"),
+    });
+    expect(fs.statSync(donor)).toMatchObject({ ino: before.ino, mtimeMs: before.mtimeMs });
+    expect(fs.readFileSync(path.join(donor, "sentinel"), "utf8")).toBe(sentinel);
     expect(fs.realpathSync(target)).toBe(donor);
   },
 );
