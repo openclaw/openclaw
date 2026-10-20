@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createModalDialogTestFixture,
   getRenderedModalDialog,
@@ -14,6 +15,31 @@ import {
 
 let fixture: ReturnType<typeof createModalDialogTestFixture>;
 let restorePopover: () => void;
+const defaults = { cwd: "/workspace/project", worktree: false };
+const options = {
+  group: "Project",
+  defaults,
+  listDirectory: async () => ({ path: "/workspace", parent: "/", home: "/home/test", entries: [] }),
+  inspectRepository: async () => "not_git" as const,
+};
+function showDialog(
+  overrides: Partial<Parameters<typeof showSessionGroupDefaultsDialog>[0]> & {
+    submit: Parameters<typeof showSessionGroupDefaultsDialog>[0]["submit"];
+  },
+) {
+  return fixture.track(showSessionGroupDefaultsDialog({ ...options, ...overrides }));
+}
+function submitForm(modal: ParentNode) {
+  modal
+    .querySelector("form")!
+    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+async function openFolderPicker(modal: ParentNode) {
+  const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  return trigger;
+}
 beforeEach(() => {
   restorePopover = installPopoverPolyfill();
   fixture = createModalDialogTestFixture();
@@ -41,19 +67,14 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     .mockResolvedValue(listing);
   const inspectRepository = vi.fn(async () => "not_git" as const);
   const submit = vi.fn(async () => null);
-  const completed = fixture.track(
-    showSessionGroupDefaultsDialog({
-      group: "Project",
-      defaults: { cwd: "/workspace", worktree: false },
-      listDirectory,
-      inspectRepository,
-      submit,
-    }),
-  );
+  const completed = showDialog({
+    defaults: { cwd: "/workspace", worktree: false },
+    listDirectory,
+    inspectRepository,
+    submit,
+  });
   const { modal } = await getRenderedModalDialog(document.body);
-  const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
-  trigger.click();
-  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  await openFolderPicker(modal);
   modal.querySelector<HTMLButtonElement>('[data-value="browse"]')!.click();
   await waitForSolid(() => expect(modal.querySelectorAll('[role="option"]')).toHaveLength(2));
   const input = modal.querySelector<HTMLInputElement>(".new-session-page__browser-path")!;
@@ -74,9 +95,7 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     expect(inspectRepository).toHaveBeenLastCalledWith("/workspace/tools");
     expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
   });
-  modal
-    .querySelector("form")!
-    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  submitForm(modal);
   await completed;
   expect(submit).toHaveBeenCalledExactlyOnceWith({ cwd: "/workspace/tools", worktree: false });
   expect(listDirectory).toHaveBeenCalledExactlyOnceWith("/workspace");
@@ -85,24 +104,9 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
 
 it("clears a saved directory when the agent workspace choice closes the popover", async () => {
   const submit = vi.fn(async () => null);
-  const completed = fixture.track(
-    showSessionGroupDefaultsDialog({
-      group: "Project",
-      defaults: { cwd: "/workspace/project", worktree: false },
-      listDirectory: async () => ({
-        path: "/workspace",
-        parent: "/",
-        home: "/home/test",
-        entries: [],
-      }),
-      inspectRepository: async () => "not_git",
-      submit,
-    }),
-  );
+  const completed = showDialog({ submit });
   const { modal } = await getRenderedModalDialog(document.body);
-  const trigger = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
-  trigger.click();
-  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  const trigger = await openFolderPicker(modal);
   const reset = modal.querySelector<HTMLButtonElement>('[data-value="agent-workspace"]')!;
   expect(document.activeElement).toBe(reset);
   reset.click();
@@ -135,44 +139,28 @@ it("clears a saved directory when the agent workspace choice closes the popover"
     expect(document.activeElement).toBe(trigger);
     expect(document.body.querySelector("openclaw-modal-dialog")).toBe(modal);
   });
-  modal
-    .querySelector("form")!
-    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  submitForm(modal);
   await completed;
   expect(submit).toHaveBeenCalledExactlyOnceWith({ cwd: "", worktree: false });
 });
 
 it("retires a pending save without letting its late completion release a reopened dialog", async () => {
   const owner = new AbortController();
-  let resolveSave!: (value: string | null) => void;
-  const save = new Promise<string | null>((resolve) => {
-    resolveSave = resolve;
-  });
-  const options = {
-    defaults: { cwd: "/workspace/a", worktree: false },
-    listDirectory: async () => ({ path: "/workspace", home: "/home/test", entries: [] }),
-    inspectRepository: async () => "not_git" as const,
-  };
+  const { promise: save, resolve: resolveSave } = createDeferred<string | null>();
   const submit = fixture.mockRequest(async () => save);
-  const retired = fixture.track(
-    showSessionGroupDefaultsDialog({ ...options, group: "Earlier", signal: owner.signal, submit }),
-  );
+  const retired = showDialog({ group: "Earlier", signal: owner.signal, submit });
   try {
     const { modal } = await getRenderedModalDialog(document.body);
     await waitForSolid(() =>
       expect(modal.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false),
     );
-    modal
-      .querySelector("form")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(modal);
     expect(submit).toHaveBeenCalledOnce();
     owner.abort();
     await retired;
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     const freshSubmit = vi.fn(async () => null);
-    const fresh = fixture.track(
-      showSessionGroupDefaultsDialog({ ...options, group: "Current", submit: freshSubmit }),
-    );
+    const fresh = showDialog({ group: "Current", submit: freshSubmit });
     const { modal: current } = await getRenderedModalDialog(document.body);
     resolveSave(null);
     await save;
@@ -181,14 +169,10 @@ it("retires a pending save without letting its late completion release a reopene
         false,
       ),
     );
-    void fixture.track(
-      showSessionGroupDefaultsDialog({ ...options, group: "Unexpected", submit: freshSubmit }),
-    );
+    void showDialog({ group: "Unexpected", submit: freshSubmit });
     expect(document.body.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
     expect(current.getAttribute("label")).toContain("Current");
-    current
-      .querySelector("form")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(current);
     await fresh;
     expect(freshSubmit).toHaveBeenCalledExactlyOnceWith(options.defaults);
   } finally {
@@ -197,34 +181,23 @@ it("retires a pending save without letting its late completion release a reopene
 });
 
 it("gates saving synchronously and lets a failed save retry the restored worktree choice", async () => {
-  let resolveRepository!: (value: "git") => void;
-  let resolveSave!: (value: string | null) => void;
-  const repository = new Promise<"git">((resolve) => {
-    resolveRepository = resolve;
-  });
-  const pendingSave = new Promise<string | null>((resolve) => {
-    resolveSave = resolve;
-  });
+  const { promise: repository, resolve: resolveRepository } = createDeferred<"git">();
+  const { promise: pendingSave, resolve: resolveSave } = createDeferred<string | null>();
   const submit = fixture.mockRequest(
     vi
       .fn<(defaults: SessionGroupDefaults) => Promise<string | null>>()
       .mockReturnValueOnce(pendingSave)
       .mockResolvedValue(null),
   );
-  const completed = fixture.track(
-    showSessionGroupDefaultsDialog({
-      group: "Project",
-      defaults: { cwd: "/workspace/project", worktree: true },
-      listDirectory: async () => ({ path: "/workspace", home: "/home/test", entries: [] }),
-      inspectRepository: async () => repository,
-      submit,
-    }),
-  );
+  const completed = showDialog({
+    defaults: { ...defaults, worktree: true },
+    inspectRepository: async () => repository,
+    submit,
+  });
   try {
     const { modal } = await getRenderedModalDialog(document.body);
-    const form = modal.querySelector("form")!;
     const save = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(modal);
     expect(submit).not.toHaveBeenCalled();
     expect(save.disabled).toBe(true);
     resolveRepository("git");
@@ -234,8 +207,8 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
         modal.querySelector("#session-group-defaults-mode-trigger")?.getAttribute("data-value"),
       ).toBe("worktree");
     });
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(modal);
+    submitForm(modal);
     const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
     modal.dispatchEvent(cancel);
     expect(cancel.defaultPrevented).toBe(true);
@@ -245,7 +218,7 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
       expect(save.disabled).toBe(false);
       expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Try saving again");
     });
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    submitForm(modal);
     await completed;
     expect(submit).toHaveBeenCalledTimes(2);
     expect(submit).toHaveBeenLastCalledWith({ cwd: "/workspace/project", worktree: true });
