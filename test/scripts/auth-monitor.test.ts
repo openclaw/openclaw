@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -11,16 +11,13 @@ const AUTH_MONITOR_PATH = "scripts/auth-monitor.sh";
 const AUTH_MONITOR_SERVICE_PATH = "scripts/systemd/openclaw-auth-monitor.service";
 const TERMUX_WIDGET_PATHS = ["scripts/termux-auth-widget.sh", "scripts/termux-quick-auth.sh"];
 
-function readScript(path: string): string {
-  return readFileSync(path, "utf8");
-}
+const readScript = (file: string) => readFileSync(file, "utf8");
 
 function createAuthMonitorHarness(minutes = 90) {
   const home = tempDirs.make("openclaw-auth-monitor-");
   const binDir = join(home, "bin");
   const curlLog = join(home, "curl.log");
   const openclawLog = join(home, "openclaw.log");
-  const stateFile = join(home, ".openclaw", "auth-monitor-state");
   mkdirSync(binDir);
   const tool = (name: string, script: string) =>
     writeFileSync(join(binDir, name), script, { mode: 0o755 });
@@ -52,8 +49,8 @@ function createAuthMonitorHarness(minutes = 90) {
   });
 
   return {
-    openclawLog,
-    stateFile,
+    readAlert: () => JSON.parse(readFileSync(openclawLog, "utf8")),
+    hasCooldown: () => existsSync(join(home, ".openclaw", "auth-monitor-state")),
     notificationCounts: () =>
       [openclawLog, curlLog].map((file) => readFileSync(file, "utf8").trim().split("\n").length),
     run: (openclawExitCode = 0) =>
@@ -76,52 +73,49 @@ function createAuthMonitorHarness(minutes = 90) {
   };
 }
 
-describe("auth monitoring scripts", () => {
-  it("keeps public helper scripts free of private host defaults", () => {
-    const joined = [AUTH_MONITOR_PATH, AUTH_MONITOR_SERVICE_PATH, ...TERMUX_WIDGET_PATHS]
-      .map(readScript)
-      .join("\n");
+it("keeps public helper scripts free of private host defaults", () => {
+  const joined = [AUTH_MONITOR_PATH, AUTH_MONITOR_SERVICE_PATH, ...TERMUX_WIDGET_PATHS]
+    .map(readScript)
+    .join("\n");
 
-    expect(joined).not.toContain(["", "home", "admin"].join("/"));
-    expect(joined).not.toContain(["l", "36"].join(""));
-    expect(joined).toContain("Run on the OpenClaw host: ${SCRIPT_DIR}/mobile-reauth.sh");
-    for (const script of TERMUX_WIDGET_PATHS.map(readScript)) {
-      expect(script).toContain('SERVER="${OPENCLAW_SERVER:-openclaw-host}"');
-    }
+  expect(joined).not.toContain(["", "home", "admin"].join("/"));
+  expect(joined).not.toContain(["l", "36"].join(""));
+  expect(joined).toContain("Run on the OpenClaw host: ${SCRIPT_DIR}/mobile-reauth.sh");
+  for (const script of TERMUX_WIDGET_PATHS.map(readScript)) {
+    expect(script).toContain('SERVER="${OPENCLAW_SERVER:-openclaw-host}"');
+  }
+});
+
+it("bounds ntfy notification requests", () => {
+  expect(readScript(AUTH_MONITOR_PATH)).toContain(
+    "curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null",
+  );
+});
+
+it("delivers a phone alert and rate-limits with 30 minutes left", () => {
+  const harness = createAuthMonitorHarness(30);
+
+  expect(harness.run().status).toBe(0);
+  expect(harness.hasCooldown()).toBe(true);
+  expect(harness.readAlert()).toEqual({
+    target: "+15550000000",
+    message: "Claude Code auth expires in 0h 30m. Consider re-auth soon.",
   });
 
-  it("bounds ntfy notification requests", () => {
-    expect(readScript(AUTH_MONITOR_PATH)).toContain(
-      "curl -fsS --connect-timeout 5 --max-time 15 -o /dev/null",
-    );
-  });
+  const throttled = harness.run();
+  expect(throttled.stdout).toContain("Skipping notification (sent recently)");
+  expect(harness.notificationCounts()).toEqual([1, 1]);
+});
 
-  it("delivers a phone alert and rate-limits with 30 minutes left", () => {
-    const harness = createAuthMonitorHarness(30);
+it("retries when all configured notification channels fail", () => {
+  const harness = createAuthMonitorHarness();
 
-    const delivered = harness.run();
-    expect(delivered.status).toBe(0);
-    expect(existsSync(harness.stateFile)).toBe(true);
-    expect(JSON.parse(readFileSync(harness.openclawLog, "utf8"))).toEqual({
-      target: "+15550000000",
-      message: "Claude Code auth expires in 0h 30m. Consider re-auth soon.",
-    });
+  const failed = harness.run(1);
+  expect(failed.status).toBe(0);
+  expect(harness.hasCooldown()).toBe(false);
+  expect(failed.stderr).toContain("No notification delivered; cooldown not updated");
 
-    const throttled = harness.run();
-    expect(throttled.stdout).toContain("Skipping notification (sent recently)");
-    expect(harness.notificationCounts()).toEqual([1, 1]);
-  });
-
-  it("retries when all configured notification channels fail", () => {
-    const harness = createAuthMonitorHarness();
-
-    const failed = harness.run(1);
-    expect(failed.status).toBe(0);
-    expect(existsSync(harness.stateFile)).toBe(false);
-    expect(failed.stderr).toContain("No notification delivered; cooldown not updated");
-
-    const retry = harness.run(1);
-    expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
-    expect(harness.notificationCounts()).toEqual([2, 2]);
-  });
+  const retry = harness.run(1);
+  expect(retry.stdout).not.toContain("Skipping notification (sent recently)");
+  expect(harness.notificationCounts()).toEqual([2, 2]);
 });

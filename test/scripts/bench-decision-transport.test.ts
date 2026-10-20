@@ -11,9 +11,8 @@ const roots = useAutoCleanupTempDirTracker(afterEach);
 
 it("completes real registered-provider requests and drains reusable connections", async () => {
   const result = await benchmarkDecisionTransport(6);
-  expect(result.requests).toBe(6);
+  expect(result).toMatchObject({ requests: 6, socketsAfterPoolClose: 0 });
   expect(result.connections).toBeLessThan(6);
-  expect(result.socketsAfterPoolClose).toBe(0);
   expect(result.warmTimingsMs).toHaveLength(5);
 });
 
@@ -61,22 +60,16 @@ function fixture(candidateResult: Record<string, unknown> = {}) {
     };
     const file = path.join(directory, "manifest.json");
     writeFileSync(file, JSON.stringify(manifest));
-    return { file, manifest };
+    return { file, manifest, flag: `--${side}` };
   });
+  const controls = ["--runs", "2", "--requests", "2", "--json"];
   const run = () =>
     spawnSync(
       process.execPath,
       [
         "scripts/bench-decision-transport.mts",
-        "--baseline",
-        manifests[0]!.file,
-        "--candidate",
-        manifests[1]!.file,
-        "--runs",
-        "2",
-        "--requests",
-        "2",
-        "--json",
+        ...manifests.flatMap(({ flag, file }) => [flag, file]),
+        ...controls,
       ],
       { encoding: "utf8", timeout: 20_000 },
     );
@@ -89,12 +82,8 @@ it("runs serial ABAB samples and reports bounded evidence without unsupported ta
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   const { samples, summary, scope } = JSON.parse(result.stdout);
-  expect(samples.map((row: { variant: string }) => row.variant)).toEqual([
-    "baseline",
-    "candidate",
-    "baseline",
-    "candidate",
-  ]);
+  const order = samples.map((row: { variant: string }) => row.variant);
+  expect(order).toEqual(["baseline", "candidate", "baseline", "candidate"]);
   expect(summary.candidate.connectionsPerSample).toEqual({ count: 2, min: 1, p50: 1, max: 1 });
   expect(samples[0].result.memoryAfterDrain.rss).toBe(100);
   expect(scope).toContain("no model inference, TLS or Gateway startup claims");
@@ -114,13 +103,10 @@ it.each(["workerSourceSha256", "harnessSourceSha256", "node"] as const)(
   },
 );
 
-it("rejects changed build output instead of publishing a successful report", () => {
-  const { manifests, run } = fixture();
-  writeFileSync(path.join(path.dirname(manifests[1]!.file), "worker.mjs"), "process.exit(0);");
-  expect(run()).toMatchObject({ status: 1, stdout: "" });
-});
-
-it("rejects an incomplete worker result even when its process succeeds", () => {
-  const { run } = fixture({ warmTimingsMs: [] });
+it.each(["artifact", "result"])("rejects an invalid %s without a report", (invalid) => {
+  const { manifests, run } = fixture(invalid === "result" ? { warmTimingsMs: [] } : {});
+  if (invalid === "artifact") {
+    writeFileSync(path.join(path.dirname(manifests[1]!.file), "worker.mjs"), "process.exit(0);");
+  }
   expect(run()).toMatchObject({ status: 1, stdout: "" });
 });

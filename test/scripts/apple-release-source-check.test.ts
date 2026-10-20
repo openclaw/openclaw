@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "apple-release-source-check.sh");
@@ -14,20 +14,13 @@ function makeRepository(): { root: string; commit: string } {
   git("init", "--quiet");
   writeFileSync(path.join(root, "tracked.txt"), "clean\n", "utf8");
   git("add", "tracked.txt");
-  git(
-    "-c",
+  const config = [
     "commit.gpgsign=false",
-    "-c",
     "user.email=release-test@openclaw.test",
-    "-c",
     "user.name=OpenClaw Release Test",
-    "commit",
-    "--quiet",
-    "-m",
-    "initial",
-  );
-  const commit = git("rev-parse", "HEAD").trim();
-  return { root, commit };
+  ].flatMap((value) => ["-c", value]);
+  git(...config, "commit", "--quiet", "-m", "initial");
+  return { root, commit: git("rev-parse", "HEAD").trim() };
 }
 
 function runCheck(root: string, commit: string) {
@@ -38,38 +31,36 @@ function runCheck(root: string, commit: string) {
   });
 }
 
-describe("Apple release source check", () => {
-  it("accepts a matching full commit from a clean checkout", () => {
+it("accepts a matching full commit from a clean checkout", () => {
+  const repository = makeRepository();
+  const result = runCheck(repository.root, repository.commit.toUpperCase());
+
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain(
+    `Verified Apple release source: commit=${repository.commit} clean=true`,
+  );
+});
+
+it("rejects release metadata from a different commit", () => {
+  const repository = makeRepository();
+  const mismatch = `${repository.commit[0] === "a" ? "b" : "a"}${repository.commit.slice(1)}`;
+  const result = runCheck(repository.root, mismatch);
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    `Apple release commit mismatch: metadata ${mismatch}, checkout ${repository.commit}.`,
+  );
+});
+
+it("rejects tracked, staged, and untracked release checkout changes", () => {
+  for (const file of ["tracked.txt", "staged.txt", "untracked.txt"]) {
     const repository = makeRepository();
-    const result = runCheck(repository.root, repository.commit.toUpperCase());
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      `Verified Apple release source: commit=${repository.commit} clean=true`,
-    );
-  });
-
-  it("rejects release metadata from a different commit", () => {
-    const repository = makeRepository();
-    const mismatch = `${repository.commit[0] === "a" ? "b" : "a"}${repository.commit.slice(1)}`;
-    const result = runCheck(repository.root, mismatch);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      `Apple release commit mismatch: metadata ${mismatch}, checkout ${repository.commit}.`,
-    );
-  });
-
-  it("rejects tracked, staged, and untracked release checkout changes", () => {
-    for (const file of ["tracked.txt", "staged.txt", "untracked.txt"]) {
-      const repository = makeRepository();
-      writeFileSync(path.join(repository.root, file), "dirty\n", "utf8");
-      if (file === "staged.txt") {
-        execFileSync("git", ["add", file], { cwd: repository.root });
-      }
-      const result = runCheck(repository.root, repository.commit);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Apple release builds require a clean Git checkout.");
+    writeFileSync(path.join(repository.root, file), "dirty\n", "utf8");
+    if (file === "staged.txt") {
+      execFileSync("git", ["add", file], { cwd: repository.root });
     }
-  });
+    const result = runCheck(repository.root, repository.commit);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Apple release builds require a clean Git checkout.");
+  }
 });

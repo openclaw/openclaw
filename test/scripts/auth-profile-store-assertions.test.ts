@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import {
   assertNoLegacyPrimaryAuthRows,
   readCanonicalAuthProfileStoreText,
@@ -51,7 +51,6 @@ function writeStore(
 }
 
 function writeSharedDatabase(
-  stateRoot: string,
   options: {
     asView?: boolean;
     withoutCanonicalTable?: boolean;
@@ -59,7 +58,7 @@ function writeSharedDatabase(
     storeJson?: string;
   } = {},
 ): void {
-  return writeDatabase(path.join(stateRoot, "state", "openclaw.sqlite"), (db) => {
+  return writeDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (db) => {
     const schemaVersion = options.schemaVersion ?? 13;
     db.exec(`PRAGMA user_version = ${schemaVersion};`);
     const table = schemaVersion >= 13 ? "config_machine_state" : "auth_profile_stores";
@@ -75,68 +74,60 @@ function writeSharedDatabase(
   });
 }
 
-function writeAgentDatabase(stateRoot: string, asView = false) {
-  const file = path.join(stateRoot, "agents/main/agent/openclaw-agent.sqlite");
+function writeAgentDatabase(asView = false) {
+  const file = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
   writeDatabase(file, (db) =>
     writeStore(db, "auth_profile_store", "primary", PRIMARY_STORE, asView),
   );
 }
 
-describe("auth profile store E2E assertions", () => {
-  it("reads the release-owned shared row before schema v13", () => {
-    writeSharedDatabase(stateDir, {
-      schemaVersion: 12,
-      storeJson: '{"version":1,"schema":12}',
-    });
+it("reads the release-owned shared row before schema v13", () => {
+  writeSharedDatabase({ schemaVersion: 12, storeJson: '{"version":1,"schema":12}' });
 
-    expect(readSharedAuthProfileStoreText(stateDir)).toBe('{"version":1,"schema":12}');
-  });
+  expect(readSharedAuthProfileStoreText(stateDir)).toBe('{"version":1,"schema":12}');
+});
 
-  it("reads and permits the pre-v13 primary agent-store contract", () => {
-    writeAgentDatabase(stateDir);
+it("reads and permits the pre-v13 primary agent-store contract", () => {
+  writeAgentDatabase();
 
-    expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
-    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
-  });
+  expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
+  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
+});
 
-  it("uses the agent store before the shared-auth schema boundary", () => {
-    // Candidate 2026.6.35 creates this unused state table at schema v1 while
-    // its auth runtime still owns primary credentials in the agent database.
-    writeSharedDatabase(stateDir, { schemaVersion: 1, storeJson: '{"shared":true}' });
-    writeAgentDatabase(stateDir);
+it("uses the agent store before the shared-auth schema boundary", () => {
+  // Candidate 2026.6.35 creates this unused state table at schema v1 while
+  // its auth runtime still owns primary credentials in the agent database.
+  writeSharedDatabase({ schemaVersion: 1, storeJson: '{"shared":true}' });
+  writeAgentDatabase();
 
-    expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
-    expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
-    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
-  });
+  expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
+  expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
+  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
+});
 
-  it("does not let a retired agent row mask a missing v7 shared table", () => {
-    writeSharedDatabase(stateDir, {
-      schemaVersion: 7,
-      withoutCanonicalTable: true,
-    });
-    writeAgentDatabase(stateDir);
+it("does not let a retired agent row mask a missing v7 shared table", () => {
+  writeSharedDatabase({ schemaVersion: 7, withoutCanonicalTable: true });
+  writeAgentDatabase();
 
-    expect(readCanonicalAuthProfileStoreText(stateDir)).toBe("");
-    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).toThrow(
-      "onboard preserved a retired primary row in auth_profile_store",
-    );
-  });
+  expect(readCanonicalAuthProfileStoreText(stateDir)).toBe("");
+  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).toThrow(
+    "onboard preserved a retired primary row in auth_profile_store",
+  );
+});
 
-  it("fails closed when the shared auth table is replaced by a view", () => {
-    writeSharedDatabase(stateDir, { asView: true });
+it("fails closed when the shared auth table is replaced by a view", () => {
+  writeSharedDatabase({ asView: true });
 
-    expect(() => readSharedAuthProfileStoreText(stateDir)).toThrow(
-      "config_machine_state is view, not a table",
-    );
-  });
+  expect(() => readSharedAuthProfileStoreText(stateDir)).toThrow(
+    "config_machine_state is view, not a table",
+  );
+});
 
-  it("fails closed when a retired auth table is replaced by a view", () => {
-    writeSharedDatabase(stateDir);
-    writeAgentDatabase(stateDir, true);
+it("fails closed when a retired auth table is replaced by a view", () => {
+  writeSharedDatabase();
+  writeAgentDatabase(true);
 
-    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).toThrow(
-      "auth_profile_store is view, not a table",
-    );
-  });
+  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).toThrow(
+    "auth_profile_store is view, not a table",
+  );
 });
