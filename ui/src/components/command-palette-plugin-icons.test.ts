@@ -5,12 +5,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createContext,
   createGateway,
-  enterQuery,
   findPaletteOption,
   mountPalette,
   paletteInput,
   registerCommandPaletteTestHooks,
+  searchPalette,
   setInputValue,
+  settlePalette,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
@@ -48,17 +49,14 @@ describe("CommandPalette plugin icons", () => {
     });
     gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
     const { palette } = await mountPalette(createContext(gateway, async () => null));
-    await enterQuery(palette, "workboard");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    await vi.waitFor(() => {
-      expect(findPaletteOption(palette, "Workboard")?.querySelector("img")?.src).toBe(
-        "blob:workboard-1",
-      );
-    });
-    const icon = findPaletteOption(palette, "Workboard")?.querySelector(
-      ".cmd-palette__plugin-icon",
-    );
+    const workboard = () => findPaletteOption(palette, "Workboard");
+    const waitForIcon = (revision: number) =>
+      vi.waitFor(() => {
+        expect(workboard()?.querySelector("img")?.src).toBe(`blob:workboard-${revision}`);
+      });
+    await searchPalette(palette, "workboard");
+    await waitForIcon(1);
+    const icon = workboard()?.querySelector(".cmd-palette__plugin-icon");
     expect(icon?.classList.contains("skeleton")).toBe(true);
     icon?.querySelector("img")?.dispatchEvent(new Event("load"));
     flush();
@@ -68,49 +66,39 @@ describe("CommandPalette plugin icons", () => {
       expect.objectContaining({ method: "GET" }),
     );
     expect(fetchIcon).toHaveBeenCalledTimes(1);
-    const initialRow = findPaletteOption(palette, "Workboard");
+    const initialRow = workboard();
     const input = paletteInput(palette);
     setInputValue(
       input,
       "Draft a detailed plan for the next release and include all testing steps.",
     );
     await palette.updateComplete;
-    expect(findPaletteOption(palette, "Workboard")).toBe(initialRow);
+    expect(workboard()).toBe(initialRow);
     expect(initialRow?.closest("[inert]")).not.toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:workboard-1");
     setInputValue(input, "workboard");
     await vi.advanceTimersByTimeAsync(200);
-    await vi.waitFor(() => {
-      expect(findPaletteOption(palette, "Workboard")?.querySelector("img")?.src).toBe(
-        "blob:workboard-2",
-      );
-    });
+    await waitForIcon(2);
     expect(fetchIcon).toHaveBeenCalledTimes(2);
 
-    const row = findPaletteOption(palette, "Workboard");
+    const row = workboard();
     row?.querySelector("img")?.dispatchEvent(new Event("error"));
     flush();
     emit("cron");
-    await vi.advanceTimersByTimeAsync(0);
-    await palette.updateComplete;
+    await settlePalette(palette, 0);
     expect(row?.querySelector("img")).toBeNull();
     expect(fetchIcon).toHaveBeenCalledTimes(2);
 
     hasIcon = false;
     emit("cron");
-    await vi.advanceTimersByTimeAsync(0);
-    await palette.updateComplete;
+    await settlePalette(palette, 0);
     expect(row?.querySelector("img")).toBeNull();
     expect(fetchIcon).toHaveBeenCalledTimes(2);
     hasIcon = true;
     emit("cron");
     await vi.advanceTimersByTimeAsync(0);
-    await vi.waitFor(() => {
-      expect(findPaletteOption(palette, "Workboard")?.querySelector("img")?.src).toBe(
-        "blob:workboard-3",
-      );
-    });
-    expect(findPaletteOption(palette, "Workboard")).toBe(row);
+    await waitForIcon(3);
+    expect(workboard()).toBe(row);
     expect(fetchIcon).toHaveBeenCalledTimes(3);
   });
 });

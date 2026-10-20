@@ -40,41 +40,13 @@ describe("worker capacity meter", () => {
   });
 
   it.each([
-    {
-      name: "idle",
-      available: 8,
-      unavailable: false,
-      filled: 0,
-      tone: "accent",
-      label: "0 of 8 slots busy",
-    },
-    {
-      name: "partially occupied",
-      available: 5,
-      unavailable: false,
-      filled: 3,
-      tone: "accent",
-      label: "3 of 8 slots busy",
-    },
-    {
-      name: "at capacity",
-      available: 0,
-      unavailable: false,
-      filled: 8,
-      tone: "warn",
-      label: "8 of 8 slots busy",
-    },
-    {
-      name: "ineligible and saturated",
-      available: 0,
-      unavailable: true,
-      filled: 0,
-      tone: "stale",
-      label: "Slot utilization unavailable",
-    },
-  ])(
-    "renders $name without reversing free and busy",
-    ({ available, unavailable, filled, tone, label }) => {
+    ["idle", 8, false, 0, "accent", "0 of 8 slots busy"],
+    ["partially occupied", 5, false, 3, "accent", "3 of 8 slots busy"],
+    ["at capacity", 0, false, 8, "warn", "8 of 8 slots busy"],
+    ["ineligible and saturated", 0, true, 0, "stale", "Slot utilization unavailable"],
+  ] as const)(
+    "renders %s without reversing free and busy",
+    (_name, available, unavailable, filled, tone, label) => {
       const container = renderCapacity({ workerSlots: { total: 8, available }, unavailable });
       const meter = container.querySelector('[role="img"]');
       expect(meter?.getAttribute("aria-label")).toBe(label);

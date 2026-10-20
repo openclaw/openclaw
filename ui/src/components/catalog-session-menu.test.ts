@@ -8,8 +8,21 @@ type CatalogSessionMenuAction = Parameters<
   HTMLElementTagNameMap["openclaw-catalog-session-menu"]["onAction"]
 >[0];
 
-type CatalogMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
-type CatalogMenuItem = HTMLButtonElement;
+async function mountMenu(
+  props: Partial<HTMLElementTagNameMap["openclaw-catalog-session-menu"]> = {},
+) {
+  const menu = document.createElement("openclaw-catalog-session-menu");
+  Object.assign(menu, props);
+  document.body.append(menu);
+  await menu.updateComplete;
+  return menu;
+}
+
+function escapeMenu(target = document.activeElement) {
+  target?.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -18,13 +31,9 @@ afterEach(() => {
 
 describe("catalog session menu", () => {
   it("renders an anchored native menu and focuses the first item", async () => {
-    // SAFETY: The imported bridge registers this tag with its declared properties.
-    const menu = document.createElement("openclaw-catalog-session-menu") as CatalogMenuElement;
-    Object.assign(menu, { lastActive: "57d" });
-    document.body.append(menu);
-    await menu.updateComplete;
+    const menu = await mountMenu({ lastActive: "57d" });
     const panel = menu.querySelector<HTMLElement>('[role="menu"]');
-    const items = [...menu.querySelectorAll<CatalogMenuItem>('[role="menuitem"]')];
+    const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 
     await waitForSolid(() => expect(document.activeElement).toBe(items[0]));
     expect(panel?.matches(":popover-open")).toBe(true);
@@ -39,19 +48,14 @@ describe("catalog session menu", () => {
     const onAction = vi.fn((action: CatalogSessionMenuAction) => {
       order.push(backingState ? action : "cleared");
     });
-    // SAFETY: The imported bridge registers this tag with its declared properties.
-    const menu = document.createElement("openclaw-catalog-session-menu") as CatalogMenuElement;
-    Object.assign(menu, {
+    const menu = await mountMenu({
       onAction,
       onClose: () => {
         backingState = null;
         order.push("close");
       },
     });
-    document.body.append(menu);
-    await menu.updateComplete;
-
-    menu.querySelector<CatalogMenuItem>('[data-value="terminal"]')?.click();
+    menu.querySelector<HTMLButtonElement>('[data-value="terminal"]')?.click();
 
     await waitForSolid(() => expect(onAction).toHaveBeenCalledWith("terminal"));
     expect(order).toEqual(["terminal", "close"]);
@@ -66,31 +70,22 @@ describe("catalog session menu", () => {
   it("closes once after an action synchronously removes the menu", async () => {
     const order: string[] = [];
     const onClose = vi.fn(() => order.push("close"));
-    // SAFETY: The imported bridge registers this tag with its declared properties.
-    const menu = document.createElement("openclaw-catalog-session-menu") as CatalogMenuElement;
-    Object.assign(menu, {
+    const menu = await mountMenu({
       onAction: (action: CatalogSessionMenuAction) => {
         order.push(action);
         menu.remove();
       },
       onClose,
     });
-    document.body.append(menu);
-    await menu.updateComplete;
-
-    menu.querySelector<CatalogMenuItem>('[data-value="viewer"]')!.click();
+    menu.querySelector<HTMLButtonElement>('[data-value="viewer"]')!.click();
     await waitForSolid(() => expect(order).toEqual(["viewer", "close"]));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("disables terminal selection with the unavailable reason", async () => {
     const onAction = vi.fn();
-    // SAFETY: The imported bridge registers this tag with its declared properties.
-    const menu = document.createElement("openclaw-catalog-session-menu") as CatalogMenuElement;
-    Object.assign(menu, { terminalDisabled: true, onAction });
-    document.body.append(menu);
-    await menu.updateComplete;
-    const terminal = menu.querySelector<CatalogMenuItem>('[data-value="terminal"]');
+    const menu = await mountMenu({ terminalDisabled: true, onAction });
+    const terminal = menu.querySelector<HTMLButtonElement>('[data-value="terminal"]');
 
     expect(terminal?.disabled).toBe(true);
     expect(terminal?.title).toBe("Terminal opening is unavailable for this session.");
@@ -98,48 +93,28 @@ describe("catalog session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("returns keyboard focus to the caller's trigger when Escape closes the menu", async () => {
+  it.each([false, true])("returns focus on Escape (replacement trigger: %s)", async (replace) => {
     const onClose = vi.fn();
     const trigger = document.createElement("button");
     document.body.append(trigger);
     trigger.focus();
-    const menu = document.createElement("openclaw-catalog-session-menu");
-    Object.assign(menu, { trigger, onClose });
-    document.body.append(menu);
+    const menu = await mountMenu({ trigger, onClose });
     await waitForSolid(() =>
       expect(document.activeElement).toBe(menu.querySelector('[data-value="viewer"]')),
     );
 
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(document.activeElement).toBe(trigger);
-    expect(menu.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
-  });
-
-  it("returns focus to a replacement trigger without remounting the open menu", async () => {
-    const original = document.createElement("button");
-    const replacement = document.createElement("button");
-    document.body.append(original, replacement);
-    original.focus();
-    const menu = document.createElement("openclaw-catalog-session-menu");
-    menu.trigger = original;
-    document.body.append(menu);
-    await waitForSolid(() =>
-      expect(document.activeElement).toBe(menu.querySelector('[data-value="viewer"]')),
-    );
     const item = document.activeElement;
-    original.remove();
-    menu.trigger = replacement;
-    await waitForSolid(() => expect(menu.trigger).toBe(replacement));
-
-    item?.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-    );
-
-    expect(document.activeElement).toBe(replacement);
+    let returnTarget = trigger;
+    if (replace) {
+      returnTarget = document.createElement("button");
+      document.body.append(returnTarget);
+      trigger.remove();
+      menu.trigger = returnTarget;
+      await waitForSolid(() => expect(menu.trigger).toBe(returnTarget));
+    }
+    escapeMenu(item);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(returnTarget);
     expect(menu.querySelector('[data-value="viewer"]')).toBe(item);
     expect(menu.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
   });

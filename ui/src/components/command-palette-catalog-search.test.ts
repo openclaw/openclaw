@@ -43,42 +43,34 @@ describe("command palette catalog search", () => {
   });
 
   it("loads bounded name and description catalogs in parallel", async () => {
+    const catalogs: Record<string, unknown> = {
+      "cron.list": { jobs: [{ id: "nightly", name: "Nightly invoices" }] },
+      "skills.status": {
+        skills: [
+          {
+            skillKey: "forecast-brief",
+            name: "Forecast brief",
+            description: "Summarizes the weather",
+            source: "workspace",
+          },
+        ],
+      },
+      "plugins.list": {
+        plugins: [
+          {
+            id: "weather-helper",
+            name: "Weather helper",
+            description: "Adds forecast tools",
+            packageName: "@openclaw/weather-helper",
+          },
+        ],
+      },
+    };
     const request = vi.fn(async (method: string) => {
-      switch (method) {
-        case "cron.list":
-          return {
-            jobs: [
-              {
-                id: "nightly",
-                name: "Nightly invoices",
-              },
-            ],
-          };
-        case "skills.status":
-          return {
-            skills: [
-              {
-                skillKey: "forecast-brief",
-                name: "Forecast brief",
-                description: "Summarizes the weather",
-                source: "workspace",
-              },
-            ],
-          };
-        case "plugins.list":
-          return {
-            plugins: [
-              {
-                id: "weather-helper",
-                name: "Weather helper",
-                description: "Adds forecast tools",
-                packageName: "@openclaw/weather-helper",
-              },
-            ],
-          };
-        default:
-          throw new Error(`Unexpected method: ${method}`);
+      if (!Object.hasOwn(catalogs, method)) {
+        throw new Error(`Unexpected method: ${method}`);
       }
+      return catalogs[method];
     });
 
     const items = await loadCommandPaletteCatalogItems({

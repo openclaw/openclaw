@@ -13,10 +13,10 @@ const item: CommandPaletteItem = {
   session: { key: "agent:main:fixture", kind: "direct", updatedAt: 1 },
 };
 it.each([
-  { label: "İstanbul needle", query: "NEEDLE", expected: "needle" },
-  { label: "Literal [a+b] query", query: "[a+b]", expected: "[a+b]" },
-  { label: "<img src=x onerror=alert(1)> needle", query: "<img", expected: "<img" },
-])("highlights literal text safely in $label", ({ label, query, expected }) => {
+  ["İstanbul needle", "NEEDLE", "needle"],
+  ["Literal [a+b] query", "[a+b]", "[a+b]"],
+  ["<img src=x onerror=alert(1)> needle", "<img", "<img"],
+])("highlights literal text safely in %s", (label, query, expected) => {
   const { container } = mountSolid(() => (
     <CommandPaletteResult item={{ ...item, label }} query={query} />
   ));
@@ -25,53 +25,36 @@ it.each([
   expect(container.querySelector(".cmd-palette__item-title img")).toBeNull();
 });
 
-it.each([
-  {
-    name: "passive Markdown",
-    catalog: false,
-    description:
-      "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
-    query: "needle",
-    contents: ["guide", "diagram"],
-    nodes: [
+it.each<[string, boolean, string, string, string[], [string, string][], string]>([
+  [
+    "passive Markdown",
+    false,
+    "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
+    "needle",
+    ["guide", "diagram"],
+    [
       ["strong em mark", "needle"],
       ["s", "old"],
       ["code", "config"],
     ],
-    forbidden: "a, img, table, pre, p",
-  },
-  {
-    name: "escaped markup",
-    catalog: false,
-    description: "<img src=x onerror=alert(1)> **&lt;script&gt;**",
-    query: "<img",
-    contents: [],
-    nodes: [
+    "a, img, table, pre, p",
+  ],
+  [
+    "escaped markup",
+    false,
+    "<img src=x onerror=alert(1)> **&lt;script&gt;**",
+    "<img",
+    [],
+    [
       ["mark", "<img"],
       ["strong", "<script>"],
     ],
-    forbidden: "img, script",
-  },
-  {
-    name: "literal catalog copy",
-    catalog: true,
-    description: "**Literal** description",
-    query: "Literal",
-    contents: [],
-    nodes: [],
-    forbidden: "strong",
-  },
-] satisfies Array<{
-  name: string;
-  catalog: boolean;
-  description: string;
-  query: string;
-  contents: string[];
-  nodes: [string, string][];
-  forbidden: string;
-}>)(
-  "renders safe $name descriptions",
-  ({ catalog, description, query, contents, nodes, forbidden }) => {
+    "img, script",
+  ],
+  ["literal catalog copy", true, "**Literal** description", "Literal", [], [], "strong"],
+])(
+  "renders safe %s descriptions",
+  (_name, catalog, description, query, contents, nodes, forbidden) => {
     const { container } = mountSolid(() => (
       <CommandPaletteResult
         item={{
@@ -98,37 +81,21 @@ it.each([
 );
 
 it.each([
-  {
-    description: "See ![A &amp; B](https://example.com/image.png).",
-    query: "&",
-    expected: "See A & B.",
-  },
-  {
-    description: "See [**ex**ample](https://example.com/docs).",
-    query: "example",
-    expected: "See example (https://example.com/docs).",
-  },
-  {
-    description: "See [guide](https://example.com/café).",
-    query: "café",
-    expected: "See guide (https://example.com/café).",
-  },
-  {
-    description: "See ![diagram](https://例え.テスト/図.png).",
-    query: "テスト",
-    expected: "See diagram (https://例え.テスト/図.png).",
-  },
-  {
-    description: "See <https://example.com/caf%C3%A9>.",
-    query: "%C3%A9",
-    expected: "See https://example.com/caf%C3%A9.",
-  },
-  {
-    description: "See [**example guide**](https://example.com/docs).",
-    query: "example",
-    expected: "See example guide.",
-  },
-])("keeps a passive match cue for $description", ({ description, query, expected }) => {
+  ["See ![A &amp; B](https://example.com/image.png).", "&", "See A & B."],
+  [
+    "See [**ex**ample](https://example.com/docs).",
+    "example",
+    "See example (https://example.com/docs).",
+  ],
+  ["See [guide](https://example.com/café).", "café", "See guide (https://example.com/café)."],
+  [
+    "See ![diagram](https://例え.テスト/図.png).",
+    "テスト",
+    "See diagram (https://例え.テスト/図.png).",
+  ],
+  ["See <https://example.com/caf%C3%A9>.", "%C3%A9", "See https://example.com/caf%C3%A9."],
+  ["See [**example guide**](https://example.com/docs).", "example", "See example guide."],
+])("keeps a passive match cue for %s", (description, query, expected) => {
   const { container } = mountSolid(() => (
     <CommandPaletteResult item={{ ...item, description }} query={query} />
   ));
