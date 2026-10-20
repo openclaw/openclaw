@@ -18,6 +18,7 @@ const suite = createControlUiE2eSuite({
 });
 const contextOptions = createControlUiE2eContextOptions();
 const mainKey = "agent:main:main";
+const collisionKey = "agent:main:thread:12345678-0000-4000-8000-000000000001";
 
 async function rememberSession(page: Page, savedSessionKey: string) {
   await page.addInitScript(
@@ -40,62 +41,58 @@ async function rememberSession(page: Page, savedSessionKey: string) {
 
 suite.define(() => {
   it.each([
-    ["missing session", "agent:main:15cf8259-0000-4000-8000-000000000001"],
-    ["removed agent", "agent:retired:main"],
-  ])("opens a usable main chat with a remembered %s", async (_name, savedKey) => {
+    ["missing session", "agent:main:15cf8259-0000-4000-8000-000000000001", mainKey],
+    ["removed agent", "agent:retired:main", mainKey],
+    ["colliding short prefix", collisionKey, collisionKey],
+  ])("restores the correct chat with a remembered %s", async (_name, savedKey, expectedKey) => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, { sessions: [], mainSessionKey: mainKey });
-      await rememberSession(page, savedKey);
-
-      await page.goto(suite.server.baseUrl);
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-      const activeComposer = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea',
-      );
-      await activeComposer.waitFor({ state: "visible" });
-      expect(await activeComposer.count()).toBe(1);
-      expect(await page.locator(".session-route-not-found").count()).toBe(0);
-      expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
-        sessionKey: mainKey,
-      });
-    });
-  });
-
-  it("restores the exact remembered session when its short prefix collides", async () => {
-    const key = "agent:main:thread:12345678-0000-4000-8000-000000000001";
-    const otherKey = "agent:main:thread:12345678-0000-4000-8000-000000000002";
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const exact = expectedKey === savedKey;
+      const key = savedKey;
       const gateway = await installMockGateway(page, {
         sessions: [],
-        methodResponses: {
-          "sessions.resolve": {
-            cases: [
-              { match: { key }, response: { ok: true, key, agentId: "main" } },
-              {
-                match: { shortId: "12345678" },
-                response: {
-                  ok: false,
-                  candidates: [
-                    { key, agentId: "main" },
-                    { key: otherKey, agentId: "main" },
-                  ],
-                },
+        mainSessionKey: mainKey,
+        methodResponses: exact
+          ? {
+              "sessions.resolve": {
+                cases: [
+                  { match: { key }, response: { ok: true, key, agentId: "main" } },
+                  {
+                    match: { shortId: "12345678" },
+                    response: {
+                      ok: false,
+                      candidates: [key, key.replace(/1$/, "2")].map((candidate) => ({
+                        key: candidate,
+                        agentId: "main",
+                      })),
+                    },
+                  },
+                ],
               },
-            ],
-          },
-        },
+            }
+          : undefined,
       });
       await rememberSession(page, key);
-
       await page.goto(suite.server.baseUrl);
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      if (!exact) {
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+      }
+      const composer = page.locator(
+        exact
+          ? ".agent-chat__input textarea"
+          : 'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea',
+      );
+      await composer.waitFor({ state: "visible" });
       expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
-        sessionKey: key,
+        sessionKey: expectedKey,
       });
+      if (!exact) {
+        expect(await composer.count()).toBe(1);
+        expect(await page.locator(".session-route-not-found").count()).toBe(0);
+        return;
+      }
       await expect.poll(() => new URL(page.url()).search).toBe("");
       const requests = await gateway.getRequests("sessions.resolve");
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.params).toMatchObject({ key, allowMissing: true });
+      expect(requests.map(({ params }) => params)).toMatchObject([{ key, allowMissing: true }]);
     });
   });
 

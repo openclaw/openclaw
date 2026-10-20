@@ -103,6 +103,11 @@ suite.define(() => {
             const sessions = application.sessions;
             const filtered = sessions.listSnapshot(query);
             return {
+              keys: filtered.result?.sessions.map((row) => row.key) ?? [],
+              revision:
+                sessions.state.agentId === "research" && !sessions.state.loading
+                  ? sessions.canonicalListRevision
+                  : -1,
               selectedAgentId: application.agentSelection.state.selectedId ?? null,
               canonicalAgentId: sessions.state.agentId ?? null,
               canonicalLoading: sessions.state.loading ?? null,
@@ -119,20 +124,8 @@ suite.define(() => {
         await chooseSidebarMenuOption(sidebar.page(), "Status", label);
         await closeSidebarMenu(page);
       };
-      const pageKeys = () =>
-        evaluateControlUiContext(
-          page,
-          ({ sessions }, query) => {
-            return sessions.listSnapshot(query).result?.sessions.map((row) => row.key) ?? [];
-          },
-          researchListQuery,
-        );
-      const settledResearchRevision = () =>
-        evaluateControlUiContext(page, ({ sessions }) => {
-          return sessions.state.agentId === "research" && !sessions.state.loading
-            ? sessions.canonicalListRevision
-            : -1;
-        });
+      const pageKeys = async () => (await sidebarState()).keys;
+      const settledResearchRevision = async () => (await sidebarState()).revision;
       await page.goto(`${suite.server.baseUrl}chat`);
       await filter("Archived");
       for (const target of targets) {
@@ -223,20 +216,12 @@ suite.define(() => {
       await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("false");
       await expect.poll(() => loadMore.getAttribute("aria-label")).toBe("Load more sessions");
       await loadMore.click();
-      // Preserve the original assertion failure after exercising the recovery control.
-      let paginationFailure: Error | undefined;
-      try {
-        await expect
-          .poll(() =>
-            gateway.getRequests("sessions.list", { agentId: "research", offset: pageSize }),
-          )
-          .toHaveLength(1);
-        await expect.poll(pageKeys).toContain(lastResearch.key);
-        await revealLastResearch();
-        await expect.poll(() => rowFor(lastResearch.key).count()).toBe(1);
-      } catch (error) {
-        paginationFailure = error instanceof Error ? error : new Error(String(error));
-      }
+      await expect
+        .poll(() => gateway.getRequests("sessions.list", { agentId: "research", offset: pageSize }))
+        .toHaveLength(1);
+      await expect.poll(pageKeys).toContain(lastResearch.key);
+      await revealLastResearch();
+      await expect.poll(() => rowFor(lastResearch.key).count()).toBe(1);
       await filter("All");
       await rowFor(research[0]!.key).waitFor({ state: "visible" });
       await filter("Archived");
@@ -246,9 +231,6 @@ suite.define(() => {
       }
       await expect.poll(pageKeys).toContain(lastResearch.key);
       await revealLastResearch();
-      if (paginationFailure) {
-        throw paginationFailure;
-      }
     });
   });
 });

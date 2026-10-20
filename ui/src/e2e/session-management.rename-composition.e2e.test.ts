@@ -50,18 +50,15 @@ suite.define(() => {
 
         // Exercise the browser keyboard contract, not a native OS IME candidate window.
         const prevented = await input.evaluate(
-          (element, args) => {
-            const event = new KeyboardEvent("keydown", {
-              key: args.key,
-              isComposing: args.isComposing,
-              keyCode: args.keyCode,
-              bubbles: true,
-              cancelable: true,
-              composed: true,
-            });
-            element.dispatchEvent(event);
-            return event.defaultPrevented;
-          },
+          (element, args) =>
+            !element.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                ...args,
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+              }),
+            ),
           { key, isComposing, keyCode },
         );
 
@@ -73,16 +70,14 @@ suite.define(() => {
         // Keep the browser object: provenance follows its identity across cache invalidation.
         await using application = await getControlUiContextHandle(page);
         await using sampledSession = await application.evaluateHandle(
-          async (context, sessionKey) => {
-            return (await context.sessions.describe({ key: sessionKey, agentId: "main" })).session;
-          },
+          async (context, sessionKey) =>
+            (await context.sessions.describe({ key: sessionKey, agentId: "main" })).session,
           original.key,
         );
         expect(await sampledSession.evaluate((session) => session?.label)).toBe(original.label);
         const rosterMatch = { includeGlobal: true };
         await gateway.deferNext("sessions.list", rosterMatch);
-        const listCountBeforeRename = (await gateway.getRequests("sessions.list", rosterMatch))
-          .length;
+        const beforeRename = (await gateway.getRequests("sessions.list", rosterMatch)).length;
         await input.fill(finalTitle);
         await input.press("Enter");
         const committed = await waitForPatch(gateway, (params) => params.label === finalTitle);
@@ -94,7 +89,7 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
         await input.waitFor({ state: "detached" });
         await gateway.waitForRequest("sessions.list", {
-          after: listCountBeforeRename,
+          after: beforeRename,
           match: rosterMatch,
         });
         // A real metadata event may retire the cache while this older sample is in flight.

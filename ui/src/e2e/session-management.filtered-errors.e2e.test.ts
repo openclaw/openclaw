@@ -19,22 +19,19 @@ suite.define(() => {
         sessionRow(`agent:main:match-${index}`, `Match ${index}`, 1000 - index),
       );
       const latest = sessionRow("agent:main:latest", "Latest result", 2000);
+      const matches = (offset: number, hasMore = false) =>
+        sessionsListResponse(rows.slice(offset, offset + 50), {
+          offset,
+          hasMore,
+          nextOffset: hasMore ? 50 : null,
+          totalCount: rows.length,
+        });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.list": {
             cases: [
-              {
-                match: { search: "observatory", offset: 50 },
-                response: sessionsListResponse(rows.slice(50), { offset: 50, totalCount: 51 }),
-              },
-              {
-                match: { search: "observatory" },
-                response: sessionsListResponse(rows.slice(0, 50), {
-                  hasMore: true,
-                  nextOffset: 50,
-                  totalCount: 51,
-                }),
-              },
+              { match: { search: "observatory", offset: 50 }, response: matches(50) },
+              { match: { search: "observatory" }, response: matches(0, true) },
               { match: { search: "latest" }, response: sessionsListResponse([latest]) },
               {
                 match: { search: "failed" },
@@ -67,10 +64,7 @@ suite.define(() => {
         await page.clock.runFor(201);
         await page.clock.resume();
       };
-      const expectNoEmptyState = async () =>
-        expect(
-          await roster.getByText("No sessions match your filters.", { exact: true }).count(),
-        ).toBe(0);
+      const emptyState = roster.getByText("No sessions match your filters.", { exact: true });
       await page.clock.install();
       await pauseVirtualClock(page);
       await search.pressSequentially("observatory", { delay: 40 });
@@ -98,7 +92,7 @@ suite.define(() => {
       expect(await search.inputValue()).toBe("older");
       await flushSearch();
       await gateway.waitForRequest("sessions.list", { match: { search: "older" } });
-      await expectNoEmptyState();
+      expect(await emptyState.count()).toBe(0);
       const beforeTyping = await gateway.getRequests("sessions.list");
       await search.fill("");
       await search.pressSequentially("superseded", { delay: 40 });
@@ -123,7 +117,7 @@ suite.define(() => {
       await search.fill("failed");
       await flushSearch();
       await roster.getByText("Metadata search unavailable", { exact: false }).waitFor();
-      await expectNoEmptyState();
+      expect(await emptyState.count()).toBe(0);
     });
   });
 
@@ -153,9 +147,8 @@ suite.define(() => {
         await selectFilter(statusFilter);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();
 
-        const failure = {
-          __mockError: { code: "UNAVAILABLE", message: "Session list temporarily unavailable" },
-        };
+        const failureMessage = "Session list temporarily unavailable";
+        const failure = { __mockError: { code: "UNAVAILABLE", message: failureMessage } };
         const refresh = async () => {
           await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", {
@@ -168,23 +161,20 @@ suite.define(() => {
           await page.clock.resume();
         };
         const alert = page.locator("[data-sidebar-session-error]");
+        const failRefresh = async () => {
+          await gateway.setMethodResponse("sessions.list", failure);
+          await refresh();
+          await expect.poll(() => alert.textContent()).toContain(failureMessage);
+        };
 
-        await gateway.setMethodResponse("sessions.list", failure);
-        await refresh();
-        await expect
-          .poll(() => alert.textContent())
-          .toContain("Session list temporarily unavailable");
+        await failRefresh();
 
         await gateway.setMethodResponse("sessions.list", healthy);
         await refresh();
         await expect.poll(() => alert.count()).toBe(0);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();
 
-        await gateway.setMethodResponse("sessions.list", failure);
-        await refresh();
-        await expect
-          .poll(() => alert.textContent())
-          .toContain("Session list temporarily unavailable");
+        await failRefresh();
 
         await selectFilter("Active");
         await expect.poll(() => alert.count()).toBe(0);
