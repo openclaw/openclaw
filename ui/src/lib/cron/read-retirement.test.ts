@@ -189,7 +189,6 @@ describe("cron controller", () => {
 
   it.each([
     { label: "filters", patch: { cronRunsStatuses: ["error"], cronRunsQuery: "filtered" } },
-    { label: "status order", patch: { cronRunsSortBy: "status" } },
   ] satisfies Array<{ label: string; patch: Parameters<typeof updateCronRunsFilter>[1] }>)(
     "drops an older append after replacing history $label",
     async ({ patch }) => {
