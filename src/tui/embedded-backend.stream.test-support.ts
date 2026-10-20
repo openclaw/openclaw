@@ -81,8 +81,12 @@ export function startBackend(createBackend: () => EmbeddedTuiBackend) {
   return { backend, events };
 }
 
-function displayDelta(deltaText: string, replace?: boolean) {
+function deltaOf(deltaText: string, replace?: boolean) {
   return { deltaText, replace };
+}
+
+function item(itemId: string, text: string, delta?: string) {
+  return { itemId, text, ...(delta === undefined ? {} : { delta }) };
 }
 
 export function captureBackendEvents(backend: EmbeddedTuiBackend) {
@@ -97,17 +101,14 @@ export type EmbeddedAgentResult = ReturnType<typeof agentResult>;
 
 type StreamTestContext = {
   createBackend: () => EmbeddedTuiBackend;
-  prepareReply: (
-    reply: Promise<EmbeddedAgentResult>,
-    onStart?: (signal: AbortSignal) => void,
-  ) => void;
+  runAgent: Mock;
   emitAgentEvent: (event: unknown) => void;
   embeddedEventTimestamp: number;
 };
 
 export function registerEmbeddedBackendStreamTests({
   createBackend,
-  prepareReply,
+  runAgent,
   emitAgentEvent,
   embeddedEventTimestamp,
 }: StreamTestContext) {
@@ -116,10 +117,9 @@ export function registerEmbeddedBackendStreamTests({
   async function startStream(
     message: string,
     runId: string,
-    onStart?: (signal: AbortSignal) => void,
+    onStart?: (signal?: AbortSignal) => void,
   ) {
-    const pending = deferred<EmbeddedAgentResult>();
-    prepareReply(pending.promise, onStart);
+    const pending = pendingReply(runAgent, onStart);
     const { backend, events } = startBackend(createBackend);
     await sendMainChat(backend, message, runId);
     return { pending, backend, events };
@@ -144,6 +144,9 @@ export function registerEmbeddedBackendStreamTests({
         throw new Error("Expected the test run to be registered");
       }
       const { pending, backend, events } = await startStream("long task", runId, (signal) => {
+        if (!signal) {
+          throw new Error("Expected the local run abort signal");
+        }
         signal.addEventListener("abort", () => delete context.localModelWait, { once: true });
         started.resolve(signal);
       });
@@ -218,7 +221,7 @@ export function registerEmbeddedBackendStreamTests({
       chat()
         .slice(-2)
         .map((event) => event.payload),
-    ).toMatchObject([{ deltaText: " discarded" }, displayDelta("Corrected", true)]);
+    ).toMatchObject([{ deltaText: " discarded" }, deltaOf("Corrected", true)]);
 
     append(" final");
     pending.resolve(agentResult(undefined));
@@ -258,82 +261,61 @@ export function registerEmbeddedBackendStreamTests({
     });
   });
 
+  // Two-character deltas still exercise mergeAssistantText's append fast path.
   it.each([
-    {
-      name: "unkeyed replacement snapshots",
-      updates: [{ text: "Hello world" }, { text: "Goodbye world" }],
-      expectedDeltas: [displayDelta("Hello world"), displayDelta("Goodbye world", true)],
-      expectedText: "Goodbye world",
-    },
-    {
-      name: "identical snapshots from distinct assistant items",
-      updates: [
-        { itemId: "first", text: "Echo" },
-        { itemId: "second", text: "Echo" },
+    [
+      "unkeyed replacement",
+      [{ text: "ab" }, { text: "cd" }],
+      [deltaOf("ab"), deltaOf("cd", true)],
+      "cd",
+    ],
+    [
+      "equal text, new item",
+      [item("a", "ab"), item("b", "ab")],
+      [deltaOf("ab"), deltaOf("\n\nab")],
+      "ab\n\nab",
+    ],
+    [
+      "prefix text, new item",
+      [item("a", "ab", "ab"), item("b", "ab!", "ab!")],
+      [deltaOf("ab"), deltaOf("\n\nab!")],
+      "ab\n\nab!",
+    ],
+    [
+      "replayed growing item",
+      [item("a", "ab", "ab"), item("a", "ab", "ab"), item("a", "abcd", "cd")],
+      [deltaOf("ab"), deltaOf("cd")],
+      "abcd",
+    ],
+    [
+      "item-scoped deltas",
+      [
+        { itemId: "a", delta: "ab" },
+        { itemId: "a", delta: "ab" },
+        { itemId: "b", delta: "!" },
       ],
-      expectedDeltas: [displayDelta("Echo"), displayDelta("\n\nEcho")],
-      expectedText: "Echo\n\nEcho",
-    },
-    {
-      name: "a new assistant item extending an earlier item's text",
-      updates: [
-        { itemId: "first", text: "Echo", delta: "Echo" },
-        { itemId: "second", text: "Echo!", delta: "Echo!" },
+      [deltaOf("ab"), deltaOf("ab"), deltaOf("\n\n!")],
+      "abab\n\n!",
+    ],
+    [
+      "empty item correction",
+      [item("a", "ab"), item("b", " cd"), item("b", "")],
+      [deltaOf("ab"), deltaOf("\n\n cd"), deltaOf("ab", true)],
+      "ab",
+    ],
+    [
+      "clear then recovery",
+      [
+        item("a", "draft", "draft"),
+        { itemId: "a", text: "", delta: "", replace: true },
+        item("b", "ok", "ok"),
       ],
-      expectedDeltas: [displayDelta("Echo"), displayDelta("\n\nEcho!")],
-      expectedText: "Echo\n\nEcho!",
-    },
-    {
-      name: "replayed and growing snapshots of one assistant item",
-      updates: [
-        { itemId: "answer", text: "Echo", delta: "Echo" },
-        { itemId: "answer", text: "Echo", delta: "Echo" },
-        { itemId: "answer", text: "Echo again", delta: " again" },
-      ],
-      expectedDeltas: [displayDelta("Echo"), displayDelta(" again")],
-      expectedText: "Echo again",
-    },
-    {
-      name: "item-scoped deltas without snapshots",
-      updates: [
-        { itemId: "first", delta: "Echo" },
-        { itemId: "first", delta: "Echo" },
-        { itemId: "second", delta: "!" },
-      ],
-      expectedDeltas: [displayDelta("Echo"), displayDelta("Echo"), displayDelta("\n\n!")],
-      expectedText: "EchoEcho\n\n!",
-    },
-    {
-      name: "empty corrections that remove only the current assistant item",
-      updates: [
-        { itemId: "first", text: "Hello" },
-        { itemId: "second", text: " world" },
-        { itemId: "second", text: "" },
-      ],
-      expectedDeltas: [
-        displayDelta("Hello"),
-        displayDelta("\n\n world"),
-        displayDelta("Hello", true),
-      ],
-      expectedText: "Hello",
-    },
-    {
-      name: "a failed same-item clear followed by a recovery item",
-      updates: [
-        { itemId: "failed", text: "Failed draft", delta: "Failed draft" },
-        { itemId: "failed", text: "", delta: "", replace: true },
-        { itemId: "recovery", text: "Recovered answer", delta: "Recovered answer" },
-      ],
-      expectedDeltas: [
-        displayDelta("Failed draft"),
-        displayDelta("", true),
-        displayDelta("Recovered answer"),
-      ],
-      expectedText: "Recovered answer",
-    },
-  ])(
-    "EmbeddedTuiBackend.sendChat projects $name",
-    async ({ updates, expectedDeltas, expectedText }) => {
+      [deltaOf("draft"), deltaOf("", true), deltaOf("ok")],
+      "ok",
+    ],
+  ] as const)(
+    "EmbeddedTuiBackend.sendChat projects %s",
+    async (_name, updates, expectedDeltas, expectedText) => {
       const { pending, events } = await startStream("replace", "run-local-replace");
 
       for (const data of updates) {

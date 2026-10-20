@@ -46,7 +46,6 @@ export function registerEmbeddedFollowupTests({
     return {
       first,
       second,
-      backend,
       events,
       send: (message: string, runId: string) => sendMainChat(backend, message, runId),
       stop: async () => {
@@ -80,8 +79,7 @@ export function registerEmbeddedFollowupTests({
     first.resolve(agentResult("done"));
     await flushMicrotasks();
     await backend.stop();
-    const otherBackend = createBackend();
-    otherBackend.start();
+    const { backend: otherBackend } = startBackend(createBackend);
     try {
       await sendMainChat(otherBackend, "new client", "run-other-client");
       const otherSenderId = runAgent.mock.calls.at(-1)?.[0]?.runContext?.senderId;
@@ -129,11 +127,9 @@ export function registerEmbeddedFollowupTests({
         if (mode === "collect") {
           await send("third", "ordinary-third");
         }
-        expect([steer.mock.calls, firstAbort.mock.calls, updateStore.mock.calls]).toEqual([
-          [],
-          [],
-          [],
-        ]);
+        expect(steer).not.toHaveBeenCalled();
+        expect(firstAbort).not.toHaveBeenCalled();
+        expect(updateStore).not.toHaveBeenCalled();
         expect(runAgent).toHaveBeenCalledTimes(1);
         expect(entry.queueMode).toBe(mode);
         first.resolve(agentResult("first done"));
