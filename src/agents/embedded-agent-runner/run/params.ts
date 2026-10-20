@@ -285,6 +285,7 @@ export type RunEmbeddedAgentParams = Pick<
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,
   | "agentDir"
+  | "agentHarnessId"
   | "sandboxAgentId"
   | "promptCacheKey"
   | "reasoningLevel"

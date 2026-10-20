@@ -621,6 +621,21 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
 });
 
 describe("native model-owned harness policy", () => {
+  it("preserves a detached review allowance without inferring native model capacity", () => {
+    const runtimeModel = createNativeModelOwnedRuntimeModel({
+      provider: "openai",
+      modelId: "native-model",
+    });
+    const result = effectiveModel(
+      { sessionPersistence: "detached", contextTokenBudget: 16_384 },
+      { agentHarnessId: "codex", nativeModelOwned: true, runtimeModel },
+    );
+    expect(result.contextTokenBudget).toBe(16_384);
+    expect(result.contextWindowInfo).toBeUndefined();
+    expect(result.contextTokensSource).toBeUndefined();
+    expect(result.effectiveModel).toBe(runtimeModel);
+  });
+
   it.each([
     ["native-large-a", 500_000, undefined, 500_000],
     ["native-large-b", 500_000, 64_000, 64_000],

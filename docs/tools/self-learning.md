@@ -65,16 +65,28 @@ transcript events and 32 KiB. Large tool results can be replaced with explicit
 omission notices; missing outcomes must not be inferred. If a required context
 boundary cannot fit, the review stops without a model call.
 
-It reuses the foreground provider, model, and auth profile, with a minimal
-prompt and only the `skill_workshop` tool. Workspace bootstrap files, the full
-skill catalog, client tools, and foreground-only instructions are omitted.
-The run targets a 16,384-token context budget. Review responses use at most
-2,048 output tokens and low reasoning effort; the run lasts at most two minutes.
-Context maintenance uses the runtime's normal compaction policy, so these
-settings are not a hard total-token limit for a successful multi-step review. Model fallbacks and transient provider retries
-are disabled. It runs on the embedded OpenClaw harness under a private session that never
-appears in your transcript. It is internal system work, not a new user turn;
-user-only reply hooks, including Advisor admission, do not run for it.
+It reuses the completed foreground runtime, provider, model, and auth profile,
+with a minimal prompt and only the `skill_workshop` tool. Workspace bootstrap
+files, the full skill catalog, client tools, and foreground-only instructions
+are omitted. Model fallbacks and transient provider retries are disabled.
+
+The run targets a 16,384-token context budget, uses low reasoning effort, and
+stops after at most two minutes or eight tool calls. OpenClaw-runtime responses
+also have a 2,048-output-token limit. Native runtimes such as Codex do not expose
+that per-response limit; their deadline and tool-call budget are not an
+equivalent token or spending cap.
+
+Each review has a private identity and never appears as a conversation turn.
+Codex reviews start a fresh ephemeral thread on the configured app-server,
+without saving a native session binding or changing the source transcript.
+They consume the already-bounded excerpt without source compaction. Credentials
+remain with the configured runtime; the Gateway does not copy Codex credentials.
+Attached native sessions whose authentication belongs to a separate supervised
+connection are currently unsupported for automatic reviews. Use foreground
+learning in those sessions; reviews will not silently select another account.
+
+Reviews are internal system work, not new user turns. User-only reply hooks,
+including Advisor admission, do not run for them.
 
 The review uses `skill_workshop` to list and view learned skills and save a
 lesson supported by the excerpt. It cannot browse files, fetch more history,

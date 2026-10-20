@@ -433,6 +433,68 @@ describe("persistent restricted Codex continuation", () => {
     expect(next.threadId).toBe(durable.threadId);
   });
 
+  it.each([false, true])(
+    "keeps detached reviews ephemeral without changing an existing binding (%s)",
+    async (hasBinding) => {
+      const { fixture, common, attempt, read } = await createFixture();
+      if (hasBinding) {
+        const foreground = await startOrResumeThread(common);
+        await fixture.endTurn(foreground.threadId);
+      }
+      const original = read();
+      const review = {
+        ...common,
+        params: {
+          ...attempt,
+          sessionPersistence: "detached" as const,
+          toolsAllow: ["skill_workshop"],
+        },
+      };
+      const first = await startOrResumeThread(review);
+      await fixture.endTurn(first.threadId);
+      const second = await startOrResumeThread(review);
+      expect(first.threadId).not.toBe(second.threadId);
+      expect(read()).toEqual(original);
+      const starts = fixture.request.mock.calls.filter(([method]) => method === "thread/start");
+      expect(starts.slice(hasBinding ? 1 : 0).map(([, params]) => params)).toEqual([
+        expect.objectContaining({ ephemeral: true, environments: [] }),
+        expect.objectContaining({ ephemeral: true, environments: [] }),
+      ]);
+      expect(fixture.request.mock.calls.filter(([method]) => method === "thread/resume")).toEqual(
+        [],
+      );
+      await fixture.endTurn(second.threadId);
+    },
+  );
+
+  it("rejects managed hooks before a detached review starts", async () => {
+    const { fixture, common, attempt, read } = await createFixture();
+    fixture.request
+      .mockResolvedValueOnce({ config: {}, origins: {}, layers: [] })
+      .mockResolvedValueOnce({
+        requirements: {
+          managed_hooks: {
+            PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }],
+          },
+        },
+      });
+    await expect(
+      startOrResumeThread({
+        ...common,
+        params: {
+          ...attempt,
+          sessionPersistence: "detached",
+          toolsAllow: ["skill_workshop"],
+        },
+      }),
+    ).rejects.toThrow("cannot override managed hooks");
+    expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+    ]);
+    expect(read()).toBeUndefined();
+  });
+
   it("does not isolate an unrestricted scheduled turn", async () => {
     const { fixture, common, attempt } = await createFixture();
     const params = { ...attempt, pluginHarnessToolPolicyRestricted: false };

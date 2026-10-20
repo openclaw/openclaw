@@ -218,7 +218,9 @@ export async function buildThreadStartParams(
     // Codex `ephemeral` skips rollout/state DB writes while loaded threads remain reusable
     // (`codex-rs/app-server-protocol/src/protocol/v2/thread.rs:108`;
     // `codex-rs/core/src/session/session.rs:599-683`, `thread_manager.rs:1157-1163`).
-    ...(isIncognitoSessionKey(params.sessionKey) ? { ephemeral: true } : {}),
+    ...(params.sessionPersistence === "detached" || isIncognitoSessionKey(params.sessionKey)
+      ? { ephemeral: true }
+      : {}),
   };
 }
 

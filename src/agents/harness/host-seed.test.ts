@@ -383,3 +383,38 @@ it.each([1, 2])(
     });
   },
 );
+
+it("seeds detached native work from its private excerpt without opening or compacting a session", async () => {
+  const manager = SessionManager.inMemory();
+  await manager.appendMessageAsync(makeUserMessage("PRIVATE_REVIEW_EVIDENCE", 1));
+  const read = vi.spyOn(SessionManager, "readSessionContextAsync");
+  const compact = vi.mocked(compactEmbeddedAgentSessionDirect).mockClear();
+  let active = true;
+  const prepare = expectDefined(
+    bindBoundedSeed(
+      {
+        sessionPersistence: "detached",
+        sessionManager: manager,
+        contextTokenBudget: 256,
+      },
+      () => {
+        if (!active) {
+          throw new Error("review source closed");
+        }
+      },
+      async (run) => run(),
+    )?.prepareBoundedSeed,
+    "private seed",
+  );
+  try {
+    expect(await prepare({ assertCurrent() {} })).toEqual([
+      makeUserMessage("PRIVATE_REVIEW_EVIDENCE", 1),
+    ]);
+    expect(read).not.toHaveBeenCalled();
+    expect(compact).not.toHaveBeenCalled();
+    active = false;
+    await expect(prepare({ assertCurrent() {} })).rejects.toThrow("review source closed");
+  } finally {
+    read.mockRestore();
+  }
+});

@@ -114,6 +114,14 @@ export function resolveEmbeddedRunEffectiveModel(
   });
   return {
     ...resolved,
+    // A private job's evidence allowance is not a claim about native model capacity.
+    // Ordinary and attached native sessions retain their own context policy.
+    ...(resolved.contextTokenBudget === undefined &&
+    !params.pinnedHarnessId &&
+    params.runParams.sessionPersistence === "detached" &&
+    params.runParams.contextTokenBudget !== undefined
+      ? { contextTokenBudget: params.runParams.contextTokenBudget }
+      : {}),
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),
   };
 }

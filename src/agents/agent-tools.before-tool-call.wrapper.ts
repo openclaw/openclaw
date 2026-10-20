@@ -281,6 +281,8 @@ export function wrapToolWithBeforeToolCallHook(
         inputContext?.watchdogAttempt ?? getGatewayToolCallerIdentity()?.watchdogAttempt;
       const ctx = watchdogAttempt ? { ...inputContext, watchdogAttempt } : inputContext;
       assertAgentPluginRuntimeCurrent();
+      // Attempts spend model rounds even when preparation, policy, or validation rejects them.
+      admitExecution?.();
       const prepareControl = readInternalExecutionControl(executionArgs.at(-1));
       if (prepareControl) {
         executionArgs.pop();
@@ -492,10 +494,9 @@ export function wrapToolWithBeforeToolCallHook(
           const args = [toolCallId, executeParams, signal, onUpdate, ...executionArgs];
           const invoke = () =>
             runWithBoundAgentToolSourceExecutionScope(tool, () => {
-              // Charge the invocation after the source read, at the effect boundary.
               signal?.throwIfAborted();
               assertAgentPluginRuntimeCurrent();
-              admitExecution?.();
+              admitExecution?.assertCurrent();
               onImplementationStart?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
               return liveness.run(() => (execute as ForwardedToolExecution)(...args));

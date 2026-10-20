@@ -100,6 +100,7 @@ export async function prepareCodexNativeExecutionPolicy(
     const selected =
       canReadSessionEntry && sourceAgentId && sourceSessionKey
         ? await captureSessionEntryCurrentCheckAsync({
+            config: captured.config,
             agentId: sourceAgentId,
             sessionKey: sourceSessionKey,
             storePath: captured.sessionTarget?.storePath ?? captured.storePath,
@@ -137,6 +138,7 @@ export async function prepareCodexNativeExecutionPolicy(
             facts.every(({ field, value }) => isDeepStrictEqual(entry[field], value));
       const source = await captureSessionEntryCurrentCheckAsync({
         ...query,
+        config: captured.config,
         fields: facts?.map(({ field }) => field) ?? [],
         errorMessage: "Codex requester policy changed; retry the turn to prepare current policy.",
       });

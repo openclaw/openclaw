@@ -219,9 +219,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   });
   let bindingStore = options.bindingStore;
   preDynamicStartupStages.mark("session-agent");
-  let activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
-    ? params.contextEngine
-    : undefined;
+  let activeContextEngine =
+    params.sessionPersistence !== "detached" && isActiveHarnessContextEngine(params.contextEngine)
+      ? params.contextEngine
+      : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
   let generationAuthority: RetainedNativeSessionGenerationAuthority | undefined;

@@ -43,6 +43,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         .mockResolvedValue(undefined);
       const params = createParams(sessionFile, workspaceDir);
       params.runtimePlan = createCodexRuntimePlanFixture();
+      params.agentHarnessId = "codex";
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.onRunProgress = ({ reason }) => {
@@ -107,6 +108,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         }
 
         const ctx = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.ctx;
+        expect(ctx?.foregroundPromptContext?.agentHarnessId).toBe("codex");
         expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
         expect(typeof ctx?.foregroundPromptContext?.agentDir).toBe("string");
         expect(ctx?.modelIterations).toBe(10);

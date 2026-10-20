@@ -70,7 +70,8 @@ export async function startOrResumeThread(
     const assert = authority.assertCurrent;
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
-    let binding = saved;
+    // Detached work owns a fresh native thread, never the conversation's saved binding.
+    let binding = params.params.sessionPersistence === "detached" ? undefined : saved;
     let selectionBinding = binding;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
@@ -139,6 +140,19 @@ export async function startOrResumeThread(
         : input.refreshableInstructions;
       return context;
     };
+    if (params.params.sessionPersistence === "detached") {
+      if (expectedOwnership) {
+        throw new Error("Detached Codex runs cannot inherit a bound native session's ownership.");
+      }
+      return publishCodexThreadInferenceBinding(
+        params,
+        await startFreshCodexThread(params, {
+          ...(await prepareRequestContext()),
+          preserveExistingBinding: true,
+          rotatedContextEngineBinding: false,
+        }),
+      );
+    }
     const releaseRetainedThread = (
       threadId: string,
       ownerClientId = initialBoundClientId,

@@ -17,6 +17,7 @@ import type { CodexConfigReadResponse, JsonObject } from "./protocol.js";
 import type { CodexBindingAuthority } from "./session-binding.js";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
+import { prepareCodexNoRetryPolicy } from "./thread-retry-policy.js";
 
 const clients: ReturnType<typeof createClientHarness>[] = [];
 const openaiUrl = "https://api.openai.com/v1";
@@ -480,6 +481,41 @@ it("fails closed for host OAuth on native backend and custom provider configurat
   const route = await prepare(h, "apiKey", undefined, true);
   expect(route.upstream).toBe(openaiUrl);
 });
+it("preserves no-retry limits on the exact host OAuth route", async () => {
+  const h = accountHarness();
+  ownClient(h.client, {}, { resolve: vi.fn() });
+  const provider = "openclaw_token_sharing";
+  const policy = await prepareCodexNoRetryPolicy({
+    client: h.client,
+    modelProvider: provider,
+    effectiveConfig: snapshot(),
+    assertCurrent: () => {},
+  });
+  const prepared = required(
+    await prepareThread(h.client, snapshot(), { ...policy, retryTransientErrors: false }),
+  );
+  const definition = (prepared.config.model_providers as JsonObject)[provider] as JsonObject;
+  expect(definition).toMatchObject({ request_max_retries: 0, stream_max_retries: 0 });
+  const check = routeCheck(h.client, prepared.route);
+  expect(check(prepared.config, provider)).not.toThrow();
+  const patches: JsonObject[] = [
+    { request_max_retries: 1 },
+    { stream_max_retries: 1 },
+    { base_url: "https://bypass.example/v1" },
+  ];
+  for (const patch of patches) {
+    expect(
+      check(
+        {
+          ...prepared.config,
+          model_providers: { [provider]: { ...definition, ...patch } },
+        },
+        provider,
+      ),
+    ).toThrow("overridden");
+  }
+});
+
 it("leaves unowned native clients completely untouched", async () => {
   const h = harness();
   expect(await prepareThread(h.client)).toBeUndefined();

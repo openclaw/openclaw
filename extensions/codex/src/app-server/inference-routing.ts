@@ -398,6 +398,7 @@ export async function prepareCodexInferenceThreadConfig(params: {
   operatorBacked?: boolean;
   /** Parent context still uses this transport when optional native model hooks are unavailable. */
   modelPolicyEnforced?: boolean;
+  retryTransientErrors?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
   authority?: CodexBindingAuthority;
@@ -488,7 +489,12 @@ export async function prepareCodexInferenceThreadConfig(params: {
       config: {
         ...params.config,
         model_provider: CODEX_RESPONSES_OAUTH_PROVIDER,
-        model_providers: { [CODEX_RESPONSES_OAUTH_PROVIDER]: responsesOAuthProvider(route) },
+        model_providers: {
+          [CODEX_RESPONSES_OAUTH_PROVIDER]: responsesOAuthProvider(
+            route,
+            params.retryTransientErrors,
+          ),
+        },
       },
     };
   }
@@ -515,13 +521,17 @@ export async function prepareCodexInferenceThreadConfig(params: {
   return { route, config: projectProviderRoutes(params.config, providers), providers };
 }
 
-function responsesOAuthProvider(route: CodexInferenceProxy): JsonObject {
+function responsesOAuthProvider(
+  route: CodexInferenceProxy,
+  retryTransientErrors?: boolean,
+): JsonObject {
   return {
     name: "OpenClaw subscription sharing",
     base_url: route.baseUrl,
     wire_api: "responses",
     requires_openai_auth: true,
     supports_websockets: false,
+    ...(retryTransientErrors === false ? { request_max_retries: 0, stream_max_retries: 0 } : {}),
   };
 }
 
@@ -553,13 +563,20 @@ export function assertCodexInferenceRouteConfig(
   ) {
     throw new Error("Codex parent-local inference route was overridden; no turn was sent");
   }
+  const oauthProvider = isJsonObject(config?.model_providers)
+    ? config.model_providers[CODEX_RESPONSES_OAUTH_PROVIDER]
+    : undefined;
+  const oauthRetryDisabled =
+    isJsonObject(oauthProvider) &&
+    oauthProvider.request_max_retries === 0 &&
+    oauthProvider.stream_max_retries === 0;
   if (
     owner.oauth &&
     (config?.model_provider !== CODEX_RESPONSES_OAUTH_PROVIDER ||
       !isJsonObject(config?.model_providers) ||
       !isDeepStrictEqual(
         config.model_providers[CODEX_RESPONSES_OAUTH_PROVIDER],
-        responsesOAuthProvider(route),
+        responsesOAuthProvider(route, oauthRetryDisabled ? false : undefined),
       ) ||
       Object.keys(config).some((key) =>
         key.startsWith(`model_providers.${CODEX_RESPONSES_OAUTH_PROVIDER}`),

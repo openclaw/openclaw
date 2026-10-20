@@ -26,6 +26,8 @@ export function buildEmbeddedForegroundPromptContext(
   return {
     agentId: run.agentId,
     agentDir,
+    // Dispatch stamps the resolved runtime, including any declared route fallback.
+    agentHarnessId: run.agentHarnessId,
     workspaceDir: run.workspaceDir,
     cwd: run.cwd,
     sandboxSessionKey,

@@ -26,6 +26,7 @@ export async function createExperienceReviewCandidate(
       modelId,
       foregroundPromptContext: {
         agentId: "main",
+        agentHarnessId: "openclaw",
         agentDir: workspaceDir,
         workspaceDir,
         cwd: workspaceDir,

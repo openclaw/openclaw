@@ -43,8 +43,8 @@ export function createAgentToolExecutionBudget(params: {
       params.abort(error);
       throw error;
     }
-    // This is the last synchronous source boundary, after approval/steering awaits.
-    // Charging here admits exactly the cap even when sibling calls run in parallel.
+    // Charge at invocation, including rejected arguments and policy vetoes.
+    // Synchronous admission keeps the cap exact across parallel attempts.
     toolCalls += 1;
   };
   return {
@@ -62,8 +62,11 @@ export function createAgentToolExecutionBudget(params: {
 }
 
 /** Capture at tool construction so retained tools cannot borrow a later budget. */
-export function captureAgentToolExecutionBudget(): (() => void) | undefined {
-  return executionBudgetContext.getStore()?.admit;
+export function captureAgentToolExecutionBudget():
+  | ((() => void) & { assertCurrent: () => void })
+  | undefined {
+  const budget = executionBudgetContext.getStore();
+  return budget ? Object.assign(budget.admit, { assertCurrent: budget.assertCurrent }) : undefined;
 }
 
 /** Freeze the invocation's operational fence before asynchronous source work. */

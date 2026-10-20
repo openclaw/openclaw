@@ -127,3 +127,41 @@ it.each(["metadata during selection", "policy revoked", "session replaced"] as c
     }
   },
 );
+
+it("uses the supplied configuration for selected and requester policy without ambient config", async () => {
+  const stateDir = tempDirs.make();
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const target = {
+    agentId: "main",
+    sessionKey: "agent:main:explicit-config-policy",
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: "explicit-config", updatedAt: 1, execHost: "node", execNode: "worker-1" },
+  });
+  clearRuntimeConfigSnapshot();
+  const policy = await prepareCodexNativeExecutionPolicy({
+    agentId: "main",
+    sessionKey: target.sessionKey,
+    config: { agents: { entries: { main: {} } }, session: { store: target.storePath } },
+    readRuntimeSessionEntry: true,
+    requesterFacts: [
+      {
+        query: target,
+        facts: [{ field: "sessionId", value: "explicit-config" }],
+      },
+    ],
+  });
+  try {
+    expect(policy.policy).toMatchObject({
+      nativeToolSurfaceAllowed: false,
+      effectiveExecHost: "node",
+      node: "worker-1",
+    });
+    await patchSessionEntry({ ...target, update: () => ({ execHost: "gateway" }) });
+    await expect(policy.assertCurrent()).rejects.toThrow("execution policy changed");
+  } finally {
+    policy.release();
+  }
+});

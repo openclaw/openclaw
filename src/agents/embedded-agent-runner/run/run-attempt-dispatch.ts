@@ -609,6 +609,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
     skillWorkshopReviewOf: params.skillWorkshopReviewOf,
+    retryTransientErrors: params.retryTransientErrors,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,

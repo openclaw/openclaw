@@ -40,6 +40,30 @@ export function bindBoundedSeed(
   hostSignal?: AbortSignal,
   media?: { capabilities: Pick<AgentHarnessHostCapabilities, "prepareContextMedia"> },
 ): Pick<AgentHarnessHostCapabilities, "prepareBoundedSeed" | "prepareContextMedia"> | undefined {
+  const hostTokenBudget =
+    normalizeContextTokenBudget(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
+  const privateHistory = input.sessionPersistence === "detached" ? input.sessionManager : undefined;
+  if (privateHistory) {
+    // The caller already read and fenced this private excerpt. Do not re-open the
+    // empty destination session or compact/write the source transcript.
+    return {
+      prepareBoundedSeed: (request) =>
+        withSource(async () => {
+          assertActive();
+          hostSignal?.throwIfAborted();
+          input.abortSignal?.throwIfAborted();
+          request.signal?.throwIfAborted();
+          request.assertCurrent();
+          const requested = normalizeContextTokenBudget(request.tokenBudget);
+          const budget = requested ? Math.min(requested, hostTokenBudget) : hostTokenBudget;
+          return boundContextEngineAssembly(
+            { messages: privateHistory.buildSessionContext().messages, estimatedTokens: 0 },
+            budget * 4,
+            budget,
+          ).messages;
+        }, request.signal),
+    };
+  }
   const { config, workspaceDir, contextEngine } = input;
   const target = input.preparedSessionTarget?.target ?? input.sessionTarget;
   const { agentId, sessionId, sessionKey, storePath } = target ?? {};
@@ -56,8 +80,6 @@ export function bindBoundedSeed(
   ) {
     return undefined;
   }
-  const hostTokenBudget =
-    normalizeContextTokenBudget(input.contextTokenBudget) || DEFAULT_CONTEXT_TOKENS;
   const sessionTarget = { ...target, agentId, sessionId, sessionKey, storePath };
   const attempt = {
     ...input,

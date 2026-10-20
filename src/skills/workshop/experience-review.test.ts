@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion as activeAssertion } from "../../agents/admitted-run-context.js";
-import { runWithAgentToolSourceExecutionScope as withSource } from "../../agents/agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolExecutionBudget,
+  runWithAgentToolSourceExecutionScope as withSource,
+} from "../../agents/agent-tool-source-execution-guard.js";
 import {
   clearPromptCacheObservations,
   completePromptCacheObservation,
@@ -14,6 +17,8 @@ import {
   createEmbeddedRunHandle,
   registerTestEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import * as harnessRegistry from "../../agents/harness/registry.js";
+import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -261,72 +266,152 @@ it("keeps prepared effects live through receipt pressure without MAIN SQL and de
   expect(mocks.runSkillWorkshopReview).toHaveBeenCalledOnce();
 });
 
-it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membership"] as const)(
-  "refuses a Workshop file write after source %s during preparation",
-  async (change) => {
-    const { source, config } = candidate;
-    await upsertSessionEntryCore(source, {
-      permissionMode: "guarded",
-      lifecycleRevision: "original",
-    });
-    const context = { config, agentId: "main", actor: "review" as const };
-    const original =
-      "---\nname: procedure\ndescription: Follow the verified procedure\n---\n\nOriginal steps.\n";
-    await createWorkshopSkill(context, { name: "procedure", content: original });
-    const skillDir = path.join(resolveWorkshopSkillsDir(config, "main"), "procedure");
-    let changed = false;
-    const mkdir = fs.mkdir.bind(fs);
-    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-      const result = await mkdir(...args);
-      if (args[0] === skillDir && !changed) {
-        changed = true;
-        if (change === "rewrite") {
-          const session = await SessionManager.openAsync(source, state.workspaceDir);
-          await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
-        } else if (change === "membership") {
-          await addSessionMember(source, {
-            identityId: "new-member",
-            addedBy: "owner",
-            expectedSessionId: source.sessionId,
-          });
-        } else if (change === "deletion") {
-          await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: source.storePath,
-            target: {
-              canonicalKey: source.sessionKey,
-              storeKeys: [source.sessionKey],
-            },
-            archiveTranscript: false,
-          });
-        } else {
-          await upsertSessionEntryCore(
-            source,
-            change === "permission"
-              ? { permissionMode: "read-only" }
-              : change === "reset"
-                ? { lifecycleRevision: "reset-revision" }
+it.each([
+  "permission",
+  "reset",
+  "replacement",
+  "deletion",
+  "rewrite",
+  "membership",
+  "runtime",
+] as const)("refuses a Workshop file write after source %s during preparation", async (change) => {
+  const { source, config } = candidate;
+  await upsertSessionEntryCore(source, {
+    permissionMode: "guarded",
+    lifecycleRevision: "original",
+  });
+  const context = { config, agentId: "main", actor: "review" as const };
+  const original =
+    "---\nname: procedure\ndescription: Follow the verified procedure\n---\n\nOriginal steps.\n";
+  await createWorkshopSkill(context, { name: "procedure", content: original });
+  const skillDir = path.join(resolveWorkshopSkillsDir(config, "main"), "procedure");
+  let changed = false;
+  const mkdir = fs.mkdir.bind(fs);
+  vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+    const result = await mkdir(...args);
+    if (args[0] === skillDir && !changed) {
+      changed = true;
+      if (change === "rewrite") {
+        const session = await SessionManager.openAsync(source, state.workspaceDir);
+        await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
+      } else if (change === "membership") {
+        await addSessionMember(source, {
+          identityId: "new-member",
+          addedBy: "owner",
+          expectedSessionId: source.sessionId,
+        });
+      } else if (change === "deletion") {
+        await deleteSessionEntryLifecycle({
+          agentId: "main",
+          storePath: source.storePath,
+          target: {
+            canonicalKey: source.sessionKey,
+            storeKeys: [source.sessionKey],
+          },
+          archiveTranscript: false,
+        });
+      } else {
+        await upsertSessionEntryCore(
+          source,
+          change === "permission"
+            ? { permissionMode: "read-only" }
+            : change === "reset"
+              ? { lifecycleRevision: "reset-revision" }
+              : change === "runtime"
+                ? { agentHarnessId: "changed-runtime" }
                 : { sessionId: `${source.sessionId}:replacement` },
-          );
-        }
-      }
-      return result;
-    });
-    withAdmission(async (assertLive) => {
-      const write = (content: string) =>
-        withSource(assertLive, () =>
-          writeWorkshopSkillFile(
-            { ...context, assertLive },
-            { name: "procedure", filePath: "SKILL.md", content },
-          ),
         );
-      await expect(write(original.replace("Original", "Changed"))).rejects.toThrow(
-        "no longer active",
+      }
+    }
+    return result;
+  });
+  withAdmission(async (assertLive) => {
+    const write = (content: string) =>
+      withSource(assertLive, () =>
+        writeWorkshopSkillFile(
+          { ...context, assertLive },
+          { name: "procedure", filePath: "SKILL.md", content },
+        ),
       );
-      await expect(write("must stay denied")).rejects.toThrow();
+    await expect(write(original.replace("Original", "Changed"))).rejects.toThrow(
+      "no longer active",
+    );
+    await expect(write("must stay denied")).rejects.toThrow();
+  });
+  await runSkillExperienceReview(candidate);
+  expect(changed).toBe(true);
+  expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(original);
+});
+
+it.each(["openclaw", "codex"])(
+  "keeps the completed %s runtime and stops at the tool budget",
+  async (runtime) => {
+    await useRealReview();
+    candidate.ctx.foregroundPromptContext.agentHarnessId = runtime;
+    let executions = 0;
+    mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
+      expect(params.agentHarnessId).toBe(runtime);
+      expect(params.agentHarnessRuntimeOverride).toBe(runtime);
+      expect(params.streamParams).toEqual(runtime === "openclaw" ? { maxTokens: 2048 } : undefined);
+      expect(params.toolsAllow).toEqual(["skill_workshop"]);
+      expect(params.toolExecutionAllow).toEqual(["skill_workshop"]);
+      const admit = captureAgentToolExecutionBudget();
+      expect(admit).toBeDefined();
+      for (let i = 0; i < 9; i++) {
+        admit!();
+        executions++;
+      }
+      return { meta: { durationMs: 1 } };
     });
-    await runSkillExperienceReview(candidate);
-    expect(changed).toBe(true);
-    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(original);
+    await expect(runSkillExperienceReview(candidate)).rejects.toThrow(
+      "Agent tool-call budget exhausted",
+    );
+    expect(executions).toBe(8);
   },
 );
+
+it("does not substitute configured credentials for an attached native source", async () => {
+  using ownership = vi.spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync");
+  ownership.mockImplementationOnce(async ({ assertCurrent }) => {
+    assertCurrent?.();
+    return { model: "native", auth: "native" };
+  });
+  await expect(runSkillExperienceReview(candidate)).rejects.toThrow(
+    "a detached review cannot inherit their credential-owning connection",
+  );
+  expect(mocks.runSkillWorkshopReview).not.toHaveBeenCalled();
+  expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+});
+
+it("does not substitute configured credentials when an attached binding is missing", async () => {
+  await upsertSessionEntryCore(candidate.source, {
+    agentHarnessId: "codex",
+    modelSelectionLocked: true,
+  });
+  using registration = vi.spyOn(harnessRegistry, "getRegisteredAgentHarness");
+  registration.mockReturnValue({
+    harness: {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("must not dispatch");
+      },
+    },
+  });
+  using ownership = vi.spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync");
+  ownership.mockResolvedValue(undefined);
+  await expect(runSkillExperienceReview(candidate)).rejects.toThrow(
+    "cannot verify the attached session's credential owner",
+  );
+  expect(ownership).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    }),
+  );
+  expect(mocks.runSkillWorkshopReview).not.toHaveBeenCalled();
+  expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+});

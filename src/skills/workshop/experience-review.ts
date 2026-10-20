@@ -7,13 +7,17 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
+  runWithSessionSourceScope,
   type PreparedSessionSourceAuthority,
 } from "../../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
@@ -32,6 +36,7 @@ import {
   runWithGatewayDetachedWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
@@ -147,7 +152,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     });
     assertPreparationCurrent();
     // Deleting, replacing, or resetting the source session must not revive its captured evidence.
-    let sourceEntry:
+    let anchorEntry:
       | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode">
       | undefined;
     await readSessionTranscriptAnchorsAsync(
@@ -165,24 +170,44 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
           throw new Error("Skill experience review source session was deleted or replaced.");
         }
         if (facts.contextValidated) {
-          sourceEntry = current;
-          if (databaseIdentity) {
-            sourceLifetime.entry = retainPreparedSessionEntryPredicate({
-              databaseIdentity,
-              sessionKey,
-              entry: current,
-              matches: (_before, after) =>
-                after?.sessionId === current.sessionId &&
-                (after.lifecycleRevision ?? null) === (current.lifecycleRevision ?? null) &&
-                after.permissionMode === current.permissionMode,
-            });
-          }
+          anchorEntry = current;
           validatedWriteToken = readWriteToken();
         }
       },
     );
-    if (!sourceEntry) {
+    if (!anchorEntry) {
       throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+    const assertSnapshotCurrent = () => {
+      assertPreparationCurrent();
+      if (readWriteToken() !== validatedWriteToken) {
+        throw new SessionTranscriptReadFenceError("Session changed during runtime ownership read");
+      }
+    };
+    // Transcript anchors intentionally omit native ownership metadata. Read it
+    // through the session owner under the same captured source write receipt.
+    const sourceEntry = await readSessionEntryReadOnlyInWorker(
+      { ...source, readConsistency: "latest", hydrateSkillPromptRefs: false },
+      assertSnapshotCurrent,
+    );
+    assertSnapshotCurrent();
+    if (!sourceEntry || sourceEntry.sessionId !== anchorEntry.sessionId) {
+      throw new SessionTranscriptReadFenceError("Session changed during runtime ownership read");
+    }
+    if (databaseIdentity) {
+      sourceLifetime.entry = retainPreparedSessionEntryPredicate({
+        databaseIdentity,
+        sessionKey,
+        entry: sourceEntry,
+        matches: (_before, after) =>
+          after?.sessionId === sourceEntry.sessionId &&
+          (after.lifecycleRevision ?? null) === (sourceEntry.lifecycleRevision ?? null) &&
+          after.permissionMode === sourceEntry.permissionMode &&
+          after.agentHarnessId === sourceEntry.agentHarnessId &&
+          after.modelSelectionLocked === sourceEntry.modelSelectionLocked &&
+          after.pluginOwnerId === sourceEntry.pluginOwnerId &&
+          after.previousSessionId === sourceEntry.previousSessionId,
+      });
     }
     return { source, sourceEntry, sessionManager, assertPhysicalCurrent };
   };
@@ -283,6 +308,40 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       },
     ),
   ]);
+  // Detached reviews use the configured runtime connection. An attached native
+  // session may own a different account; never silently substitute that route.
+  await runWithSessionSourceScope(assertSourceCurrent, async () => {
+    const pinnedRuntime = resolveSessionPinnedHarnessId(sourceEntry);
+    if (
+      pinnedRuntime &&
+      pinnedRuntime !== "openclaw" &&
+      !getRegisteredAgentHarness(pinnedRuntime)
+    ) {
+      throw new Error(`Skill review source runtime "${pinnedRuntime}" is unavailable.`);
+    }
+    const ownership = await readSessionRuntimeOwnershipAsync({
+      config,
+      agentId,
+      sessionKey,
+      storePath: source.storePath,
+      sessionEntry: sourceEntry,
+      assertCurrent: assertSourceCurrent,
+      readPreparedPreviousSessionId: () => sourceEntry.previousSessionId,
+    });
+    if (pinnedRuntime && pinnedRuntime !== "openclaw" && !ownership) {
+      throw new Error(
+        "Automatic Skill Workshop review cannot verify the attached session's credential owner. " +
+          "Reattach the original native session before retrying.",
+      );
+    }
+    if (ownership?.auth === "native") {
+      throw new Error(
+        "Automatic Skill Workshop review is unavailable for attached native sessions: " +
+          "a detached review cannot inherit their credential-owning connection. " +
+          "Use foreground learning in the attached session instead.",
+      );
+    }
+  });
   const preparedRunAdmission = prepareAgentRunAdmission({
     cfg: config,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
