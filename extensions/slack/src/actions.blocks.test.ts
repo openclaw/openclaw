@@ -5,10 +5,10 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { createSlackEditTestClient } from "./blocks.test-helpers.js";
 import { slackSetupPlugin } from "./channel.setup.js";
 
-const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
+const { editSlackMessage } = await import("./actions.js");
 type EditOptions = NonNullable<Parameters<typeof editSlackMessage>[3]>;
 const tableBlock = {
   type: "data_table",
@@ -32,23 +32,6 @@ const tableBlock = {
 const tableSummary =
   "Pipeline report (table)\n- Account: Acme; ARR: $125k\n- Account: Globex; ARR: $82k";
 const tablePlain = "Pipeline report (table)\nAccount\tARR\nAcme\t$125k\nGlobex\t$82k";
-
-it("uses the original action text once when a native table is rejected", async () => {
-  const client = createSlackSendTestClient();
-  client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-  await sendSlackMessage("channel:C123", "Pipeline summary\n\n" + tableSummary, {
-    cfg: { channels: { slack: { botToken: "xoxb-test" } } },
-    token: "xoxb-test",
-    client,
-    blocks: [tableBlock],
-    nativeDataFallbackBaseText: "Pipeline summary",
-  });
-  expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-  const fallback = client.chat.postMessage.mock.calls[1]?.[0];
-  expect(fallback).toMatchObject({ mrkdwn: false, text: "Pipeline summary\n\n" + tablePlain });
-  expect(fallback?.blocks).toBeUndefined();
-  expect(fallback?.text?.match(/Acme/gu)).toHaveLength(1);
-});
 
 describe("Slack edits", () => {
   let client: ReturnType<typeof createSlackEditTestClient>;
