@@ -47,7 +47,10 @@ async function fixture(shared = false) {
   seed(scope, initial);
   return { scope, remove: await capture(scope, initial) };
 }
-async function capture(scope: Parameters<typeof read>[0], expected: Parameters<typeof seed>[1]) {
+async function capture(
+  scope: Parameters<typeof read>[0] & { storePath: string },
+  expected: Parameters<typeof seed>[1],
+) {
   const expectedEntry = await read(scope);
   expect(expectedEntry).toMatchObject(expected);
   return (options: { archiveTranscript?: boolean; commitGuard?: () => void } = {}) =>

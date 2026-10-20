@@ -60,7 +60,7 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           pane.evaluate((element: HTMLElement & { state: ChatPageHost }) => ({
             connected: element.state.connected,
             ready: Boolean(element.state.client?.recoveryScopeReady),
-            loading: Boolean(element.state.chatLoading),
+            loading: element.state.chatLoading,
           }));
         await expect.poll(() => composer.isDisabled()).toBe(false);
         await waitForGatewayRecoveryScope(page);

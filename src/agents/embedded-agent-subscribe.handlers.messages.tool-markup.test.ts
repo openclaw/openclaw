@@ -24,7 +24,7 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
   "%s tool markup delivery",
   (api) => {
     let ctx: ReturnType<typeof createMessageUpdateContext>;
-    let events: ReturnType<typeof vi.fn>;
+    let events = vi.fn();
     beforeEach(() => {
       events = vi.fn();
       ctx = createMessageUpdateContext({ onAgentEvent: events });
@@ -57,7 +57,9 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       );
       const source = example + continuation;
       const regions = vi.spyOn(codeRegions, "findCodeRegions");
-      onTestFinished(() => void regions.mockRestore());
+      onTestFinished(() => {
+        regions.mockRestore();
+      });
       let text = "";
       for (let offset = 0; offset < source.length; offset += 4) {
         const delta = source.slice(offset, offset + 4);

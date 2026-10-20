@@ -20,6 +20,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journal-restore.js";
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
@@ -288,7 +289,9 @@ it.each(["first-upgrade", "already-held"])(
           env,
         });
         const state = openOpenClawStateDatabase({ env });
-        const report = JSON.parse(String(sourceReport(state.db, reconstructionKey)));
+        const report = JSON.parse(
+          String(sourceReport(requireNativeSqliteDatabase(state.db), reconstructionKey)),
+        );
         delete report.missingJournal;
         state.db
           .prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?")

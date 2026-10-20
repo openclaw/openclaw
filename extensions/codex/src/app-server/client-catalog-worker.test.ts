@@ -42,7 +42,7 @@ async function startWorker(harness: ReturnType<typeof createHarness>) {
 }
 
 let parse: MockInstance<typeof messageDecoder.parseCodexAppServerMessage>;
-let submitted: MockInstance<WorkerTaskPool["run"]>;
+let submitted: MockInstance<typeof WorkerTaskPool.prototype.run>;
 beforeEach(() => {
   parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
   submitted = vi.spyOn(WorkerTaskPool.prototype, "run");

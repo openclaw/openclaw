@@ -68,7 +68,9 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
     },
   });
   const service = await startPluginServices({ registry, config: {} });
-  onTestFinished(() => service.stop());
+  onTestFinished(async () => {
+    await service.stop();
+  });
   assert(serviceContext, "Service did not start");
   return { service, serviceContext, registry, record };
 }

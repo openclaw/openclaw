@@ -211,11 +211,10 @@ it("keeps a committed local answer in history without a second final delivery in
     outputTokens: 8,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
-  const messages = (await sessionAccessor.loadTranscriptEvents(scope)).map(
-    (event) => event.message,
-  );
-  expect(messages).toContainEqual(
-    expect.objectContaining({ role: "assistant", content: "Committed local answer." }),
+  expect(await sessionAccessor.loadTranscriptEvents(scope)).toContainEqual(
+    expect.objectContaining({
+      message: expect.objectContaining({ role: "assistant", content: "Committed local answer." }),
+    }),
   );
 });
 
