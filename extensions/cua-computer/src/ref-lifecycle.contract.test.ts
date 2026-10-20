@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { driver, result } from "./commands.test-helpers.js";
 import { callWindowTool } from "./driver-result.js";
 import {
@@ -34,9 +34,7 @@ function lifecycleCases() {
   const elementRef = issueElementRef(observation, { elementIndex: 0 });
 
   return {
-    fresh_window() {
-      resolveWindowRef(state, windowRef);
-    },
+    fresh_window: () => resolveWindowRef(state, windowRef),
     fresh_element() {
       resolveElementRef(resolveObservation(state, observation.id, windowRef), elementRef);
     },
@@ -57,12 +55,8 @@ function lifecycleCases() {
         session.setGeneration("execution-2");
         return result({});
       });
-      await callWindowTool(
-        session.session,
-        { generation: session.session.generation },
-        "get_window_state",
-        {},
-      );
+      const callState = { generation: session.session.generation };
+      await callWindowTool(session.session, callState, "get_window_state", {});
     },
     superseded_observation() {
       issueObservation(state, windowRef);
@@ -72,21 +66,17 @@ function lifecycleCases() {
       issueWindowRef(state, { pid: 200, windowId: 20 });
       resolveWindowRef(state, windowRef);
     },
-    unknown_ref() {
-      resolveWindowRef(state, "cua:v2:window:unknown");
-    },
+    unknown_ref: () => resolveWindowRef(state, "cua:v2:window:unknown"),
   };
 }
 
-describe("Computer Use ref lifecycle contract", () => {
-  for (const testCase of contract.cases) {
-    it(testCase.id, async () => {
-      const runCase = async () => lifecycleCases()[testCase.scenario]();
-      if (testCase.expected === "valid") {
-        await expect(runCase()).resolves.toBeUndefined();
-      } else {
-        await expect(runCase()).rejects.toThrow(new RegExp(`^${contract.staleErrorCode}:`, "u"));
-      }
-    });
+it.each(contract.cases)("Computer Use ref lifecycle: $id", async ({ scenario, expected }) => {
+  const runCase = async () => {
+    await lifecycleCases()[scenario]();
+  };
+  if (expected === "valid") {
+    await expect(runCase()).resolves.toBeUndefined();
+  } else {
+    await expect(runCase()).rejects.toThrow(new RegExp(`^${contract.staleErrorCode}:`, "u"));
   }
 });

@@ -27,10 +27,8 @@ function inspect(
     options.expectedDigest ?? createHash("sha256").update(nativeContents).digest("hex");
   const sdkManifestPath = path.join(root, "sdk-package.json");
   const platformPackageName = "@trycua/cua-driver-linux-x64-gnu";
-  const platformDir = path.join(root, "platform");
-  const platformManifestPath = path.join(platformDir, "package.json");
+  const platformManifestPath = path.join(root, "package.json");
 
-  fs.mkdirSync(platformDir);
   const pluginManifest = {
     dependencies: { "@trycua/cua-driver": acceptedVersion },
     cuaDriverArtifacts: { "linux-x64-gnu": { files: { [nativeFile]: expectedDigest } } },
@@ -40,7 +38,7 @@ function inspect(
     name: platformPackageName,
     version: options.platformVersion ?? acceptedVersion,
   });
-  fs.writeFileSync(path.join(platformDir, nativeFile), nativeContents);
+  fs.writeFileSync(path.join(root, nativeFile), nativeContents);
 
   const packages = new Map<string, string>([["@trycua/cua-driver", sdkManifestPath]]);
   if (!options.omitPlatformPackage) {
@@ -71,9 +69,6 @@ describe("CUA Driver artifact verification", () => {
   it("rejects Linux hosts without a published glibc package", () => {
     expectFailure(inspect({}, "musl"), "PLATFORM_UNSUPPORTED", "glibc-based Linux");
   });
-});
-
-describe("verifyInstalledCuaDriverArtifacts (real resolution)", () => {
   // ESM-only SDK resolution previously reported an installed package as missing.
   it("resolves the installed SDK package through import conditions", async () => {
     vi.resetModules();
