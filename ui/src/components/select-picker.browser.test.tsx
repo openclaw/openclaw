@@ -21,21 +21,6 @@ afterEach(async () => {
   await Promise.resolve();
 });
 
-function mountHost(style = "") {
-  const host = document.createElement("div");
-  host.style.cssText = style;
-  document.body.append(host);
-  return host;
-}
-
-function fixtureModels(labels: string[]): ModelPickerOption[] {
-  return labels.map((label) => ({
-    value: `fixture/${label.toLowerCase().replaceAll(" ", "-")}`,
-    label,
-    provider: "fixture",
-  }));
-}
-
 function option(value: string, label = value): ModelPickerOption {
   return { value, label };
 }
@@ -47,6 +32,11 @@ function numberedModels(length: number) {
 const modelLabels = "Anchor,Aurora Large,Aurora Small,Birch,Cedar,Delta,Elm,Forest,Granite".split(
   ",",
 );
+const readableModels = modelLabels.map((label) => ({
+  value: `fixture/${label.toLowerCase().replaceAll(" ", "-")}`,
+  label,
+  provider: "fixture",
+}));
 
 async function browser(width?: number) {
   const { page, userEvent } = await import("vitest/browser");
@@ -58,23 +48,16 @@ async function browser(width?: number) {
   return { page, userEvent, role };
 }
 
-function boundsWithinViewport(bounds: DOMRect, vertical = true) {
-  expect(bounds.left).toBeGreaterThanOrEqual(0);
-  expect(bounds.right).toBeLessThanOrEqual(innerWidth);
-  if (vertical) {
-    expect(bounds.top).toBeGreaterThanOrEqual(0);
-    expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
-  }
-}
-
 function labelsFit(picker: SelectPicker) {
   for (const label of picker.querySelectorAll<HTMLElement>("[role=option] .picker-select__label")) {
     expect(label.scrollWidth, label.textContent ?? "").toBeLessThanOrEqual(label.clientWidth);
   }
 }
 
-async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">, style: string) {
+type ModelExtras = Pick<ModelPickerParams, "placement" | "custom">;
+async function mountModel(options: ModelPickerOption[], style: string, extra: ModelExtras = {}) {
   const onChange = vi.fn();
+  const params = { value: options[0]!.value, options, ...extra };
   const { picker } = await mountPickers(
     () => <ModelPicker label="Model" onChange={onChange} {...params} />,
     style,
@@ -83,7 +66,8 @@ async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">,
 }
 
 async function mountPickers(content: () => JSX.Element, style = "", direction = "") {
-  const host = mountHost(style);
+  const host = document.body.appendChild(document.createElement("div"));
+  host.style.cssText = style;
   host.dir = direction;
   mountSolid(content, { container: host });
   const pickers = [...host.querySelectorAll<SelectPicker>("openclaw-select-picker")];
@@ -92,18 +76,19 @@ async function mountPickers(content: () => JSX.Element, style = "", direction = 
 }
 
 function menuCase(
-  sizing: "custom" | "viewport" | "trigger" | "wrap",
+  sizing: "custom" | "viewport" | "trigger" | "wrap" | "search",
   options: ModelPickerOption[],
   width = 390,
   style = "position:fixed;right:12px;top:32px;width:90px",
-  extra: Pick<ModelPickerParams, "placement" | "custom"> = {},
+  extra: ModelExtras = {},
 ) {
   return {
     sizing,
     width,
     style,
     selected: options[0]!.label,
-    params: { value: options[0]!.value, options, ...extra },
+    options,
+    extra,
   };
 }
 
@@ -112,13 +97,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     const warning = vi.spyOn(console, "warn");
     onTestFinished(() => warning.mockRestore());
     const { userEvent, role } = await browser(1280);
-    const { picker, onChange } = await mountModel(
-      {
-        value: "fixture/model-0",
-        options: numberedModels(30),
-      },
-      "width:240px;margin:24px",
-    );
+    const { picker, onChange } = await mountModel(numberedModels(30), "width:240px;margin:24px");
     await role("button", "Model: Model 0").click();
     await userEvent.keyboard("{ArrowUp}");
     const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
@@ -280,40 +259,15 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
   );
 
   it.each([
-    { width: 1280, placement: "bottom" as const },
-    { width: 390, placement: "top" as const },
-  ])("keeps distinct model labels readable at $width pixels", async ({ width, placement }) => {
-    const { page, role } = await browser(width);
-    const { picker, onChange } = await mountModel(
-      {
-        value: "fixture/anchor",
-        placement,
-        options: fixtureModels(modelLabels),
-      },
-      `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:120px`,
-    );
-    await role("button", "Model: Anchor").click();
-    const row = picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!;
-    await expect.element(row).toBeVisible();
-    const label = row.querySelector<HTMLElement>(".picker-select__label")!;
-    expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
-    const menu = picker.querySelector<HTMLElement>(".picker-select__menu")!;
-    const bounds = menu.getBoundingClientRect();
-    boundsWithinViewport(bounds);
-    await role("combobox", "Search").fill("Aurora Large");
-    expect(onChange).not.toHaveBeenCalled();
-    await picker.updateComplete;
-    expect(
-      picker.querySelector<HTMLElement>('[data-value="fixture/anchor"]')?.checkVisibility() ??
-        false,
-    ).toBe(false);
-    await page
-      .elementLocator(picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!)
-      .click();
-    expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
-  });
-
-  it.each([
+    ...(["bottom", "top"] as const).map((placement) =>
+      menuCase(
+        "search",
+        readableModels,
+        placement === "bottom" ? 1280 : 390,
+        `position:fixed;right:12px;${placement === "top" ? "bottom" : "top"}:32px;width:120px`,
+        { placement },
+      ),
+    ),
     ...(["bottom", "top"] as const).map((placement) =>
       menuCase(
         "custom",
@@ -345,9 +299,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     ),
   ])(
     "keeps compact model menus readable: $sizing at $width pixels",
-    async ({ width, style, params, selected, sizing }) => {
-      const { userEvent, role } = await browser(width);
-      const { picker, onChange } = await mountModel(params, style);
+    async ({ width, style, options, extra, selected, sizing }) => {
+      const { page, userEvent, role } = await browser(width);
+      const { picker, onChange } = await mountModel(options, style, extra);
       await role("button", `Model: ${selected}`).click();
       if (sizing === "trigger") {
         await expect.element(role("option", "Off")).toBeVisible();
@@ -356,8 +310,29 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         await expect.element(role("listbox", "Model")).toBeVisible();
       }
       const bounds = picker.querySelector(".picker-select__menu")!.getBoundingClientRect();
-      if (sizing === "custom" || sizing === "viewport") {
-        boundsWithinViewport(bounds, false);
+      if (sizing === "custom" || sizing === "viewport" || sizing === "search") {
+        expect(bounds.left).toBeGreaterThanOrEqual(0);
+        expect(bounds.right).toBeLessThanOrEqual(innerWidth);
+      }
+      if (sizing === "search") {
+        const row = picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!;
+        await expect.element(row).toBeVisible();
+        const label = row.querySelector<HTMLElement>(".picker-select__label")!;
+        expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
+        expect(bounds.top).toBeGreaterThanOrEqual(0);
+        expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
+        await role("combobox", "Search").fill("Aurora Large");
+        expect(onChange).not.toHaveBeenCalled();
+        await picker.updateComplete;
+        expect(
+          picker.querySelector<HTMLElement>('[data-value="fixture/anchor"]')?.checkVisibility() ??
+            false,
+        ).toBe(false);
+        await page
+          .elementLocator(picker.querySelector<HTMLElement>('[data-value="fixture/aurora-large"]')!)
+          .click();
+        expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
+        return;
       }
       if (sizing === "viewport") {
         expect(bounds.width).toBeGreaterThan(90);
@@ -389,14 +364,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
 
   it("displays a saved disabled utility model without making it selectable as primary", async () => {
     const { role, userEvent } = await browser();
-    const available = [
-      "agent-backup",
-      "fallback-one",
-      "fallback-two",
-      "global-one",
-      "global-three",
-      "global-two",
-    ].map((label) => ({ value: `fixture/${label}`, label }));
+    const available = "agent-backup fallback-one fallback-two global-one global-three global-two"
+      .split(" ")
+      .map((label) => option(`fixture/${label}`, label));
     const unavailable = {
       value: "retired/not-offered",
       label: "retired/not-offered",
@@ -454,13 +424,10 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     async (initialWidth) => {
       const { page, userEvent, role } = await browser(initialWidth);
       const { picker, onChange } = await mountModel(
-        {
-          value: "fixture/anchor",
-          options: modelLabels.map((label) => {
-            const id = label.toLowerCase().replaceAll(" ", "-");
-            return option("fixture/" + id, id);
-          }),
-        },
+        modelLabels.map((label) => {
+          const id = label.toLowerCase().replaceAll(" ", "-");
+          return option("fixture/" + id, id);
+        }),
         "width:min(320px,calc(100vw - 48px));margin-inline:auto 24px;margin-top:300px",
       );
       const trigger = role("button", "Model: anchor");

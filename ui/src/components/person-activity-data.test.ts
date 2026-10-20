@@ -11,10 +11,8 @@ import { createContext, createGatewayHarness } from "../test-helpers/app-sidebar
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { observePersonActivityData, registerPersonActivityData } from "./person-activity-data.ts";
 
-function snapshot(
-  result: SessionListSnapshot["result"],
-  error: string | null = null,
-): SessionListSnapshot {
+type Roster = SessionListSnapshot["result"];
+function snapshot(result: Roster, error: string | null = null): SessionListSnapshot {
   return { result, error, agentId: null, loading: false, readSucceeded: true };
 }
 function setup(client = createTestGatewayClient(async () => ({}))) {
@@ -43,8 +41,7 @@ function fixture() {
     observe,
     changed,
     activity,
-    publish: (result: SessionListSnapshot["result"], error?: string) =>
-      publish(snapshot(result, error)),
+    publish: (result: Roster, error?: string) => publish(snapshot(result, error)),
   };
 }
 
@@ -76,39 +73,39 @@ it("keeps live and late-open cards current without a sidebar rendering publicati
   context.sessions.dispose();
 });
 
-it("admits only a refreshed cross-agent roster, retains rows on read failure, and applies removal", async () => {
-  const f = fixture();
-  const query = f.observe.mock.calls[0]![0];
-  expect(query).toMatchObject({ limit: 200, rowMode: "compact", includeDerivedTitles: true });
-  for (const key of ["agentId", "ownerId", "involvingMe", "search", "archivedFilter"]) {
-    expect(query).not.toHaveProperty(key);
-  }
-  expect(f.activity.data?.sessionsResult).toBeNull();
-  const result = sessionsResult([{ key: "agent:research:recent", kind: "direct" }], 2);
-  f.publish(result);
-  expect(f.activity.data?.sessionsResult).toBeNull();
-  f.refresh.resolve();
-  await f.refresh.promise;
-  expect(f.activity.data?.sessionsResult).toBe(result);
-  f.publish(null, "Temporarily unavailable");
-  expect(f.activity.data?.sessionsResult).toBe(result);
-  const empty = sessionsResult([], 3);
-  f.publish(empty);
-  expect(f.activity.data?.sessionsResult).toBe(empty);
-  f.activity.dispose();
-  expect(f.dispose).toHaveBeenCalledOnce();
-});
-
-it("does not admit a retained roster after a rejected opening read and recovers on fresh data", async () => {
-  const f = fixture();
-  f.refresh.reject(new Error("Unavailable"));
-  await f.refresh.promise.catch(() => undefined);
-  expect(f.activity.data?.sessionsResult).toBeNull();
-  const fresh = sessionsResult([{ key: "agent:main:fresh", kind: "direct" }], 3);
-  f.publish(fresh);
-  expect(f.activity.data?.sessionsResult).toBe(fresh);
-  f.activity.dispose();
-});
+it.each([false, true])(
+  "admits only fresh cross-agent membership (opening rejected=%s)",
+  async (rejected) => {
+    const f = fixture();
+    const query = f.observe.mock.calls[0]![0];
+    expect(query).toMatchObject({ limit: 200, rowMode: "compact", includeDerivedTitles: true });
+    for (const key of ["agentId", "ownerId", "involvingMe", "search", "archivedFilter"]) {
+      expect(query).not.toHaveProperty(key);
+    }
+    expect(f.activity.data?.sessionsResult).toBeNull();
+    const result = sessionsResult([{ key: "agent:research:recent", kind: "direct" }], 2);
+    f.publish(result);
+    expect(f.activity.data?.sessionsResult).toBeNull();
+    if (rejected) {
+      f.refresh.reject(new Error("Unavailable"));
+    } else {
+      f.refresh.resolve();
+    }
+    await f.refresh.promise.catch(() => undefined);
+    expect(f.activity.data?.sessionsResult).toBe(rejected ? null : result);
+    if (rejected) {
+      f.publish(result);
+      expect(f.activity.data?.sessionsResult).toBe(result);
+    }
+    f.publish(null, "Temporarily unavailable");
+    expect(f.activity.data?.sessionsResult).toBe(result);
+    const empty = sessionsResult([], 3);
+    f.publish(empty);
+    expect(f.activity.data?.sessionsResult).toBe(empty);
+    f.activity.dispose();
+    expect(f.dispose).toHaveBeenCalledOnce();
+  },
+);
 
 it.each(["close", "connection"] as const)(
   "ignores late data after %s retires the card",

@@ -24,20 +24,17 @@ function fixture(props: (defaults: Props) => Props = (defaults) => defaults) {
     toggle: container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle")!,
   };
 }
-const toggleLabels = (button: HTMLButtonElement) =>
-  ["aria-label", "aria-pressed"].map((name) => button.getAttribute(name));
-
 it.each([false, true])("handles visibility and mask edits (revealed=%s)", (revealed) => {
   const { input, mask, maskText, toggle, onInput, onToggle } = fixture((defaults) => ({
     ...defaults,
     revealed,
-    disabled: false,
   }));
   expect(input).toMatchObject({ type: revealed ? "text" : "password", value: "secret" });
   expect(mask.hidden).toBe(revealed);
   expect(toggle.dataset.sensitiveIcon).toBe(revealed ? "eye-off" : "eye");
   const label = revealed ? "configForm.hideValue" : "configForm.revealValue";
-  expect(toggleLabels(toggle)).toEqual([t(label), String(revealed)]);
+  expect(toggle.getAttribute("aria-label")).toBe(t(label));
+  expect(toggle.getAttribute("aria-pressed")).toBe(String(revealed));
   if (revealed) {
     toggle.click();
     expect(onToggle).toHaveBeenCalledOnce();

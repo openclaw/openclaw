@@ -38,16 +38,11 @@ function watch(element: HTMLElement, publish: Publish) {
 }
 function scroller(reads: string[] = [], name = "read") {
   const element = container.appendChild(document.createElement("div"));
-  Object.defineProperties(element, {
-    scrollHeight: {
-      configurable: true,
-      get: () => {
-        reads.push(name);
-        return 200;
-      },
-    },
-    clientHeight: { configurable: true, value: 100 },
+  vi.spyOn(element, "scrollHeight", "get").mockImplementation(() => {
+    reads.push(name);
+    return 200;
   });
+  vi.spyOn(element, "clientHeight", "get").mockReturnValue(100);
   return element;
 }
 

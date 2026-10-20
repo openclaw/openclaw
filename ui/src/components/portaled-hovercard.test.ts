@@ -91,16 +91,13 @@ it("keeps a Solid card open while its links hold focus and closes after focus le
 
   expect(document.activeElement).toBe(first);
   controller.handleCardPointerLeave();
-  await vi.advanceTimersByTimeAsync(200);
-  expect(card.isConnected).toBe(true);
-  expect(document.activeElement).toBe(first);
-  expect(dismiss).not.toHaveBeenCalled();
-
-  second.focus();
-  await vi.advanceTimersByTimeAsync(200);
-  expect(card.isConnected).toBe(true);
-  expect(document.activeElement).toBe(second);
-  expect(dismiss).not.toHaveBeenCalled();
+  for (const focused of [first, second]) {
+    focused.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(focused);
+    expect(dismiss).not.toHaveBeenCalled();
+  }
 
   trigger.href = "#outside";
   trigger.focus();
