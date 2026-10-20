@@ -471,7 +471,6 @@ vi.mock("../../agent-project-settings.js", () => ({
     getThinkingBudgets: () => undefined,
     getProviderRetrySettings: () => ({ maxRetryDelayMs: undefined }),
     getGlobalSettings: () => ({}),
-    getProjectSettings: () => ({}),
     applyOverrides: () => {},
     setCompactionEnabled: () => {},
   }),
