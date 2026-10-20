@@ -56,7 +56,6 @@ function createA2aInboundFixture(peerName = "hermes") {
     account,
     config: {},
     channelRuntime: runtime.channel,
-    buildContext: runtime.channel.inbound.buildContext,
     store,
     taskId: task.id,
     contextId: task.contextId,

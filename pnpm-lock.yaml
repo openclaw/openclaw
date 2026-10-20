@@ -209,7 +209,7 @@ overrides:
   protobufjs: 8.8.1
   uuid: 14.0.3
 
-packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
+packageExtensionsChecksum: sha256-+aaViXQWMTYboC/2zljN8mTDYzt1x2ZpXFjRkJd9Eys=
 
 patchedDependencies:
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
@@ -15499,6 +15499,7 @@ snapshots:
       '@hapi/boom': 9.1.4
       async-mutex: 0.5.0
       libsignal: 6.0.0
+      long: 5.3.2
       lru-cache: 11.5.3
       music-metadata: 11.16.1(supports-color@10.2.2)
       p-queue: 9.3.3

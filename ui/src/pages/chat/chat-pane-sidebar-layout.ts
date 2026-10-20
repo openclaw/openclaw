@@ -17,14 +17,10 @@ import type { SidebarRegionParams } from "./chat-pane-sidebar-view.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { SidebarFullMessageLoader } from "./components/chat-sidebar-content-types.ts";
-import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import {
-  activatePanel,
-  toggleSidebarPanelExpanded,
   closeSlot,
   fitSidebarLayout,
   openSlot,
-  reorderPanel,
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
@@ -118,55 +114,6 @@ export function ensureLazySidebarElement(key: LazyElementKey) {
       lazyListeners.publish();
     });
   return null;
-}
-
-/**
- * Region callbacks: the pure layout moves resolve here, while the pane injects
- * what only it owns — the board dock, the cached discussion url, the persisted
- * resize, and the panel's open state.
- */
-export function sidebarRegionCallbacks(params: {
-  state: ChatPageHost;
-  layout: SidebarLayout;
-  closePanelSlot: (slot: SidebarSlotId) => void;
-  openPanelSlot: (slot: SidebarSlotId) => void;
-  forgetDiscussionUrl: () => void;
-  resizePanel: (columnId: string, size: number) => void;
-  setPanelOpen: (open: boolean) => void;
-}): SidebarRegionCallbacks {
-  const { layout, state } = params;
-  return {
-    activatePanel: (panelId) => {
-      const slot = layout.columns[0]?.panels.find((panel) => panel.id === panelId)?.slot;
-      if (slot === "dashboard" && !isSidebarSlotVisible(layout, "dashboard")) {
-        params.openPanelSlot(slot);
-      } else {
-        state.updateSidebarLayout(activatePanel(layout, panelId));
-      }
-      state.updateSidebarActivePanel(panelId);
-    },
-    togglePanelExpanded: (panelId) => {
-      state.updateSidebarLayout(toggleSidebarPanelExpanded(layout, panelId), {
-        dashboardPresentation: "personal",
-      });
-      state.updateSidebarActivePanel(panelId);
-    },
-    closeSlot: (slot) => {
-      if (slot === "conversation") {
-        params.setPanelOpen(false);
-        return;
-      }
-      if (slot === "discussion") {
-        params.forgetDiscussionUrl();
-      }
-      params.closePanelSlot(slot);
-    },
-    openSlot: params.openPanelSlot,
-    reorderPanel: (panelId, targetPanelId, placement) =>
-      state.updateSidebarLayout(reorderPanel(layout, panelId, targetPanelId, placement)),
-    resizePanel: params.resizePanel,
-    setOpen: params.setPanelOpen,
-  };
 }
 
 export function renderSidebarRegion(params: SidebarRegionParams) {

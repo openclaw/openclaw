@@ -29,6 +29,8 @@ import {
   AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
   AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS,
   type AgentRunAuditEventRecord,
+  type AgentRunFinishedAuditEventInput,
+  type AgentRunStartedAuditEventInput,
   type AuditEventInput,
   type AuditEventListQuery,
   type AuditEventListPage,
@@ -585,12 +587,18 @@ function deleteExpiredAuditEvents(db: EngineConnection, now: number) {
   );
 }
 
-function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequence: number): void {
+function pruneAfterInsert(
+  db: EngineConnection,
+  now: number,
+  at: number,
+  insertedCount: number,
+  nextSequence: number,
+): void {
   const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const cached = auditEventRetention.get(db);
   let retention = cached
     ? {
-        rowCount: cached.rowCount + 1,
+        rowCount: cached.rowCount + insertedCount,
         nextExpiryAt: Math.min(cached.nextExpiryAt, at + AUDIT_EVENT_RETENTION_MS),
       }
     : readAuditEventRetention(db);
@@ -631,7 +639,7 @@ function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequenc
       (normalizeSqliteNumber(oldest?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
       AUDIT_EVENT_RETENTION_MS;
   }
-  auditEventRetention.set(db, { ...retention, nextSequence: sequence + 1 });
+  auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
 /** Persist one projected event idempotently and prune fixed retention bounds. */
@@ -699,7 +707,7 @@ export function recordAuditEventInDatabase(
         throw new Error("audit event sequence is outside the supported integer range");
       }
       const now = Date.now();
-      pruneAfterInsert(db, now, values.occurred_at, insertedSequence);
+      pruneAfterInsert(db, now, values.occurred_at, 1, insertedSequence + 1);
       // Current events cannot be removed by retention: sequence allocation puts
       // them after every existing row. An expired replay may be pruned immediately.
       const row =
@@ -719,6 +727,98 @@ export function recordAuditEventInDatabase(
     auditEventRetention.delete(db);
     invalidateSkillSelectionAuditCachesForDatabase(db);
     clearAuditIdentityKeyCacheForDatabase(db);
+    throw error;
+  }
+}
+
+function getAuditAutocommitRetention(db: EngineConnection, now: number, at: number, count: 1 | 2) {
+  const retention = auditEventRetention.get(db);
+  return !db.isTransaction &&
+    !isPostgresSqlConnection(db) &&
+    retention &&
+    retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
+    retention.nextExpiryAt >= now &&
+    at + AUDIT_EVENT_RETENTION_MS >= now &&
+    Number.isSafeInteger(retention.nextSequence + (count - 1))
+    ? retention
+    : undefined;
+}
+
+function parseInsertedAuditSequence(value: string): number {
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error("audit event sequence is outside the supported integer range");
+  }
+  return sequence;
+}
+
+/** Persist a completed run as one replay-safe insert and one retention pass. */
+export function recordAuditRunInDatabase(
+  start: AgentRunStartedAuditEventInput,
+  finish: AgentRunFinishedAuditEventInput,
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  eventIds: readonly [string, string],
+): void {
+  const { db } = options.database;
+  const nested = db.isTransaction;
+  const values = [
+    bindAuditEvent(db, start, eventIds[0]),
+    bindAuditEvent(db, finish, eventIds[1]),
+  ] as const;
+  // Validate both inputs before their atomic INSERT; allocated sequences are checked below.
+  for (const value of values) {
+    parseAgentRunRow({ ...value, sequence: 1 });
+  }
+  const queries = getAuditEventQueries(db);
+  try {
+    const retention = getAuditAutocommitRetention(
+      db,
+      Date.now(),
+      Math.min(start.occurredAt, finish.occurredAt),
+      2,
+    );
+    if (retention) {
+      const { rows } = runOpenClawStateWriteTransaction(() => queries.insertRun(values), options, {
+        singleStatement: true,
+      });
+      // SQLite consumes a sequence for every attempt, including replay conflicts.
+      retention.nextSequence += 2;
+      retention.rowCount += rows.length;
+      retention.nextExpiryAt = Math.min(
+        retention.nextExpiryAt,
+        ...rows.map(
+          (row) =>
+            values[row.event_id === eventIds[0] ? 0 : 1].occurred_at + AUDIT_EVENT_RETENTION_MS,
+        ),
+      );
+      return;
+    }
+    return runOpenClawStateWriteTransaction(() => {
+      const { rows } = queries.insertRun(values);
+      if (rows.length === 0) {
+        auditEventRetention.delete(db);
+        return;
+      }
+      // RETURNING order is not a contract; stable event IDs identify each half.
+      const inserted = rows.map((row) => ({
+        values: row.event_id === eventIds[0] ? values[0] : values[1],
+        sequence: parseInsertedAuditSequence(row.sequence),
+      }));
+      const now = Date.now();
+      pruneAfterInsert(
+        db,
+        now,
+        Math.min(...inserted.map((row) => row.values.occurred_at)),
+        inserted.length,
+        // Both VALUES attempts consume a sequence, including either replay conflict.
+        Math.max(...inserted.map((row) => row.sequence + (row.values === values[0] ? 2 : 1))),
+      );
+      if (nested) {
+        auditEventRetention.delete(db);
+      }
+    }, options);
+  } catch (error) {
+    auditEventRetention.delete(db);
     throw error;
   }
 }

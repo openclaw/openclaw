@@ -11,6 +11,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { deriveCanonicalEd25519PrivateKeyRaw } from "../infra/ed25519-signature.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 
 const PUBLIC_SESSION_TOKEN_PREFIX = "v1.";
 const PUBLIC_SESSION_TOKEN_CIPHER = "aes-256-gcm";
@@ -280,11 +281,7 @@ export async function mintExistingPublicSessionShareToken(
   if (!codec) {
     return undefined;
   }
-  let tokens = previewTokens.get(codec);
-  if (!tokens) {
-    tokens = new Map();
-    previewTokens.set(codec, tokens);
-  }
+  const tokens = getOrCreateWeakOwnerMap(previewTokens, codec);
   const key = JSON.stringify(locator);
   let token = tokens.get(key);
   if (!token) {

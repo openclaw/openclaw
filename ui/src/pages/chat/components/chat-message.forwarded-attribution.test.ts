@@ -239,7 +239,7 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
 
   const { titler } = titlerFor("agent:main:main", "Main session");
   const sourceLink = expectDefined(link, "source session link");
-  await titler.decorate(sourceLink, true);
+  await titler.decorate(sourceLink);
   expect(sourceLink.textContent).toBe("Main session");
   renderGroup(group);
   const retained = query(`${attributionSelector} a`);
@@ -291,7 +291,7 @@ it.each([
   expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
   expect(text(attributionSelector) ?? "").not.toContain("—");
   const { titler, request } = titlerFor(key, "Client session title");
-  await titler.decorate(chip, true);
+  await titler.decorate(chip);
   expect(chip.textContent?.trim()).toBe(chipText);
   expect(chip.getAttribute("href")).toBe(href);
   if (isCronRun) {

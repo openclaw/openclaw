@@ -16,7 +16,9 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "../../agents/model-a
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
+  resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
@@ -173,6 +175,14 @@ export function resolveProviderAuthOverview(params: {
       return providerApiKeyRef.source === "env"
         ? { kind: "env", detail: maskApiKey(usableCustomKey.apiKey) }
         : { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
+    // Inference sends an explicit api-key provider's own key before stored profiles.
+    const providerEntryKey = resolveProviderEntryApiKeyProfileReference({ cfg, provider, store });
+    if (
+      providerEntryKey.kind === "literal" &&
+      shouldPreferExplicitConfigApiKeyAuth(cfg, provider)
+    ) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(providerEntryKey.apiKey) };
     }
     if (profiles.length > 0) {
       return {

@@ -45,7 +45,7 @@ const MAX_SEARCH_MCP_INSTRUCTIONS_CHARS = 512;
 const MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS = 20_000;
 export const INCOMPLETE_INSTRUCTIONS_HINT =
   "Call tool_describe before use to load the complete server instructions.";
-export const UNRETRIEVABLE_INSTRUCTIONS_HINT =
+const UNRETRIEVABLE_INSTRUCTIONS_HINT =
   "Server instructions exceed the tool_describe response limit; only the visible excerpt can be returned.";
 
 function compactMcpInstructions(instructions: string | undefined): string | undefined {

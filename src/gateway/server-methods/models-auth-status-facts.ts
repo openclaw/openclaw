@@ -15,6 +15,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalog-auth.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
@@ -198,11 +199,7 @@ export function readModelAuthStatusFacts(
   refresh: boolean,
   now: number,
 ) {
-  let agents = authStatusFacts.get(snapshot.config);
-  if (!agents) {
-    agents = new Map();
-    authStatusFacts.set(snapshot.config, agents);
-  }
+  const agents = getOrCreateWeakOwnerMap(authStatusFacts, snapshot.config);
   const revision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const cached = agents.get(snapshot.agentId);
   if (

@@ -31,6 +31,7 @@ type ReadEntry<T> = {
   promise: Promise<T>;
   controller: AbortController;
   pending: boolean;
+  retryAt?: number;
   timing?: DiffReadTiming;
   value?: T;
 };
@@ -79,7 +80,8 @@ function createReadCache<Input, Output>(
   ) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
-  retain: (value: Output) => boolean = () => true,
+  // A numeric result retains an unavailable response until its next probe.
+  retain: (value: Output) => boolean | number = () => true,
   maxEntries = MAX_CACHED_CHECKOUTS,
 ) {
   const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
@@ -107,10 +109,12 @@ function createReadCache<Input, Output>(
       const timing = options.diffTiming;
       const validationStarted = timing ? performance.now() : 0;
       const key = keyOf(input);
+      let entry = entries.get(key);
+      const waitingToRetry = !options.refresh && (entry?.retryAt ?? 0) > Date.now();
       let currentRevision: string | null | undefined;
-      if (revision) {
+      if (revision && !waitingToRetry) {
         // Share only overlapping checks of identical inputs, never a settled revision.
-        const revisionInput = gitEnvironmentKey(input);
+        const revisionInput = keyOf === gitEnvironmentKey ? key : gitEnvironmentKey(input);
         let check = revisions.get(revisionInput);
         if (!check) {
           const controller = new AbortController();
@@ -143,17 +147,19 @@ function createReadCache<Input, Output>(
         typeof freshness !== "number" && typeof currentRevision === "string"
           ? (freshness.versionedMilliseconds ?? freshnessMs)
           : freshnessMs;
-      const revisionKey = JSON.stringify([input, currentRevision]);
+      const revisionKey = waitingToRetry
+        ? entry!.revision
+        : JSON.stringify([input, currentRevision]);
       options.signal?.throwIfAborted();
       if (closed) {
         throw new Error("Git reads are unavailable while the Gateway is restarting");
       }
-      let entry = entries.get(key);
+      entry = entries.get(key);
       const previous = entry;
       const wasEvicted = evicted.delete(key);
       let cacheHit = !entry?.pending;
       if (
-        (options.refresh && currentRevision === null) ||
+        (options.refresh && (currentRevision === null || entry?.retryAt !== undefined)) ||
         !entry ||
         entry.revision !== revisionKey ||
         (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
@@ -199,8 +205,14 @@ function createReadCache<Input, Output>(
             if (snapshot) {
               next.expiresAt = Date.now() + freshnessMs;
             }
-            if (retainedFreshnessMs === 0 || !retain(value)) {
+            const retention = retain(value);
+            if (typeof retention === "number") {
+              next.retryAt = next.expiresAt = Date.now() + retention;
+            } else if (retainedFreshnessMs === 0 || !retention) {
               remove(key, next);
+            } else if (joinPending && currentRevision === null) {
+              // Unversioned summaries already allow this admission-based TTL.
+              next.retryAt = next.expiresAt;
             }
             return value;
           },
@@ -306,9 +318,9 @@ function createDiffReadCache(
         },
         { signal, diffTiming },
       ),
+    gitEnvironmentKey,
     undefined,
-    undefined,
-    (value) => !value.unavailableReason,
+    (value) => (value.unavailableReason === "not_git" ? 1_000 : !value.unavailableReason),
     maxEntries,
   );
 }

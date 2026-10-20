@@ -1,7 +1,6 @@
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseUpdateRecoveryBackupManifest,
@@ -55,7 +54,6 @@ declare const SEALED_RUNTIME_BUILD: boolean;
 
 type Entry = UpdateRecoveryBackupManifest["entries"][number];
 type ResourceKind = "file" | "directory" | "sqlite";
-type CapturedPath = { stat?: BigIntStats; names?: string[]; target?: string };
 
 function matchesCapturedStat(
   pathname: string,
@@ -109,8 +107,7 @@ async function markPrivateCapture(directory: string): Promise<void> {
   requireDirectorySync(await syncDirectory(directory), "Private update capture marker");
 }
 
-/** Capture for manual recovery under the original invocation's live custody.
- * Sources may remain active; final revalidation is not authority to restore them. */
+/** Capture chosen originals for manual recovery, not authority to restore active sources. */
 export function captureUpdateRecoveryBaseline(params: {
   runId: string;
   installRoot: string;
@@ -230,7 +227,7 @@ export function captureUpdateRecoveryBaseline(params: {
     await configCapture.revalidate();
     assertCurrent();
 
-    const observed = new Map<string, CapturedPath>();
+    const observed = new Set<string>();
     const entries = new Map<string, Entry>();
     const files = new Map<string, BigIntStats>();
     const capacityWarnings = new Set<string>();
@@ -264,7 +261,7 @@ export function captureUpdateRecoveryBaseline(params: {
       assertCurrent();
       const stat = await statOrMissing(pathname);
       assertCurrent();
-      observed.set(pathname, { stat });
+      observed.add(pathname);
       if (!stat) {
         if (kind === "sqlite") {
           forcedSqlite.add(pathname);
@@ -279,7 +276,6 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       if (stat.isSymbolicLink()) {
         const target = await fs.readlink(pathname);
-        observed.set(pathname, { stat, target });
         const entry: Extract<Entry, { kind: "symlink" }> = {
           kind: "symlink",
           sourcePath: pathname,
@@ -314,7 +310,6 @@ export function captureUpdateRecoveryBaseline(params: {
           throw new Error(`Original update resource is unexpectedly a directory: ${pathname}`);
         }
         const names = (await fs.readdir(pathname)).toSorted();
-        observed.set(pathname, { stat, names });
         entries.set(pathname, {
           kind: "directory",
           sourcePath: pathname,
@@ -477,9 +472,6 @@ export function captureUpdateRecoveryBaseline(params: {
         });
       }
       await configCapture.revalidate();
-      if (!isDeepStrictEqual(await collectResources(), declared)) {
-        throw new Error("Original update migration resource inventory changed during capture.");
-      }
       assertCurrent();
       const originalCaptureSources = new Set(databases.originalCaptureSourcePaths);
       const generationPaths = [...databasePaths].filter(
@@ -513,30 +505,6 @@ export function captureUpdateRecoveryBaseline(params: {
             ),
           ].join("\n"),
         );
-      }
-      for (const [pathname, before] of observed) {
-        if (databaseSpellings.has(pathname) || sidecars.has(pathname)) {
-          continue;
-        }
-        const current = await statOrMissing(pathname);
-        const entry = entries.get(pathname);
-        const sha256 = entry?.kind === "file" && !entry.sqlite ? entry.sha256 : undefined;
-        if (
-          before.stat
-            ? !current || !matchesCapturedStat(pathname, before.stat, current, sha256)
-            : current !== undefined
-        ) {
-          throw new Error(`Original update resource changed during capture: ${pathname}`);
-        }
-        if (
-          before.names &&
-          !isDeepStrictEqual((await fs.readdir(pathname)).toSorted(), before.names)
-        ) {
-          throw new Error(`Original update directory changed during capture: ${pathname}`);
-        }
-        if (before.target !== undefined && (await fs.readlink(pathname)) !== before.target) {
-          throw new Error(`Original update resource link changed during capture: ${pathname}`);
-        }
       }
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({
         kind: warning.kind,

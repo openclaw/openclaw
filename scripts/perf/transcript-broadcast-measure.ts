@@ -82,6 +82,7 @@ const { values } = parseArgs({
     "recap-burst-repeats": { type: "string", default: "0" },
     "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string", default: "20" },
+    sessions: { type: "string", default: "100" },
     rounds: { type: "string", default: "5" },
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
@@ -93,6 +94,7 @@ const { values } = parseArgs({
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
     "heap-snapshot": { type: "boolean", default: false },
+    "session-census": { type: "boolean", default: false },
     "session-row-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
@@ -121,21 +123,33 @@ if (
     "chat.send",
     "transcript-broadcast",
     "attempt-retention",
+    "session-idle-retention",
     "memory-soak",
     "plugins.reload",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
-const toolScenario = scenario === "chat.send" || retentionScenario || soakScenario;
+const reasoningScenario = retentionScenario || idleScenario || soakScenario;
+if (
+  values["session-census"] &&
+  (!idleScenario || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error(
+    "--session-census requires --scenario session-idle-retention --entry src/entry.ts",
+  );
+}
+const toolScenario = scenario === "chat.send" || reasoningScenario;
 const turnScenario =
   scenario === "chat.send" ||
   scenario === "transcript-broadcast" ||
   retentionScenario ||
+  idleScenario ||
   soakScenario;
 if (
   !values.allocations &&
@@ -143,6 +157,7 @@ if (
   !values["workload-cpu-profile"] &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
+  !idleScenario &&
   !soakScenario
 ) {
   throw new Error("--scenario requires --allocations or --workload-cpu-profile");
@@ -157,7 +172,8 @@ const rowMode = values["row-mode"];
 if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
-const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
+const clientCount =
+  scenario === "chat.send" || idleScenario ? 1 : integer(values.clients, "--clients");
 const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
 if (rpcConcurrency > clientCount) {
   throw new Error("--rpc-concurrency must not exceed --clients");
@@ -170,11 +186,28 @@ if (
 ) {
   throw new Error("reconnect storm starts must fit within 5000 ms; reduce --reconnect-stagger-ms");
 }
-const exactClients = integer(values["exact-clients"] ?? String(clientCount), "--exact-clients", 0);
+const exactClients = integer(
+  values["exact-clients"] ?? String(idleScenario ? 0 : clientCount),
+  "--exact-clients",
+  0,
+);
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
 }
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
+const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
+if (
+  idleScenario &&
+  (exactClients ||
+    values["activity-summaries"] ||
+    values["cpu-profile"] ||
+    values["stream-start-allocations"] ||
+    values["stream-start-diagnostics"])
+) {
+  throw new Error(
+    "session-idle-retention requires no exact subscriptions, activity summaries, or stream-start profiling",
+  );
+}
 const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
@@ -199,7 +232,9 @@ if (connectionScenario && listIntervalMs) {
   throw new Error("connection scenarios use their own sidebar refresh; omit --list-interval-ms");
 }
 if (values["stress-tools"] && !toolScenario) {
-  throw new Error("--stress-tools requires chat.send, attempt-retention, or memory-soak");
+  throw new Error(
+    "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
+  );
 }
 if (values["stress-subagents"] && (!soakScenario || !values["stress-tools"])) {
   throw new Error("--stress-subagents requires memory-soak and --stress-tools");
@@ -610,6 +645,7 @@ function createPollRandom(round: number, client: number) {
 let cohort:
   | {
       id: string;
+      expectedCount: number;
       arrivals: Set<number>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
@@ -659,7 +695,7 @@ const mock = createServer((req, res) => {
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
     if (continuation) {
-      if (retentionScenario || soakScenario) {
+      if (reasoningScenario) {
         const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
         if (
           expectedSignature === undefined ||
@@ -743,7 +779,7 @@ const mock = createServer((req, res) => {
         cohort.arrivals.add(index);
         cohort.phases.firstPrimaryRequestAtEpochMs ??= epochNow();
         cohort.phases.lastPrimaryRequestAtEpochMs = epochNow();
-        if (cohort.arrivals.size === runCount) {
+        if (cohort.arrivals.size === cohort.expectedCount) {
           if (values["active-work-diagnostics"]) {
             activeWorkCounts = await readActiveWorkCounts();
           }
@@ -845,7 +881,7 @@ const mock = createServer((req, res) => {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
         if (
-          (retentionScenario || soakScenario) &&
+          reasoningScenario &&
           (primary || continuation) &&
           "response" in event &&
           event.response !== undefined
@@ -1075,7 +1111,7 @@ async function ready(targetPort: number, endpoint: string, owned?: ChildProcess)
 const parentKey = "agent:main:transcript-broadcast-measure-parent";
 const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from(
-  { length: runCount },
+  { length: sessionCount },
   (_, index) => `agent:main:transcript-broadcast-measure-child-${index}`,
 );
 const connectParams = {
@@ -1359,7 +1395,11 @@ async function finishStressSubagent(
 }
 let completedSoakRounds = 0;
 let sessionResets = 0;
-async function runRound(client: ReturnType<typeof createGatewayWsClient>, measuredRound?: number) {
+async function runRound(
+  client: ReturnType<typeof createGatewayWsClient>,
+  measuredRound?: number,
+  roundKeys = keys,
+) {
   if (
     retentionScenario ||
     (soakScenario && resetEveryRounds > 0 && completedSoakRounds % resetEveryRounds === 0)
@@ -1420,6 +1460,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
   });
   cohort = {
     id: randomUUID(),
+    expectedCount: roundKeys.length,
     arrivals: new Set(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
@@ -1472,7 +1513,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     () =>
       current.reject(
         new Error(
-          `only ${current.arrivals.size}/${runCount} primary model requests arrived in 45s`,
+          `only ${current.arrivals.size}/${current.expectedCount} primary model requests arrived in 45s`,
         ),
       ),
     45_000,
@@ -1485,7 +1526,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
       subagentWork = await startStressSubagent(client, current);
     }
     const turns = Promise.all(
-      keys.map(async (sessionKey, index) => {
+      roundKeys.map(async (sessionKey, index) => {
         const turnStarted = performance.now();
         const runId = randomUUID();
         const image = retentionScenario
@@ -1500,7 +1541,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
           sessionKey,
           message:
             `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
-            (retentionScenario
+            (retentionScenario || idleScenario
               ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
               : ""),
           deliver: false,
@@ -2025,7 +2066,17 @@ try {
     }
   }
   console.log("PHASE subscribed-and-reset");
+  let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
   const runScenario = async (measuredRound?: number) => {
+    if (idleScenario) {
+      idleTurnCohorts = [];
+      for (let offset = 0; offset < keys.length; offset += runCount) {
+        idleTurnCohorts.push(
+          await runRound(sender, measuredRound, keys.slice(offset, offset + runCount)),
+        );
+      }
+      return undefined;
+    }
     if (turnScenario) {
       const streamStart = await runRound(sender, measuredRound);
       if (values["activity-summaries"]) {
@@ -2139,6 +2190,12 @@ try {
   };
   const warmupStartedAt = performance.now();
   do {
+    // Warm runtime imports on the parent, leaving all measured sessions untouched.
+    if (idleScenario) {
+      await runRound(sender, undefined, [parentKey]);
+      await drainEvents();
+      break;
+    }
     const started = performance.now();
     await runScenario();
     await drainEvents();
@@ -2162,12 +2219,15 @@ try {
     }
     await delay(startAt - Date.now());
   }
-  const initialRetainedResources =
-    retentionScenario || soakScenario
-      ? await readGatewayResources(gateway, {
-          collectGarbage: !soakScenario || !values.allocations,
-        })
-      : undefined;
+  const initialRetainedResources = reasoningScenario
+    ? await readGatewayResources(gateway, {
+        collectGarbage: !soakScenario || !values.allocations,
+        sessionCensus: values["session-census"],
+        ...(idleScenario && values["heap-snapshot"]
+          ? { snapshotPath: path.join(output, "initial.heapsnapshot") }
+          : {}),
+      })
+    : undefined;
   const soakAllocationPath =
     soakScenario && values.allocations
       ? path.join(output, "allocation-soak.heapprofile")
@@ -2194,9 +2254,16 @@ try {
     sessionResets: number;
     collectedGarbage: boolean;
     resources: Awaited<ReturnType<typeof readGatewayResources>>;
+    phase?: string;
   }> = [];
-  const sampleMemory = async (collectGarbage = false) => {
-    const resources = await readGatewayResources(measuredGateway, { collectGarbage });
+  const sampleMemory = async (collectGarbage = false, phase?: string) => {
+    const resources = await readGatewayResources(measuredGateway, {
+      collectGarbage,
+      sessionCensus: collectGarbage && values["session-census"],
+      ...(idleScenario && phase && values["heap-snapshot"]
+        ? { snapshotPath: path.join(output, `${phase}.heapsnapshot`) }
+        : {}),
+    });
     const sample = {
       atEpochMs: Date.now(),
       elapsedMs: Date.now() - measurementStartedAt,
@@ -2204,11 +2271,47 @@ try {
       sessionResets,
       collectedGarbage: collectGarbage,
       resources,
+      ...(phase ? { phase } : {}),
     };
     memorySamples.push(sample);
     appendFileSync(path.join(output, "memory-samples.jsonl"), `${JSON.stringify(sample)}\n`);
     console.log(`MEMORY ${JSON.stringify(sample)}`);
+    return resources;
   };
+  const idleHistories = new Map<string, { messages: number; digest: string }>();
+  const verifyIdleHistories = async (phase: "touched" | "idle" | "reopened") => {
+    for (const sessionKey of keys) {
+      const history = await rpc(sender, "chat.history", { sessionKey, limit: 100 });
+      if (!isRecord(history) || !Array.isArray(history.messages)) {
+        throw new Error(`missing idle-session history: ${sessionKey}`);
+      }
+      const messages = history.messages;
+      const digest = (entries: unknown[]) =>
+        createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+      const previous = idleHistories.get(sessionKey);
+      if (
+        previous &&
+        (digest(messages.slice(0, previous.messages)) !== previous.digest ||
+          (phase === "idle" && messages.length !== previous.messages))
+      ) {
+        throw new Error(`idle-session transcript changed during ${phase}: ${sessionKey}`);
+      }
+      const answers = messages.filter(
+        (message) =>
+          isRecord(message) &&
+          message.role === "assistant" &&
+          contentText(message.content).trim() === chunk.repeat(chunkCount).trim(),
+      );
+      if (answers.length !== (phase === "reopened" ? 2 : 1)) {
+        throw new Error(`idle-session answer missing or duplicated during ${phase}: ${sessionKey}`);
+      }
+      if (phase === "touched") {
+        idleHistories.set(sessionKey, { messages: messages.length, digest: digest(messages) });
+      }
+    }
+  };
+  let postIdleResources: Awaited<ReturnType<typeof readGatewayResources>> | undefined;
+  let idleDiagnostics: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>> | undefined;
   const retainedProfilePath = path.join(output, "retained.heapprofile");
   let retainedProfileStartedAt: number | undefined;
   if (soakScenario) {
@@ -2216,7 +2319,9 @@ try {
   }
   for (
     let round = 0;
-    soakScenario ? Date.now() - measurementStartedAt < durationMs : round < rounds;
+    soakScenario
+      ? Date.now() - measurementStartedAt < durationMs
+      : round < (idleScenario ? 2 : rounds);
     round++
   ) {
     const roundStartedAt = Date.now();
@@ -2436,7 +2541,7 @@ try {
         ? await measureGatewayAllocations(
             gateway,
             path.join(output, `allocation-${round}.heapprofile`),
-            turnScenario ? runCount : operations,
+            turnScenario ? sessionCount : operations,
             measuredWorkload,
           )
         : undefined;
@@ -2457,17 +2562,21 @@ try {
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
     }
-    if (turnScenario && (peakPrimaryStreams !== runCount || primaryStreamRequests !== runCount)) {
+    if (
+      turnScenario &&
+      (peakPrimaryStreams !== Math.min(runCount, sessionCount) ||
+        primaryStreamRequests !== sessionCount)
+    ) {
       throw new Error(
-        `expected ${runCount} primary streams: peak=${peakPrimaryStreams}, requests=${primaryStreamRequests}`,
+        `expected ${sessionCount} primary streams with ${Math.min(runCount, sessionCount)} concurrent: peak=${peakPrimaryStreams}, requests=${primaryStreamRequests}`,
       );
     }
     if (
-      (scenario === "chat.send" || soakScenario) &&
-      (toolCalls !== runCount || toolResults !== runCount)
+      (scenario === "chat.send" || soakScenario || idleScenario) &&
+      (toolCalls !== sessionCount || toolResults !== sessionCount)
     ) {
       throw new Error(
-        `expected ${runCount} completed tool calls, calls=${toolCalls}, results=${toolResults}`,
+        `expected ${sessionCount} completed tool calls, calls=${toolCalls}, results=${toolResults}`,
       );
     }
     if (
@@ -2483,9 +2592,9 @@ try {
       );
     }
     if (
-      (retentionScenario || soakScenario) &&
-      (reasoningResponses !== runCount * (retentionScenario ? 3 : 2) ||
-        reasoningReplayRequests !== runCount * (retentionScenario ? 2 : 1))
+      reasoningScenario &&
+      (reasoningResponses !== sessionCount * (retentionScenario ? 3 : 2) ||
+        reasoningReplayRequests !== sessionCount * (retentionScenario ? 2 : 1))
     ) {
       throw new Error(
         `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
@@ -2512,14 +2621,24 @@ try {
       );
     }
     const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
-    const retainedResources = retentionScenario
-      ? await readGatewayResources(gateway, {
-          collectGarbage: true,
-          ...(values["heap-snapshot"] && round === rounds - 1
-            ? { snapshotPath: path.join(output, "settled.heapsnapshot") }
-            : {}),
-        })
-      : undefined;
+    const retainedResources =
+      retentionScenario || idleScenario
+        ? await readGatewayResources(gateway, {
+            collectGarbage: true,
+            sessionCensus: values["session-census"],
+            ...(idleScenario && values["heap-snapshot"]
+              ? {
+                  snapshotPath: path.join(
+                    output,
+                    round === 0 ? "post-work.heapsnapshot" : "post-reopen.heapsnapshot",
+                  ),
+                }
+              : {}),
+            ...(retentionScenario && values["heap-snapshot"] && round === rounds - 1
+              ? { snapshotPath: path.join(output, "settled.heapsnapshot") }
+              : {}),
+          })
+        : undefined;
     const deliveredEvents = [...counters.values()].reduce((sum, count) => sum + count, 0);
     const deliveredSessionEvents =
       (counters.get("session.message") ?? 0) + (counters.get("sessions.changed") ?? 0);
@@ -2570,11 +2689,18 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
-      ...((retentionScenario || soakScenario) && { reasoningResponses, reasoningReplayRequests }),
+      ...(reasoningScenario && { reasoningResponses, reasoningReplayRequests }),
       recapRequests,
       ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
         ? { outputLimitResponses, recoveredResponses, imageRequests, retainedResources }
+        : {}),
+      ...(idleScenario
+        ? {
+            phase: round === 0 ? "touch" : "reopen",
+            retainedResources,
+            turnCohorts: idleTurnCohorts,
+          }
         : {}),
       ...cpu,
       eventCounts: Object.fromEntries(counters),
@@ -2630,6 +2756,21 @@ try {
         key === "representativeResponse" ? undefined : value,
       ),
     );
+    if (idleScenario) {
+      await verifyIdleHistories(round === 0 ? "touched" : "reopened");
+      if (round === 0) {
+        const finishIdleDiagnostics = await startGatewayDiagnostics(gateway, "session-idle");
+        const idleStartedAt = Date.now();
+        while (Date.now() - idleStartedAt < durationMs) {
+          await delay(Math.min(memoryIntervalMs, durationMs - (Date.now() - idleStartedAt)));
+          assertGatewayAlive();
+          await sampleMemory();
+        }
+        idleDiagnostics = await finishIdleDiagnostics();
+        postIdleResources = await sampleMemory(true, "post-idle");
+        await verifyIdleHistories("idle");
+      }
+    }
     if (soakScenario) {
       if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
         await sampleMemory();
@@ -2765,7 +2906,7 @@ try {
     output,
     scenario,
     revision: values.revision ?? null,
-    operationsPerRound: turnScenario ? runCount : operations,
+    operationsPerRound: turnScenario ? sessionCount : operations,
     rpcConcurrency,
     reconnectStaggerMs,
     rpcLatencyScope:
@@ -2808,6 +2949,33 @@ try {
     streamRequests,
     fixture,
     ...(retentionScenario ? { promptBytes, initialRetainedResources } : {}),
+    ...(idleScenario
+      ? {
+          sessionCount,
+          idleDurationMs: durationMs,
+          promptBytes,
+          initialRetainedResources,
+          postIdleResources,
+          heapGrowthAfterIdleBytes:
+            postIdleResources && initialRetainedResources
+              ? postIdleResources.memory.heapUsed - initialRetainedResources.memory.heapUsed
+              : undefined,
+          memorySamples,
+          idleDiagnostics,
+          idleGc:
+            values["trace-gc"] || values.allocations
+              ? readGatewayGcTrace(
+                  path.join(output, "gateway.stdout.log"),
+                  "session-idle",
+                  "diagnostics",
+                )
+              : undefined,
+          transcriptChecks: {
+            unchangedAcrossIdle: idleHistories.size,
+            appendOnlyAfterReopen: idleHistories.size,
+          },
+        }
+      : {}),
     ...(soakScenario
       ? {
           durationMs,

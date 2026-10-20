@@ -773,6 +773,44 @@ Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
 intentionally retained live histories from the trend.
 
+For loaded-session retention after real turns settle, use:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario session-idle-retention \
+  --sessions 100 --runs 10 --chunks 1 --chunk-interval-ms 0 --prompt-kib 128 \
+  --duration-ms 360000 --memory-interval-ms 30000 --diagnostics --trace-gc
+```
+
+This warms the runtime with one parent turn, captures a post-GC baseline, and
+touches 100 distinct sessions in cohorts of at most ten concurrent turns. Each
+turn includes a synthetic prompt, one real `read` tool, and the reasoning-signature
+replay check. The driver keeps one roster-only client and no exact-message
+subscriptions. It then idles for `--duration-ms` without model work or polling,
+captures post-idle resources, and reopens every measured session once. `--rounds`
+is ignored. The final partial cohort has its own barrier size.
+
+The report includes post-GC resources after initial work and after reopening,
+periodic natural-GC idle samples, idle GC diagnostics/promotion, and each cohort's
+first-turn or reopened-turn latency. Reopened timings include the real agent
+turn and tool round trip, so they are end-to-end reload cost rather than a
+storage-only timer. History digests must remain unchanged across the idle window;
+reopening must append a second exact synthetic answer without rewriting history.
+Add `--entry src/entry.ts --session-census` to count live `SessionManager`,
+`AgentSession`, and runtime `Agent` instances at the four forced-GC checkpoints
+without writing snapshots. The source-only census imports the same constructors
+as the Gateway and uses V8's count-only object query; it retains no instance
+references. Bundled entries are rejected because their constructor identity
+differs. Counts cover the main isolate only, and the queries force additional
+collections, so omit the census from latency/GC acceptance runs.
+Add `--heap-snapshot` in a separate diagnostic pass for `initial.heapsnapshot`,
+`post-work.heapsnapshot`, `post-idle.heapsnapshot`, and `post-reopen.heapsnapshot`
+to count retained managers, sessions, agents, and their transcript retainers.
+Snapshot capture and forced GC can affect eviction timing; use the recorded
+timestamps and unprofiled paired runs for acceptance comparisons. Set the idle
+duration beyond the lifecycle's eviction window. Fixtures and all output stay
+inside the supplied synthetic state directory.
+
 For a steady memory soak with real tool execution and attached viewers, use:
 
 ```sh
@@ -1255,6 +1293,18 @@ hashes, a passing edit control, and fewer diff collections with a higher cache
 hit rate on the repaired path, without a material paired latency regression.
 Native Git status used to validate a revision still counts as Git work; cache
 hits do not imply zero subprocesses.
+
+Use `--missing-cwd` with RPC mode and a small fixture to measure a disappeared
+session directory. The driver renames the synthetic `new/` directory after
+session creation, requires `not_git` on every measured response, restores the
+directory, and requires recovery within two seconds. Do not combine it with
+mutation, churn, or extra polling fixtures. The report includes
+`missingRecoveryMs`; both revisions must return identical absent-checkout
+responses. Compare at least two simultaneous pairs with swapped CPU halves.
+RPC reports also include `processCpuMsPerRpc`, the Gateway process's CPU during
+the measured window divided by completed requests. This includes its worker
+threads but excludes child Git processes; compare it with command counts and
+latency, not as total system CPU.
 
 Add `--nested-cwd` to launch each session from the fixture's `new/` subdirectory.
 This exercises checkout discovery through a session's working directory instead

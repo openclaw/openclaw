@@ -2964,6 +2964,7 @@ describe("chat attachment picker", () => {
       expect(attachments).toHaveLength(1);
     });
     const container = renderChatView({
+      draft: "Review the attachment",
       attachments,
       getAttachments: () => attachments,
       onAttachmentsChange: (next) => {
@@ -3027,6 +3028,7 @@ describe("chat attachment picker", () => {
   it("keeps the default placeholder only for internally generated pasted text", () => {
     let pastedTextAttachments: ChatAttachment[] = [];
     const pasteTarget = renderChatView({
+      draft: "Review the attachment",
       getAttachments: () => pastedTextAttachments,
       onAttachmentsChange: (next) => {
         pastedTextAttachments = next;

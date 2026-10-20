@@ -49,6 +49,7 @@ import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navi
 import { readSystemInfo } from "../../lib/system-info.ts";
 import { showToast } from "../../lib/toast.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { headerSessionMetadataPatch } from "./chat-pane-session-metadata-patch.ts";
@@ -61,10 +62,17 @@ import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.t
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private readonly headerSessionDataMemo = new ChatPaneHeaderMemo<SessionMenuData>();
   protected resolveHeaderSessionTitle(row: GatewaySessionRow | undefined): string {
+    const state = this.state;
+    const hydration = state && chatHistoryRequests(state).initialSnapshotHydration;
+    const session = row ?? this.resourceSessionObservation()?.row ?? undefined;
     return chatSessionPresentationTitle(
-      this.state,
-      row ?? this.transcriptSessionProps(row).transcriptMetadata,
+      state,
+      session ?? this.transcriptSessionProps(session).transcriptMetadata,
       this.sessionKey,
+      Boolean(
+        hydration?.titlePending &&
+        areUiSessionKeysEquivalent(hydration.sessionKey, this.sessionKey),
+      ),
     );
   }
 

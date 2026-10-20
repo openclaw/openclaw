@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { emptyPluginCapabilityEvidence } from "../claws/packages.test-support.js";
 import type { ClawPackage } from "../claws/types.js";
+import { defaultRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   preflightClawPackage: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock("../config/config.js", async () => ({
 
 const { runClawsInspectCommand } = await import("./claws-cli.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 async function createInspectFixture(format: "claude" | "openclaw", packages: ClawPackage[] = []) {
   const root = tempDirs.make("openclaw-claws-inspect-extension-");
@@ -62,11 +64,13 @@ async function createInspectFixture(format: "claude" | "openclaw", packages: Cla
   );
   const values: unknown[] = [];
   const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeJson: vi.fn((value: unknown) => values.push(value)),
-    writeStdout: vi.fn(),
-    exit: vi.fn(),
+    log: vi.spyOn(defaultRuntime, "log").mockImplementation(() => {}),
+    error: vi.spyOn(defaultRuntime, "error").mockImplementation(() => {}),
+    writeJson: vi
+      .spyOn(defaultRuntime, "writeJson")
+      .mockImplementation((value) => values.push(value)),
+    writeStdout: vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(() => {}),
+    exit: vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {}),
   };
   return { root, values, runtime };
 }
@@ -91,7 +95,7 @@ describe("claws inspect extensions", () => {
       capabilityGrants: emptyPluginCapabilityEvidence.grants,
       capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
     });
-    await runClawsInspectCommand(root, { json: true }, runtime);
+    await runClawsInspectCommand(root, { json: true });
 
     expect(values[0]).toMatchObject({
       valid: true,
@@ -126,7 +130,7 @@ describe("claws inspect extensions", () => {
       "utf8",
     );
 
-    await runClawsInspectCommand(root, {}, runtime);
+    await runClawsInspectCommand(root, {});
 
     const lines = runtime.log.mock.calls.map((call) => String(call[0]));
     const agentLine = lines.find((line) => line.startsWith("Agent: "));
@@ -147,7 +151,7 @@ describe("claws inspect extensions", () => {
       "utf8",
     );
 
-    await runClawsInspectCommand(root, {}, runtime);
+    await runClawsInspectCommand(root, {});
 
     const output = String(runtime.error.mock.calls[0]?.[0]);
     expect(output).toContain("DIAG_MARKER");
@@ -171,7 +175,7 @@ describe("claws inspect extensions", () => {
       capabilityGrants: emptyPluginCapabilityEvidence.grants,
       capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
     });
-    await runClawsInspectCommand(root, { json: true }, runtime);
+    await runClawsInspectCommand(root, { json: true });
 
     expect(values[0]).toMatchObject({
       valid: false,

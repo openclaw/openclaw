@@ -261,7 +261,7 @@ describe("claws cli", () => {
     });
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
 
-    await runClawsAddCommand(manifestPath, { dryRun: true, workspace }, mocks.runtime);
+    await runClawsAddCommand(manifestPath, { dryRun: true, workspace });
 
     const output = mocks.logs.join("\n");
     expect(output).not.toMatch(/^Experimental:/m);
