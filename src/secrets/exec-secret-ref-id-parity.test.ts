@@ -1,21 +1,20 @@
-/** Tests exec SecretRef id validation parity with provider contract helpers. */
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { SecretRefSchema as GatewaySecretRefSchema } from "../../packages/gateway-protocol/src/schema.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import {
-  INVALID_FILE_SECRET_REF_IDS,
-  INVALID_EXEC_SECRET_REF_IDS,
-  VALID_FILE_SECRET_REF_IDS,
-  VALID_EXEC_SECRET_REF_IDS,
+  INVALID_FILE_SECRET_REF_IDS as invalidFileIds,
+  INVALID_EXEC_SECRET_REF_IDS as invalidExecIds,
+  VALID_FILE_SECRET_REF_IDS as validFileIds,
+  VALID_EXEC_SECRET_REF_IDS as validExecIds,
 } from "../test-utils/secret-ref-test-vectors.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
-import { isSecretsApplyPlan } from "./plan.js";
+import { isSecretsApplyPlan, type SecretsPlanTarget } from "./plan.js";
 import { isValidExecSecretRefId, isValidFileSecretRefId } from "./ref-contract.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
@@ -28,26 +27,21 @@ describe("exec SecretRef id parity", () => {
       );
       expect(entry?.includeInPlan).toBe(true);
       const pathSegments = targetType.split(".").map((part) => (part === "*" ? "main" : part));
+      const target = { type: targetType, path: pathSegments.join("."), pathSegments };
       const accepts = (id: string) =>
-        planAcceptsRef(
-          { source: "exec", provider: "vault", id },
-          {
-            type: targetType,
-            path: pathSegments.join("."),
-            pathSegments,
-          },
-        );
+        planAcceptsRef({ source: "exec", provider: "vault", id }, target);
       expect(accepts("apps/signing-key")).toBe(true);
       expect(accepts("../apps/signing-key")).toBe(false);
     },
   );
   const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
-  const validEnvSecretRefIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
-  const invalidEnvSecretRefIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
+  const validEnvIds = ["OPENAI_API_KEY", "A", "A_1", `A${"B".repeat(127)}`];
+  const invalidEnvIds = ["", "openai_api_key", "OPENAI-API-KEY", "1OPENAI", "A B"];
+  const isValidEnvId = (id: string) => validEnvIds.includes(id);
 
   function configAcceptsRef(ref: unknown): boolean {
-    const result = validateConfigObjectRaw({
+    return validateConfigObjectRaw({
       models: {
         providers: {
           openai: {
@@ -57,18 +51,12 @@ describe("exec SecretRef id parity", () => {
           },
         },
       },
-    });
-    return result.ok;
+    }).ok;
   }
 
   function planAcceptsRef(
     ref: unknown,
-    target: {
-      type: string;
-      path: string;
-      pathSegments: string[];
-      providerId?: string;
-    } = {
+    target: Omit<SecretsPlanTarget, "ref"> = {
       type: "talk.providers.*.apiKey",
       path: TALK_TEST_PROVIDER_API_KEY_PATH,
       pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
@@ -93,20 +81,16 @@ describe("exec SecretRef id parity", () => {
     expect(pluginSdkSecretInput.safeParse(ref).success).toBe(expected);
   }
 
-  for (const id of [...validEnvSecretRefIds, ...invalidEnvSecretRefIds]) {
-    it(`keeps plan/gateway/plugin parity for env id "${id}"`, () => {
-      expectParity(
-        { source: "env", provider: "default", id },
-        validEnvSecretRefIds.includes(id),
-        false,
-      );
-    });
-  }
-
-  for (const id of [...VALID_FILE_SECRET_REF_IDS, ...INVALID_FILE_SECRET_REF_IDS]) {
-    it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
-      expectParity({ source: "file", provider: "default", id }, isValidFileSecretRefId(id));
-    });
+  for (const [source, provider, ids, valid] of [
+    ["env", "default", [...validEnvIds, ...invalidEnvIds], isValidEnvId],
+    ["file", "default", [...validFileIds, ...invalidFileIds], isValidFileSecretRefId],
+    ["exec", "vault", [...validExecIds, ...invalidExecIds], isValidExecSecretRefId],
+  ] as const) {
+    for (const id of ids) {
+      it(`keeps ${source} ref parity for id "${id}"`, () => {
+        expectParity({ source, provider, id }, valid(id), source !== "env");
+      });
+    }
   }
 
   it("rejects invalid provider aliases across plan/gateway/plugin refs", () => {
@@ -120,12 +104,6 @@ describe("exec SecretRef id parity", () => {
   ]) {
     it(`rejects non-canonical ${ref.source} refs with extra properties across config/plan/gateway/plugin`, () => {
       expectParity(ref, false);
-    });
-  }
-
-  for (const id of [...VALID_EXEC_SECRET_REF_IDS, ...INVALID_EXEC_SECRET_REF_IDS]) {
-    it(`keeps config/plan/gateway/plugin parity for exec id "${id}"`, () => {
-      expectParity({ source: "exec", provider: "vault", id }, isValidExecSecretRefId(id));
     });
   }
 });

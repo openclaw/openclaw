@@ -1,4 +1,3 @@
-/** Tests command-specific secret assignment collection from config snapshots. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
@@ -60,23 +59,21 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
   });
 
   it.each([
-    { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
-    { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
-    {
-      name: "substituted braced-looking literal",
-      authored: "${SOURCE}",
-      env: { SOURCE: "${OTHER}" },
-      expected: "${OTHER}",
-    },
-    { name: "escaped template literal", authored: "$${OTHER}", env: {}, expected: "${OTHER}" },
-  ])("keeps command assignments source-authoritative: $name", ({ authored, env, expected }) => {
-    const sourceConfig = readSource(buildTalkTestProviderConfig(authored), env);
-    const resolvedConfig = cloneConfigWithResolutionFacts(sourceConfig);
-    const result = analyzeTalk(sourceConfig, resolvedConfig);
+    ["unresolved bare shorthand", "$MISSING", {}, true],
+    ["unresolved braced shorthand", "${MISSING}", {}, true],
+    ["substituted braced-looking literal", "${SOURCE}", { SOURCE: "${OTHER}" }, false],
+    ["escaped template literal", "$${OTHER}", {}, false],
+  ] as const)(
+    "keeps command assignments source-authoritative: %s",
+    (_name, authored, env, unresolved) => {
+      const sourceConfig = readSource(buildTalkTestProviderConfig(authored), env);
+      const resolvedConfig = cloneConfigWithResolutionFacts(sourceConfig);
+      const result = analyzeTalk(sourceConfig, resolvedConfig);
 
-    expect(result.assignments).toEqual([]);
-    expect(result.unresolved).toEqual(expected === null ? [talkPath] : []);
-  });
+      expect(result.assignments).toEqual([]);
+      expect(result.unresolved).toEqual(unresolved ? [talkPath] : []);
+    },
+  );
 
   it("accepts a materialized shorthand whose literal still resembles a reference", () => {
     const sourceConfig = readSource(buildTalkTestProviderConfig("$SOURCE"));
@@ -94,18 +91,10 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
   });
 
   it("skips unresolved refs that are marked inactive by runtime warnings", () => {
+    const apiKey = { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" };
     const sourceConfig = {
-      memory: {
-        search: {
-          remote: {
-            apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
+      memory: { search: { remote: { apiKey } } },
+      agents: { defaults: {} },
     } as unknown as OpenClawConfig;
     const resolvedConfig = structuredClone(sourceConfig);
 

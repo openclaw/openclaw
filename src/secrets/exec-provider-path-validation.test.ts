@@ -6,10 +6,7 @@ import { withMockedWindowsAclVerificationUnavailable } from "../test-utils/vites
 import { assertSecureExecCommandPath } from "./exec-provider-path-validation.js";
 
 describe("exec provider command path validation", () => {
-  const isWindows = process.platform === "win32";
-  function itPosix(name: string, fn: () => Promise<void> | void) {
-    it.skipIf(isWindows)(name, fn);
-  }
+  const itPosix = it.skipIf(process.platform === "win32");
   let fixtureRoot = "";
   let validExecutablePath = "";
   let executionMarkerPath = "";

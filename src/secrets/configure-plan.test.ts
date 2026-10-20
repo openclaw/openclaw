@@ -1,4 +1,3 @@
-/** Tests secrets configure plan generation and target validation. */
 import { beforeAll, describe, expect, it } from "vitest";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -27,12 +26,8 @@ describe("secrets configure plan helpers", () => {
     const config = {
       ...buildTalkTestProviderConfig("plain"),
       channels: {
-        telegram: {
-          botToken: "token", // pragma: allowlist secret
-        },
-        nostr: {
-          privateKey: "nostr-private-key", // pragma: allowlist secret
-        },
+        telegram: { botToken: "token" }, // pragma: allowlist secret
+        nostr: { privateKey: "nostr-private-key" }, // pragma: allowlist secret
       },
     } as OpenClawConfig;
 
@@ -95,21 +90,17 @@ describe("secrets configure plan helpers", () => {
   });
 
   it("reports configure change presence and builds deterministic plan shape", () => {
-    const selected = new Map([
-      [
-        TALK_TEST_PROVIDER_API_KEY_PATH,
-        {
-          type: "talk.providers.*.apiKey",
-          path: TALK_TEST_PROVIDER_API_KEY_PATH,
-          pathSegments: ["talk", "providers", TALK_TEST_PROVIDER_ID, "apiKey"],
-          label: TALK_TEST_PROVIDER_API_KEY_PATH,
-          configFile: "openclaw.json" as const,
-          expectedResolvedValue: "string" as const,
-          providerId: TALK_TEST_PROVIDER_ID,
-          ref: envRef("TALK_API_KEY"),
-        },
-      ],
-    ]);
+    const target = {
+      type: "talk.providers.*.apiKey",
+      path: TALK_TEST_PROVIDER_API_KEY_PATH,
+      pathSegments: ["talk", "providers", TALK_TEST_PROVIDER_ID, "apiKey"],
+      label: TALK_TEST_PROVIDER_API_KEY_PATH,
+      configFile: "openclaw.json" as const,
+      expectedResolvedValue: "string" as const,
+      providerId: TALK_TEST_PROVIDER_ID,
+      ref: envRef("TALK_API_KEY"),
+    };
+    const selected = new Map([[target.path, target]]);
     const providerChanges = { upserts: { default: { source: "env" as const } }, deletes: [] };
     expect(hasConfigurePlanChanges({ selectedTargets: selected, providerChanges })).toBe(true);
 
@@ -118,8 +109,7 @@ describe("secrets configure plan helpers", () => {
       providerChanges,
       generatedAt: "2026-02-28T00:00:00.000Z",
     });
-    expect(plan.targets).toHaveLength(1);
-    expect(plan.targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
+    expect(plan.targets.map((entry) => entry.path)).toEqual([TALK_TEST_PROVIDER_API_KEY_PATH]);
     expect(plan.providerUpserts).toEqual({
       default: { source: "env" },
     });

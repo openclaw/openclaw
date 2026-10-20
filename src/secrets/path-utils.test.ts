@@ -1,4 +1,3 @@
-/** Tests dotted-path get/set/delete helpers used by secrets migration. */
 import { describe, expect, it } from "vitest";
 import {
   deletePathStrict,
@@ -7,19 +6,15 @@ import {
   setPathExistingStrict,
 } from "./path-utils.js";
 
-function createArrayConfig(): Record<string, unknown> {
-  return { accounts: [{ id: "a" }] };
-}
-
 const BLOCKED_PATH_SEGMENTS = ["__proto__", "constructor", "prototype"];
 const POLLUTION_PROBE = "openclawPathPollutionProbe";
+const createArrayConfig = () => ({ accounts: [{ id: "a" }] });
 
 describe("secrets path utils", () => {
   it("deletePathStrict compacts arrays via splice", () => {
     const config = {};
     setPathCreateStrict(config, ["accounts"], [{ id: "a" }, { id: "b" }, { id: "c" }]);
-    const changed = deletePathStrict(config, ["accounts", "1"]);
-    expect(changed).toBe(true);
+    expect(deletePathStrict(config, ["accounts", "1"])).toBe(true);
     expect(getPath(config, ["accounts"])).toEqual([{ id: "a" }, { id: "c" }]);
   });
 
@@ -70,18 +65,15 @@ describe("secrets path utils", () => {
     ).toThrow(/Path segment does not exist/);
   });
 
-  it("setPathExistingStrict updates an existing leaf", () => {
-    const config = { talk: { apiKey: "old" } }; // pragma: allowlist secret
-    const changed = setPathExistingStrict(config, ["talk", "apiKey"], "new");
-    expect(changed).toBe(true);
-    expect(getPath(config, ["talk", "apiKey"])).toBe("new");
-  });
-
-  it("setPathCreateStrict creates missing container segments", () => {
-    const config = {};
-    const changed = setPathCreateStrict(config, ["talk", "provider", "apiKey"], "x");
-    expect(changed).toBe(true);
-    expect(getPath(config, ["talk", "provider", "apiKey"])).toBe("x");
+  it.each([
+    ["updates an existing leaf", setPathExistingStrict, "old", "new", true],
+    ["creates missing containers", setPathCreateStrict, undefined, "x", true],
+    ["leaves equal values unchanged", setPathCreateStrict, "same", "same", false],
+  ] as const)("%s", (_name, write, before, value, changed) => {
+    const config = before === undefined ? {} : { talk: { apiKey: before } };
+    const segments = before === undefined ? ["talk", "provider", "apiKey"] : ["talk", "apiKey"];
+    expect(write(config, segments, value)).toBe(changed);
+    expect(getPath(config, segments)).toBe(value);
   });
 
   it.each([
@@ -110,11 +102,4 @@ describe("secrets path utils", () => {
       expect(mismatched.accounts[0].token).toBe("old");
     },
   );
-
-  it("setPathCreateStrict leaves value unchanged when equal", () => {
-    const config = { talk: { apiKey: "same" } }; // pragma: allowlist secret
-    const changed = setPathCreateStrict(config, ["talk", "apiKey"], "same");
-    expect(changed).toBe(false);
-    expect(getPath(config, ["talk", "apiKey"])).toBe("same");
-  });
 });
