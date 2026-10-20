@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PostgresSqlConnection } from "../sql-connection.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseFactKey,
+} from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
 import {
   postgresCatalogQuery,
@@ -23,11 +28,15 @@ export type PostgresCapabilities = {
   clientEncoding: "UTF8";
 };
 const capabilities = new WeakMap<PostgresSqlConnection, PostgresCapabilities>();
-const admittedSchemas = new WeakMap<object, StoreSchema>();
+// Definitions follow physical admission across handles and worker isolates.
+const admittedSchemaKey: SqliteDatabaseFactKey<StoreSchema> = {
+  name: "database.postgres.schema",
+  schemaDependent: true,
+};
 export const getAdmittedPostgresSchema = (db: PostgresSqlConnection) =>
-  admittedSchemas.get(db.anchor);
+  getSqliteDatabaseAdmission(db, admittedSchemaKey);
 export const retainPostgresSchema = (db: PostgresSqlConnection, schema: StoreSchema) =>
-  admittedSchemas.set(db.anchor, schema);
+  publishSqliteDatabaseAdmission(db, admittedSchemaKey, schema);
 
 export function admitPostgresCapabilities(db: PostgresSqlConnection): PostgresCapabilities {
   const retained = capabilities.get(db);
