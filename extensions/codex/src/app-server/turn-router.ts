@@ -47,6 +47,8 @@ export type CodexThreadRouteReservation = {
   ) => Promise<void>;
   cancelTurn: () => Promise<void>;
   drain: () => Promise<void>;
+  /** Capture accepted projection work even after this reservation is released. */
+  drainAccepted: () => Promise<void>;
   release: () => void;
 };
 
@@ -206,6 +208,7 @@ class ClientTurnRouter {
       bindTurn: (turnId, bindingOptions) => this.bindTurn(route, turnId, bindingOptions),
       cancelTurn: () => this.cancelTurn(route),
       drain: () => this.waitForNotifications(route),
+      drainAccepted: () => route.notificationTail,
       release: () => this.release(route),
     };
   }

@@ -43,6 +43,8 @@ export function createCodexRecoveryClientAcquirer(params: {
       signal.throwIfAborted();
       params.assertCurrent?.();
       await params.verifyArtifact(client, signal);
+      signal.throwIfAborted();
+      params.assertCurrent?.();
       params.initializeRuntime(client);
       return { client, release };
     } catch (error) {

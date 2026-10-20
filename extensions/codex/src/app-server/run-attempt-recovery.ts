@@ -77,6 +77,7 @@ export async function recoverCodexAttemptConnection(
     return turn;
   };
   assertCurrent();
+  turnRuntime.state.recoveredTurnId = turnId;
   const acquired = await acquire(runAbortController.signal);
   let adopted = false;
   let detachRequestResolution: (() => void) | undefined;
@@ -197,27 +198,26 @@ export async function recoverCodexAttemptConnection(
         controller.abort(new CodexServerRequestResolvedError());
       }
     }
+    turnRuntime.state.recoveredProjectionDrain = Promise.all([
+      turnRuntime.state.recoveredProjectionDrain,
+      disconnectedRoute.drainAccepted(),
+    ]).then(() => {});
     admitted.resolve();
     await binding;
     const scope = { threadId: previous.threadId, turnId };
-    // Resume returns a snapshot, including work completed while the socket was absent.
-    // Projector item identities suppress items already received on the old connection.
-    for (const item of isTerminalTurnStatus(recoveredTurn.status) ? recoveredTurn.items : []) {
-      if (isJsonObject(item)) {
-        await notifications.enqueueNotification(
-          { method: "item/completed", params: { ...scope, item } },
-          scope,
-        );
-      }
-    }
     if (isTerminalTurnStatus(recoveredTurn.status) && !turnRuntime.state.completed) {
-      if (!isJsonObject(recoveredTurn)) {
+      // The controller obtains one final full history after all old projection work
+      // settles. Resume's live snapshot can omit canonical-before-legacy messages.
+      const terminal = { ...recoveredTurn, items: [] };
+      if (!isJsonObject(terminal)) {
         throw new Error("Codex turn completion payload is not a JSON object");
       }
-      await notifications.enqueueNotification(
-        { method: "turn/completed", params: { threadId: previous.threadId, turn: recoveredTurn } },
-        scope,
-      );
+      const notification = {
+        method: "turn/completed",
+        params: { threadId: previous.threadId, turn: terminal },
+      };
+      notifications.noteNotificationReceived(notification, scope, Date.now());
+      await notifications.enqueueNotification(notification, scope);
     }
     const finalCloseError = acquired.client.getCloseError();
     if (finalCloseError && !turnRuntime.state.completed) {

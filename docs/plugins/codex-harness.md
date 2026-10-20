@@ -15,18 +15,6 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
-Automatic retries retain the admitted request's prepared native instruction text
-when the effective model, config, and tool surface stay unchanged. This prevents
-incidental workspace or prompt-hook text updates from forcing a native config
-handoff on a still-loaded failed thread. A new request prepares its own instruction
-snapshot.
-Prompt hooks still run on every attempt, including their tool-policy checks;
-permission, plugin, and native configuration validation remain live. Explicit
-plugin refreshes, context-engine projections, and supervision keep their existing
-instruction ownership. Model changes that Codex supports per turn can still reuse
-the original thread; changes requiring native configuration replacement keep the
-normal handoff checks.
-
 When a remote managed thread has a settled failed turn and cannot unload its old
 configuration, OpenClaw can continue in a full-history native fork. This requires
 unchanged inherited tool and authority fingerprints and verified complete history,

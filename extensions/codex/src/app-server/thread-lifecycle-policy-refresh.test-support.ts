@@ -20,10 +20,11 @@ import {
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
+import { registerThreadOrphanRecoveryTests } from "./thread-lifecycle-orphan-recovery.test-support.js";
 import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
 import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
-type PolicyRefreshFixtures = {
+export type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
   createThreadLifecycleAppServerOptions: () => StartParams["appServer"];
   createLeasedLifecycleWireClient: (
@@ -35,14 +36,16 @@ type PolicyRefreshFixtures = {
   writeCodexAppServerBinding: typeof writeRawCodexAppServerBinding;
 };
 
-/** Keep policy refresh cases under the binding suite's existing lifecycle setup and cleanup. */
-export function registerThreadPolicyRefreshTests({
-  createParams,
-  createThreadLifecycleAppServerOptions,
-  createLeasedLifecycleWireClient,
-  startOrResumeThread,
-  writeCodexAppServerBinding,
-}: PolicyRefreshFixtures) {
+/** Keep cold recovery and policy refresh under the binding suite's existing lifecycle custody. */
+export function registerThreadPolicyRefreshTests(fixtures: PolicyRefreshFixtures) {
+  const {
+    createParams,
+    createThreadLifecycleAppServerOptions,
+    createLeasedLifecycleWireClient,
+    startOrResumeThread,
+    writeCodexAppServerBinding,
+  } = fixtures;
+  registerThreadOrphanRecoveryTests(fixtures);
   it.each([
     "instructions",
     "model",

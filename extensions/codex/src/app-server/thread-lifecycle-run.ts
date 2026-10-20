@@ -30,6 +30,8 @@ import {
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
 import {
+  assertCodexThreadReplacementSafe,
+  stopCodexAutomaticRestart,
   resumePendingCodexThread,
   prepareCodexThreadResume,
   withCodexThreadLifecycleBinding,
@@ -62,6 +64,7 @@ export async function startOrResumeThread(
   return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, authority) => {
     const assert = authority.assertCurrent;
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert, authority };
+    await stopCodexAutomaticRestart(params, saved);
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     let selectionBinding = binding;
@@ -635,6 +638,9 @@ export async function startOrResumeThread(
 
     assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
     const requestContext = await prepareRequestContext();
+    if (saved) {
+      await assertCodexThreadReplacementSafe(params, saved, requestContext);
+    }
     if (initialBoundThreadId && !preserveExistingBinding && !configuredMcpOwnershipChanged) {
       await releaseRetainedThread(initialBoundThreadId);
     }

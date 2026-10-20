@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
-import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  retainCodexAppServerLiveThread,
+  unsubscribeCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerBrokenPipeError,
@@ -40,10 +43,9 @@ export async function releaseCodexAttemptThreadSubscription(params: {
 }): Promise<boolean> {
   const { client, thread, recoveryRoute, cleanupAuthority } = params;
   if (recoveryRoute && recoveryRoute.threadId === thread.threadId) {
-    // This reservation owns only its exact subscription. An unavailable backend
-    // must not retire a shared replacement client or another conversation.
-    thread.liveThreadOwnership?.forget();
-    return await unsubscribeCodexThreadBestEffort(client, {
+    // Keep the exact claim until native release is confirmed. Failed release
+    // retires this pool entry without closing active sibling leases.
+    const released = await unsubscribeCodexThreadBestEffort(client, {
       threadId: thread.threadId,
       timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       assertCurrent: () => {
@@ -54,6 +56,18 @@ export async function releaseCodexAttemptThreadSubscription(params: {
       },
       withCurrent: cleanupAuthority.withCurrent,
     });
+    if (!released) {
+      await closeCodexStartupClientBestEffort(client);
+      if (thread.liveThreadOwnership) {
+        // Keep exact cleanup custody, without advertising warm configuration readiness.
+        await retainCodexAppServerLiveThread(
+          client,
+          thread.threadId,
+          thread.liveThreadOwnership.release,
+        );
+      }
+    }
+    return released;
   }
   if (thread.liveThreadOwnership) {
     try {

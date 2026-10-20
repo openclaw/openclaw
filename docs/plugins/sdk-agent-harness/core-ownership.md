@@ -36,15 +36,6 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
-`hostCapabilities.preparePromptInstructions({ scope, developerInstructions, refreshableInstructions })`
-optionally retains instruction text across attempts of the same admitted request
-within the host's agent-run execution scope. The host owns that lifetime and
-isolates admissions and plugins; a new request captures its own text. The harness must
-change `scope` when its effective model, config, or tool surface changes. This is
-prepared request context, not an authorization cache: live authority is checked
-before and after preparation, and the harness must still enforce current hooks,
-permissions, and native configuration checks. Older hosts omit the capability.
-
 ### Current input files for local execution
 
 A harness that has confirmed unsandboxed execution on the Gateway host may call

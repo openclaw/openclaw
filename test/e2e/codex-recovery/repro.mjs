@@ -24,16 +24,67 @@ function websocketText(data) {
   }
   throw new TypeError("Expected WebSocket RawData");
 }
+const remoteNativeUrl = process.env.OPENCLAW_CODEX_RECOVERY_REMOTE_NATIVE_URL;
+const remoteNativeAuthEnv = process.env.OPENCLAW_CODEX_RECOVERY_REMOTE_NATIVE_AUTH_ENV;
+// Match the production normalization of a resolved secret input.
+const remoteNativeAuthToken = remoteNativeAuthEnv
+  ? process.env[remoteNativeAuthEnv]?.trim()
+  : undefined;
+const remoteSocketOptions = remoteNativeAuthToken
+  ? { headers: { Authorization: `Bearer ${remoteNativeAuthToken}` } }
+  : {};
+if (remoteNativeAuthEnv && !remoteNativeAuthToken) {
+  throw new Error("Missing configured remote native authentication environment");
+}
+const recoveryRepo = process.env.OPENCLAW_CODEX_RECOVERY_RESTART_SOURCE;
+let upgradeRequested = false;
+let upgraded = false;
+const liveSlack = process.env.OPENCLAW_CODEX_RECOVERY_LIVE_SLACK === "1";
+const liveSlackTarget = liveSlack
+  ? (await import("../../../extensions/slack/src/target-parsing.ts")).parseSlackTarget(
+      process.env.OPENCLAW_CODEX_RECOVERY_SLACK_CHANNEL ?? "",
+    )
+  : undefined;
+if (liveSlack && liveSlackTarget?.kind !== "channel") {
+  throw new Error("Live acceptance requires an exact Slack channel target");
+}
+const liveSessionPrefix = liveSlackTarget
+  ? `agent:main:slack:channel:${liveSlackTarget.teamId ? `team:${liveSlackTarget.teamId.toLowerCase()}:channel:` : ""}${liveSlackTarget.id.toLowerCase()}`
+  : undefined;
+if (
+  remoteNativeUrl &&
+  (!liveSlack ||
+    process.env.OPENCLAW_CODEX_RECOVERY_REMOTE_PROVIDER_MODE !== "existing-native" ||
+    !process.env.OPENCLAW_CODEX_RECOVERY_MODEL ||
+    !process.env.OPENCLAW_CODEX_RECOVERY_NATIVE_VERSION)
+) {
+  throw new Error(
+    "Remote acceptance requires live Slack, explicit existing-native provider mode, verified model and native version",
+  );
+}
 const binary = process.env.OPENCLAW_CODEX_RECOVERY_BINARY;
-if (!binary) {
+if (!binary && !remoteNativeUrl) {
   throw new Error(
     "Set OPENCLAW_CODEX_RECOVERY_BINARY to the installed Codex app-server executable.",
   );
 }
 const expectBroken = process.argv.includes("--expect-broken");
 const root = path.resolve(process.argv[2]);
-const sourceSnapshot = () => {
-  const git = (...args) => execFileSync("git", args, { cwd: repo, maxBuffer: 16 * 1024 * 1024 });
+const sourceSnapshot = (sourceRepo = repo) => {
+  const manifestPath = path.join(sourceRepo, ".recovery-source.json");
+  if (fs.existsSync(manifestPath)) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const hash = createHash("sha256");
+    for (const file of manifest.files.toSorted()) {
+      hash
+        .update(file)
+        .update("\0")
+        .update(fs.readFileSync(path.join(sourceRepo, file)));
+    }
+    return { commit: manifest.commit, snapshotHash: hash.digest("hex") };
+  }
+  const git = (...args) =>
+    execFileSync("git", args, { cwd: sourceRepo, maxBuffer: 16 * 1024 * 1024 });
   const diff = git("diff", "HEAD", "--");
   const untracked = git("ls-files", "--others", "--exclude-standard", "-z")
     .toString()
@@ -45,7 +96,7 @@ const sourceSnapshot = () => {
     hash
       .update(file)
       .update("\0")
-      .update(fs.readFileSync(path.join(repo, file)));
+      .update(fs.readFileSync(path.join(sourceRepo, file)));
   }
   return {
     commit: git("rev-parse", "HEAD").toString().trim(),
@@ -54,7 +105,16 @@ const sourceSnapshot = () => {
   };
 };
 const source = sourceSnapshot();
+let recoverySource;
 const mode = process.argv[3] || "gateway-remote-active-lost-result-effect";
+const gatewayRestart = mode.includes("gateway-restart");
+const lostCompletion = mode.includes("lost-completion");
+if (remoteNativeUrl && ((mode.includes("restart") && !gatewayRestart) || mode.includes("auth"))) {
+  throw new Error(
+    "Existing remote native processes and authentication cannot be changed by this fixture",
+  );
+}
+let gatewayRestarted = false;
 if (fs.existsSync(root)) {
   throw new Error("Choose a new run directory");
 }
@@ -84,6 +144,22 @@ const env = {
   NO_PROXY: "127.0.0.1,localhost,::1,managed-devbox.repro.invalid",
   OPENAI_API_KEY: "synthetic-local-only",
 };
+if (liveSlack) {
+  delete env.OPENCLAW_SKIP_CHANNELS;
+  delete env.HTTP_PROXY;
+  delete env.HTTPS_PROXY;
+  delete env.ALL_PROXY;
+  for (const name of [
+    process.env.OPENCLAW_CODEX_RECOVERY_SLACK_BOT_ENV,
+    process.env.OPENCLAW_CODEX_RECOVERY_SLACK_APP_ENV,
+  ]) {
+    if (!name || !process.env[name]) {
+      throw new Error("Missing inherited Slack test SecretRef environment");
+    }
+    env[name] = process.env[name];
+  }
+  env.OC_REPRO_LIVE_SLACK = "1";
+}
 env.OC_REPRO_MODE = mode;
 env.OC_REPRO_ROOT = root;
 const children = [],
@@ -95,7 +171,12 @@ let failProvider = !mode.includes("active");
 let forcePrimaryOverload = mode.includes("model-fallback");
 let faulted = false;
 let pendingToolId;
+let pendingToolTurnId;
+let blockedRemoteMutation;
 let probeToolSent = false;
+let automaticReplayAttempted = false;
+let automaticRecoveryWindowOpen = false;
+let automaticInferenceRequests = 0;
 let reconnectBlocked = false;
 let cli;
 let restartPromise;
@@ -117,7 +198,7 @@ if (mode.includes("drift")) {
 async function listen(s) {
   await new Promise((r, j) => {
     s.once("error", j);
-    s.listen(0, "127.0.0.1", r);
+    s.listen(0, process.env.OPENCLAW_CODEX_RECOVERY_LISTEN_HOST || "127.0.0.1", r);
   });
   return s.address().port;
 }
@@ -171,11 +252,21 @@ try {
     }
     log("provider", { number: requestCount, url: "/v1/responses", body });
     providerRequests.push(body);
+    // The child waits for durable startup settlement before asking for backend
+    // restoration, and awaits our acknowledgement before sending a fresh request.
+    // Historical restart instructions can appear as quoted context in that request.
+    if (automaticRecoveryWindowOpen) {
+      automaticInferenceRequests++;
+    }
+    const repeatsUnknownEffect =
+      automaticRecoveryWindowOpen && probeToolSent && !automaticReplayAttempted;
     if (
-      !probeToolSent &&
-      (((mode.includes("tools55") || mode.includes("active")) && requestCount === 1) ||
-        (mode.includes("joint") && !failProvider))
+      repeatsUnknownEffect ||
+      (!probeToolSent &&
+        (((mode.includes("tools55") || mode.includes("active")) && requestCount === 1) ||
+          (mode.includes("joint") && !failProvider)))
     ) {
+      automaticReplayAttempted ||= repeatsUnknownEffect;
       probeToolSent = true;
       const items = Array.from(
         { length: mode.includes("active") || mode.includes("joint") ? 1 : 55 },
@@ -190,7 +281,7 @@ try {
                 }
               : { path: root + "/workspace", limit: 1 },
           ),
-          call_id: "call_probe_" + i,
+          call_id: (repeatsUnknownEffect ? "call_probe_repeat_" : "call_probe_") + i,
           id: "fc_probe_" + i,
           status: "completed",
         }),
@@ -248,6 +339,103 @@ try {
     }
   };
   provider = http.createServer((req, res) => {
+    if (liveSlack && req.url === "/__fixture/status") {
+      res.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          requestCount,
+          providerMode: remoteNativeUrl ? "existing-native" : "synthetic-local",
+          blockedRemoteMutation,
+          faulted,
+          gatewayRestarted,
+          upgraded,
+          effects: fs.existsSync(root + "/workspace/effect-count.txt")
+            ? fs.readFileSync(root + "/workspace/effect-count.txt", "utf8")
+            : "",
+        }),
+      );
+      return;
+    }
+    if (
+      liveSlack &&
+      req.method === "POST" &&
+      req.url === "/__fixture/upgrade" &&
+      recoveryRepo &&
+      !upgraded
+    ) {
+      recoverySource = sourceSnapshot(recoveryRepo);
+      upgradeRequested = true;
+      cli?.kill("SIGTERM");
+      res.writeHead(200).end("restarting isolated test Gateway from candidate source");
+      return;
+    }
+    if (liveSlack && req.method === "POST" && req.url === "/__fixture/offline") {
+      reconnectBlocked = true;
+      for (const socket of sockets) {
+        socket.terminate();
+      }
+      res.writeHead(200).end("isolated client transport offline");
+      return;
+    }
+    if (liveSlack && req.method === "POST" && req.url === "/__fixture/online") {
+      reconnectBlocked = false;
+      res.writeHead(200).end("isolated client transport restored");
+      return;
+    }
+    if (liveSlack && req.method === "POST" && req.url === "/__fixture/inspect-session") {
+      let raw = "";
+      req.on("data", (chunk) => {
+        raw += chunk;
+        if (raw.length > 4096) {
+          req.destroy();
+        }
+      });
+      req.on("end", () => {
+        try {
+          const { sessionKey, probeId } = JSON.parse(raw);
+
+          if (
+            typeof sessionKey !== "string" ||
+            !sessionKey.startsWith("agent:main:") ||
+            !liveSessionPrefix ||
+            !(
+              sessionKey.toLowerCase() === liveSessionPrefix ||
+              sessionKey.toLowerCase().startsWith(liveSessionPrefix + ":thread:")
+            ) ||
+            typeof probeId !== "string" ||
+            !/^[a-z0-9-]{1,80}$/.test(probeId)
+          ) {
+            res.writeHead(400).end("Invalid isolated live session probe");
+            return;
+          }
+          cli?.send({ kind: "inspect-live-session", sessionKey, probeId });
+          res.writeHead(202).end("Session evidence requested; require its matching receipt");
+        } catch {
+          res.writeHead(400).end("Invalid session evidence request");
+        }
+      });
+      return;
+    }
+    if (liveSlack && req.method === "POST" && req.url === "/__fixture/stop") {
+      cli?.send({ kind: "stop-live" });
+      res.writeHead(200).end("stopping");
+      return;
+    }
+    if (remoteNativeUrl && ["/__fixture/fail", "/__fixture/healthy"].includes(req.url)) {
+      res
+        .writeHead(409)
+        .end("Existing native provider is unchanged; use transport controls for remote faults");
+      return;
+    }
+    if (liveSlack && req.method === "POST" && req.url === "/__fixture/fail") {
+      failProvider = true;
+      res.writeHead(200).end("failure injection enabled");
+      return;
+    }
+    if (liveSlack && req.method === "POST" && req.url === "/__fixture/healthy") {
+      failProvider = false;
+      res.writeHead(200).end("provider restored");
+      return;
+    }
     if (req.method !== "POST") {
       res.writeHead(404).end();
       return;
@@ -312,14 +500,48 @@ try {
     );
   });
   const providerPort = await listen(provider);
+  const providerHost = process.env.OPENCLAW_CODEX_RECOVERY_PROVIDER_HOST || "127.0.0.1";
+  fs.writeFileSync(root + "/fixture-control.json", JSON.stringify({ providerPort, providerHost }));
   fs.writeFileSync(
     root + "/native-home/config.toml",
-    `model = "${model}"\nmodel_provider = "openai"\nopenai_base_url = "http://127.0.0.1:${providerPort}/v1"\napproval_policy = "never"\nsandbox_mode = "read-only"\n[analytics]\nenabled = false\n`,
+    `model = "${model}"\nmodel_provider = "openai"\nopenai_base_url = "http://${providerHost}:${providerPort}/v1"\napproval_policy = "never"\nsandbox_mode = "read-only"\n[analytics]\nenabled = false\n`,
   );
   const nativeClaim = await acquireTestPortBlock({ offsets: [0] });
   claims.push(nativeClaim);
   const nativePort = nativeClaim.port;
   async function startNative() {
+    if (remoteNativeUrl) {
+      fs.writeFileSync(
+        root + "/remote-native-launch.json",
+        JSON.stringify({
+          url: remoteNativeUrl,
+          providerMode: "existing-native",
+          nativeConfigurationUnchanged: true,
+          workspace: root + "/workspace",
+        }),
+      );
+      const deadline = Date.now() + 120000;
+      while (Date.now() < deadline) {
+        const ready = await new Promise((resolve) => {
+          const socket = new WebSocket(remoteNativeUrl, {
+            ...remoteSocketOptions,
+            handshakeTimeout: 5000,
+          });
+          socket.once("open", () => {
+            socket.close();
+            resolve(true);
+          });
+          socket.once("error", () => resolve(false));
+        });
+        if (ready) {
+          return { pid: "external-native" };
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+      }
+      throw new Error("Isolated remote native did not become ready");
+    }
     const child = spawn(binary, ["app-server", "--listen", `ws://127.0.0.1:${nativePort}`], {
       cwd: root + "/workspace",
       env: {
@@ -362,7 +584,11 @@ try {
     if (mode.includes("outage")) {
       reconnectBlocked = true;
     }
-    if (mode.includes("restart")) {
+    if (gatewayRestart) {
+      // Kill only the fixture Gateway; the native process and SQLite state survive.
+      cli.kill("SIGKILL");
+    }
+    if (mode.includes("restart") && !gatewayRestart) {
       restartPromise = (async () => {
         try {
           const exited = new Promise((resolve) => {
@@ -389,14 +615,56 @@ try {
       return;
     }
     const cid = ++connection;
-    const back = new WebSocket(`ws://127.0.0.1:${nativePort}`);
+    const back = new WebSocket(
+      remoteNativeUrl || `ws://127.0.0.1:${nativePort}`,
+      remoteSocketOptions,
+    );
     sockets.add(front);
     sockets.add(back);
     const queue = [];
     log("connect", { cid });
+    const requestMethods = new Map();
+    // Live evidence intentionally excludes config, account payloads, prompts and tool bodies.
+    const wireEvidence = (frame, responseTo) => ({
+      cid,
+      id: frame.id,
+      method: frame.method,
+      responseTo,
+      threadId: frame.params?.threadId ?? frame.params?.thread?.id ?? frame.result?.thread?.id,
+      turnId: frame.params?.turnId ?? frame.params?.turn?.id ?? frame.result?.turn?.id,
+      status: frame.params?.turn?.status ?? frame.result?.turn?.status,
+      tool: frame.params?.tool,
+      errorCode: typeof frame.error?.code === "number" ? frame.error.code : undefined,
+    });
     front.on("message", (data) => {
       const v = JSON.parse(websocketText(data));
-      log("to-native", { cid, ...v });
+      if (v.method && v.id !== undefined) {
+        requestMethods.set(v.id, v.method);
+      }
+      log("to-native", remoteNativeUrl ? wireEvidence(v) : { cid, ...v });
+      if (
+        remoteNativeUrl &&
+        typeof v.method === "string" &&
+        ((v.method.startsWith("account/") &&
+          !["account/read", "account/rateLimits/read"].includes(v.method)) ||
+          (v.method.startsWith("config/") && v.method !== "config/read"))
+      ) {
+        blockedRemoteMutation = v.method;
+        log("remote-native-mutation-blocked", { method: v.method });
+        if (v.id !== undefined) {
+          front.send(
+            JSON.stringify({
+              id: v.id,
+              error: {
+                code: -32600,
+                message: "Fixture forbids shared native account/config mutation",
+              },
+            }),
+          );
+        }
+        cli?.send({ kind: "stop-live" });
+        return;
+      }
       if (
         (mode.includes("lost-result") || mode.includes("joint")) &&
         v.id === pendingToolId &&
@@ -423,21 +691,51 @@ try {
       const frame = JSON.parse(websocketText(data));
       if (
         !authFailure &&
+        !liveSlack &&
         !mode.includes("model-fallback") &&
         frame.method === "turn/completed" &&
         frame.params?.turn?.status === "failed"
       ) {
         failProvider = false;
       }
-      log("from-native", { cid, ...frame });
+      const responseTo = frame.method ? undefined : requestMethods.get(frame.id);
+      if (!frame.method) {
+        requestMethods.delete(frame.id);
+      }
+      log("from-native", remoteNativeUrl ? wireEvidence(frame, responseTo) : { cid, ...frame });
       if (frame.method === "item/tool/call") {
-        pendingToolId = frame.id;
-        if (mode.includes("active") && !mode.includes("lost-result") && !faulted) {
+        const expectedLiveEffect =
+          frame.params?.tool === "gateway_exec" &&
+          typeof frame.params?.arguments?.command === "string" &&
+          frame.params.arguments.command.includes("effect-count.txt");
+        if (!liveSlack || !mode.includes("effect") || expectedLiveEffect) {
+          pendingToolId = frame.id;
+          pendingToolTurnId = frame.params?.turnId;
+        }
+        if (
+          mode.includes("active") &&
+          !mode.includes("lost-result") &&
+          !lostCompletion &&
+          !faulted
+        ) {
           faulted = true;
           log("fault-injected", { kind: "undelivered-tool-request", cid, id: frame.id });
           cutConnection(front, back);
           return;
         }
+      }
+      if (
+        lostCompletion &&
+        !faulted &&
+        pendingToolTurnId &&
+        frame.method === "turn/completed" &&
+        frame.params?.turn?.id === pendingToolTurnId &&
+        frame.params.turn.status === "completed"
+      ) {
+        faulted = true;
+        log("fault-injected", { kind: "lost-completed-turn", cid, turnId: pendingToolTurnId });
+        cutConnection(front, back);
+        return;
       }
       if (front.readyState === WebSocket.OPEN) {
         front.send(data, { binary: false });
@@ -528,24 +826,67 @@ try {
   env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
   env.OPENCLAW_SKIP_CANVAS_HOST = "1";
   config.agents.defaults.heartbeat = { every: "0m" };
+  if (liveSlack) {
+    const channel = process.env.OPENCLAW_CODEX_RECOVERY_SLACK_CHANNEL;
+    if (!channel) {
+      throw new Error("Missing exact test Slack channel");
+    }
+    env.OC_REPRO_SLACK_SESSION_PREFIX = liveSessionPrefix;
+    const ref = (id) => ({ source: "env", provider: "default", id });
+    config.channels = {
+      slack: {
+        enabled: true,
+        mode: "socket",
+        groupPolicy: "allowlist",
+        requireMention: true,
+        botToken: ref(process.env.OPENCLAW_CODEX_RECOVERY_SLACK_BOT_ENV),
+        appToken: ref(process.env.OPENCLAW_CODEX_RECOVERY_SLACK_APP_ENV),
+        channels: {
+          [channel]: {
+            allow: true,
+            requireMention: true,
+            users: [process.env.OPENCLAW_CODEX_RECOVERY_SLACK_USER],
+          },
+        },
+        dm: { enabled: false },
+      },
+    };
+    config.plugins.allow.push("slack");
+    config.plugins.entries.slack = { enabled: true };
+    config.agents.defaults.silentReply = { group: "allow" };
+  }
   delete env.OPENAI_API_KEY;
   fs.writeFileSync(root + "/config.json", JSON.stringify(config, null, 2));
-  const out = fs.openSync(root + "/openclaw.log", "a");
-  cli = spawn(
-    nodeDir + "/node",
-    [
-      "--import",
-      fixture + "/repro-dns.mjs",
-      "--import",
-      repo + "/scripts/tsx.mjs",
-      fixture + "/gateway-entry.mts",
-    ],
-    { cwd: repo, env, stdio: ["ignore", out, out, "ipc"] },
-  );
-  fs.closeSync(out);
-  children.push(cli);
+  const startGateway = (recovered = false) => {
+    const out = fs.openSync(root + "/openclaw.log", "a");
+    const selectedRepo = upgraded ? recoveryRepo : repo;
+    const selectedFixture = path.join(selectedRepo, "test/e2e/codex-recovery");
+    const child = spawn(
+      nodeDir + "/node",
+      [
+        "--import",
+        selectedFixture + "/repro-dns.mjs",
+        "--import",
+        selectedRepo + "/scripts/tsx.mjs",
+        selectedFixture + "/gateway-entry.mts",
+      ],
+      {
+        cwd: selectedRepo,
+        env: { ...env, ...(recovered ? { OC_REPRO_GATEWAY_PHASE: "recovered" } : {}) },
+        stdio: ["ignore", out, out, "ipc"],
+      },
+    );
+    fs.closeSync(out);
+    children.push(child);
+    return child;
+  };
+  cli = startGateway();
   const handleMessage = async (message) => {
+    if (message?.kind === "live-probe-failed") {
+      log("live-probe-failed", { probeId: message.probeId });
+    }
     if (message?.kind === "restore-backend") {
+      automaticRecoveryWindowOpen = false;
       reconnectBlocked = false;
       forcePrimaryOverload = false;
       failProvider = false;
@@ -601,25 +942,62 @@ try {
       }
     }
   };
-  cli.on("message", (message) => {
-    void (async () => {
-      try {
-        await handleMessage(message);
-      } catch (error) {
+  const attachGatewayMessages = (child) => {
+    child.on("message", (message) => {
+      void handleMessage(message).catch((/** @type {unknown} */ error) => {
         log("fixture-restore-error", { error: String(error) });
-        cli.kill("SIGTERM");
-      }
-    })();
-  });
+        child.kill("SIGTERM");
+      });
+    });
+  };
+  attachGatewayMessages(cli);
   const exit = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      cli.kill("SIGTERM");
-      resolve({ timeout: true });
-    }, 240000);
-    cli.once("exit", (code, signal) => {
+    const timer = setTimeout(
+      () => {
+        cli.kill("SIGTERM");
+        resolve({ timeout: true });
+      },
+      liveSlack ? 1200000 : recoveryRepo ? 420000 : 240000,
+    );
+    const onExit = (code, signal) => {
+      if (upgradeRequested) {
+        upgradeRequested = false;
+        upgraded = true;
+        log("gateway-candidate-started", { recoverySource });
+        cli = startGateway(true);
+        attachGatewayMessages(cli);
+        cli.once("exit", onExit);
+        return;
+      }
+      if (gatewayRestart && !gatewayRestarted && faulted && signal === "SIGKILL") {
+        gatewayRestarted = true;
+        automaticRecoveryWindowOpen = mode.includes("automatic-startup");
+        log("gateway-restarted", { nativePid: native.pid });
+        cli = startGateway(true);
+        attachGatewayMessages(cli);
+        cli.once("exit", onExit);
+        return;
+      }
+      if (!liveSlack && gatewayRestarted && recoveryRepo && !upgraded && code === 0) {
+        const baseline = JSON.parse(fs.readFileSync(root + "/gateway-results.json", "utf8"));
+        if (!baseline[1]?.error || baseline[2]?.result?.status !== "ok") {
+          clearTimeout(timer);
+          resolve({ baselineReproductionFailed: true, code: 1 });
+          return;
+        }
+        fs.writeFileSync(root + "/baseline-gateway-results.json", JSON.stringify(baseline));
+        recoverySource = sourceSnapshot(recoveryRepo);
+        upgraded = true;
+        log("gateway-candidate-started", { recoverySource });
+        cli = startGateway(true);
+        attachGatewayMessages(cli);
+        cli.once("exit", onExit);
+        return;
+      }
       clearTimeout(timer);
       resolve({ code, signal });
-    });
+    };
+    cli.once("exit", onExit);
   });
   fs.writeFileSync(
     root + "/result.json",
@@ -627,8 +1005,13 @@ try {
       {
         mode,
         source,
-        nativeVersion: execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(),
+        recoverySource,
+        nativeVersion: remoteNativeUrl
+          ? process.env.OPENCLAW_CODEX_RECOVERY_NATIVE_VERSION
+          : execFileSync(binary, ["--version"], { encoding: "utf8" }).trim(),
         requestCount,
+        automaticInferenceRequests,
+        providerMode: remoteNativeUrl ? "existing-native" : "synthetic-local",
         authAttempts,
         exit,
       },
@@ -639,83 +1022,153 @@ try {
   console.log(JSON.stringify({ root, requestCount, exit }));
   assert.deepEqual(sourceSnapshot(), source, "source must remain unchanged during reproduction");
   assert.equal(exit.code, 0, "Gateway fixture must finish and clean up");
-  const results = JSON.parse(fs.readFileSync(root + "/gateway-results.json", "utf8"));
-  const ok = (r) => !r.error && r.result?.status === "ok";
-  assert.equal(ok(results[2]), true, "independent conversation must complete");
-  if (mode.includes("sibling")) {
-    assert.equal(
-      JSON.parse(fs.readFileSync(root + "/sibling-result.json", "utf8")).status,
-      "ok",
-      "live sibling must complete",
+  if (upgraded && recoveryRepo) {
+    assert.deepEqual(
+      sourceSnapshot(recoveryRepo),
+      recoverySource,
+      "candidate source must remain unchanged",
     );
   }
-  assert.equal(
-    ok(results[0]),
-    !expectBroken && !authFailure && !mode.includes("restart") && !mode.includes("outage"),
-    "original request recovery outcome",
-  );
-  assert.equal(ok(results[1]), !expectBroken, "same-conversation new request outcome");
-  if (authFailure && mode.includes("drift") && !expectBroken) {
-    assert.equal(
-      providerRequests.length,
-      2,
-      "restored same and independent requests reach inference",
-    );
-    for (const request of providerRequests) {
-      const latestPersona = request.input.findLast(
-        (item) =>
-          item.role === "developer" &&
-          JSON.stringify(item.content).includes("Synthetic persona version"),
-      );
-      assert.ok(
-        JSON.stringify(latestPersona?.content ?? []).includes("Synthetic persona version B"),
-        "the model must receive the changed developer instructions after credential restoration",
+  if (!liveSlack) {
+    const results = JSON.parse(fs.readFileSync(root + "/gateway-results.json", "utf8"));
+    const ok = (r) => !r.error && r.result?.status === "ok";
+    assert.equal(ok(results[2]), true, "independent conversation must complete");
+    if (mode.includes("sibling")) {
+      assert.equal(
+        JSON.parse(fs.readFileSync(root + "/sibling-result.json", "utf8")).status,
+        "ok",
+        "live sibling must complete",
       );
     }
-  }
-  if (authFailure) {
-    assert(
-      authAttempts.some((attempt) => attempt.scheme === "none"),
-      "reproduce missing native inference auth",
+    assert.equal(
+      ok(results[0]),
+      !expectBroken && !authFailure && !mode.includes("restart") && !mode.includes("outage"),
+      "original request recovery outcome",
     );
-    assert(
-      authAttempts.some((attempt) => attempt.scheme === "bearer"),
-      "owner-restored auth must reach provider",
-    );
+    assert.equal(ok(results[1]), !expectBroken, "same-conversation new request outcome");
+    if (mode.includes("automatic-startup") && !expectBroken) {
+      const recovery = JSON.parse(fs.readFileSync(root + "/startup-recovery.json", "utf8"));
+      assert.equal(recovery.actualInternalContinuation, true);
+      assert.equal(recovery.terminalPhase, "error");
+      assert.equal(recovery.recoveryClaimCleared, true);
+      assert.equal(
+        automaticInferenceRequests,
+        0,
+        "Startup recovery must not start fresh inference",
+      );
+      assert.equal(
+        automaticReplayAttempted,
+        false,
+        "Unsafe automatic continuation must not reach inference",
+      );
+      assert.equal(
+        requestCount,
+        lostCompletion ? 4 : 3,
+        "Only the original task and two fresh requests reach inference",
+      );
+    }
+    if (gatewayRestart && !expectBroken) {
+      assert.equal(gatewayRestarted, true, "Gateway must be killed and reopened");
+      const followupMarker = `RECOVERY_FOLLOWUP_subsequent_${results[1].runId}`;
+      const followupRequest = providerRequests.findLast((request) =>
+        JSON.stringify(request.input.findLast((item) => item.role === "user") ?? null).includes(
+          followupMarker,
+        ),
+      );
+      assert.ok(followupRequest, "the fresh same-conversation request must reach inference");
+      for (const type of ["function_call", "function_call_output"]) {
+        assert.ok(
+          followupRequest.input.some(
+            (item) => item.type === type && item.call_id === "call_probe_0",
+          ),
+          `fresh same-conversation follow-up must retain original ${type}`,
+        );
+      }
+    }
+    if (authFailure && mode.includes("drift") && !expectBroken) {
+      assert.equal(
+        providerRequests.length,
+        2,
+        "restored same and independent requests reach inference",
+      );
+      for (const request of providerRequests) {
+        const latestPersona = request.input.findLast(
+          (item) =>
+            item.role === "developer" &&
+            JSON.stringify(item.content).includes("Synthetic persona version"),
+        );
+        assert.ok(
+          JSON.stringify(latestPersona?.content ?? []).includes("Synthetic persona version B"),
+          "the model must receive the changed developer instructions after credential restoration",
+        );
+      }
+    }
+    if (authFailure) {
+      assert(
+        authAttempts.some((attempt) => attempt.scheme === "none"),
+        "reproduce missing native inference auth",
+      );
+      assert(
+        authAttempts.some((attempt) => attempt.scheme === "bearer"),
+        "owner-restored auth must reach provider",
+      );
+    }
+    if (mode.includes("effect")) {
+      assert.equal(
+        fs.readFileSync(root + "/workspace/effect-count.txt", "utf8"),
+        "effect\n",
+        "tool side effect must execute exactly once",
+      );
+    }
+    const events = fs
+      .readFileSync(root + "/agent-events.jsonl", "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    for (const r of results) {
+      if (gatewayRestart && r.label === "original") {
+        continue; // The killed process cannot emit a terminal event.
+      }
+      const runId = r.runId ?? r.result?.runId;
+      assert(runId, "each request, including failed requests, must retain its logical run id");
+      const terminal = events.filter(
+        (e) =>
+          e.runId === runId && e.stream === "lifecycle" && ["end", "error"].includes(e.data.phase),
+      );
+      assert.equal(terminal.length, 1, "one terminal event per logical request");
+      if (ok(r)) {
+        assert.equal(
+          terminal[0].data.phase,
+          "end",
+          "recovered request must not publish final failure",
+        );
+      }
+    }
+    if (mode.includes("active") || mode.includes("joint")) {
+      assert.equal(faulted, true, "fault injection must execute");
+    }
   }
-  if (mode.includes("effect")) {
+  if (liveSlack) {
+    assert.equal(blockedRemoteMutation, undefined, "No shared native account/config mutations");
+    if (remoteNativeUrl) {
+      assert.equal(requestCount, 0, "Remote native must use its existing real provider");
+    }
+    assert.equal(faulted, true, "live Slack request must reach the injected tool boundary");
     assert.equal(
       fs.readFileSync(root + "/workspace/effect-count.txt", "utf8"),
       "effect\n",
-      "tool side effect must execute exactly once",
+      "live tool effect must occur exactly once",
     );
   }
-  const events = fs
-    .readFileSync(root + "/agent-events.jsonl", "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map(JSON.parse);
-  for (const r of results) {
-    const runId = r.runId ?? r.result?.runId;
-    assert(runId, "each request, including failed requests, must retain its logical run id");
-    const terminal = events.filter(
-      (e) =>
-        e.runId === runId && e.stream === "lifecycle" && ["end", "error"].includes(e.data.phase),
-    );
-    assert.equal(terminal.length, 1, "one terminal event per logical request");
-    if (ok(r)) {
-      assert.equal(
-        terminal[0].data.phase,
-        "end",
-        "recovered request must not publish final failure",
-      );
-    }
-  }
-  if (mode.includes("active") || mode.includes("joint")) {
-    assert.equal(faulted, true, "fault injection must execute");
-  }
-  console.log(JSON.stringify({ passed: true, expectBroken, root }));
+  console.log(
+    JSON.stringify({
+      fixturePassed: true,
+      externalSlackAssertionsRequired: liveSlack,
+      expectBroken,
+      root,
+    }),
+  );
 } finally {
   await restartPromise?.catch(() => {});
   for (const s of sockets) {

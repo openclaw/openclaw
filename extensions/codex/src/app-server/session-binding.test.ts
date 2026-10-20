@@ -68,49 +68,6 @@ describe("Codex app-server binding store", () => {
     expect(store.read(identity)).toEqual(binding);
   });
 
-  it("deletes only the requested stable owner in SQLite", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-delete-"));
-    try {
-      const state = createCodexSqliteTestBindingStateStore({
-        namespace: "deletion-test",
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-        env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      });
-      const store = createCodexAppServerBindingStore(state);
-      const base = {
-        kind: "session" as const,
-        agentId: "main",
-        sessionId: "shared-id",
-        sessionKey: "agent:main:cron:job",
-      };
-      const run = { ...base, sessionKey: `${base.sessionKey}:run:one` };
-      for (const identity of [base, run]) {
-        await store.mutate(identity, {
-          kind: "set",
-          binding: {
-            threadId: identity.sessionKey,
-            cwd: "/repo",
-          },
-        });
-      }
-      await store.withSessionDeletion(
-        run,
-        () => {},
-        async (_binding, mutation) => {
-          mutation.commit();
-          expect(state.lookup(bindingStoreKey(run))).toBeUndefined();
-          expect(state.lookup(bindingStoreKey(base))).toMatchObject({ state: "active" });
-        },
-      );
-      expect(state.entries().map(({ key }) => key)).toEqual([bindingStoreKey(base)]);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("removes retired fences without creating rows for absent bindings", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);

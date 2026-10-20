@@ -46,6 +46,8 @@ class CodexAttemptState {
   clientClosedDiagnostic?: string;
   clientClosedAbort = false;
   connectionRecovery?: Promise<void>;
+  recoveredTurnId?: string;
+  recoveredProjectionDrain?: Promise<void>;
   shouldDelayNativeHookRelayUnregister = false;
   lifecycleStarted = false;
   lifecycleTerminalEmitted = false;
@@ -188,7 +190,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         state.pendingSettlementStage ??
         projectorRef.current?.settlement.pendingStage ??
         "notification_queue";
-      if (timeout.kind === "settlement" && projectorRef.current?.recoverCompletedAnswer()) {
+      if (
+        timeout.kind === "settlement" &&
+        !state.recoveredTurnId &&
+        projectorRef.current?.recoverCompletedAnswer()
+      ) {
         state.settlementWarning = {
           pendingStage,
           elapsedMs: timeout.elapsedMs,
@@ -207,6 +213,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         completeTurn();
         settlementExpired.resolve();
         return;
+      }
+      if (state.recoveredTurnId) {
+        // A final answer cannot prove that disconnected history was reconciled.
+        resourceState.remoteRecoveryFailed = true;
       }
       state.timeout = timeout;
       projectorRef.current?.markTimedOut();

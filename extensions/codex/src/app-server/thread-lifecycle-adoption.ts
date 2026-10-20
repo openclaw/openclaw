@@ -1,4 +1,5 @@
 import path from "node:path";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import {
@@ -10,6 +11,7 @@ import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
+import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import {
   sessionBindingIdentity,
   resolveCodexSessionBinding,
@@ -18,7 +20,10 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { captureCodexAppServerClientLifetime } from "./shared-client.js";
-import { shouldRotateCodexGpt56MultiAgentBinding } from "./thread-binding-policy.js";
+import {
+  shouldRotateCodexAppServerBindingForRuntime,
+  shouldRotateCodexGpt56MultiAgentBinding,
+} from "./thread-binding-policy.js";
 import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
@@ -27,6 +32,7 @@ import {
 } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread } from "./thread-lifecycle-io.js";
 import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
+import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -34,14 +40,12 @@ import type {
   CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
+import { settleCodexOrphanTurn } from "./thread-orphan-recovery.js";
 import {
   withCodexAppServerThreadMutation,
   withExclusiveCodexAppServerThread,
 } from "./thread-ownership.js";
-import {
-  assertAdoptedCodexThreadResumeAllowed,
-  assertCodexSupervisionThreadLineage,
-} from "./thread-policy.js";
+import { readCodexThreadForResume, assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 
 /** All bound preparation follows attach's native-queue-before-binding-lease order. */
 export async function withCodexThreadLifecycleBinding(
@@ -106,6 +110,74 @@ export async function withCodexThreadLifecycleBinding(
     : snapshot
       ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
       : await runWithLease();
+}
+
+/** Core completes proved delivery checkpoints before admission; remaining restart work is uncertain. */
+export async function stopCodexAutomaticRestart(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding | undefined,
+): Promise<void> {
+  if (
+    params.params.inputProvenance?.kind !== "internal_system" ||
+    params.params.inputProvenance.sourceTool !== "main_session_restart_recovery" ||
+    params.appServer.start.transport !== "websocket" ||
+    binding?.connectionScope ||
+    binding?.preserveNativeModel ||
+    isIncognitoSessionKey(params.params.sessionKey)
+  ) {
+    return;
+  }
+  let cause: unknown;
+  if (
+    binding &&
+    !binding.pendingResumeConfiguration &&
+    !binding.contextEngine &&
+    !binding.ringZeroClientInstanceId &&
+    !binding.ringZeroConfigFingerprint &&
+    !shouldRotateCodexAppServerBindingForRuntime({
+      connectionClass: params.appServer.connectionClass,
+      current: params.appServerRuntimeFingerprint,
+      binding: binding.appServerRuntimeFingerprint,
+    })
+  ) {
+    const assertCurrent = captureCodexThreadResumeAuthority(
+      params,
+      binding,
+      "thread-configuration",
+    );
+    try {
+      assertCurrent();
+      const thread = await readCodexThreadForResume(
+        params,
+        binding.threadId,
+        {
+          lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+          throwIfAborted: () => params.signal?.throwIfAborted(),
+        },
+        assertCurrent,
+      );
+      await settleCodexOrphanTurn(params, binding, thread, assertCurrent);
+    } catch (error) {
+      cause = error;
+    } finally {
+      // Revoked host/client ownership remains authoritative; never turn it into
+      // permission to settle an old task or deliver a stale recovery notice.
+      assertCurrent();
+    }
+  }
+  params.params.hostCapabilities.assertActive();
+  params.assertCurrent?.();
+  params.signal?.throwIfAborted();
+  // Native completion (including a cleared or legacy absent receipt) is not a
+  // durable host task terminal. Never infer a new model turn from that gap.
+  throw new AgentHarnessPreflightError(
+    "Codex automatic recovery stopped because the previous host task outcome is uncertain.",
+    {
+      cause,
+      userMessage:
+        "The previous task could not be safely resumed. Its history is preserved, and I stopped automatic recovery to avoid repeating earlier tool effects.",
+    },
+  );
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
@@ -246,12 +318,8 @@ export async function prepareCodexThreadResume(
   assertCurrent();
   let thread: CodexThread;
   try {
-    thread = await assertAdoptedCodexThreadResumeAllowed(
-      params,
-      binding.threadId,
-      context,
-      assertCurrent,
-    );
+    thread = await readCodexThreadForResume(params, binding.threadId, context, assertCurrent);
+    thread = await settleCodexOrphanTurn(params, binding, thread, assertCurrent);
   } finally {
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();
@@ -260,6 +328,61 @@ export async function prepareCodexThreadResume(
   // checks remain in preparePendingCodexThreadResume, before this common handoff.
   assertCodexSupervisionThreadLineage(binding, thread);
   return { ...observeCodexThreadConfiguration(params, thread, assertCurrent), assertCurrent };
+}
+
+/** Rotation must not discard a recovery handle or abandon an accepted legacy turn. */
+export async function assertCodexThreadReplacementSafe(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding,
+  context: CodexThreadRequestContext,
+): Promise<void> {
+  const incompatible = () =>
+    new CodexAdoptedThreadActiveError(
+      "The previous Codex task is preserved, but the configured tool catalog or execution policy changed. Its uncertain tool effects were not replayed. Retry with the compatible configuration or explicitly start a new conversation.",
+    );
+  if (
+    params.appServer.start.transport !== "websocket" ||
+    binding.connectionScope ||
+    binding.preserveNativeModel ||
+    isIncognitoSessionKey(params.params.sessionKey)
+  ) {
+    if (binding.turnRecovery) {
+      throw incompatible();
+    }
+    return;
+  }
+  if (
+    shouldRotateCodexAppServerBindingForRuntime({
+      connectionClass: params.appServer.connectionClass,
+      current: params.appServerRuntimeFingerprint,
+      binding: binding.appServerRuntimeFingerprint,
+    })
+  ) {
+    // The current endpoint cannot prove what happened on a different native runtime.
+    if (binding.turnRecovery) {
+      throw incompatible();
+    }
+    return;
+  }
+  const assertCurrent = captureCodexThreadResumeAuthority(params, binding, "thread-configuration");
+  try {
+    let thread: CodexThread;
+    try {
+      thread = await readCodexThreadForResume(params, binding.threadId, context, assertCurrent);
+    } catch (error) {
+      if (!binding.turnRecovery && isCodexThreadReadMissingError(error, binding.threadId)) {
+        return;
+      }
+      throw error;
+    }
+    await settleCodexOrphanTurn(params, binding, thread, assertCurrent);
+    assertCurrent();
+    if (binding.turnRecovery) {
+      throw incompatible();
+    }
+  } finally {
+    assertCurrent();
+  }
 }
 
 function captureCodexThreadResumeAuthority(

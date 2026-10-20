@@ -99,6 +99,14 @@ const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
     clientId: optionalStringSchema,
+    // Exact native acceptance, not a replay checkpoint. Settling survives a host restart.
+    turnRecovery: z
+      .object({
+        turnId: z.string().trim().min(1),
+        state: z.enum(["accepted", "settling"]),
+      })
+      .strict()
+      .optional(),
     cwd: z.string(),
     rolloutPath: optionalNonBlankStringSchema,
     // Private runtime ownership. Only the supervision catalog creates this
