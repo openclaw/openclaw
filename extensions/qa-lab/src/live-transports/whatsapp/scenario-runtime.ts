@@ -12,7 +12,6 @@ import {
 import {
   WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS,
   isTransientWhatsAppQaDriverError,
-  resolveWhatsAppQaNoReplyTarget,
   restartWhatsAppQaDriverSession,
   waitForNoWhatsAppReply,
 } from "./whatsapp-live.driver.js";
@@ -84,10 +83,7 @@ async function runWhatsAppScenarioAttempt(params: {
       observedAfter: quietStartedAt,
       sutPhoneE164: runtimeEnv.sutPhoneE164,
       windowMs: scenarioRun.quietWindowMs ?? 5_000,
-      ...resolveWhatsAppQaNoReplyTarget({
-        groupJid: runtimeEnv.groupJid,
-        target: scenarioRun.target,
-      }),
+      ...resolvedTarget,
     });
     await waitForWhatsAppChannelStable(
       params.environment.gateway as never,
@@ -119,10 +115,7 @@ async function runWhatsAppScenarioAttempt(params: {
       observedAfter: requestStartedAt,
       sutPhoneE164: runtimeEnv.sutPhoneE164,
       windowMs: scenarioRun.quietWindowMs ?? scenario.timeoutMs,
-      ...resolveWhatsAppQaNoReplyTarget({
-        groupJid: runtimeEnv.groupJid,
-        target: scenarioRun.target,
-      }),
+      ...resolvedTarget,
     });
     return {
       details: ["no reply", afterSendDetails].filter(Boolean).join("; "),
