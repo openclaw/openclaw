@@ -1,6 +1,6 @@
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import clawrouter from "../../extensions/clawrouter/index.js";
 import {
   createEmptyAgentDiscoveryStores,
@@ -51,26 +51,22 @@ describe("ClawRouter Responses discovery to dispatch", () => {
         const url = request.url;
         if (url === `${baseUrl}/v1/catalog`) {
           expect(request.headers.get("authorization")).toBe("Bearer synthetic-catalog-key");
-          return Response.json({
-            providers: [
-              {
-                id: "private",
-                displayName: "Synthetic provider",
-                openaiCompatible: true,
-                nativeBaseUrl: "/v1/native/private",
-                routes: [],
-                models: [
-                  {
-                    id: "synthetic-opaque",
-                    displayName: "Synthetic name",
-                    upstream: "synthetic-opaque",
-                    capabilities: ["llm.responses"],
-                    ...(efforts ? { supportedReasoningEfforts: efforts } : {}),
-                  },
-                ],
-              },
-            ],
-          });
+          const model = {
+            id: "synthetic-opaque",
+            displayName: "Synthetic name",
+            upstream: "synthetic-opaque",
+            capabilities: ["llm.responses"],
+            ...(efforts ? { supportedReasoningEfforts: efforts } : {}),
+          };
+          const catalogProvider = {
+            id: "private",
+            displayName: "Synthetic provider",
+            openaiCompatible: true,
+            nativeBaseUrl: "/v1/native/private",
+            routes: [],
+            models: [model],
+          };
+          return Response.json({ providers: [catalogProvider] });
         }
         expect(url).toBe(`${baseUrl}/v1/responses`);
         requests.push({ url, body: await request.json() });
@@ -90,9 +86,8 @@ describe("ClawRouter Responses discovery to dispatch", () => {
       vi.stubGlobal("fetch", fetchMock);
       const provider = await registerSingleProviderPlugin(clawrouter);
       const runtimeHooks: ProviderRuntimeHooks = {
-        prepareProviderDynamicModel: async ({ context }) => {
-          return await provider.prepareDynamicModel?.(context);
-        },
+        prepareProviderDynamicModel: async ({ context }) =>
+          await provider.prepareDynamicModel?.(context),
         runProviderDynamicModel: ({ context }) => provider.resolveDynamicModel?.(context),
         shouldPreferProviderRuntimeResolvedModel: ({ context }) =>
           provider.preferRuntimeResolvedModel?.(context) ?? false,
@@ -125,18 +120,14 @@ describe("ClawRouter Responses discovery to dispatch", () => {
       expect(auth.resolveApiKeyForProvider).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: "clawrouter:synthetic", lockedProfile: true }),
       );
-      if (!resolved.model) {
-        throw new Error("discovered model missing");
-      }
+      assert(resolved.model, "discovered model missing");
       const stream = provider.wrapStreamFn?.({
         config,
         provider: "clawrouter",
         modelId: resolved.model.id,
         streamFn: createOpenAIResponsesTransportStreamFn(),
       });
-      if (!stream) {
-        throw new Error("provider stream missing");
-      }
+      assert(stream, "provider stream missing");
       const responseStream = await stream(
         resolved.model,
         {

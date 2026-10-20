@@ -3,6 +3,7 @@ import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../packages/ai/src/host.js";
+import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../packages/ai/src/transports/openai-completions-transport.js";
 import { resolveOpenAIStrictToolSetting } from "../../src/agents/openai-strict-tool-setting.js";
 import { resolveProviderRequestCapabilities } from "../../src/agents/provider-attribution.js";
@@ -11,38 +12,36 @@ import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-pub
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 
 const publicUrl = "https://openrouter.ai/api/v1";
+const makeRoute = (
+  name: string,
+  overrides: Partial<Model<"openai-completions">> & { omitStrict?: boolean; native?: boolean } = {},
+) => ({
+  ...makeProviderModel("openai-completions", "openrouter", "openai/gpt-5.4-mini", {
+    baseUrl: publicUrl,
+    reasoning: false,
+    contextWindow: 8192,
+    maxTokens: 1024,
+  }),
+  name,
+  native: false,
+  omitStrict: false,
+  ...overrides,
+});
 const routes = [
-  { name: "OpenAI", id: "openai/gpt-5.4-mini", baseUrl: publicUrl },
-  { name: "Anthropic", id: "anthropic/claude-sonnet-4.6", baseUrl: publicUrl },
-  { name: "Gemini", id: "google/gemini-3-flash-preview", baseUrl: publicUrl },
-  { name: "automatic", id: "openrouter/auto", baseUrl: publicUrl },
-  {
-    name: "custom provider on OpenRouter",
-    id: "openai/gpt-5.4-mini",
-    baseUrl: publicUrl,
-    provider: "custom",
-  },
-  {
-    name: "custom proxy",
-    id: "openai/gpt-5.4-mini",
-    baseUrl: "https://proxy.example.test/v1",
-    omitStrict: true,
-  },
-  {
-    name: "explicit opt-out",
-    id: "openai/gpt-5.4-mini",
-    baseUrl: publicUrl,
-    compat: { supportsStrictMode: false },
-    omitStrict: true,
-  },
-  {
-    name: "native OpenAI",
+  makeRoute("OpenAI"),
+  makeRoute("Anthropic", { id: "anthropic/claude-sonnet-4.6" }),
+  makeRoute("Gemini", { id: "google/gemini-3-flash-preview" }),
+  makeRoute("automatic", { id: "openrouter/auto" }),
+  makeRoute("custom provider on OpenRouter", { provider: "custom" }),
+  makeRoute("custom proxy", { baseUrl: "https://proxy.example.test/v1", omitStrict: true }),
+  makeRoute("explicit opt-out", { compat: { supportsStrictMode: false }, omitStrict: true }),
+  makeRoute("native OpenAI", {
     id: "gpt-5.4-mini",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
     native: true,
-  },
-] as const;
+  }),
+];
 
 type CapturedRequest = {
   model: string;
@@ -91,21 +90,8 @@ describe("OpenRouter serialized tool schema policy", () => {
   it.each(
     (["managed", "direct"] as const).flatMap((mode) => routes.map((route) => ({ mode, route }))),
   )("preserves optional inputs for $mode $route.name", async ({ mode, route }) => {
-    const input: Model<"openai-completions"> = {
-      id: route.id,
-      name: route.name,
-      api: "openai-completions",
-      provider: "provider" in route ? route.provider : "openrouter",
-      baseUrl: route.baseUrl,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 1024,
-      ...("compat" in route ? { compat: route.compat } : {}),
-    };
+    const { native, omitStrict, ...input } = route;
     const model = { ...normalizeModelCompat(input), api: input.api };
-    const native = "native" in route;
     const tools = [
       {
         name: "browser",
@@ -165,7 +151,7 @@ describe("OpenRouter serialized tool schema policy", () => {
     expect(captured.url).toBe(`${route.baseUrl}/chat/completions`);
     expect(captured.body.model).toBe(route.id);
     const tool = captured.body.tools[0]!.function;
-    if ("omitStrict" in route) {
+    if (omitStrict) {
       expect(tool).not.toHaveProperty("strict");
     } else {
       expect(tool.strict).toBe(native && mode === "managed");

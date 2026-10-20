@@ -157,7 +157,7 @@ it.each([true, false])(
       name: "Memory dreaming",
       declarationKey: "memory-core:memory-dreaming-promotion",
     });
-    const unrelated = await cron.add({ ...job, name: "Unrelated maintenance" });
+    await cron.add({ ...job, name: "Unrelated maintenance" });
     const before = await cron.list({ includeDisabled: true });
     const config: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} } },
@@ -170,9 +170,6 @@ it.each([true, false])(
     expect(await cron.list({ includeDisabled: true })).toEqual(
       dreamingEnabled ? before : before.filter((entry) => entry.id !== managed.id),
     );
-    expect(
-      (await cron.list({ includeDisabled: true })).some((entry) => entry.id === unrelated.id),
-    ).toBe(true);
     expect(logger.error).not.toHaveBeenCalled();
   },
 );

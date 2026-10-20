@@ -37,22 +37,10 @@ afterEach(async () => {
 });
 
 function configWithToken(token: unknown, endpoint = "http://127.0.0.1:19483/beam"): OpenClawConfig {
+  const mirror = { endpoint, catalogs: ["claude"], token };
   return {
     agents: { entries: { main: {} } },
-    plugins: {
-      entries: {
-        beam: {
-          enabled: true,
-          config: {
-            mirror: {
-              endpoint,
-              catalogs: ["claude"],
-              token,
-            },
-          },
-        },
-      },
-    },
+    plugins: { entries: { beam: { enabled: true, config: { mirror } } } },
   };
 }
 
@@ -126,8 +114,9 @@ describe("Beam mirror prepared credentials", () => {
     const { scheduler, logger } = await startMirror(snapshot.config);
     try {
       expect(logger.info).not.toHaveBeenCalled();
-      expect(logger.warn.mock.calls.flat().join("\n")).toContain("credential");
-      expect(logger.warn.mock.calls.flat().join("\n")).not.toContain("BEAM_MISSING_TOKEN");
+      const warnings = logger.warn.mock.calls.flat().join("\n");
+      expect(warnings).toContain("credential");
+      expect(warnings).not.toContain("BEAM_MISSING_TOKEN");
     } finally {
       await scheduler.stop();
     }
@@ -173,24 +162,23 @@ describe("Beam mirror prepared credentials", () => {
         id: "claude",
         label: "Synthetic catalog",
         async list() {
+          const session = {
+            threadId: "t1",
+            recencyAt: Date.now(),
+            status: "stored",
+            createdAt: Date.now() - 60_000,
+            updatedAt: Date.now(),
+            archived: false,
+            canContinue: false,
+            canArchive: false,
+          };
           return [
             {
               hostId: "gateway:local",
               label: "Local",
               kind: "gateway",
               connected: true,
-              sessions: [
-                {
-                  threadId: "t1",
-                  recencyAt: Date.now(),
-                  status: "stored",
-                  createdAt: Date.now() - 60_000,
-                  updatedAt: Date.now(),
-                  archived: false,
-                  canContinue: false,
-                  canArchive: false,
-                },
-              ],
+              sessions: [session],
             },
           ];
         },
@@ -200,12 +188,7 @@ describe("Beam mirror prepared credentials", () => {
             hostId,
             threadId,
             label: "Local",
-            items: [
-              {
-                type: "agentMessage",
-                text: "revision " + ++reads,
-              },
-            ],
+            items: [{ type: "agentMessage", text: "revision " + ++reads }],
           };
         },
       });
