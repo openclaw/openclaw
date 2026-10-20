@@ -1,7 +1,4 @@
-// Tests reply plumbing helpers that connect payloads, routes, and delivery modes.
-
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { assert, afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -16,26 +13,18 @@ import { applyReplyThreading } from "./reply-payloads-base.js";
 import { formatRunLabel, resolveSubagentLabel } from "./subagents-utils.js";
 
 describe("buildThreadingToolContext", () => {
-  const cfg = {} as OpenClawConfig;
-
   afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
 
-  it.each([
-    [
-      "uses the recipient id for other channels",
-      { Provider: "telegram", From: "user:42", To: "chat:99" },
-      "chat:99",
-    ],
-  ])("%s", (_name, sessionCtx, expectedChannelId) => {
+  it("uses the recipient id for other channels", () => {
     const result = buildThreadingToolContext({
-      sessionCtx: { ...sessionCtx } as TemplateContext,
-      config: cfg,
+      sessionCtx: { Provider: "telegram", From: "user:42", To: "chat:99" },
+      config: {},
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe(expectedChannelId);
+    expect(result.currentChannelId).toBe("chat:99");
   });
 
   it("lets plugin threading adapters suppress the generic message-id fallback", () => {
@@ -71,60 +60,57 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("spaces/AAA");
-    expect(result.currentThreadTs).toBe("spaces/AAA/threads/full");
-    expect(result.currentMessageId).toBeUndefined();
+    expect([result.currentChannelId, result.currentThreadTs, result.currentMessageId]).toEqual([
+      "spaces/AAA",
+      "spaces/AAA/threads/full",
+      undefined,
+    ]);
   });
 });
 
 describe("applyReplyThreading auto-threading", () => {
-  it("can disable implicit reply threading for the current turn", () => {
+  type ThreadingCase = [
+    string,
+    string,
+    Omit<Parameters<typeof applyReplyThreading>[0], "payloads" | "currentMessageId">,
+    { replyToId?: string; replyToTag?: boolean; text?: string },
+  ];
+  it.each<ThreadingCase>([
+    [
+      "deny implicit",
+      "Hello",
+      { replyToMode: "batched", replyThreading: { implicitCurrentMessage: "deny" } },
+      { replyToId: undefined },
+    ],
+    ["Slack off", "A", { replyToMode: "off", replyToChannel: "slack" }, { replyToId: undefined }],
+    [
+      "Telegram explicit",
+      "[[reply_to_current]]A",
+      { replyToMode: "off", replyToChannel: "telegram" },
+      { replyToId: "42", replyToTag: true },
+    ],
+    [
+      "explicit id",
+      "[[reply_to:mm-post-xyz789]] threaded reply",
+      { replyToMode: "all" },
+      { replyToId: "mm-post-xyz789", text: "threaded reply" },
+    ],
+  ])("%s", (_name, text, options, expected) => {
     const result = applyReplyThreading({
-      payloads: [{ text: "Hello" }],
-      replyToMode: "batched",
+      payloads: [{ text }],
       currentMessageId: "42",
-      replyThreading: { implicitCurrentMessage: "deny" },
+      ...options,
     });
-
     expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBeUndefined();
-  });
-
-  it("does not bypass off mode for Slack when reply is implicit", () => {
-    const result = applyReplyThreading({
-      payloads: [{ text: "A" }],
-      replyToMode: "off",
-      replyToChannel: "slack",
-      currentMessageId: "42",
-    });
-
-    expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBeUndefined();
-  });
-
-  it("keeps explicit tags for Telegram when off mode is enabled", () => {
-    const result = applyReplyThreading({
-      payloads: [{ text: "[[reply_to_current]]A" }],
-      replyToMode: "off",
-      replyToChannel: "telegram",
-      currentMessageId: "42",
-    });
-
-    expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
-    expect(expectDefined(result[0], "result[0] test invariant").replyToTag).toBe(true);
-  });
-
-  it("resolves [[reply_to:<id>]] to explicit id when replyToMode is 'all'", () => {
-    const result = applyReplyThreading({
-      payloads: [{ text: "[[reply_to:mm-post-xyz789]] threaded reply" }],
-      replyToMode: "all",
-      currentMessageId: "mm-post-abc123",
-    });
-
-    expect(result).toHaveLength(1);
-    expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("mm-post-xyz789");
-    expect(expectDefined(result[0], "result[0] test invariant").text).toBe("threaded reply");
+    const payload = result[0];
+    assert(payload);
+    expect(payload.replyToId).toBe(expected.replyToId);
+    if (expected.replyToTag !== undefined) {
+      expect(payload.replyToTag).toBe(expected.replyToTag);
+    }
+    if (expected.text !== undefined) {
+      expect(payload.text).toBe(expected.text);
+    }
   });
 });
 
@@ -149,9 +135,7 @@ describe("subagents utils", () => {
   });
 
   it("formats run labels with truncation", () => {
-    const long = "x".repeat(100);
-    const run = { ...baseRun, label: long };
-    const formatted = formatRunLabel(run, { maxLength: 10 });
+    const formatted = formatRunLabel({ ...baseRun, label: "x".repeat(100) }, { maxLength: 10 });
     expect(formatted.startsWith("x".repeat(10))).toBe(true);
     expect(formatted.endsWith("…")).toBe(true);
   });

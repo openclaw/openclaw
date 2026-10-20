@@ -51,6 +51,26 @@ import {
 } from "./reply-run-registry.test-helpers.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
+type Backend = Parameters<ReplyOperation["attachBackend"]>[0];
+function createInjectableOperation(
+  sessionId: string,
+  queueMessage: Backend["queueMessage"],
+  backend: Partial<Backend> = {},
+  overrides: Parameters<typeof createTestReplyOperation>[0] = {},
+) {
+  const operation = createTestReplyOperation({ sessionId, ...overrides });
+  operation.attachBackend({
+    kind: "embedded",
+    supportsTranscriptCommitWait: true,
+    cancel: vi.fn(),
+    isStreaming: () => true,
+    queueMessage,
+    ...backend,
+  });
+  operation.setPhase("running");
+  return operation;
+}
+
 async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers();
   try {
@@ -633,60 +653,50 @@ describe("reply run registry", () => {
   });
 
   it.each([
-    {
-      name: "user abort while queued",
-      abort: (operation: ReturnType<typeof createTestReplyOperation>) => operation.abortByUser(),
-      code: "aborted_by_user",
-      reason: "user_abort",
-      phase: "queued",
-    },
-    {
-      name: "restart abort while running",
-      abort: (operation: ReturnType<typeof createTestReplyOperation>) =>
-        operation.abortForRestart(),
-      code: "aborted_for_restart",
-      reason: "restart",
-      phase: "running",
-    },
-  ] as const)("preserves cleanup when backend cancellation throws: $name", async (testCase) => {
-    await withFakeReplyTimers(async () => {
-      const cancelError = new Error("cancel failed");
-      const cancel = vi.fn(() => {
-        throw cancelError;
+    ["aborted_by_user", "user_abort", "queued", "abortByUser"],
+    ["aborted_for_restart", "restart", "running", "abortForRestart"],
+  ] as const)(
+    "preserves cleanup when backend cancellation throws: %s",
+    async (code, reason, phase, abort) => {
+      await withFakeReplyTimers(async () => {
+        const cancelError = new Error("cancel failed");
+        const cancel = vi.fn(() => {
+          throw cancelError;
+        });
+        const operation = createTestReplyOperation({
+          sessionKey: `agent:main:${reason}-${phase}`,
+          sessionId: `session-${reason}-${phase}`,
+        });
+        const revokeWriter = vi.fn(async () => true);
+        operation.registerTerminalProducerFence(revokeWriter);
+        operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+        operation.setPhase(phase);
+        const afterClear = vi.fn();
+        runAfterReplyOperationClear(operation, afterClear);
+
+        expect(() => operation[abort]()).toThrow(cancelError);
+        expect(operation.result).toEqual({ kind: "aborted", code });
+        expect(operation.phase).toBe("aborted");
+        expect(operation.abortSignal.aborted).toBe(true);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(cancel).toHaveBeenCalledWith(reason);
+
+        expect(getSessionControllerOperation(operation.key)).toBe(operation);
+        expect(afterClear).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS);
+        expect(operation.watchdog.snapshot().recovery?.status).toBe("settled");
+        expect(getSessionControllerOperation(operation.key)).toBeUndefined();
+        expect(afterClear).toHaveBeenCalledOnce();
+        expect(cancel).toHaveBeenCalledTimes(2);
+        expect(cancel).toHaveBeenLastCalledWith("superseded");
+        expect(revokeWriter).toHaveBeenCalledOnce();
+        operation.complete();
+        expect(controllerQueries.isSessionRunActiveForKey(operation.key)).toBe(false);
+        expect(afterClear).toHaveBeenCalledOnce();
       });
-      const operation = createTestReplyOperation({
-        sessionKey: `agent:main:${testCase.reason}-${testCase.phase}`,
-        sessionId: `session-${testCase.reason}-${testCase.phase}`,
-      });
-      const revokeWriter = vi.fn(async () => true);
-      operation.registerTerminalProducerFence(revokeWriter);
-      operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-      operation.setPhase(testCase.phase);
-      const afterClear = vi.fn();
-      runAfterReplyOperationClear(operation, afterClear);
-
-      expect(() => testCase.abort(operation)).toThrow(cancelError);
-      expect(operation.result).toEqual({ kind: "aborted", code: testCase.code });
-      expect(operation.phase).toBe("aborted");
-      expect(operation.abortSignal.aborted).toBe(true);
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(cancel).toHaveBeenCalledWith(testCase.reason);
-
-      expect(getSessionControllerOperation(operation.key)).toBe(operation);
-      expect(afterClear).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS);
-      expect(operation.watchdog.snapshot().recovery?.status).toBe("settled");
-      expect(getSessionControllerOperation(operation.key)).toBeUndefined();
-      expect(afterClear).toHaveBeenCalledOnce();
-      expect(cancel).toHaveBeenCalledTimes(2);
-      expect(cancel).toHaveBeenLastCalledWith("superseded");
-      expect(revokeWriter).toHaveBeenCalledOnce();
-      operation.complete();
-      expect(controllerQueries.isSessionRunActiveForKey(operation.key)).toBe(false);
-      expect(afterClear).toHaveBeenCalledOnce();
-    });
-  });
+    },
+  );
 
   it("admits a visible successor after an aborted producer misses its cleanup deadline", async () => {
     await withFakeReplyTimers(async () => {
@@ -885,66 +895,51 @@ describe("reply run registry", () => {
   });
 
   it.each([
-    { name: "stalled owner", work: "none", activity: false, beforeExpiry: 59_999, remaining: 1 },
-    {
-      name: "owner progress",
-      work: "none",
-      activity: true,
-      beforeExpiry: 15_000,
-      remaining: 45_000,
-    },
-    {
-      name: "work before finalization",
-      work: "before",
-      activity: false,
-      beforeExpiry: 60_000,
-      remaining: 30_000,
-    },
-    {
-      name: "activity during bounded work",
-      work: "after",
-      activity: true,
-      beforeExpiry: 60_000,
-      remaining: 15_000,
-    },
-  ])("expires finalization at the longest active deadline: $name", async (fixture) => {
-    await withFakeReplyTimers(async () => {
-      const afterClear = vi.fn();
-      const operation = createTestReplyOperation({
-        sessionKey: "agent:main:hung-finalization",
-        sessionId: "session-hung-finalization",
+    ["stalled owner", "none", false, 59_999, 1],
+    ["owner progress", "none", true, 15_000, 45_000],
+    ["work before finalization", "before", false, 60_000, 30_000],
+    ["activity during bounded work", "after", true, 60_000, 15_000],
+  ] as const)(
+    "expires finalization at the longest active deadline: %s",
+    async (_name, work, activity, beforeExpiry, remaining) => {
+      await withFakeReplyTimers(async () => {
+        const afterClear = vi.fn();
+        const operation = createTestReplyOperation({
+          sessionKey: "agent:main:hung-finalization",
+          sessionId: "session-hung-finalization",
+        });
+        operation.setPhase("running");
+        operation.attachBackend({ kind: "embedded", cancel: () => operation.complete() });
+        runAfterReplyOperationClear(operation, afterClear);
+
+        if (work === "before") {
+          beginReplyOperationFinalizationWork(operation, SESSION_WATCHDOG_CLEANUP_MS * 2);
+          await vi.advanceTimersByTimeAsync(30_000);
+        }
+        operation.freezeAbort();
+        if (work === "after") {
+          beginReplyOperationFinalizationWork(operation, SESSION_WATCHDOG_CLEANUP_MS * 2);
+        }
+        if (activity) {
+          await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS - 15_000);
+          operation.watchdog.progress("finalization");
+        }
+        await vi.advanceTimersByTimeAsync(beforeExpiry);
+
+        expect(getSessionControllerOperation("agent:main:hung-finalization")).toBe(operation);
+        expect(operation.result).toBeNull();
+        expect(operation.abortSignal.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(remaining);
+
+        expect(getSessionControllerOperation("agent:main:hung-finalization")).toBeUndefined();
+        expect(operation.result).toEqual({ kind: "completed" });
+        expect(operation.phase).toBe("completed");
+        expect(operation.abortSignal.aborted).toBe(false);
+        expect(afterClear).toHaveBeenCalledTimes(1);
       });
-      operation.setPhase("running");
-      operation.attachBackend({ kind: "embedded", cancel: () => operation.complete() });
-      runAfterReplyOperationClear(operation, afterClear);
-
-      if (fixture.work === "before") {
-        beginReplyOperationFinalizationWork(operation, SESSION_WATCHDOG_CLEANUP_MS * 2);
-        await vi.advanceTimersByTimeAsync(30_000);
-      }
-      operation.freezeAbort();
-      if (fixture.work === "after") {
-        beginReplyOperationFinalizationWork(operation, SESSION_WATCHDOG_CLEANUP_MS * 2);
-      }
-      if (fixture.activity) {
-        await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS - 15_000);
-        operation.watchdog.progress("finalization");
-      }
-      await vi.advanceTimersByTimeAsync(fixture.beforeExpiry);
-
-      expect(getSessionControllerOperation("agent:main:hung-finalization")).toBe(operation);
-      expect(operation.result).toBeNull();
-      expect(operation.abortSignal.aborted).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(fixture.remaining);
-
-      expect(getSessionControllerOperation("agent:main:hung-finalization")).toBeUndefined();
-      expect(operation.result).toEqual({ kind: "completed" });
-      expect(operation.phase).toBe("completed");
-      expect(operation.abortSignal.aborted).toBe(false);
-      expect(afterClear).toHaveBeenCalledTimes(1);
-    });
-  });
+    },
+  );
 
   it.each([MAX_TIMER_TIMEOUT_MS + 1, null])(
     "waits for completion with timeout %s",
@@ -999,18 +994,9 @@ describe("reply run registry", () => {
 
   it("queues messages only when the task-suggestion tool surface matches", async () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createTestReplyOperation({
-      sessionId: "session-task-suggestions",
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      supportsTranscriptCommitWait: true,
+    createInjectableOperation("session-task-suggestions", queueMessage, {
       taskSuggestionDeliveryMode: "gateway",
-      cancel: vi.fn(),
-      isStreaming: () => true,
-      queueMessage,
     });
-    operation.setPhase("running");
 
     await expect(
       queueCurrentReplyRunMessage("session-task-suggestions", "legacy client", {
@@ -1047,17 +1033,7 @@ describe("reply run registry", () => {
     { imageOrder: ["offloaded" as const] },
   ])("queues image inputs only through backends that preserve them: %j", async (input) => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createTestReplyOperation({
-      sessionId: "session-images",
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      supportsTranscriptCommitWait: true,
-      cancel: vi.fn(),
-      isStreaming: () => true,
-      queueMessage,
-    });
-    operation.setPhase("running");
+    const operation = createInjectableOperation("session-images", queueMessage);
 
     await expect(
       queueCurrentReplyRunMessage("session-images", "inspect", input),
@@ -1086,19 +1062,12 @@ describe("reply run registry", () => {
     vi.useFakeTimers();
     try {
       const queueMessage = vi.fn(async () => {});
-      const operation = createTestReplyOperation({
-        sessionId: "session-running",
-        originatingLeafEntryId: "leaf-a",
-      });
-      operation.attachBackend({
-        kind: "embedded",
-        supportsTranscriptCommitWait: true,
-        cancel: vi.fn(),
-        isStreaming: () => false,
-        isStopped: () => false,
+      const operation = createInjectableOperation(
+        "session-running",
         queueMessage,
-      });
-      operation.setPhase("running");
+        { isStreaming: () => false, isStopped: () => false },
+        { originatingLeafEntryId: "leaf-a" },
+      );
 
       const target = captureCurrentReplyMessageInjectionTarget("agent:main:main");
       expect(target).toBeDefined();
@@ -1133,24 +1102,14 @@ describe("reply run registry", () => {
     { probe: "isCompacting", throws: true },
   ])("fails closed for backend $probe (throws: $throws)", async ({ probe, throws }) => {
     const queueMessage = vi.fn(async () => {});
-    const operation = createTestReplyOperation({
-      sessionId: "session-running",
-    });
-
-    operation.attachBackend({
-      kind: "embedded",
-      supportsTranscriptCommitWait: true,
-      cancel: vi.fn(),
-      isStreaming: () => true,
+    createInjectableOperation("session-running", queueMessage, {
       [probe]: () => {
         if (throws) {
           throw new Error("bad stopped state");
         }
         return true;
       },
-      queueMessage,
     });
-    operation.setPhase("running");
 
     await expect(queueCurrentReplyRunMessage("session-running", "hello")).resolves.toMatchObject({
       status: "rejected",

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxFsBridge } from "../../agents/sandbox/fs-bridge.types.js";
+import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { WEBCHAT_LOCAL_MEDIA_MAX_BYTES } from "../../media/configured-max-bytes.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -20,6 +21,10 @@ const sandboxMocks = vi.hoisted(() => ({
 // mock-isolation: Prevent real SSH provisioning; media loading and read policy stay real.
 vi.mock("../../agents/sandbox/context.js", () => sandboxMocks);
 
+function unexpected(method: string): never {
+  throw new Error(`unexpected ${method}`);
+}
+
 describe("SSH reply media", () => {
   let state: OpenClawTestState;
   let sandbox: SandboxContext;
@@ -36,49 +41,29 @@ describe("SSH reply media", () => {
     // A stale local copy must never win over the remote canonical file.
     await fs.mkdir(path.join(workspaceDir, "notes"));
     await fs.writeFile(path.join(workspaceDir, "notes/draft.md"), "stale host draft");
-    sandbox = {
-      enabled: true,
-      backendId: "ssh",
-      sessionKey: "agent:main:ssh-reply",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      workspaceAccess: "rw",
-      runtimeId: "ssh-reply",
-      runtimeLabel: "SSH test workspace",
-      containerName: "ssh-reply",
-      containerWorkdir: "/remote/workspace",
-      docker: {
-        image: "unused",
-        containerPrefix: "unused",
-        workdir: "/workspace",
-        readOnlyRoot: true,
-        tmpfs: [],
-        network: "none",
-        capDrop: [],
+    sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "ssh",
+        sessionKey: "agent:main:ssh-reply",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        runtimeId: "ssh-reply",
+        runtimeLabel: "SSH test workspace",
+        containerName: "ssh-reply",
+        containerWorkdir: "/remote/workspace",
+        tools: {},
+        fsBridge: {
+          readFile,
+          resolvePath: () => unexpected("resolvePath"),
+          writeFile: async () => unexpected("writeFile"),
+          mkdirp: async () => unexpected("mkdirp"),
+          remove: async () => unexpected("remove"),
+          rename: async () => unexpected("rename"),
+          stat: async () => null,
+        },
+        [Symbol.dispose]: dispose,
       },
-      tools: {},
-      browserAllowHostControl: false,
-      fsBridge: {
-        readFile,
-        resolvePath: () => {
-          throw new Error("unexpected resolvePath");
-        },
-        writeFile: async () => {
-          throw new Error("unexpected writeFile");
-        },
-        mkdirp: async () => {
-          throw new Error("unexpected mkdirp");
-        },
-        remove: async () => {
-          throw new Error("unexpected remove");
-        },
-        rename: async () => {
-          throw new Error("unexpected rename");
-        },
-        stat: async () => null,
-      },
-      [Symbol.dispose]: dispose,
-    };
+    });
     sandboxMocks.resolveSandboxContext.mockReset().mockResolvedValue(sandbox);
     sandboxMocks.ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(sandbox);
   });
@@ -89,14 +74,13 @@ describe("SSH reply media", () => {
   });
 
   function normalizer(options: Partial<Parameters<typeof createReplyMediaPathNormalizer>[0]> = {}) {
+    const policy = {
+      mode: "all",
+      backend: "ssh",
+      workspaceAccess: sandbox.workspaceAccess,
+    } as const;
     return createReplyMediaPathNormalizer({
-      cfg: {
-        agents: {
-          defaults: {
-            sandbox: { mode: "all", backend: "ssh", workspaceAccess: sandbox.workspaceAccess },
-          },
-        },
-      },
+      cfg: { agents: { defaults: { sandbox: policy } } },
       sessionKey: sandbox.sessionKey,
       agentId: "main",
       workspaceDir: sandbox.workspaceDir,

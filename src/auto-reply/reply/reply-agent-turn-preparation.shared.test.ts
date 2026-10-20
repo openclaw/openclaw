@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { SessionControllerMailboxClaim } from "../../sessions/session-controller.mailbox.js";
 import type { FollowupRun } from "./queue.js";
@@ -74,22 +74,31 @@ beforeEach(() => {
   state.preflight.mockResolvedValue(undefined);
 });
 
+type TurnParams = Parameters<typeof prepareReplyAgentTurn>[0];
+function prepare({
+  opts,
+  ...params
+}: Partial<Omit<TurnParams, "defaults">> & {
+  opts?: TurnParams["defaults"]["opts"];
+} = {}) {
+  return prepareReplyAgentTurn({
+    queued: createRun(),
+    claimSource: async () =>
+      ({ abortController: new AbortController() }) as SessionControllerMailboxClaim,
+    ...params,
+    defaults: {
+      typing: {} as TurnParams["defaults"]["typing"],
+      typingMode: "never",
+      defaultModel: "default-model",
+      opts,
+    },
+  });
+}
+
 it("prepares immediate and queued turns through the same model and memory preflight", async () => {
   const signalRunStart = vi.fn(async () => {});
-  const claimSource = async () =>
-    ({ abortController: new AbortController() }) as SessionControllerMailboxClaim;
   for (const kind of ["visible", "queued_followup"] as const) {
-    const result = await prepareReplyAgentTurn({
-      queued: createRun(),
-      defaults: {
-        typing: {} as Parameters<typeof prepareReplyAgentTurn>[0]["defaults"]["typing"],
-        typingMode: "never",
-        defaultModel: "default-model",
-      },
-      kind,
-      claimSource,
-      signalRunStart,
-    });
+    const result = await prepare({ kind, signalRunStart });
     expect(result.kind).toBe("admitted");
   }
   expect(state.resolveConfig).toHaveBeenCalledTimes(2);
@@ -102,27 +111,16 @@ it("prepares immediate and queued turns through the same model and memory prefli
 });
 
 it("gives consecutive unbound queued turns distinct execution identities", async () => {
-  const defaults = {
-    typing: {} as Parameters<typeof prepareReplyAgentTurn>[0]["defaults"]["typing"],
-    typingMode: "never" as const,
-    defaultModel: "default-model",
-    opts: { runId: "originating-immediate-turn" },
-  };
+  const opts = { runId: "originating-immediate-turn" };
   const runIds: string[] = [];
   for (let index = 0; index < 2; index++) {
-    const result = await prepareReplyAgentTurn({
-      queued: createRun(),
-      defaults,
+    const result = await prepare({
+      opts,
       kind: "queued_followup",
-      claimSource: async () =>
-        ({ abortController: new AbortController() }) as SessionControllerMailboxClaim,
     });
-    expect(result.kind).toBe("admitted");
-    if (result.kind !== "admitted") {
-      throw new Error("Expected queued turn admission");
-    }
+    assert(result.kind === "admitted", "Expected queued turn admission");
     runIds.push(result.turn.runId);
-    expect(result.turn.runId).not.toBe(defaults.opts.runId);
+    expect(result.turn.runId).not.toBe(opts.runId);
   }
   expect(runIds[0]).not.toBe(runIds[1]);
   expect(state.preflight.mock.calls.map(([params]) => params.opts.runId)).toEqual(runIds);
@@ -138,17 +136,10 @@ it.each(["visible", "queued_followup"] as const)(
     try {
       const queued = createRun();
       queued.controllerInput = input;
-      const result = await prepareReplyAgentTurn({
+      const result = await prepare({
         queued,
-        defaults: {
-          typing: {} as Parameters<typeof prepareReplyAgentTurn>[0]["defaults"]["typing"],
-          typingMode: "never",
-          defaultModel: "default-model",
-          opts: { runId: "originating-immediate-turn" },
-        },
+        opts: { runId: "originating-immediate-turn" },
         kind,
-        claimSource: async () =>
-          ({ abortController: new AbortController() }) as SessionControllerMailboxClaim,
       });
       expect(result).toMatchObject({ kind: "admitted", turn: { runId: "protocol-turn" } });
       expect(state.preflight.mock.calls[0]?.[0].opts.runId).toBe("protocol-turn");
@@ -170,21 +161,13 @@ it.each([null, "aborted_by_user", "aborted_for_restart"] as const)(
     const settled = vi.fn(async () => {});
 
     await expect(
-      prepareReplyAgentTurn({
-        queued: createRun(),
-        defaults: {
-          typing: {} as Parameters<typeof prepareReplyAgentTurn>[0]["defaults"]["typing"],
-          typingMode: "never",
-          defaultModel: "default-model",
-          opts: {
-            onQueuedFollowupAdmitted: async () => {
-              throw failure;
-            },
-            onQueuedFollowupSettled: settled,
+      prepare({
+        opts: {
+          onQueuedFollowupAdmitted: async () => {
+            throw failure;
           },
+          onQueuedFollowupSettled: settled,
         },
-        claimSource: async () =>
-          ({ abortController: new AbortController() }) as SessionControllerMailboxClaim,
       }),
     ).rejects.toBe(failure);
 
