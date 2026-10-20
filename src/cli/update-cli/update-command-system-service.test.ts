@@ -9,9 +9,9 @@ import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { withUpdateInProgressEnv } from "./update-command-service-env.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { maybeRestartService } from "./update-command-service.js";
@@ -108,13 +108,7 @@ it.runIf(process.platform === "linux").each([
           serviceMutationAllowed: false,
           serviceMutationSkipMessage: expect.stringContaining(restartCommand),
         });
-        const result: UpdateRunResult = {
-          status: "ok",
-          mode: "npm",
-          root,
-          steps: [],
-          durationMs: 0,
-        };
+        const result = updateResult({ root, durationMs: 0 });
         await expect(
           maybeRestartService({
             shouldRestart: false,
@@ -128,14 +122,14 @@ it.runIf(process.platform === "linux").each([
           }),
         ).resolves.toBe("ok");
         expect(classifyUpdateOutcome(result)).toBe("succeeded");
-        expect(result.steps).toEqual([
-          expect.objectContaining({
+        expect(result.steps).toMatchObject([
+          {
             exitCode: 0,
             advisory: {
               kind: "recoverable-maintenance",
               message: expect.stringContaining(restartCommand),
             },
-          }),
+          },
         ]);
         const report = renderUpdateRunReport(updateRunReportInputFromResult(result));
         expect(report.markdown).toContain(restartCommand);

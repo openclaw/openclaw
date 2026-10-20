@@ -3,18 +3,14 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
-import {
-  resolveCommandProcessSignal,
-  retainCommandProcessCleanup,
-  withCommandProcessScope,
-} from "../../process/exec-spawn.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import * as channelConfig from "./update-command-config.js";
+import { retainedInspectionCleanup } from "./update-command-inspection-settlement.test-support.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -40,8 +36,13 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
-function prepareTarget(overrides: Partial<Parameters<typeof resolveUpdateCommandTarget>[3]> = {}) {
-  return {
+function targetFixture(overrides: Partial<Parameters<typeof resolveUpdateCommandTarget>[3]> = {}) {
+  const run = {
+    runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+    env: state.env,
+  };
+  const enter = vi.fn(async () => ({ assertCurrent: () => {} }));
+  const prepared = {
     startedAt: 0,
     postCoreUpdateResume: false,
     postCoreUpdateChannel: undefined,
@@ -56,6 +57,19 @@ function prepareTarget(overrides: Partial<Parameters<typeof resolveUpdateCommand
     pkgOwnership: { assertUnowned: boundary.inspect, assertEntryUnowned: vi.fn() },
     ...overrides,
   } satisfies Parameters<typeof resolveUpdateCommandTarget>[3];
+  return {
+    run,
+    enter,
+    inspect: (dryRun = false) =>
+      resolveUpdateCommandTarget(
+        { json: true, run, ...(dryRun ? { dryRun, sourceUpdate: { root: state.root } } : {}) },
+        { triageTarget: { root: prepared.discoveredRoot, env: state.env } },
+        undefined,
+        prepared,
+        { enter },
+        1000,
+      ),
+  };
 }
 
 it.each(["recovered", "busy", "corrupt"] as const)(
@@ -75,19 +89,8 @@ it.each(["recovered", "busy", "corrupt"] as const)(
       read.mockRejectedValue(outcome === "busy" ? contention : corruption);
     }
     const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    const run = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-      env: state.env,
-    };
-    const enter = vi.fn(async () => ({ assertCurrent: () => {} }));
-    const target = resolveUpdateCommandTarget(
-      { json: true, dryRun: true, sourceUpdate: { root: state.root }, run },
-      { triageTarget: { root: state.root, env: state.env } },
-      undefined,
-      prepareTarget({ startedAt: Date.now() }),
-      { enter },
-      1000,
-    );
+    const { run, enter, inspect } = targetFixture({ startedAt: Date.now() });
+    const target = inspect(true);
     if (outcome === "recovered") {
       await expect(target).resolves.toMatchObject({ updateInstallKind: "git", channel: "dev" });
       expect(warning).toHaveBeenCalledWith(expect.stringContaining("continuing the update"));
@@ -110,46 +113,19 @@ it.each(["recovered", "busy", "corrupt"] as const)(
 it.each(["forced", "uncertain"] as const)(
   "settles target inspection before reporting preflight refusal (%s)",
   async (cleanupResult) => {
-    const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
-    const joining = createDeferredCore();
+    const cleanup = retainedInspectionCleanup();
     const reported = new Error("terminal refusal was reported");
     boundary.report.mockRejectedValue(reported);
-    boundary.inspect.mockImplementation(async () => {
-      retainCommandProcessCleanup(cleanup.promise);
-      resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
-        once: true,
-      });
-    });
-    const enter = vi.fn(async () => ({ assertCurrent: () => {} }));
-    const prepared = prepareTarget({
+    boundary.inspect.mockImplementation(async () => cleanup.retain());
+    const { enter, inspect } = targetFixture({
       shouldRestart: true,
       requestedChannel: "extended-stable",
       discoveredRoot: "/synthetic/install",
     });
-    const work = withCommandProcessScope(() =>
-      resolveUpdateCommandTarget(
-        { json: true, run: { runId: run.runId, env: state.env } },
-        { triageTarget: { root: prepared.discoveredRoot, env: state.env } },
-        undefined,
-        prepared,
-        { enter },
-        1000,
-      ),
-    ).catch((error: unknown) => error);
-    try {
-      await Promise.race([
-        joining.promise,
-        work.then(() => {
-          throw new Error("target preparation escaped cleanup ownership");
-        }),
-      ]);
+    const work = withCommandProcessScope(() => inspect()).catch((error: unknown) => error);
+    const result = await cleanup.join(work, cleanupResult, () => {
       expect(boundary.report).not.toHaveBeenCalled();
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    const result = await work;
+    });
     expect(enter).not.toHaveBeenCalled();
     expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
     if (cleanupResult === "forced") {

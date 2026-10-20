@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { captureGatewayServiceDefinitionBackup } from "../../daemon/service-definition-backup.js";
@@ -38,11 +38,17 @@ const gatewayArgs = (root: string, ...args: string[]) => [
 async function expectPackageVersion(root: string, version: string) {
   expect(await readText(path.join(root, "package.json"))).toContain(version);
 }
+const packageRoot = (owner: string) => path.join(owner, "node_modules", "openclaw");
+async function writePackageOwner(owner: string, version: string) {
+  await writePackageRoot(packageRoot(owner), version);
+  await fs.writeFile(
+    path.join(owner, "package.json"),
+    JSON.stringify({ dependencies: { openclaw: version } }),
+  );
+}
 
 export function registerPackageRootRollbackTests(
-  getFixture: () => InstallRootTransitionFixture & {
-    mocks: { managerUid: number | undefined; error: Mock };
-  },
+  getFixture: () => InstallRootTransitionFixture & { mocks: { managerUid: number | undefined } },
 ) {
   it.each([
     "removed",
@@ -73,32 +79,30 @@ export function registerPackageRootRollbackTests(
     await fs.rm(path.join(root, "package.json"));
     const globalRoot = path.join(root, "pnpm", "global", "v11");
     const previousOwner = path.join(globalRoot, "previous");
-    const previousRoot = path.join(previousOwner, "node_modules", "openclaw");
+    const previousRoot = packageRoot(previousOwner);
     const { recordPhase } = createUpdateCommandExecutionGuards({ run }, previousRoot);
-    const candidateRoot = path.join(globalRoot, "candidate", "node_modules", "openclaw");
+    const candidateRoot = packageRoot(path.join(globalRoot, "candidate"));
     const binDir = path.join(root, "bin");
     const serviceRoot = installationDrift ? path.join(root, "service-install") : previousRoot;
-    await writePackageRoot(previousRoot, previousPackageVersion);
+    await writePackageOwner(previousOwner, previousPackageVersion);
     if (installationDrift) {
       await writePackageRoot(serviceRoot, VERSION);
     }
-    await fs.writeFile(
-      path.join(previousOwner, "package.json"),
-      JSON.stringify({ dependencies: { openclaw: previousPackageVersion } }),
-    );
     await fs.symlink("previous", path.join(globalRoot, "active-openclaw"));
     await fs.mkdir(binDir);
     await fs.writeFile(path.join(binDir, "openclaw"), "previous launcher\n");
+    const definitionPath = systemdFiles.resolveSystemdUnitPath(run.env);
+    const readDefinition = () => readText(definitionPath);
     const command = {
       programArguments: gatewayArgs(serviceRoot, "--port", "19305"),
       environment: { HOME: root },
-      sourcePath: systemdFiles.resolveSystemdUnitPath(run.env),
-      definitionPaths: [systemdFiles.resolveSystemdUnitPath(run.env)],
+      sourcePath: definitionPath,
+      definitionPaths: [definitionPath],
     };
     mocks.command.mockResolvedValue(command);
     mocks.capability.mockResolvedValue({ kind: "writable" });
     const previousDefinition = buildSystemdUnit(command).replace("KillMode=mixed\n", "");
-    await fs.writeFile(command.sourcePath, previousDefinition);
+    await fs.writeFile(definitionPath, previousDefinition);
     if (backupScenario) {
       vi.spyOn(systemdFiles, "readSystemdServiceExecStart").mockImplementation(mocks.command);
       vi.spyOn(systemdSystem, "assertNoSystemSystemdOwnership").mockResolvedValue(undefined);
@@ -141,12 +145,8 @@ export function registerPackageRootRollbackTests(
       throw new Error("native stage missing");
     }
     const stagedOwner = path.join(native.globalRoot, "candidate");
-    const stagedRoot = path.join(stagedOwner, "node_modules", "openclaw");
-    await writePackageRoot(stagedRoot, "9999.1.1");
-    await fs.writeFile(
-      path.join(stagedOwner, "package.json"),
-      JSON.stringify({ dependencies: { openclaw: "9999.1.1" } }),
-    );
+    const stagedRoot = packageRoot(stagedOwner);
+    await writePackageOwner(stagedOwner, "9999.1.1");
     await fs.unlink(path.join(native.globalRoot, "active-openclaw"));
     await fs.symlink("candidate", path.join(native.globalRoot, "active-openclaw"));
     if (scenario !== "retained") {
@@ -192,12 +192,14 @@ export function registerPackageRootRollbackTests(
     }
     expect(before.stopped).toBe(true);
     if (installationDrift) {
-      expect(before.serviceUpdateVerdict).toMatchObject({
-        kind: "owned",
-        root: serviceRoot,
-        requiresInstallRootRefresh: true,
+      expect(before).toMatchObject({
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: serviceRoot,
+          requiresInstallRootRefresh: true,
+        },
+        servicePort: 19305,
       });
-      expect(before.servicePort).toBe(19305);
       before.serviceIdentity = { version: VERSION };
     }
     mocks.running =
@@ -211,6 +213,7 @@ export function registerPackageRootRollbackTests(
         }
       : command;
     const foreignRoot = path.join(root, "foreign");
+    const foreignCommand = { ...command, programArguments: gatewayArgs(foreignRoot) };
     if (scenario === "foreign command" || scenario === "foreign command after restore") {
       await writePackageRoot(foreignRoot, VERSION);
     }
@@ -219,9 +222,7 @@ export function registerPackageRootRollbackTests(
     mocks.command.mockImplementation(async () => {
       reads++;
       if (backupScenario) {
-        return (await fs.readFile(command.sourcePath!, "utf8")).includes(candidateRoot)
-          ? currentCommand
-          : command;
+        return (await readDefinition()).includes(candidateRoot) ? currentCommand : command;
       }
       if (reads === 2 && (scenario === "changed command" || scenario === "changed manager")) {
         changedDuringStop = true;
@@ -230,10 +231,7 @@ export function registerPackageRootRollbackTests(
         mocks.managerUid = 3002;
       }
       if (scenario === "foreign command") {
-        return {
-          ...currentCommand,
-          programArguments: gatewayArgs(foreignRoot),
-        };
+        return foreignCommand;
       }
       return scenario === "changed command" && reads >= 2
         ? { ...currentCommand, programArguments: [...currentCommand.programArguments, "--verbose"] }
@@ -250,14 +248,13 @@ export function registerPackageRootRollbackTests(
         await withSystemdDefinitionMutation(
           run.env,
           command.environment,
-          (mutation) =>
-            mutation.publish(command.sourcePath!, buildSystemdUnit(currentCommand), 0o600),
+          (mutation) => mutation.publish(definitionPath, buildSystemdUnit(currentCommand), 0o600),
           { definitionTransaction: backup.hooks },
         );
         definitionRecovery.backup = await backup.finish();
       });
       if (scenario === "backup edited") {
-        await fs.appendFile(command.sourcePath!, "Nice=7\n");
+        await fs.appendFile(definitionPath, "Nice=7\n");
       }
       if (scenario === "backup invalid") {
         definitionRecovery.backup!.files[0]!.sourcePath += ".foreign";
@@ -266,9 +263,7 @@ export function registerPackageRootRollbackTests(
         definitionRecovery.unverified = true;
       }
     }
-    const definitionBeforeRollback = backupScenario
-      ? await fs.readFile(command.sourcePath!)
-      : undefined;
+    const definitionBeforeRollback = backupScenario ? await fs.readFile(definitionPath) : undefined;
     if (scenario === "unavailable manager") {
       mocks.managerUid = undefined;
     } else if (scenario === "sealed definition") {
@@ -282,11 +277,7 @@ export function registerPackageRootRollbackTests(
         if (scenario === "changed manager after restore") {
           mocks.managerUid = 3002;
         } else {
-          const foreignCommand = {
-            ...command,
-            programArguments: gatewayArgs(foreignRoot),
-          };
-          await fs.writeFile(command.sourcePath, buildSystemdUnit(foreignCommand));
+          await fs.writeFile(definitionPath, buildSystemdUnit(foreignCommand));
           mocks.command.mockResolvedValue(foreignCommand);
         }
         return restored;
@@ -296,9 +287,8 @@ export function registerPackageRootRollbackTests(
       expect(argv[1]).toBe(path.join(previousRoot, "dist", "index.js"));
       await expectPackageVersion(previousRoot, previousPackageVersion);
       expect(argv).not.toContain("install");
-      expect(argv).toContain("restart");
-      expect(argv).toContain("--preserve-definition");
-      expect(await readText(command.sourcePath)).toBe(previousDefinition);
+      expect(argv).toEqual(expect.arrayContaining(["restart", "--preserve-definition"]));
+      expect(await readDefinition()).toBe(previousDefinition);
       mocks.running = true;
       return commandResult({
         stdout: JSON.stringify({ action: "restart", ok: true, result: "restarted" }),
@@ -309,7 +299,7 @@ export function registerPackageRootRollbackTests(
         new Error("Retained service definition reload failed"),
       );
     }
-    const outcome = await rollbackFailedUpdate({
+    const { result, rolledBack } = await rollbackFailedUpdate({
       result: {
         status: "error",
         reason: "doctor-failed",
@@ -339,9 +329,9 @@ export function registerPackageRootRollbackTests(
       nodeRunner: process.execPath,
       definitionRecovery,
     });
-    expect(mocks.events.filter((event) => event === "native daemon-reload")).toHaveLength(
-      backupRestored ? 1 : 0,
-    );
+    const expectEvents = (event: string, count: number) =>
+      expect(mocks.events.filter((entry) => entry === event)).toHaveLength(count);
+    expectEvents("native daemon-reload", backupRestored ? 1 : 0);
     const refused = [
       "changed command",
       "changed manager",
@@ -354,46 +344,44 @@ export function registerPackageRootRollbackTests(
       changesAfterRestore ||
       (!refused && (!backupScenario || backupRestored));
     const succeeded = restored && scenario !== "backup restore failed" && !changesAfterRestore;
-    expect(outcome.rolledBack).toBe(succeeded);
-    if (restored) {
-      await expectPackageVersion(previousRoot, previousPackageVersion);
-    } else {
-      await expectPackageVersion(candidateRoot, "9999.1.1");
-    }
+    expect(rolledBack).toBe(succeeded);
+    await expectPackageVersion(
+      restored ? previousRoot : candidateRoot,
+      restored ? previousPackageVersion : "9999.1.1",
+    );
+    expect(result.reason).toBe(
+      refused || changesAfterRestore ? "service-revalidation-failed" : "doctor-failed",
+    );
     if (!succeeded) {
       expect(mocks.child).not.toHaveBeenCalled();
     }
     if (succeeded || scenario === "backup restore failed") {
-      expect(await readText(command.sourcePath)).toBe(previousDefinition);
+      expect(await readDefinition()).toBe(previousDefinition);
     }
     if (succeeded || changesAfterRestore) {
       expect(await readText(path.join(binDir, "openclaw"))).toBe("previous launcher\n");
     }
     if (scenario === "backup restore failed") {
-      expect(outcome.result).toMatchObject({
-        reason: "doctor-failed",
+      expect(result).toMatchObject({
         root: previousRoot,
         recovery: { packageRollbackVerified: true, serviceRestartSafe: false },
         rollbackOutcome: { status: "failed" },
       });
-      expect(outcome.result).not.toHaveProperty("recovery.dataAtRisk");
+      expect(result).not.toHaveProperty("recovery.dataAtRisk");
       expect(mocks.running).toBe(false);
     } else if (backupScenario && !backupRestored) {
-      expect(await fs.readFile(command.sourcePath!)).toEqual(definitionBeforeRollback);
-      expect(outcome.result.reason).toBe("doctor-failed");
-      expect(outcome.result).not.toHaveProperty("recovery.dataAtRisk");
-      expect(outcome.result.rollbackOutcome).toEqual({
+      expect(await fs.readFile(definitionPath)).toEqual(definitionBeforeRollback);
+      expect(result).not.toHaveProperty("recovery.dataAtRisk");
+      expect(result.rollbackOutcome).toEqual({
         status: "not-attempted",
         reason: "service-definition-rollback-unverified",
       });
       if (scenario === "backup edited" || scenario === "backup invalid") {
         const warning =
           scenario === "backup edited"
-            ? `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${command.sourcePath}`
+            ? `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${definitionPath}`
             : "SERVICE_DEFINITION_UNKNOWN: Service backup selects different managed artifacts.";
-        expect(outcome.result.steps).toContainEqual(
-          expect.objectContaining({ warnings: [warning] }),
-        );
+        expect(result.steps).toContainEqual(expect.objectContaining({ warnings: [warning] }));
         expect(getUpdateRun(run.runId, { env: run.env })?.steps).toContainEqual(
           expect.objectContaining({
             step: "warning:package rollback",
@@ -403,30 +391,27 @@ export function registerPackageRootRollbackTests(
         );
       }
       expect(mocks.running).toBe(true);
-      expect(mocks.events.filter((event) => event === "native stop")).toHaveLength(1);
+      expectEvents("native stop", 1);
     } else if (changesAfterRestore) {
-      expect(outcome.result).toMatchObject({
-        reason: "service-revalidation-failed",
+      expect(result).toMatchObject({
         root: previousRoot,
         recovery: { packageRollbackVerified: true },
       });
       await expect(fs.stat(candidateRoot)).rejects.toMatchObject({ code: "ENOENT" });
       expect(mocks.running).toBe(false);
-      expect(mocks.events.filter((event) => event === "native stop")).toHaveLength(2);
+      expectEvents("native stop", 2);
     } else if (refused) {
       if (scenario === "changed command" || scenario === "changed manager") {
         expect(changedDuringStop).toBe(true);
       }
-      expect(outcome.result.reason).toBe("service-revalidation-failed");
       await expectPackageVersion(
-        path.join(transaction.backupRoot, "v11", "previous", "node_modules", "openclaw"),
+        packageRoot(path.join(transaction.backupRoot, "v11", "previous")),
         previousPackageVersion,
       );
-      expect(mocks.events.filter((event) => event === "native stop")).toHaveLength(1);
+      expectEvents("native stop", 1);
     } else {
-      expect(outcome.result).toMatchObject({
+      expect(result).toMatchObject({
         status: "error",
-        reason: "doctor-failed",
         root: previousRoot,
         before: { version: previousPackageVersion },
         after: { version: previousPackageVersion },
@@ -434,16 +419,14 @@ export function registerPackageRootRollbackTests(
         rollbackOutcome: { status: "succeeded" },
       });
       expect(mocks.running).toBe(true);
-      expect(mocks.events.filter((event) => event === "native stop")).toHaveLength(
-        scenario === "running original" || backupScenario ? 2 : 1,
-      );
+      expectEvents("native stop", scenario === "running original" || backupScenario ? 2 : 1);
       expect(mocks.child).toHaveBeenCalledOnce();
       if (installationDrift) {
         await expectPackageVersion(serviceRoot, VERSION);
         expect(mocks.health).toHaveBeenCalledWith(
           expect.objectContaining({ port: 19305, expectedVersion: VERSION }),
         );
-        expect(await readText(command.sourcePath)).toContain(serviceRoot);
+        expect(await readDefinition()).toContain(serviceRoot);
         await expect(fs.stat(candidateRoot)).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(mocks.health.mock.calls.some(([request]) => request.expectedVersion === VERSION)).toBe(
