@@ -35,6 +35,27 @@ function createArtifactFixture(files: Record<string, object | string>): string {
   return rootDir;
 }
 
+function manifest(id: string, fields: Record<string, unknown> = {}) {
+  return { id, configSchema: { type: "object" }, ...fields };
+}
+
+function childManifest(tool: string) {
+  return manifest("child", { contracts: { tools: [tool, "read"] }, skills: ["child-skill"] });
+}
+
+function pluginFiles(
+  id: string,
+  fields: Record<string, unknown> = {},
+  files: Record<string, object | string> = {},
+) {
+  return {
+    "package.json": { openclaw: { extensions: ["./index.js"] } },
+    "index.js": "export {};",
+    "openclaw.plugin.json": manifest(id, fields),
+    ...files,
+  };
+}
+
 function createDeclaredSurface(
   overrides: Partial<PluginAcceptedDeclaredSurface> = {},
 ): PluginAcceptedDeclaredSurface {
@@ -61,18 +82,13 @@ describe("plugin capability consent", () => {
   ])(
     "records official capability acceptance only after requested review ($recordOfficialCapabilities/$accepted)",
     async ({ recordOfficialCapabilities, accepted }) => {
-      const artifactDir = createArtifactFixture({
-        "package.json": {
-          name: "@openclaw/codex",
-          openclaw: { extensions: ["./index.js"] },
-        },
-        "index.js": "export {};",
-        "openclaw.plugin.json": {
-          id: "codex",
-          contracts: { tools: ["fixture.tool"] },
-          configSchema: { type: "object" },
-        },
-      });
+      const artifactDir = createArtifactFixture(
+        pluginFiles(
+          "codex",
+          { contracts: { tools: ["fixture.tool"] } },
+          { "package.json": { name: "@openclaw/codex", openclaw: { extensions: ["./index.js"] } } },
+        ),
+      );
       const reviewed: string[] = [];
       const consent = createManagedPluginArtifactConsentHandler({
         config: {},
@@ -117,83 +133,60 @@ describe("plugin capability consent", () => {
     },
   );
 
-  it.each([
-    { label: "native package entries", explicitPath: false, staged: false },
-    { label: "a configured file override", explicitPath: true, staged: false },
-    {
-      label: "a configured file override mapped into an update stage",
-      explicitPath: true,
-      staged: true,
-    },
-    {
-      label: "a configured file override after the previous payload was removed",
-      explicitPath: true,
-      staged: true,
-      missingPrevious: true,
-    },
-    {
-      label: "a configured file symlink with its original manifest root",
-      explicitPath: true,
-      alias: true,
-      staged: false,
-    },
-    {
-      label: "a configured file symlink mapped into an update stage",
-      explicitPath: true,
-      alias: true,
-      staged: true,
-    },
-    {
-      label: "an unmanaged configured descendant outside the package entry set",
-      explicitPath: true,
-      unmanaged: true,
-      staged: false,
-    },
+  it.each<
+    [string, boolean, boolean, { alias?: boolean; unmanaged?: boolean; missingPrevious?: boolean }?]
+  >([
+    ["native package entries", false, false],
+    ["a configured file override", true, false],
+    ["a configured file override mapped into an update stage", true, true],
+    [
+      "a configured file override after the previous payload was removed",
+      true,
+      true,
+      { missingPrevious: true },
+    ],
+    ["a configured file symlink with its original manifest root", true, false, { alias: true }],
+    ["a configured file symlink mapped into an update stage", true, true, { alias: true }],
+    [
+      "an unmanaged configured descendant outside the package entry set",
+      true,
+      false,
+      { unmanaged: true },
+    ],
   ])(
-    "matches runtime discovery for $label",
-    ({ explicitPath, staged, alias = false, unmanaged = false, missingPrevious = false }) => {
+    "matches runtime discovery for %s",
+    (
+      _label,
+      explicitPath,
+      staged,
+      { alias = false, unmanaged = false, missingPrevious = false } = {},
+    ) => {
       const rootDir = createArtifactFixture({
         "package.json": {
           name: "multi-plugin-package",
           openclaw: { extensions: ["./index.js", "./plugins/child/child.js"] },
         },
-        "openclaw.plugin.json": {
-          id: "root",
+        "openclaw.plugin.json": manifest("root", {
           channels: ["chat"],
           contracts: { tools: ["read"] },
-          configSchema: { type: "object" },
-        },
+        }),
         "index.js": "export {};",
-        "plugins/child/openclaw.plugin.json": {
-          id: "child",
-          contracts: { tools: ["write", "read"] },
-          skills: ["child-skill"],
-          configSchema: { type: "object" },
-        },
+        "plugins/child/openclaw.plugin.json": childManifest("write"),
         "plugins/child/child.js": "export {};",
-        "plugins/openclaw.plugin.json": {
-          id: "ignored-ancestor",
+        "plugins/openclaw.plugin.json": manifest("ignored-ancestor", {
           contracts: { tools: ["unreachable-tool"] },
-          configSchema: { type: "object" },
-        },
+        }),
         "extra/extra.js": "export {};",
-        "extra/openclaw.plugin.json": {
-          id: "unmanaged-extra",
+        "extra/openclaw.plugin.json": manifest("unmanaged-extra", {
           contracts: { tools: ["unmanaged-tool"] },
-          configSchema: { type: "object" },
-        },
+        }),
       });
       const artifactDir = staged ? createArtifactFixture({}) : rootDir;
       if (staged) {
         fs.cpSync(rootDir, artifactDir, { recursive: true });
         fs.writeFileSync(
           path.join(artifactDir, "plugins/child/openclaw.plugin.json"),
-          JSON.stringify({
-            id: "child",
-            contracts: { tools: ["staged-write", "read"] },
-            skills: ["child-skill"],
-            configSchema: { type: "object" },
-          }),
+          JSON.stringify(childManifest("staged-write")),
         );
       }
       if (alias) {
@@ -233,10 +226,10 @@ describe("plugin capability consent", () => {
       );
       const runtimeDeclared = mergePluginDeclaredSurfaces(
         runtime.manifestRegistry.plugins
-          .filter((manifest) => ownedIds.has(manifest.id))
+          .filter((entry) => ownedIds.has(entry.id))
           .map(
-            (manifest) =>
-              buildPluginCapabilitySummary({ manifest, origin: manifest.origin }).declared,
+            (entry) =>
+              buildPluginCapabilitySummary({ manifest: entry, origin: entry.origin }).declared,
           ),
       );
       const includesChildManifest = explicitPath && !alias && !unmanaged;
@@ -267,11 +260,9 @@ describe("plugin capability consent", () => {
     const rootDir = createArtifactFixture({
       "package.json": { openclaw: { extensions: ["./index.js"] } },
       "index.js": "export {};",
-      "openclaw.plugin.json": {
-        id: "native",
+      "openclaw.plugin.json": manifest("native", {
         contracts: { gatewayMethodDispatch: ["dangerous.gateway"] },
-        configSchema: { type: "object" },
-      },
+      }),
       ".claude-plugin/plugin.json": { name: "bundle", skills: ["./misleading-safe-skill"] },
     });
 
@@ -282,11 +273,9 @@ describe("plugin capability consent", () => {
 
   it("reviews a competing bundle before native fallback when the package declares no extensions", () => {
     const rootDir = createArtifactFixture({
-      "openclaw.plugin.json": {
-        id: "native",
+      "openclaw.plugin.json": manifest("native", {
         contracts: { gatewayMethodDispatch: ["native.gateway"] },
-        configSchema: { type: "object" },
-      },
+      }),
       ".claude-plugin/plugin.json": { name: "bundle", skills: ["./bundle-skills"] },
     });
 
@@ -304,87 +293,46 @@ describe("plugin capability consent", () => {
     expect(() => resolvePluginArtifactDeclaredSurface(rootDir)).toThrow();
   });
 
-  it.each<{
-    label: string;
-    previous: Partial<PluginAcceptedDeclaredSurface>;
-    next: Partial<PluginAcceptedDeclaredSurface>;
-    widened: Partial<PluginAcceptedDeclaredSurface>;
-  }>([
-    {
-      label: "an added capability in an existing group",
-      previous: { tools: ["read"] },
-      next: { tools: ["write", "read"] },
-      widened: { tools: ["write"] },
-    },
-    {
-      label: "a removed capability",
-      previous: { tools: ["read", "write"] },
-      next: { tools: ["read"] },
-      widened: {},
-    },
-  ])("identifies widening for $label", ({ previous, next, widened }) => {
+  it.each([
+    { previous: ["read"], next: ["write", "read"], widened: { tools: ["write"] } },
+    { previous: ["read", "write"], next: ["read"], widened: {} },
+  ])("identifies widening from $previous to $next", ({ previous, next, widened }) => {
     expect(
-      diffDeclaredSurfaceWidening(createDeclaredSurface(previous), createDeclaredSurface(next)),
+      diffDeclaredSurfaceWidening(
+        createDeclaredSurface({ tools: previous }),
+        createDeclaredSurface({ tools: next }),
+      ),
     ).toEqual({ widened, hasWidening: Object.keys(widened).length > 0 });
   });
 
-  it.each<{
-    label: string;
-    record: Partial<PluginInstallRecord>;
-    declared: Partial<PluginAcceptedDeclaredSurface>;
-    current: boolean;
-  }>([
-    {
-      label: "missing acceptance",
-      record: { acceptedSurface: undefined },
-      declared: { tools: ["read"] },
-      current: false,
-    },
-    {
-      label: "missing acceptance hash",
-      record: { acceptedSurfaceHash: undefined },
-      declared: { tools: ["read"] },
-      current: false,
-    },
-    {
-      label: "a forged acceptance hash",
-      record: { acceptedSurfaceHash: "0".repeat(64) },
-      declared: { tools: ["read"] },
-      current: false,
-    },
-    {
-      label: "a changed accepted snapshot",
-      record: { acceptedSurface: createDeclaredSurface({ tools: ["write"] }) },
-      declared: { tools: ["read"] },
-      current: false,
-    },
-    {
-      label: "a changed installed artifact",
-      record: { integrity: "sha512-new", acceptedSurfaceIntegrity: "sha512-old" },
-      declared: { tools: ["read"] },
-      current: false,
-    },
-    {
-      label: "an accepted artifact anchor that disappeared",
-      record: { acceptedSurfaceIntegrity: "sha512-old" },
-      declared: { tools: ["read"] },
-      current: false,
-    },
-    {
-      label: "matching declared surface without an available artifact digest",
-      record: {},
-      declared: { tools: ["read"] },
-      current: true,
-    },
-  ])("recognizes current acceptance for $label", ({ record, declared, current }) => {
-    const surface = createDeclaredSurface(declared);
+  it.each<[string, Partial<PluginInstallRecord>, boolean]>([
+    ["missing acceptance", { acceptedSurface: undefined }, false],
+    ["missing acceptance hash", { acceptedSurfaceHash: undefined }, false],
+    ["a forged acceptance hash", { acceptedSurfaceHash: "0".repeat(64) }, false],
+    [
+      "a changed accepted snapshot",
+      { acceptedSurface: createDeclaredSurface({ tools: ["write"] }) },
+      false,
+    ],
+    [
+      "a changed installed artifact",
+      { integrity: "sha512-new", acceptedSurfaceIntegrity: "sha512-old" },
+      false,
+    ],
+    [
+      "an accepted artifact anchor that disappeared",
+      { acceptedSurfaceIntegrity: "sha512-old" },
+      false,
+    ],
+    ["matching declared surface without an available artifact digest", {}, true],
+  ])("recognizes current acceptance for %s", (_label, record, current) => {
+    const surface = createDeclaredSurface({ tools: ["read"] });
     const installRecord: PluginInstallRecord = {
       source: "npm",
       acceptedSurface: surface,
       acceptedSurfaceHash: computeDeclaredSurfaceHash(surface),
       ...record,
     };
-
     expect(resolveAcceptedSurfaceCurrent(installRecord, surface)).toBe(current);
   });
 
@@ -410,7 +358,7 @@ describe("plugin capability consent", () => {
       mode: "install",
       stagedArtifactDir: createArtifactFixture({
         "index.js": "export {};",
-        "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
+        "openclaw.plugin.json": manifest("plugin"),
       }),
     });
 
@@ -420,42 +368,31 @@ describe("plugin capability consent", () => {
 
   it("selects the canonical installed artifact integrity in precedence order", () => {
     expect(
-      resolvePluginInstallRecordIntegrity({
-        integrity: "primary",
-        npmIntegrity: "npm",
-        clawpackSha256: "clawpack",
-        gitCommit: "commit",
-      }),
-    ).toEqual({ integrity: "primary", integrityKind: "ssri" });
-    expect(
-      resolvePluginInstallRecordIntegrity({ npmIntegrity: "npm", gitCommit: "commit" }),
-    ).toEqual({
-      integrity: "npm",
-      integrityKind: "ssri",
-    });
-    expect(resolvePluginInstallRecordIntegrity({ clawpackSha256: "clawpack" })).toEqual({
-      integrity: "clawpack",
-      integrityKind: "sha256",
-    });
-    expect(resolvePluginInstallRecordIntegrity({ gitCommit: "commit" })).toEqual({
-      integrity: "commit",
-      integrityKind: "git-commit",
-    });
-    expect(resolvePluginInstallRecordIntegrity({})).toBeUndefined();
+      [
+        {
+          integrity: "primary",
+          npmIntegrity: "npm",
+          clawpackSha256: "clawpack",
+          gitCommit: "commit",
+        },
+        { npmIntegrity: "npm", gitCommit: "commit" },
+        { clawpackSha256: "clawpack" },
+        { gitCommit: "commit" },
+        {},
+      ].map(resolvePluginInstallRecordIntegrity),
+    ).toEqual([
+      { integrity: "primary", integrityKind: "ssri" },
+      { integrity: "npm", integrityKind: "ssri" },
+      { integrity: "clawpack", integrityKind: "sha256" },
+      { integrity: "commit", integrityKind: "git-commit" },
+      undefined,
+    ]);
   });
 
   it.each(["missing", "invalid"])(
     "requires fresh review to repair a %s previous artifact",
     async (condition) => {
-      const files = {
-        "package.json": { openclaw: { extensions: ["./index.js"] } },
-        "index.js": "export {};",
-        "openclaw.plugin.json": {
-          id: "plugin",
-          contracts: { tools: ["repair-tool"] },
-          configSchema: { type: "object" },
-        },
-      };
+      const files = pluginFiles("plugin", { contracts: { tools: ["repair-tool"] } });
       const previousDir = createArtifactFixture(files);
       const stagedDir = createArtifactFixture(files);
       const acceptedSurface = resolvePluginArtifactDeclaredSurface(previousDir);
@@ -503,15 +440,9 @@ describe("plugin capability consent", () => {
   );
 
   it("requires Claw-owner review even when an update has current plugin acceptance", async () => {
-    const rootDir = createArtifactFixture({
-      "package.json": { openclaw: { extensions: ["./index.js"] } },
-      "index.js": "export {};",
-      "openclaw.plugin.json": {
-        id: "plugin",
-        contracts: { tools: ["read"] },
-        configSchema: { type: "object" },
-      },
-    });
+    const rootDir = createArtifactFixture(
+      pluginFiles("plugin", { contracts: { tools: ["read"] } }),
+    );
     const acceptedSurface = resolvePluginArtifactDeclaredSurface(rootDir);
     const previousRecords = {
       plugin: {
@@ -555,11 +486,7 @@ describe("plugin capability consent", () => {
         openclaw: { extensions: ["./index.js"] },
       },
       "index.js": "export {};",
-      "openclaw.plugin.json": {
-        id: "acpx",
-        contracts: { tools: ["acpx.run"] },
-        configSchema: { type: "object" },
-      },
+      "openclaw.plugin.json": manifest("acpx", { contracts: { tools: ["acpx.run"] } }),
     });
     const sourceRecord: PluginInstallRecord = {
       source: "clawhub",
@@ -601,11 +528,7 @@ describe("plugin capability consent", () => {
   });
 
   it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
-    const rootDir = createArtifactFixture({
-      "package.json": { openclaw: { extensions: ["./index.js"] } },
-      "index.js": "export {};",
-      "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
-    });
+    const rootDir = createArtifactFixture(pluginFiles("plugin"));
     const consent = createManagedPluginArtifactConsentHandler({
       config: { plugins: { entries: { plugin: { enabled: false } } } },
       source: "npm",

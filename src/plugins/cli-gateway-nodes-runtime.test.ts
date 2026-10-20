@@ -1,4 +1,3 @@
-/** Tests plugin CLI node Gateway runtime timeout and invocation behavior. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
@@ -36,42 +35,23 @@ describe("createPluginCliGatewayNodesRuntime", () => {
     );
   });
 
-  it("forwards requested node invoke scopes for bundled plugin CLI runtime", async () => {
-    const nodes = createPluginCliGatewayNodesRuntime();
-
-    await withPluginRuntimePluginScope({ pluginId: "google-meet", pluginOrigin: "bundled" }, () =>
-      nodes.invoke({
-        nodeId: "node-1",
-        command: "browser.proxy",
-        scopes: ["operator.admin"],
-      }),
-    );
-
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "node.invoke",
-        scopes: ["operator.admin"],
-      }),
-    );
-  });
-
-  it("drops requested node invoke scopes for third-party plugin CLI runtime", async () => {
-    const nodes = createPluginCliGatewayNodesRuntime();
-
-    await withPluginRuntimePluginScope({ pluginId: "third-party", pluginOrigin: "global" }, () =>
-      nodes.invoke({
-        nodeId: "node-1",
-        command: "browser.proxy",
-        scopes: ["operator.admin"],
-      }),
-    );
-
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        scopes: expect.anything(),
-      }),
-    );
-  });
+  it.each(["bundled", "global"] as const)(
+    "gates requested invoke scopes for %s plugins",
+    async (pluginOrigin) => {
+      await withPluginRuntimePluginScope({ pluginId: "fixture", pluginOrigin }, () =>
+        createPluginCliGatewayNodesRuntime().invoke({
+          nodeId: "node-1",
+          command: "browser.proxy",
+          scopes: ["operator.admin"],
+        }),
+      );
+      expect(callGatewayMock).toHaveBeenCalledWith(
+        pluginOrigin === "bundled"
+          ? expect.objectContaining({ method: "node.invoke", scopes: ["operator.admin"] })
+          : expect.not.objectContaining({ scopes: expect.anything() }),
+      );
+    },
+  );
 
   it("forwards node invocation cancellation to the Gateway request", async () => {
     const controller = new AbortController();

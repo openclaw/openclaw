@@ -4,58 +4,40 @@ import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import type { PluginManifestContracts } from "./manifest-types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
-describe("plugin capability summaries", () => {
-  it.each<{
-    label: string;
-    origin: PluginOrigin | "official";
-    hooks?: PluginEntryConfig["hooks"];
-    promptInjection: { effective: boolean; configured?: boolean };
-    conversationAccess: { effective: boolean; configured?: boolean };
-  }>([
-    {
-      label: "bundled defaults",
-      origin: "bundled",
-      promptInjection: { effective: true },
-      conversationAccess: { effective: true },
-    },
-    {
-      label: "external defaults",
-      origin: "global",
-      promptInjection: { effective: true },
-      conversationAccess: { effective: false },
-    },
-    {
-      label: "official catalog defaults",
-      origin: "official",
-      promptInjection: { effective: true },
-      conversationAccess: { effective: false },
-    },
-    {
-      label: "explicit external grants",
-      origin: "workspace",
-      hooks: { allowPromptInjection: false, allowConversationAccess: true },
-      promptInjection: { effective: false, configured: false },
-      conversationAccess: { effective: true, configured: true },
-    },
-    {
-      label: "explicit bundled restrictions",
-      origin: "bundled",
-      hooks: { allowConversationAccess: false },
-      promptInjection: { effective: true },
-      conversationAccess: { effective: false, configured: false },
-    },
-  ])("preserves fail-closed policy for $label", (scenario) => {
-    const summary = buildPluginCapabilitySummary({
-      manifest: {},
-      origin: scenario.origin,
-      entryConfig: scenario.hooks ? { hooks: scenario.hooks } : undefined,
-    });
+const granted = { effective: true };
+const denied = { effective: false };
+const allowed = { effective: true, configured: true };
+const restricted = { effective: false, configured: false };
+type Grant = typeof granted & { configured?: boolean };
 
-    expect(summary.grants.hooks).toEqual({
-      allowPromptInjection: scenario.promptInjection,
-      allowConversationAccess: scenario.conversationAccess,
-    });
-  });
+describe("plugin capability summaries", () => {
+  it.each<[string, PluginOrigin | "official", PluginEntryConfig["hooks"], Grant, Grant]>([
+    ["bundled defaults", "bundled", undefined, granted, granted],
+    ["external defaults", "global", undefined, granted, denied],
+    ["official defaults", "official", undefined, granted, denied],
+    [
+      "external grants",
+      "workspace",
+      { allowPromptInjection: false, allowConversationAccess: true },
+      restricted,
+      allowed,
+    ],
+    ["bundled restrictions", "bundled", { allowConversationAccess: false }, granted, restricted],
+  ])(
+    "preserves fail-closed policy for %s",
+    (_label, origin, hooks, promptInjection, conversationAccess) => {
+      const summary = buildPluginCapabilitySummary({
+        manifest: {},
+        origin,
+        entryConfig: hooks ? { hooks } : undefined,
+      });
+
+      expect(summary.grants.hooks).toEqual({
+        allowPromptInjection: promptInjection,
+        allowConversationAccess: conversationAccess,
+      });
+    },
+  );
 
   it("normalizes manifest surfaces and configured model grants deterministically", () => {
     const summary = buildPluginCapabilitySummary({
