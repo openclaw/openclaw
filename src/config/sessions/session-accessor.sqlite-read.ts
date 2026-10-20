@@ -6,12 +6,14 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
   runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -29,6 +31,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import { readTranscriptExportInSlices } from "./session-accessor.sqlite-export-slices.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -56,6 +59,7 @@ import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { assertTranscriptEventReadBudget } from "./session-transcript-read-bytes.js";
 import {
@@ -175,6 +179,11 @@ type TranscriptExportSnapshot = {
   sessionKey: string | undefined;
   generation?: string | null;
   throughSeq?: number;
+  /**
+   * Rows after `afterSeq` through `throughSeq` that a sliced read still has to add, and the
+   * transcript context version this head was read at.
+   */
+  deferred?: { afterSeq?: number; throughSeq: number; version: SessionTranscriptContextVersion };
 };
 
 type TranscriptExportRequest = {
@@ -191,43 +200,46 @@ type TranscriptExportRead = {
   afterSeq?: number;
 };
 
-/** Snapshot export payloads and their identity without opening the writable lifecycle. */
+/**
+ * Snapshot export payloads and their identity without opening the writable lifecycle, reading
+ * the rows in bounded slices after the head. A deferred `batchHead` is reused while the
+ * transcript context version still matches it.
+ */
 export function readTranscriptExportSnapshotReadOnlySync(
   scope: SessionTranscriptReadScope,
   options: TranscriptExportOptions = {},
+  batchHead?: TranscriptExportSnapshot,
 ) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteReadSnapshotSync(
-        database.db,
-        () => readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options),
-        { operationLabel: "session transcript export snapshot" },
+  const request = { resolved, scope, options };
+  return readTranscriptExportInSlices({
+    ...options,
+    sessionId: resolved.sessionId,
+    batchHead,
+    transaction: (read) =>
+      withOpenClawAgentDatabaseReadOnly(
+        (database) =>
+          runSqliteReadSnapshotSync(database.db, () => read(database), {
+            operationLabel: "session transcript export snapshot",
+          }),
+        toDatabaseOptions(resolved),
       ),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : undefined;
+    readHead: (database, slicing) =>
+      readTranscriptExportSnapshotsFromDatabase(database, [request], slicing)[0]!,
+  });
 }
 
-function readTranscriptExportSnapshotFromDatabase(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
-  resolved: ResolvedTranscriptReadScope,
-  scope: SessionTranscriptReadScope,
-  options: TranscriptExportOptions,
-): TranscriptExportSnapshot {
-  const snapshot = readTranscriptExportSnapshotsFromDatabase(database, [
-    { resolved, scope, options },
-  ])[0]!;
-  if (snapshot === "cold") {
-    throw new SessionTranscriptColdError(resolved.sessionId);
-  }
-  return snapshot;
-}
-
-/** Export metadata and only requested deltas within the caller's read transaction. */
+/**
+ * Export metadata and only requested deltas within the caller's read transaction. With
+ * `deferAboveBytes` on SQLite, a transcript whose recorded size exceeds it keeps its rows unread
+ * and returns `deferred` for `readTranscriptExportSnapshotReadOnlySync` after that transaction.
+ * PostgreSQL ignores it: the stalled checkpoint is a SQLite WAL problem, and PostgreSQL buffers
+ * every query result, so unbounded slice queries would refetch the remaining rows.
+ */
 export function readTranscriptExportSnapshotsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   requests: readonly TranscriptExportRequest[],
+  { deferAboveBytes = Number.POSITIVE_INFINITY }: { deferAboveBytes?: number } = {},
 ): Array<TranscriptExportSnapshot | "cold"> {
   const exportStats = readTranscriptStatsBatchFromDatabase(
     database,
@@ -265,7 +277,12 @@ export function readTranscriptExportSnapshotsFromDatabase(
           beforeEventSeq: fence?.beforeRawSeq,
           maxEventBytes: scope.maxEventBytes,
         });
-        pending.push({ request, snapshot, throughSeq, afterSeq: previous?.throughSeq });
+        if (stats.sizeBytes > deferAboveBytes && !isPostgresSqlConnection(database.db)) {
+          const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+          snapshot.deferred = { afterSeq: previous?.throughSeq, throughSeq, version };
+        } else {
+          pending.push({ request, snapshot, throughSeq, afterSeq: previous?.throughSeq });
+        }
       }
       return snapshot;
     }),
@@ -285,13 +302,7 @@ export function readTranscriptExportSnapshotsFromDatabase(
         end += 1;
       }
       const batch = reads.slice(start, end);
-      const bySession = new Map<string, TranscriptExportRead[]>();
-      for (const read of batch) {
-        const sessionId = read.request.resolved.sessionId;
-        const targets = bySession.get(sessionId) ?? [];
-        targets.push(read);
-        bySession.set(sessionId, targets);
-      }
+      const bySession = groupRecords(batch, (read) => read.request.resolved.sessionId);
       const rows = iterateSqliteQuerySync(
         database.db,
         getSessionKysely(database.db)

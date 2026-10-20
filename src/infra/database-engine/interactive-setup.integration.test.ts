@@ -21,7 +21,7 @@ const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const nodeExecutable = resolveTestNodeExecPath();
 const commandTimeoutMs = 60_000;
-const localJournals = new Map([
+const localStores = new Map([
   [
     path.join("state", "openclaw-quarantine.sqlite"),
     ["agent_integrity_verifications", "quarantined_databases"],
@@ -29,6 +29,16 @@ const localJournals = new Map([
   [
     path.join("control", "services.sqlite"),
     ["daemon_runtime_pin_migration", "daemon_runtime_pins"],
+  ],
+  [
+    path.join("client", "credentials.sqlite"),
+    [
+      "client_credential_migration",
+      "device_auth_tokens",
+      "device_identities",
+      "gateway_origin_device_tokens",
+      "native_exec_socket_credentials",
+    ],
   ],
 ]);
 
@@ -208,14 +218,14 @@ for (const engine of ["sqlite", "postgres"] as const) {
             for (const database of databases) {
               using local = openNodeSqliteDatabase(database, { readOnly: true });
               if (engine === "postgres") {
-                const journal = localJournals.get(path.relative(stateDir, database));
+                const localStore = localStores.get(path.relative(stateDir, database));
                 expect(
                   local
                     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
                     .all(),
                   `${entry} left application state in ${path.relative(stateDir, database)}`,
-                ).toEqual((journal ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
-                if (!journal) {
+                ).toEqual((localStore ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
+                if (!localStore) {
                   const anchor = local
                     .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
                     .get();

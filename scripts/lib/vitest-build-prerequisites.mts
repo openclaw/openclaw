@@ -68,7 +68,7 @@ const runtimeConsumers = [
   {
     file: "src/gateway/setup-inference.first-signin.integration.test.ts",
     configs: [
-      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",

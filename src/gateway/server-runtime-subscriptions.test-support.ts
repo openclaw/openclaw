@@ -25,6 +25,7 @@ import {
   onAgentRuntimeEvent,
 } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
@@ -285,7 +286,7 @@ export function registerAuditSubscriptionTests(params: {
       }),
     ).toBeUndefined();
 
-    unsubs.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     const restarted = start();

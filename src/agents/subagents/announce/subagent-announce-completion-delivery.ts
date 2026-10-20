@@ -145,6 +145,13 @@ export async function runAnnounceAgentCall(params: {
           clearTimeout(timer);
           params.onAccepted?.(payload);
         },
+        onStartOwner: (owner) => {
+          // Private callers still time out their observation while admission keeps custody.
+          // Public handoffs transfer their cancelling deadline at source registration.
+          if (!params.privateCompletion && owner.observe()) {
+            clearTimeout(timer);
+          }
+        },
         onExecutionStarted: () => {
           executionSignal.throwIfAborted();
           if (!params.isExecutionAllowed()) {

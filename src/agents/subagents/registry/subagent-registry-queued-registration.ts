@@ -1,3 +1,4 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -8,9 +9,12 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   prepareSwarmCollectorCompletion,
+  prepareTerminatedCollectorLaunch,
+  clearPublishedSwarmCollectorOutput,
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   getCurrentSubagentRunOwner,
   hasPendingSubagentRetirementPublication,
@@ -23,7 +27,6 @@ import {
   waitForPendingSubagentKillClaim,
 } from "./subagent-registry-persistence.js";
 import { waitForQueuedSubagentClaim } from "./subagent-registry-queued-registration-wait.js";
-import { createQueuedRegistrationSettlement } from "./subagent-registry-queued-settlement.js";
 import { createFailedQueuedRun } from "./subagent-registry-run-launch-record.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -160,26 +163,134 @@ export function registerRequiredQueuedSubagent(params: {
     }
     assertLaunchCurrent();
   };
-  const settlement = createQueuedRegistrationSettlement({
-    entry,
-    context,
-    manager,
-    assertRegistryCurrent,
-    ownsSession,
-    waitForClaim,
-    canContinueSettlement: () => canContinueSettlement(),
-    canPrepareCancelled: () =>
-      registrationAcknowledged && !persistenceUncertain && !recoveryPending,
-    setPending: (pending) => {
-      settlementPending = pending;
-    },
-    retire: () => {
-      recoveryPending = { kind: "retired" };
-    },
-    onTerminalPublished: (execution) => {
-      publishedTerminalExecution = execution;
-    },
-  });
+  let cancelledLaunch:
+    | { error: string; killedAt: number; failure?: Error; published?: true }
+    | undefined;
+  const cancellationCurrent = (current: SubagentRunRecord) =>
+    ownsSession() &&
+    !current.killIntent &&
+    current.killReconciliation &&
+    current.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    current.execution.status === "terminal" &&
+    typeof current.execution.endedAt === "number" &&
+    current.swarmLaunchPending === true &&
+    !current.collectorCompletion;
+  const publish = async (
+    stage: "recovery intent" | "terminal" | "cancelled launch",
+    prepare: (current: SubagentRunRecord, ownedSession: boolean) => SubagentRunRecord,
+  ): Promise<boolean> => {
+    for (;;) {
+      for (let claim = waitForClaim(); claim; claim = waitForClaim()) {
+        await claim;
+      }
+      const selected = getCurrentSubagentRunOwner(manager.runs, entry);
+      if (!selected) {
+        return false;
+      }
+      const result = await mutateSubagentRuns(
+        [selected.runId],
+        (rows) => {
+          const current = rows.get(selected.runId);
+          if (!current || !isSameSubagentRunOwner(current, entry)) {
+            return { value: "retired" as const };
+          }
+          if (stage !== "cancelled launch" && current.killReconciliation) {
+            return { value: "retired" as const };
+          }
+          if (current.killIntent) {
+            return { value: "claim" as const };
+          }
+          if (
+            stage === "cancelled launch"
+              ? !cancellationCurrent(current) ||
+                current.killReconciliation?.killedAt !== cancelledLaunch?.killedAt
+              : !canContinueSettlement()
+          ) {
+            return { value: "retired" as const };
+          }
+          return {
+            value: "published" as const,
+            postimages: new Map([[current.runId, prepare(current, ownsSession())]]),
+          };
+        },
+        {
+          runs: manager.runs,
+          context,
+          assertCurrent: assertRegistryCurrent,
+          onPublished: (postimages) => {
+            const current = postimages.get(selected.runId);
+            if (current) {
+              clearPublishedSwarmCollectorOutput(current);
+              if (stage === "terminal") {
+                publishedTerminalExecution = current.execution;
+              }
+            }
+          },
+        },
+      );
+      if (result !== "claim") {
+        return result === "published";
+      }
+    }
+  };
+  const prepareCancelled = (error: string) => {
+    if (cancelledLaunch) {
+      return true;
+    }
+    const current = getCurrentSubagentRunOwner(manager.runs, entry);
+    if (
+      !(registrationAcknowledged && !persistenceUncertain && !recoveryPending) ||
+      !current ||
+      !isSameSubagentRunOwner(current, entry) ||
+      !cancellationCurrent(current)
+    ) {
+      return false;
+    }
+    settlementPending = true;
+    cancelledLaunch = { error, killedAt: current.killReconciliation!.killedAt };
+    return true;
+  };
+  const settleCancelled = async () => {
+    const prepared = cancelledLaunch;
+    if (!prepared || prepared.published) {
+      return;
+    }
+    if (prepared.failure) {
+      throw prepared.failure;
+    }
+    try {
+      const collectorSession = await prepareSwarmCollectorCompletion(
+        getCurrentSubagentRunOwner(manager.runs, entry) ?? entry,
+        manager.getRuntimeConfig(),
+        assertRegistryCurrent,
+      );
+      const published = await publish("cancelled launch", (current) => {
+        const draft = { ...current };
+        prepareTerminatedCollectorLaunch(
+          draft,
+          current.execution.endedAt!,
+          prepared.error,
+          () => manager.getRuntimeConfig(),
+          collectorSession,
+        );
+        return draft;
+      });
+      if (published) {
+        prepared.published = true;
+      } else {
+        recoveryPending = { kind: "retired" };
+      }
+      settlementPending = false;
+    } catch (error) {
+      if (
+        hasSqliteWorkerOutcomeUnknown(error) ||
+        (error instanceof SubagentRegistryWriteError && error.outcome === "committed")
+      ) {
+        prepared.failure = toErrorObject(error, "Cancelled collector launch settlement failed");
+      }
+      throw error;
+    }
+  };
   params.retainOwnership?.(
     Object.freeze({
       waitForClaim,
@@ -218,8 +329,8 @@ export function registerRequiredQueuedSubagent(params: {
           }
           await claim;
         }
-        if (settlement.prepareCancelled(error)) {
-          await settlement.settleCancelled();
+        if (prepareCancelled(error)) {
+          await settleCancelled();
           return;
         }
         if (confirmedTakeover()) {
@@ -263,7 +374,7 @@ export function registerRequiredQueuedSubagent(params: {
     if (!descriptorCommitted && ownsSession()) {
       return true;
     }
-    const published = await settlement.publish("recovery intent", (current, ownedSession) => ({
+    const published = await publish("recovery intent", (current, ownedSession) => ({
       ...current,
       queuedLaunch: undefined,
       execution: {
@@ -302,7 +413,7 @@ export function registerRequiredQueuedSubagent(params: {
         manager.getRuntimeConfig(),
         assertRegistryCurrent,
       );
-      const published = await settlement.publish("terminal", (current, ownedSession) => {
+      const published = await publish("terminal", (current, ownedSession) => {
         const terminal = createFailedQueuedRun(current, message, endedAt, ownedSession);
         updateSwarmCollectorCompletion(terminal, manager.getRuntimeConfig(), prepared);
         return terminal;

@@ -33,6 +33,7 @@ export function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   delegationSectionRenders: boolean;
+  inTurnCollectionGuidance?: string;
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageToolAvailable = params.availableTools.has("message");
@@ -82,7 +83,8 @@ export function buildMessagingSection(params: {
     : hasSessionsSpawn
       ? [
           '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`. Follow the accepted completion mode.',
-          hasSessionsYield ? "Announcing children: wait via `sessions_yield`." : "",
+          params.inTurnCollectionGuidance ??
+            (hasSessionsYield ? "Announcing children: wait via `sessions_yield`." : ""),
           hasSubagents ? "`subagents(action=list)` only status/debug." : "",
         ]
           .filter(Boolean)

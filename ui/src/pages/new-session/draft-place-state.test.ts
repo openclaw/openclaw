@@ -259,6 +259,8 @@ describe("DraftPlaceState repository selection", () => {
   });
 
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
+    // This test owns draft selection; settle lazy code loading before the interaction deadline.
+    await import("../chat/components/chat-model-picker-panel.tsx");
     const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
       data: routeData({ requestedModel: "example/first" }),
       models: models("first", "second", "remembered"),

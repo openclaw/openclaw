@@ -14,17 +14,12 @@ export function resolveInboundDebounceMs(params: {
   overrideMs?: number;
 }): number {
   const inbound = params.cfg.messages?.inbound;
-  for (const value of [
-    params.overrideMs,
-    inbound?.byChannel?.[params.channel],
-    inbound?.debounceMs,
-  ]) {
-    const resolved = resolveOptionalIntegerOption(value, { min: 0 });
-    if (resolved !== undefined) {
-      return resolved;
-    }
-  }
-  return 0;
+  return (
+    resolveOptionalIntegerOption(params.overrideMs, { min: 0 }) ??
+    inbound?.byChannel?.[params.channel] ??
+    inbound?.debounceMs ??
+    0
+  );
 }
 
 type DebounceBuffer<T> = {

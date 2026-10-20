@@ -48,9 +48,7 @@ export async function waitForNoWhatsAppReply(
     windowMs: number;
   } & WhatsAppQaNoReplyTarget,
 ) {
-  await new Promise((resolve) => {
-    setTimeout(resolve, params.windowMs);
-  });
+  await sleep(params.windowMs);
   const observedAfterMs = params.observedAfter.getTime();
   const unexpectedReply = params.driver.getObservedMessages().find((message) => {
     if (new Date(message.observedAt).getTime() <= observedAfterMs) {

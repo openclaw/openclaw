@@ -39,6 +39,18 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
+## Model sign-in
+
+Open the model menu in the chat composer and choose **Model sign-in**. The menu
+remains available during a response, while session settings are saving, and when
+no models are listed. Model choices still respect their existing permission and
+busy-state restrictions; opening sign-in does not grant permission to change them.
+
+When the selected model cannot send because its credentials are missing or invalid,
+a **Model sign-in** link also appears beside the composer. The link stays available
+when camera or voice-note capture replaces the model menu. Provider authentication
+and Gateway permissions are unchanged.
+
 ## Settings
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the

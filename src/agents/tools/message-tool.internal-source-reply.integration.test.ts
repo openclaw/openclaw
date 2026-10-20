@@ -600,13 +600,20 @@ describe("WebChat message tool internal source reply", () => {
           }
         });
         const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
-        let preCommitCleanup:
-          | Awaited<ReturnType<typeof cleanupManagedOutgoingMediaRecords>>
-          | undefined;
+        let preCommitEntries: Awaited<ReturnType<typeof listManagedImageRecordEntries>> = [];
         const appendSpy = vi
           .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
           .mockImplementationOnce(async (params) => {
-            preCommitCleanup = await cleanupManagedOutgoingMediaRecords({ stateDir });
+            await cleanupManagedOutgoingMediaRecords({ stateDir });
+            preCommitEntries = await listManagedImageRecordEntries({ stateDir, sessionKey });
+            for (const { record } of preCommitEntries) {
+              const { mediaRoot, mediaSubdir, mediaId, contentType } = record.original;
+              expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(
+                contentType === "image/png"
+                  ? Buffer.from(TINY_PNG_BASE64, "base64")
+                  : Buffer.from('{"status":"ready"}\n'),
+              );
+            }
             return append(params);
           });
         const [toolResult, overlappingResult] = await Promise.all([
@@ -616,11 +623,7 @@ describe("WebChat message tool internal source reply", () => {
           unsubscribe();
           appendSpy.mockRestore();
         });
-        expect(preCommitCleanup).toEqual({
-          deletedRecordCount: 0,
-          deletedFileCount: 0,
-          retainedCount: 3,
-        });
+        expect(preCommitEntries).toHaveLength(3);
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ transcriptOwner: true });
         expect(overlappingResult.details).toMatchObject({

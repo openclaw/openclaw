@@ -8,6 +8,7 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
+import * as observerModel from "../../gateway/session-observer-model.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -78,6 +79,22 @@ it.for(["ready", "late", "abandoned"] as const)(
     const result = createDeferred<Awaited<ReturnType<typeof defaultCompleteModel>>>();
     const published = createDeferred();
     const scheduler = createTestGatewayScheduler();
+    const prepare = vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue({
+      config: cfg,
+      authProfileId: undefined,
+      provider: "test",
+      model: "utility",
+      agentId: "main",
+      agentDir: root,
+      outputTextPolicy: "strict-visible",
+      thinkLevel: "off",
+    });
+    const complete = vi
+      .spyOn(observerModel, "defaultCompleteModel")
+      .mockImplementation(async () => {
+        started.resolve();
+        return result.promise;
+      });
     const service = createSessionActivitySummaries({
       scheduler,
       getConfig: () => cfg,
@@ -85,20 +102,6 @@ it.for(["ready", "late", "abandoned"] as const)(
         if (fixture.read()?.activitySummary) {
           published.resolve();
         }
-      },
-      prepareModel: async () => ({
-        config: cfg,
-        authProfileId: undefined,
-        provider: "test",
-        model: "utility",
-        agentId: "main",
-        agentDir: root,
-        outputTextPolicy: "strict-visible",
-        thinkLevel: "off",
-      }),
-      completeModel: async () => {
-        started.resolve();
-        return result.promise;
       },
     });
     const finishModel = () =>
@@ -164,6 +167,8 @@ it.for(["ready", "late", "abandoned"] as const)(
       await service.dispose();
       await scheduler.stop();
       observer.restore();
+      prepare.mockRestore();
+      complete.mockRestore();
     }
   },
 );

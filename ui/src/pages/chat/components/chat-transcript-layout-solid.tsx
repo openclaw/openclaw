@@ -1,16 +1,5 @@
-import { render, type JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  For,
-  Match,
-  onCleanup,
-  runWithOwner,
-  Show,
-  Switch,
-  untrack,
-} from "solid-js";
-import { registerListener } from "../../../../../src/shared/listeners.js";
+import { dynamic, render, type JSX } from "@solidjs/web";
+import { createMemo, createSignal, For, onCleanup, runWithOwner, Show, untrack } from "solid-js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -21,73 +10,17 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
-import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
 import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
-import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import {
-  StreamGroup,
-  UnplacedSubagentWait,
-  WorkGroupSummary,
-} from "./chat-message-stream-view.tsx";
-import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
-import { ChatSystemEvents } from "./chat-system-events.tsx";
-import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
-import {
-  GuardedTranscriptItem,
-  type NativeTranscriptView,
-} from "./chat-transcript-render-guard.ts";
-import { ChatTypingIndicator } from "./chat-typing-indicator.tsx";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
+import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
+import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
-  return (
-    <Switch>
-      <Match when={props.value.kind === "system-events" ? props.value : undefined}>
-        {(view) => <ChatSystemEvents item={view().item} />}
-      </Match>
-      <Match when={props.value.kind === "group" ? props.value : undefined}>
-        {(view) => <MessageGroup {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "activity" ? props.value : undefined}>
-        {(view) => <ActivityGroup {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "stream" ? props.value : undefined}>
-        {(view) => <StreamGroup {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "work" ? props.value : undefined}>
-        {(view) => <WorkGroupSummary {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "frame" ? props.value : undefined}>
-        {(view) => <AgentRunFrame {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "wait" ? props.value : undefined}>
-        {(view) => <UnplacedSubagentWait {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "divider" ? props.value : undefined}>
-        {(view) => <ChatDivider {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "notice" ? props.value : undefined}>
-        {(view) => <ChatNotice {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "work-previews" ? props.value : undefined}>
-        {(view) => <TranscriptWorkPreviews {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "realtime" ? props.value : undefined}>
-        {(view) => <RealtimeTalkConversation {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "recap" ? props.value : undefined}>
-        {(view) => <TurnRecapRow {...view()} />}
-      </Match>
-      <Match when={props.value.kind === "typing" ? props.value : undefined}>
-        {(view) => <ChatTypingIndicator {...view()} />}
-      </Match>
-    </Switch>
-  );
+  const Row = dynamic(() => nativeRows[props.value.kind]);
+  return <Row {...props.value} />;
 }
 
 function GuardedRow(props: { value: GuardedTranscriptItem }): JSX.Element {
@@ -130,15 +63,15 @@ function TranscriptRows(props: {
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
             {(virtualRow, renderedIndex) => {
-              const index = createMemo(() => virtualRow().index);
-              const row = createMemo(() => props.snapshot.rows[index()]);
+              const index = () => virtualRow().index;
+              const row = () => props.snapshot.rows[index()];
               const content = createMemo(() => props.snapshot.getContent(index()));
-              const gap = createMemo(() => {
+              const gap = () => {
                 const previous = virtualRows()[renderedIndex() - 1];
                 return previous && virtualRow().index > previous.index + 1
                   ? virtualRow().start - previous.end
                   : 0;
-              });
+              };
               // The keyed row owns one measurement binding for its entire mounted lifetime.
               const initialKey = untrack(() => String(virtualRow().key));
               const measureRef = props.measureRowRefFor(initialKey);
@@ -184,7 +117,7 @@ export class ChatTranscriptRenderer {
   private commitQueued = false;
   private readonly layoutEffects = new Set<() => void>();
   private readonly mediaDisconnect = new Set<() => void>();
-  private readonly listeners = new Set<() => void>();
+  private publish?: () => void;
   private readonly presentationChanged = () => this.publishPresentation?.();
 
   get columnElement(): HTMLDivElement | undefined {
@@ -192,7 +125,10 @@ export class ChatTranscriptRenderer {
   }
 
   subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
   }
 
   private isPresented(): boolean {
@@ -296,7 +232,8 @@ export class ChatTranscriptRenderer {
       element.className = "chat-thread-inner chat-thread-inner--virtual";
       element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
-      // A session outlives the render computation that first introduces its DOM.
+      // This retained transcript island outlives the computation that introduces its DOM.
+      // Its session owner disposes the detached root, including while the pane is parked.
       this.disposeRoot = runWithOwner(null, () =>
         render(() => {
           const [presented, setPresented] = createSignal(this.isPresented(), { ownedWrite: true });
@@ -345,9 +282,7 @@ export class ChatTranscriptRenderer {
       );
     } else {
       this.publishPresentation?.();
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.publish?.();
     }
     this.commit();
     next.scrollElementRef(this.element);

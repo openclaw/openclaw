@@ -209,6 +209,7 @@ export function createApplicationOverlays(
       ).catch(() => undefined);
     }
   };
+  // Revoke approval and pairing authority during the Gateway receipt, before views run.
   const stopGateway = gateway.subscribe(synchronizeGateway);
 
   const stopEvents = gateway.subscribeEvents((event) => {

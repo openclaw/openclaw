@@ -21,25 +21,15 @@ export async function listAllMcpTools(
     ...MCP_CATALOG_LIST_LIMITS,
     signal,
     loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-      const requestController = new AbortController();
-      const onAbort = () => requestController.abort(requestSignal.reason);
-      requestSignal.addEventListener("abort", onAbort, { once: true });
-      if (requestSignal.aborted) {
-        onAbort();
-      }
-      try {
-        const page = await client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestController.signal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      } finally {
-        requestSignal.removeEventListener("abort", onAbort);
-      }
+      const page = await client.request(
+        { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
+        {
+          timeout: requestTimeoutMs,
+          maxTotalTimeout: requestTimeoutMs,
+          signal: requestSignal,
+        },
+      );
+      return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
     },
   });
 }

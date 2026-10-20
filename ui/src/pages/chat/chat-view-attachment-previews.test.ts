@@ -8,7 +8,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView, requireElement } from "./chat-view.test-helpers.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {

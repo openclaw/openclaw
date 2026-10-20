@@ -6,7 +6,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.ts";
 
-export type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
+type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
   repoRoot: string;
 };
 

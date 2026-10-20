@@ -34,6 +34,7 @@ import {
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import * as personActivity from "./person-activity-link.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
@@ -93,7 +94,7 @@ function createWorkloadGateway(readSummary: () => Promise<SessionsListResult>, i
       return { subscribed: true };
     }
     if (method === "sessions.groups.list") {
-      return { names: [], sectionOrder: [] };
+      return { groups: [], sectionOrder: [] };
     }
     if (method === "sessions.list") {
       if (!Value.Check(SessionsListParamsSchema, params)) {
@@ -178,6 +179,16 @@ describe("sidebar people workload", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+  });
+
+  it("prepares one activity link per updated person while keeping navigation current", async () => {
+    const { sidebar, publishPresence } = await mountWorkload();
+    const link = vi.spyOn(personActivity, "personActivityLink");
+    await publishPresence([profile("ada", "Ada renamed", NOW)]);
+    const row = person(sidebar, "Ada renamed");
+    expect(row.getAttribute("href")).toBe("/activity/ada");
+    expect(row.getAttribute("aria-label")).toContain("Ada renamed");
+    expect(link.mock.calls.filter(([id]) => id === "ada")).toHaveLength(1);
   });
 
   it("keeps a pending snapshot hidden until newly present profiles have counts", async () => {

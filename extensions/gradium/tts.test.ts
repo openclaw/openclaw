@@ -1,17 +1,23 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
-import { gradiumTTS } from "./tts.js";
+import { buildGradiumSpeechProvider } from "./speech-provider.js";
 
 describe("gradium tts diagnostics", () => {
   installPinnedHostnameTestHooks();
 
-  const request: Parameters<typeof gradiumTTS>[0] = {
+  const provider = buildGradiumSpeechProvider();
+  const request: SpeechSynthesisRequest = {
     text: "hello",
-    apiKey: "test-key",
-    baseUrl: "https://api.gradium.ai",
-    voiceId: "YTpq7expH9539ERJ",
-    outputFormat: "wav",
+    cfg: {},
+    providerConfig: {
+      apiKey: "test-key",
+      baseUrl: "https://api.gradium.ai",
+      voiceId: "YTpq7expH9539ERJ",
+    },
+    target: "audio-file",
     timeoutMs: 5_000,
   };
 
@@ -31,7 +37,7 @@ describe("gradium tts diagnostics", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(gradiumTTS(request)).rejects.toThrow(
+    await expect(provider.synthesize(request)).rejects.toThrow(
       "Gradium API error (401): Invalid API key [request_id=grad_req_123]",
     );
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -46,7 +52,7 @@ describe("gradium tts diagnostics", () => {
     });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed.response));
 
-    await expect(gradiumTTS(request)).rejects.toThrow("Gradium API error (503): yyyy");
+    await expect(provider.synthesize(request)).rejects.toThrow("Gradium API error (503): yyyy");
 
     expect(streamed.getReadCount()).toBeLessThan(200);
   });
@@ -68,7 +74,12 @@ describe("gradium tts diagnostics", () => {
       .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(gradiumTTS({ ...request, baseUrl })).rejects.toThrow(expectedError);
+    await expect(
+      provider.synthesize({
+        ...request,
+        providerConfig: { ...request.providerConfig, baseUrl },
+      }),
+    ).rejects.toThrow(expectedError);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -84,7 +95,7 @@ describe("gradium tts diagnostics", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(gradiumTTS(request)).rejects.toThrow(
+    await expect(provider.synthesize(request)).rejects.toThrow(
       "Gradium API error: malformed audio response",
     );
   });

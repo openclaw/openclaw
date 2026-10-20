@@ -5,6 +5,7 @@ import { formatErrorMessageWithCode } from "../infra/errors.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayIndependentRootWorkAdmission,
@@ -136,7 +137,11 @@ export async function runGatewayStartupObservers(params: {
                 try {
                   const { recoverExecExitNotifications } =
                     await import("../agents/bash-tools.exec-notify.js");
-                  await recoverExecExitNotifications(params.config, params.signal);
+                  await withPluginRuntimeGatewayContextResolver(
+                    params.resolveGatewayContext,
+                    () => recoverExecExitNotifications(params.config, params.signal),
+                    { inheritRequestScope: false },
+                  );
                 } catch (error) {
                   if (!params.signal.aborted) {
                     params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);

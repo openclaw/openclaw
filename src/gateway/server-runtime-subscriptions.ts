@@ -29,7 +29,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
-import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   onGatewaySuspendAdmissionChange,
   retainGatewayRootWorkAdmissionContinuation,
@@ -580,9 +580,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     await auditRecorder.stop();
   };
 
-  const heartbeatUnsub = onHeartbeatEvent((evt) => {
+  heartbeatNotifications.onEvent = (evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
-  });
+  };
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
@@ -701,7 +701,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     sessionCompanion,
     sessionObserver,
     agentUnsub,
-    heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub() {
       unsubscribeProcesses();

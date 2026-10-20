@@ -143,13 +143,79 @@ export async function executeNodeMediaAction(input: {
           });
         });
       }
-      return await createNodePhotoResult({
-        kind: facing ? "snaps" : "photos",
-        photos,
-        expectedHost: resolvedNode.remoteIp,
-        modelHasVision,
+      const kind: "snaps" | "photos" = facing ? "snaps" : "photos";
+      const command = kind === "snaps" ? "camera.snap" : "photos.latest";
+      const content: AgentToolResult<unknown>["content"] = [];
+      const details: Array<Record<string, unknown> & { path: string }> = [];
+      for (const [
+        index,
+        { photo, facing: artifactFacing, createdAt, isJpeg },
+      ] of photos.entries()) {
+        const filePath = cameraTempPath({
+          kind: "snap",
+          ...(artifactFacing ? { facing: artifactFacing } : { id: crypto.randomUUID() }),
+          ext: isJpeg ? "jpg" : "png",
+        });
+        await writeCameraPayloadToFile({
+          filePath,
+          payload: photo,
+          expectedHost: resolvedNode.remoteIp,
+          invalidPayloadMessage: `invalid ${command} payload`,
+        });
+        content.push(
+          modelHasVision && photo.base64
+            ? {
+                type: "image",
+                data: photo.base64,
+                mimeType:
+                  imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+              }
+            : {
+                type: "text",
+                text: `${artifactFacing ? "Camera" : "Library"} photo saved to ${filePath}.`,
+              },
+        );
+        details.push({
+          ...(artifactFacing ? { facing: artifactFacing } : { index }),
+          path: filePath,
+          width: photo.width,
+          height: photo.height,
+          ...(typeof createdAt === "string" ? { createdAt } : {}),
+        });
+      }
+      if (details.length === 0) {
+        content.push({ type: "text", text: "No photos found." });
+      }
+      const mediaUrls = details.map((entry) => entry.path);
+      const sanitized = await sanitizeToolResultImages(
+        {
+          content,
+          details:
+            details.length > 0 ? { [kind]: details, media: { mediaUrls, outbound: false } } : [],
+        },
+        kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
         imageSanitization,
-      });
+      );
+      // When vision attempted to supply inline image blocks, the per-photo saved-path
+      // text was skipped; append an accurate summary based on whether images survived
+      // sanitization so the model always receives the private saved file path(s)
+      // without claiming images were loaded when none entered context.
+      const attemptedVisionImages = content.some((block) => block.type === "image");
+      if (attemptedVisionImages && details.length > 0) {
+        const retainedImageCount = sanitized.content.filter(
+          (block) => block.type === "image",
+        ).length;
+        const savedPaths = details.map((entry) => JSON.stringify(entry.path)).join(", ");
+        const text =
+          retainedImageCount > 0
+            ? `Loaded ${retainedImageCount} photo${retainedImageCount === 1 ? "" : "s"} into private model context for inspection; not attached or sent to the user. Saved to ${savedPaths}. Share explicitly only when the user asks.`
+            : `Photo${details.length === 1 ? "" : "s"} saved to ${savedPaths}; not attached or sent to the user. Share explicitly only when the user asks.`;
+        return {
+          ...sanitized,
+          content: [...sanitized.content, { type: "text", text }],
+        };
+      }
+      return sanitized;
     }
     case "camera_clip":
     case "screen_record": {
@@ -250,6 +316,9 @@ export async function executeNodeMediaAction(input: {
         height: payload.height,
         media: {
           mediaUrl: written.path,
+          // Inspected screenshots stay private; the FILE: path in the result
+          // text supports explicit sharing when the user asks.
+          outbound: false,
         },
       });
     }
@@ -273,62 +342,6 @@ type ValidatedNodePhoto = ReturnType<typeof validateNodePhoto> & {
   facing?: CameraArtifactFacing;
   createdAt?: unknown;
 };
-
-async function createNodePhotoResult(params: {
-  kind: "snaps" | "photos";
-  photos: ValidatedNodePhoto[];
-  expectedHost?: string;
-  modelHasVision?: boolean;
-  imageSanitization: ImageSanitizationLimits;
-}): Promise<AgentToolResult<unknown>> {
-  const command = params.kind === "snaps" ? "camera.snap" : "photos.latest";
-  const content: AgentToolResult<unknown>["content"] = [];
-  const details: Array<Record<string, unknown> & { path: string }> = [];
-  for (const [index, { photo, facing, createdAt, isJpeg }] of params.photos.entries()) {
-    const filePath = cameraTempPath({
-      kind: "snap",
-      ...(facing ? { facing } : { id: crypto.randomUUID() }),
-      ext: isJpeg ? "jpg" : "png",
-    });
-    await writeCameraPayloadToFile({
-      filePath,
-      payload: photo,
-      expectedHost: params.expectedHost,
-      invalidPayloadMessage: `invalid ${command} payload`,
-    });
-    content.push(
-      params.modelHasVision && photo.base64
-        ? {
-            type: "image",
-            data: photo.base64,
-            mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
-          }
-        : {
-            type: "text",
-            text: `${facing ? "Camera" : "Library"} photo saved to ${filePath}.`,
-          },
-    );
-    details.push({
-      ...(facing ? { facing } : { index }),
-      path: filePath,
-      width: photo.width,
-      height: photo.height,
-      ...(typeof createdAt === "string" ? { createdAt } : {}),
-    });
-  }
-  if (details.length === 0) {
-    content.push({ type: "text", text: "No photos found." });
-  }
-  const mediaUrls = details.map((entry) => entry.path);
-  return await sanitizeToolResultImages(
-    {
-      content,
-      details: details.length > 0 ? { [params.kind]: details, media: { mediaUrls } } : [],
-    },
-    params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
-    params.imageSanitization,
-  );
-}
 
 /**
  * Refuses to write media whose bytes contradict the caller's filename.

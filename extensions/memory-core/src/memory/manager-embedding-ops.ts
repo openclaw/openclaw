@@ -18,7 +18,7 @@ import {
   type MemorySearchDeadlineControl,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   withMemoryWorkspaceLock,
@@ -367,14 +367,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     provider: EmbeddingProvider | null = this.provider,
     providerRuntime: MemoryEmbeddingProviderRuntime | undefined = this.providerRuntime,
   ): number {
-    const configuredTimeoutSeconds = this.settings.sync.embeddingBatchTimeoutSeconds;
-    if (
-      kind === "batch" &&
-      typeof configuredTimeoutSeconds === "number" &&
-      configuredTimeoutSeconds > 0
-    ) {
-      return resolveTimerTimeoutMs(configuredTimeoutSeconds * 1000, MAX_TIMER_TIMEOUT_MS);
-    }
     const defaults = EMBEDDING_TIMEOUTS_MS[kind];
     const runtimeTimeoutMs =
       kind === "query"

@@ -127,9 +127,7 @@ describe("doctor skills", () => {
       kind: "mismatch",
       effectiveConfigDir: "/agent/home/.config/gh",
       alternateConfigDir: "/root/.config/gh",
-      alternateHostsFile: "/root/.config/gh/hosts.yml",
       alternateHomeHint: "/root",
-      suggestedEnvValue: "/root/.config/gh",
     });
     const calls = await runSkillDoctor([createSkill({ name: "github" })]);
     const output = String(calls.find((call) => call[1] === "GitHub CLI")?.[0] ?? "");

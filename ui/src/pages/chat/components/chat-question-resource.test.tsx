@@ -92,7 +92,7 @@ it("keeps the Solid application context when opening a resource preview", async 
   );
 });
 
-it("publishes uploaded resource selections through its host and follows controlled selections", async () => {
+it("publishes uploaded resource selections and follows controlled selections", async () => {
   const request = createGatewayRequestMock(async (method) => {
     if (method === "mcp.app.formResource") {
       return { resources: [{ uri: "parts://notes", name: "notes.txt" }] };
@@ -112,7 +112,6 @@ it("publishes uploaded resource selections through its host and follows controll
   // SAFETY: Resource uploads consume the Gateway and optional upload policy only.
   const context = { gateway: application.gateway } as ApplicationContext;
   const selections = vi.fn();
-  const bubbled = vi.fn();
   let setDisabled!: (value: boolean) => void;
   let setRequestId!: (value: string) => void;
   const view = mountSolid(
@@ -123,7 +122,7 @@ it("publishes uploaded resource selections through its host and follows controll
       setDisabled = updateDisabled;
       setRequestId = updateRequestId;
       return (
-        <div onResource-selection={bubbled}>
+        <div>
           <ChatQuestionResource
             question={{
               questionId: "part",
@@ -140,9 +139,9 @@ it("publishes uploaded resource selections through its host and follows controll
             sessionKey="agent:main:upload-session"
             selected={selected()}
             disabled={disabled()}
-            onResource-selection={(event) => {
-              selections(event.detail.values);
-              setSelected(new Set(event.detail.values));
+            onSelection={(values) => {
+              selections(values);
+              setSelected(new Set(values));
             }}
           />
         </div>
@@ -170,8 +169,6 @@ it("publishes uploaded resource selections through its host and follows controll
     },
     { signal: expect.any(AbortSignal) },
   );
-  expect(bubbled).toHaveBeenCalledTimes(1);
-  expect(bubbled.mock.calls[0]?.[0].target?.tagName).toBe("OPENCLAW-CHAT-QUESTION-RESOURCE");
   const remove = await waitForSolid(() =>
     view.getByRole<HTMLButtonElement>("button", { name: "Remove" }),
   );
@@ -184,7 +181,6 @@ it("publishes uploaded resource selections through its host and follows controll
   remove.click();
   await waitForSolid(() => expect(view.queryByText("notes.txt")).toBeNull());
   expect(selections).toHaveBeenLastCalledWith([]);
-  expect(bubbled).toHaveBeenCalledTimes(2);
   input.dispatchEvent(new Event("change", { bubbles: true }));
   await waitForSolid(() => expect(selections).toHaveBeenCalledTimes(3));
   expect(view.getByText("notes.txt")).toBeTruthy();

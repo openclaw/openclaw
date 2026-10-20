@@ -150,6 +150,7 @@ export function CloudWorkersPage() {
     });
   }
   onSettled(() => {
+    // Applied-config receipts abort the prior catalog request before refreshing profiles.
     const stop = configProjection.subscribe(refreshCatalog);
     refreshCatalog();
     return stop;

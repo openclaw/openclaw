@@ -554,11 +554,14 @@ describe("requester settle dispatch deadline", () => {
       vi.setSystemTime(10_000);
       const context = createContext();
       const child = settledChild();
+      child.completionRequesterSessionId = "requester-session";
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
       const cfg = {
         agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
       };
       setRuntimeConfigSnapshot(cfg);
+      const preparationStarted = createDeferredCore();
+      const finishPreparation = createDeferredCore();
       const executionStarted = createDeferredCore();
       const workDone = createDeferredCore();
       const stop = new AbortController();
@@ -571,11 +574,14 @@ describe("requester settle dispatch deadline", () => {
         const request = preflight.request as { idempotencyKey: string; sessionKey: string };
         const registration = registerRequesterTurn({ controllerInput, preflight, io }, timeoutMs);
         acceptedSignal = registration.controller.signal;
-        acceptTurn({ controllerInput, preflight, io });
         try {
           if (!registration.registered) {
             throw new Error("expected requester RPC source");
           }
+          io.emitStartOwner?.(request.idempotencyKey, registration.entry);
+          preparationStarted.resolve();
+          await finishPreparation.promise;
+          acceptTurn({ controllerInput, preflight, io });
           await withSessionTurn(
             {
               ...REQUESTER_TURN,
@@ -633,8 +639,19 @@ describe("requester settle dispatch deadline", () => {
           signal: stop.signal,
         }),
       );
+      let settled = false;
+      void wake.then(() => {
+        settled = true;
+      });
       try {
-        await executionStarted.promise;
+        await preparationStarted.promise;
+        await vi.advanceTimersByTimeAsync(21);
+        expect(settled).toBe(false);
+        expect(acceptedSignal?.aborted).toBe(false);
+        finishPreparation.resolve();
+        expect(
+          await Promise.race([executionStarted.promise.then(() => true), wake.then(() => false)]),
+        ).toBe(true);
         await vi.advanceTimersByTimeAsync(21);
         expect(acceptedSignal?.aborted).toBe(false);
         expect(finalReceipts).toEqual([]);
@@ -684,6 +701,7 @@ describe("requester settle dispatch deadline", () => {
         expect(child.execution.outcome).toEqual({ status: "ok" });
         expect(child.completion?.resultText).toBe("child result");
       } finally {
+        finishPreparation.resolve();
         workDone.resolve();
         stop.abort();
         await wake;

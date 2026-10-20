@@ -81,7 +81,6 @@ let resetFeishuProxyAgentForTest: ClientModule["resetFeishuProxyAgentForTest"];
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "app_123",

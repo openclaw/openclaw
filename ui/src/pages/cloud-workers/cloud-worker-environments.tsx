@@ -18,7 +18,7 @@ import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-mod
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -124,7 +124,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-  // Config and permission receipts invalidate the inventory at their synchronous owners.
   function syncInventoryInputs() {
     const current = [
       context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
@@ -137,6 +136,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     }
   }
   onSettled(() => {
+    // Config and permission receipts invalidate the inventory at their synchronous owners.
     const stop = runtime.subscribe(syncInventoryInputs);
     syncInventoryInputs();
     return stop;
@@ -544,13 +544,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const current = createMemo(
     () => environments().find((environment) => environment.key === selected()) ?? environments()[0],
   );
-  const advertised = () =>
-    isGatewayMethodAdvertised(gateway.snapshot ?? {}, "environments.list") === true;
   return (
     <>
       <SettingsPage>
         <Show
-          when={(advertised() && canCall("environments.list")) || view.inventory !== null}
+          when={canCall("environments.list") || view.inventory !== null}
           fallback={
             gateway.connected ? (
               <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />

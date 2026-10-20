@@ -24,7 +24,7 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
-import * as groups from "./chat-message-group-view.tsx";
+import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
@@ -33,7 +33,6 @@ import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interact
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
-  isTranscriptGlobalAlias,
   resolveTranscriptAvatarPlacement,
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
@@ -46,11 +45,11 @@ import {
 import { pruneTranscriptExpansions } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
-  type NativeTranscriptView,
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptReplyDependencies,
 } from "./chat-transcript-render-guard.ts";
+import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
@@ -67,7 +66,6 @@ export function projectChatTranscript(
   const { asyncQuestions, selectedSession: activeSession } = props;
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
-  const isGlobalAliasKey = isTranscriptGlobalAlias(props);
   const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
   const assistantAvatar = resolveAssistantDisplayAvatar({
@@ -231,11 +229,7 @@ export function projectChatTranscript(
     !hasLiveContent &&
     (!props.historyPagination?.hasMore || search.open);
   transcript.setContentReady(!props.loading);
-  const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
-    props,
-    chatItems,
-    isGlobalAliasKey,
-  );
+  const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
@@ -405,7 +399,7 @@ export function projectChatTranscript(
       turnRecap: recapForGroup(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
       searchResult: searchFiltering,
-    } satisfies Parameters<typeof groups.renderSolidMessageGroup>[1];
+    } satisfies NativeMessageGroupOptions;
   };
   // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.

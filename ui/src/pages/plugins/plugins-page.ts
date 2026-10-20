@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
@@ -15,7 +16,6 @@ import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import {
   loadPluginDiscoveryDetail,
-  uninstallPlugin,
   type PluginListResult,
   type PluginMutationResult,
 } from "../../lib/plugins/index.ts";
@@ -674,7 +674,7 @@ export function createPluginsPage(options: {
       : null;
     await consent.runMutation(
       rowKey,
-      (client) => uninstallPlugin(client, pluginId),
+      (client) => client.request<PluginsUninstallResult>("plugins.uninstall", { pluginId }),
       async (result, refreshError, client, isLatest) => {
         if (state.detail?.pluginId === pluginId) {
           setState({ detail: null });

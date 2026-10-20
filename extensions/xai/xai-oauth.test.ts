@@ -669,4 +669,30 @@ describe("xAI OAuth", () => {
     expect(login.pollTimes.map((time) => time - startedAt)).toEqual([0, 1_000, 7_000]);
     expectReleased(login);
   });
+
+  it("keeps device-code polling deadline monotonic so a wall-clock jump cannot end authorization early", async () => {
+    const login = startLogin(() => jsonResponse({ error: "authorization_pending" }, 400));
+    await login.requested.promise; // first token poll complete
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(login.pollTimes).toHaveLength(1);
+
+    // Jump the wall clock forward by 60s. A Date.now()-seeded deadline would now
+    // read as already expired and terminate the loop; a monotonic deadline is
+    // unaffected and must keep polling at the normal interval.
+    vi.setSystemTime(Date.now() + 60_000);
+    // Advance the normal poll interval; the extra 0ms advances flush the awaited
+    // continuation that resumes the poll loop.
+    for (let i = 0; i < 12 && login.pollTimes.length < 2; i++) {
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    // The next poll must still fire at the normal interval instead of being
+    // aborted by the (fake) wall-clock jump.
+    expect(login.pollTimes.length).toBeGreaterThan(1);
+    login.controller.abort();
+    await expect(login.outcome).resolves.toMatchObject({ error: expect.any(Error) });
+  });
 });

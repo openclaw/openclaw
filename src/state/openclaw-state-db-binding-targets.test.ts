@@ -17,6 +17,10 @@ import {
   repairOpenClawStateDatabaseSchema,
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
 const fixture = createFixtureLifetime();
@@ -63,6 +67,7 @@ function createVersion14Bindings() {
   closeOpenClawStateDatabaseForTest();
 
   using legacy = openNodeSqliteDatabase(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
   // A compatible future column must survive; copying only canonical columns loses its data.
   legacy.exec(`
       ALTER TABLE current_conversation_bindings ADD COLUMN target_agent_id TEXT NOT NULL DEFAULT 'main';
@@ -226,14 +231,18 @@ describe("conversation binding target migration", () => {
     }));
 
   it.for(migrationPaths)(
-    "preserves bindings and additive data through %s and cold reopen under a Gateway",
+    "preserves bindings and additive data through %s with backup custody and cold reopen under a Gateway",
     (migrationPath, { signal }) =>
       fixture.run(async () => {
         signal.throwIfAborted();
         const { options, databasePath, before } = createVersion14Bindings();
-        if (migrationPath === "doctor repair") {
-          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        }
+        await withStateMigrationBackupForTest(options, () => {
+          if (migrationPath === "doctor repair") {
+            expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+          } else {
+            openOpenClawStateDatabase(options);
+          }
+        });
         const migrated = openOpenClawStateDatabase(options);
         const after = readMigrationSnapshot(migrated.db);
         expect(after.rows).toEqual(
@@ -294,7 +303,7 @@ describe("conversation binding target migration", () => {
     ),
   )(
     "preserves the complete old database after $failure through $migrationPath",
-    ({ migrationPath, failure }) => {
+    async ({ migrationPath, failure }) => {
       const { options, databasePath } = createVersion14Bindings();
       let before: ReturnType<typeof readMigrationSnapshot>;
       {
@@ -310,14 +319,16 @@ describe("conversation binding target migration", () => {
         before = readMigrationSnapshot(legacy);
       }
       const reason = failure === "dependent trigger" ? /target_session_id/ : /expected global/;
-      if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(reason);
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: [],
-          warnings: [expect.stringMatching(reason)],
-        });
-      }
+      await withStateMigrationBackupForTest(options, () => {
+        if (migrationPath === "runtime open") {
+          expect(() => openOpenClawStateDatabase(options)).toThrow(reason);
+        } else {
+          expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+            changes: [],
+            warnings: [expect.stringMatching(reason)],
+          });
+        }
+      });
       using preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
       expect(readMigrationSnapshot(preserved)).toEqual(before);
     },

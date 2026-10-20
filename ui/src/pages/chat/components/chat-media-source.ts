@@ -15,6 +15,7 @@ function finiteMediaTime(value: number): number {
 
 /** Synchronous browser-playback owner; keeps refreshed tickets from interrupting active media. */
 export class ChatMediaSourceOwner {
+  private syncQueued = false;
   private appliedSource = "";
   private appliedIdentity = "";
   private pendingSource = "";
@@ -51,16 +52,24 @@ export class ChatMediaSourceOwner {
     }
   }
 
-  get currentIdentity(): string {
-    return this.appliedIdentity;
-  }
-
   get readySource(): string {
     return this.playbackSource;
   }
 
   get readiness() {
     return this.playbackReadiness;
+  }
+
+  queueSync(sync: () => void): void {
+    if (this.syncQueued) {
+      return;
+    }
+    this.syncQueued = true;
+    // Native callers assign related properties together; consume their complete source once.
+    queueMicrotask(() => {
+      this.syncQueued = false;
+      sync();
+    });
   }
 
   sync(

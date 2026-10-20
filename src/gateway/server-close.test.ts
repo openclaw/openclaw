@@ -1117,6 +1117,8 @@ describe("createGatewayCloseHandler", () => {
 
   registerGatewayCancellationTests({
     createClose: createGatewayCloseHandler,
+    createSource: createCloseSource,
+    resolveGatewayContext: resolveTestGatewayContext,
     setShutdownHook: (hook) => mocks.triggerInternalHook.mockImplementation(hook),
   });
 
@@ -1291,26 +1293,6 @@ describe("createGatewayCloseHandler", () => {
       release?.();
       await other.input.settlement.promise;
     }
-  });
-
-  it("aborts queued turns after recording recovery and before shutdown continues", async () => {
-    const { source } = await createCloseSource("queued-1", {}, { phase: "waiting" });
-    let queuedAbortedAtRecovery: boolean | undefined;
-    const close = createGatewayCloseHandler({
-      markMainSessionsAbortedForRestart: () => {
-        queuedAbortedAtRecovery = source.input.abortSignal.aborted;
-      },
-    });
-    const result = await close({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-      drainTimeoutMs: 0,
-    });
-    expect(result.warnings).toContain("restart-reply-drain");
-    expect(queuedAbortedAtRecovery).toBe(false);
-    expect(source.input.abortSignal.aborted).toBe(true);
-    expect(source.input.phase).toBe("consumed");
-    expect(rpcSourceTesting.size).toBe(0);
   });
 
   it.each(["shutdown", "finalizing"] as const)(

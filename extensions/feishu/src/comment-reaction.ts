@@ -6,14 +6,7 @@ import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target
 
 const COMMENT_TYPING_REACTION_TYPE = "Typing";
 const COMMENT_REACTION_TIMEOUT_MS = 30_000;
-const commentTypingReactionState = new Map<
-  string,
-  {
-    active: boolean;
-    cleaned: boolean;
-    cleanupPromise?: Promise<boolean>;
-  }
->();
+const activeCommentTypingReactions = new Set<string>();
 
 function buildCommentTypingReactionKey(params: {
   fileToken: string;
@@ -21,20 +14,6 @@ function buildCommentTypingReactionKey(params: {
   replyId: string;
 }): string {
   return `${params.fileType}:${params.fileToken}:${params.replyId}`;
-}
-
-function ensureCommentTypingReactionState(key: string) {
-  const existing = commentTypingReactionState.get(key);
-  if (existing) {
-    return existing;
-  }
-  const created = {
-    active: false,
-    cleaned: false,
-    cleanupPromise: undefined,
-  };
-  commentTypingReactionState.set(key, created);
-  return created;
 }
 
 async function requestCommentTypingReactionWithClient(params: {
@@ -95,7 +74,7 @@ async function requestCommentTypingReaction(params: {
   runtime?: RuntimeEnv;
 }): Promise<boolean> {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.configured || !(account.config.typingIndicator ?? true)) {
+  if (!account.configured || !account.config.typingIndicator) {
     return false;
   }
   return requestCommentTypingReactionWithClient({
@@ -113,35 +92,10 @@ async function cleanupCommentTypingReactionByKey(params: {
   key: string;
   performDelete: () => Promise<boolean>;
 }): Promise<boolean> {
-  const state = ensureCommentTypingReactionState(params.key);
-  if (state.cleaned) {
+  if (!activeCommentTypingReactions.delete(params.key)) {
     return false;
   }
-  if (state.cleanupPromise) {
-    return await state.cleanupPromise;
-  }
-  const cleanupPromise = (async (): Promise<boolean> => {
-    if (!state.active) {
-      state.cleaned = true;
-      return false;
-    }
-    const deleted = await params.performDelete();
-    if (deleted) {
-      state.cleaned = true;
-      state.active = false;
-    }
-    return deleted;
-  })();
-  state.cleanupPromise = cleanupPromise;
-  try {
-    return await cleanupPromise;
-  } finally {
-    state.cleanupPromise = undefined;
-    if (state.cleaned) {
-      state.active = false;
-      commentTypingReactionState.delete(params.key);
-    }
-  }
+  return await params.performDelete();
 }
 
 export async function cleanupAmbientCommentTypingReaction(params: {
@@ -202,18 +156,20 @@ export function createCommentTypingReactionLifecycle(params: {
         replyId,
       })
     : undefined;
-  const state = key ? ensureCommentTypingReactionState(key) : undefined;
 
   return {
     start: async (): Promise<void> => {
-      if (!state || state.cleaned || state.active || !replyId) {
+      if (!key || !replyId || activeCommentTypingReactions.has(key)) {
         return;
       }
-      state.active = await requestCommentTypingReaction({
+      const added = await requestCommentTypingReaction({
         ...params,
         replyId,
         action: "add",
       });
+      if (added) {
+        activeCommentTypingReactions.add(key);
+      }
     },
     cleanup: async (): Promise<void> => {
       if (!key || !replyId) {

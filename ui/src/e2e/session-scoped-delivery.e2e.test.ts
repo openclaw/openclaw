@@ -11,6 +11,7 @@ import {
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { seedStorage } from "./sidebar-assertions.test-support.ts";
+import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI scoped stream delivery",
@@ -49,7 +50,9 @@ async function receivedSessions(page: Page): Promise<unknown[]> {
 }
 
 suite.define(() => {
-  it.each(["roster", "preview-off"] as const)(
+  // Default rows show observer headlines only with previews on; roster rows
+  // always do.
+  it.each(["roster", "preview-on"] as const)(
     "preserves the visible consumers in %s presentation",
     async (mode) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
@@ -61,7 +64,7 @@ suite.define(() => {
           [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
             sidebarAgentsMode: mode === "roster" ? "roster" : "chip",
           }),
-          "openclaw:sidebar:sessions:show-preview": String(mode === "roster"),
+          "openclaw:sidebar:sessions:show-preview": "true",
         });
         const gateway = await installMockGateway(page, {
           sessionKey: first,
@@ -88,10 +91,6 @@ suite.define(() => {
             health: "waiting-on-user",
             headline: "Waiting for the next instruction",
           });
-          await page
-            .locator(`[data-session-key="${keys[1]}"]`)
-            .getByText("Waiting for the next instruction", { exact: true })
-            .waitFor();
         }
         await gateway.emitGatewayEvent(
           "chat",
@@ -101,6 +100,15 @@ suite.define(() => {
           .locator(".chat-thread-inner")
           .getByText("Visible chat stays live", { exact: true })
           .waitFor();
+        if (mode === "preview-off") {
+          const row = page.locator(`[data-session-key="${keys[1]}"]`);
+          expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+          await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+          await openSidebarMenu(page);
+          await page.getByRole("switch", { name: "Show message preview", exact: true }).click();
+          await closeSidebarMenu(page);
+          await row.getByText("Waiting for the next instruction", { exact: true }).waitFor();
+        }
       });
     },
   );

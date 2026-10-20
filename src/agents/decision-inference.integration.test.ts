@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DecisionProviderContextV2 } from "../decisions/provider-context.js";
 import type { DecisionBatchResultV2, DecisionRuntimeV2 } from "../decisions/types-v2.js";
+import type { DecisionRuntimeV1 } from "../decisions/types.js";
 import {
   createContext,
   createOperatorClient,
@@ -16,6 +18,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -37,8 +40,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { VERSION } from "../version.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { executePreparedDecision } from "./decision-inference.js";
 import * as modelAuth from "./model-auth-provider.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -67,6 +73,7 @@ type Trace = {
   modelApi?: string;
   preparedApi?: string;
   evaluate?: DecisionRuntimeV2["evaluateV2"];
+  evaluateV1?: DecisionRuntimeV1["evaluate"];
 };
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
@@ -658,3 +665,176 @@ it.each([
     });
   },
 );
+
+it("runs both SDK versions through the source TypeSafe plugin, prepared auth, and loopback transport", async () => {
+  const root = roots.make("decision-typesafe-host-");
+  const consumerRoot = path.join(root, "consumer");
+  const emptyBundled = path.join(root, "bundled");
+  fs.mkdirSync(consumerRoot);
+  fs.mkdirSync(emptyBundled);
+  const consumerId = "decision-consumer-fixture";
+  const consumer = createColdPluginFixture({ rootDir: consumerRoot, pluginId: consumerId });
+  fs.writeFileSync(
+    consumer.runtimeSource,
+    'const trace=globalThis[Symbol.for("openclaw.test.decision-prepared-path")]; module.exports={id:"decision-consumer-fixture",register(api){trace.evaluate=api.runtime.decisions.evaluateV2;trace.evaluateV1=api.runtime.decisions.evaluate;}};',
+  );
+  const trace: Trace = { calls: 0, authenticated: false };
+  Reflect.set(globalThis, traceKey, trace);
+  let status = 200;
+  const received: Array<{ url?: string; authorization?: string; body: unknown }> = [];
+  await withServer(
+    (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+        });
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(
+          status === 200
+            ? JSON.stringify({
+                model: "kev-latest",
+                answers: { q: { type: "noul", noul: 0.37 } },
+                usage: { input_tokens: 3, output_tokens: 1 },
+              })
+            : "synthetic-private-provider-body",
+        );
+      });
+    },
+    async (baseUrl) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "unrelated/not-configured",
+            decisionModel: "typesafe/kev-latest",
+            workspace: path.join(root, "workspace"),
+          },
+        },
+        plugins: {
+          load: {
+            paths: [
+              fileURLToPath(new URL("../../extensions/typesafe", import.meta.url)),
+              consumerRoot,
+            ],
+          },
+          slots: { memory: "none" },
+          entries: {
+            typesafe: { enabled: true, config: { baseUrl } },
+            [consumerId]: { enabled: true },
+          },
+        },
+      };
+      await withEnvAsync(
+        {
+          ...createColdPluginHermeticEnv(root, { bundledPluginsDir: emptyBundled }),
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+        },
+        async () => {
+          setRuntimeConfigSnapshot(cfg);
+          const registry = await loadAndActivateRootPluginRegistry({
+            config: cfg,
+            workspaceDir: path.join(root, "workspace"),
+          });
+          expect(registry.diagnostics.filter((item) => item.level === "error")).toEqual([]);
+          expect(
+            registry.providers.map((entry) => entry.provider.id),
+            JSON.stringify({
+              plugins: registry.plugins.map((p) => ({
+                id: p.id,
+                status: p.status,
+                error: p.error,
+              })),
+              diagnostics: registry.diagnostics,
+              paths: cfg.plugins?.load?.paths,
+            }),
+          ).toContain("typesafe");
+          const agentId = resolveDefaultAgentId(cfg);
+          // Retain the prepared caller across SDK assertions: releasing a warm-up
+          // lease retires the owner and charges each call for cold catalog setup.
+          await using prepared = await acquireAgentRunPreparedModelRuntime(
+            {
+              config: cfg,
+              agentId,
+              agentDir: resolveAgentDir(cfg, agentId),
+              workspaceDir: path.join(root, "workspace"),
+              loadRuntimePlugins: true,
+              runtimePluginSelections: [{ provider: "typesafe", modelId: "kev-latest", agentId }],
+            },
+            { catalogMode: "static" },
+          );
+          expect(prepared.snapshot.pluginRegistry?.providers).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                pluginId: "typesafe",
+                source: registry.providers.find((entry) => entry.provider.id === "typesafe")!
+                  .source,
+              }),
+            ]),
+          );
+          expect(prepared.snapshot.modelCatalog.entries).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ provider: "typesafe", id: "kev-latest" }),
+            ]),
+          );
+          const evaluate = trace.evaluate,
+            legacy = trace.evaluateV1;
+          if (!evaluate || !legacy) {
+            throw new Error("Missing registered decision SDK");
+          }
+          const options = () => ({
+            purpose: "actual-engine-fixture",
+            rubricVersion: "1",
+            timeoutMs: 5000,
+            signal: new AbortController().signal,
+          });
+          const batch = {
+            state: { type: "text" as const, text: "synthetic evidence" },
+            questions: { q: { type: "boolean" as const } },
+          };
+          const outcome = await evaluate(batch, { ...options(), reasoning: "auto" });
+          expect(
+            outcome,
+            JSON.stringify({ outcome, receivedRequests: received.length }),
+          ).toMatchObject({
+            status: "ok",
+            result: {
+              answers: { q: { type: "boolean", probabilityTrue: 0.37 } },
+              usage: { inputTokens: 3, outputTokens: 1 },
+            },
+          });
+          expect(
+            await legacy({ state: "synthetic evidence", questions: batch.questions }, options()),
+          ).toMatchObject({ status: "ok", result: { answers: { q: { probabilityTrue: 0.37 } } } });
+          for (const reasoning of ["off", "on"] as const) {
+            await expect(evaluate(batch, { ...options(), reasoning })).resolves.toMatchObject({
+              status: "unavailable",
+              reason: "unsupported-input",
+            });
+          }
+          for (const rejection of [413, 422]) {
+            status = rejection;
+            expect(await evaluate(batch, options())).toMatchObject({
+              status: "unavailable",
+              reason: "unsupported-input",
+            });
+          }
+          expect(received).toHaveLength(4);
+          for (const request of received) {
+            expect(request.authorization).toBeUndefined();
+            expect(request.url).toBe("/v1/systemone");
+            expect(request.body).toMatchObject({
+              model: "kev-latest",
+              questions: { q: { type: "noul" } },
+            });
+          }
+          // The retained lease disposes here, before afterEach resets runtime owners.
+        },
+      );
+    },
+  );
+});

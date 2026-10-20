@@ -1,4 +1,9 @@
-import { ButtonStyle } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  ComponentType,
+  type APIButtonComponent,
+  type APIContainerComponent,
+} from "discord-api-types/v10";
 import {
   createChannelApprovalNativeRuntimeAdapterAsync,
   type ApprovalViewModel,
@@ -30,7 +35,7 @@ import {
   editChannelMessage,
 } from "./internal/api.messages.js";
 import { createUserDmChannel } from "./internal/api.users.js";
-import { Button, Container, Row, Separator, TextDisplay } from "./internal/components.message.js";
+import { colorToNumber } from "./internal/components.base.js";
 import { serializePayload, type MessagePayloadObject } from "./internal/payload.js";
 import {
   createDiscordClient,
@@ -69,34 +74,26 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
-class ExecApprovalActionButton extends Button {
-  override customId: string;
-  override label: string;
-  override style: ButtonStyle;
-
-  constructor(
-    view: Pick<PendingApprovalView, "approvalId" | "approvalKind">,
-    descriptor: ExecApprovalActionDescriptor,
-  ) {
-    super();
-    this.customId = buildExecApprovalCustomId(
-      view.approvalId,
-      view.approvalKind,
-      descriptor.decision,
-    );
-    this.label = descriptor.label;
-    this.style =
+function createApprovalActionButton(
+  view: Pick<PendingApprovalView, "approvalId" | "approvalKind">,
+  descriptor: ExecApprovalActionDescriptor,
+): APIButtonComponent {
+  return {
+    type: ComponentType.Button,
+    custom_id: buildExecApprovalCustomId(view.approvalId, view.approvalKind, descriptor.decision),
+    label: descriptor.label,
+    style:
       descriptor.style === "success"
         ? ButtonStyle.Success
         : descriptor.style === "primary"
           ? ButtonStyle.Primary
           : descriptor.style === "danger"
             ? ButtonStyle.Danger
-            : ButtonStyle.Secondary;
-  }
+            : ButtonStyle.Secondary,
+  };
 }
 
-function buildExecApprovalPayload(container: Container): MessagePayloadObject {
+function buildExecApprovalPayload(container: APIContainerComponent): MessagePayloadObject {
   return { components: [container], allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
 }
 
@@ -106,7 +103,7 @@ function formatCommandPreview(commandText: string, maxChars: number): string {
   return preview.replace(/`/g, "\u200b`");
 }
 
-function createApprovalContainer(view: ApprovalViewModel): Container {
+function createApprovalContainer(view: ApprovalViewModel): APIContainerComponent {
   const plugin = view.approvalKind === "plugin";
   const systemAgent = view.approvalKind === "system-agent";
   const pending = view.phase === "pending";
@@ -157,32 +154,38 @@ function createApprovalContainer(view: ApprovalViewModel): Container {
     ? `Expires <t:${Math.max(0, Math.floor(view.expiresAtMs / 1000))}:R> · ID: ${approvalId}`
     : `ID: ${approvalId}`;
 
-  const components: Array<TextDisplay | Separator | Row<Button>> = [
-    new TextDisplay(`## ${title}`),
-    new TextDisplay(description),
-    new Separator({ divider: true, spacing: "small" }),
-    new TextDisplay(`### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${commandPreview}\n\`\`\``),
+  const components: APIContainerComponent["components"] = [
+    { type: ComponentType.TextDisplay, content: `## ${title}` },
+    { type: ComponentType.TextDisplay, content: description },
+    { type: ComponentType.Separator, divider: true, spacing: 1 },
+    {
+      type: ComponentType.TextDisplay,
+      content: `### ${systemAgent ? "Change" : "Command"}\n\`\`\`\n${commandPreview}\n\`\`\``,
+    },
   ];
   if (commandSecondaryPreview) {
-    components.push(
-      new TextDisplay(`### Shell Preview\n\`\`\`\n${commandSecondaryPreview}\n\`\`\``),
-    );
+    components.push({
+      type: ComponentType.TextDisplay,
+      content: `### Shell Preview\n\`\`\`\n${commandSecondaryPreview}\n\`\`\``,
+    });
   }
   if (view.metadata.length) {
-    components.push(
-      new TextDisplay(view.metadata.map((item) => `- ${item.label}: ${item.value}`).join("\n")),
-    );
+    components.push({
+      type: ComponentType.TextDisplay,
+      content: view.metadata.map((item) => `- ${item.label}: ${item.value}`).join("\n"),
+    });
   }
   if (pending) {
-    components.push(
-      new Row(view.actions.map((descriptor) => new ExecApprovalActionButton(view, descriptor))),
-    );
+    components.push({
+      type: ComponentType.ActionRow,
+      components: view.actions.map((descriptor) => createApprovalActionButton(view, descriptor)),
+    });
   }
   components.push(
-    new Separator({ divider: false, spacing: "small" }),
-    new TextDisplay(`-# ${footer}`),
+    { type: ComponentType.Separator, divider: false, spacing: 1 },
+    { type: ComponentType.TextDisplay, content: `-# ${footer}` },
   );
-  return new Container(components, { accentColor });
+  return { type: ComponentType.Container, components, accent_color: colorToNumber(accentColor) };
 }
 
 async function finalizeMessage(params: {
@@ -192,7 +195,7 @@ async function finalizeMessage(params: {
   cleanupAfterResolve?: boolean;
   channelId: string;
   messageId: string;
-  container: Container;
+  container: APIContainerComponent;
 }): Promise<void> {
   const operations = params.cleanupAfterResolve ? ["delete", "update"] : ["update"];
   for (const operation of operations) {
@@ -364,7 +367,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return;
       }
-      const container = payload as Container;
+      const container = payload as APIContainerComponent;
       await finalizeMessage({
         cfg,
         accountId: resolved.accountId,

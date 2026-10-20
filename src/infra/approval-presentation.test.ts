@@ -1,6 +1,6 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
-import { prepareExecApprovalPresentation as prepare } from "../gateway/exec-approval-registration.js";
+import { prepareExecApprovalPresentation as prepare } from "./approval-presentation.js";
 import type { PluginApprovalRequestPayload } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;

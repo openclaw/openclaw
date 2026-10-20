@@ -179,6 +179,7 @@ function baseBranchGhStub(baseRef: string) {
   };
   return `#!/bin/sh
 case "$*" in
+  "api user --include") printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n' ;;
   "browse") printf 'https://github.com/fixture/repo\\n' ;;
   "api --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0")
     printf '%s\\n' '${JSON.stringify(pull)}' ;;
@@ -403,6 +404,130 @@ function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) 
 }
 
 describe("scripts/pr wrappers", () => {
+  function workflowFixture() {
+    const fixture = makeMismatchedWrapperRepo();
+    const reviewPath = join(fixture.canonical, "scripts/pr-lib/review.sh");
+    writeFileSync(
+      reviewPath,
+      `${readScript(reviewPath)}\nreview_guard() {
+  pr_git show-ref --verify --quiet refs/openclaw/pr-operation-locks/123 || return 1
+  [ ! -e /dev/fd/8 ] && [ ! -e /dev/fd/9 ] || return 1
+  printf 'active workflow wrapper %s\\n' "$script_parent_dir"
+  printf 'admitted workflow %s\\n' "$PR_WORKFLOW_SOURCE_REVISION"
+  return "\${PR_TEST_COMMAND_STATUS:-0}"
+}\n`,
+    );
+    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/review.sh"]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: observe admitted workflow"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
+    const source = fixture.git(fixture.canonical, ["rev-parse", "HEAD"]).stdout.trim();
+    const run = (status = "0", env: NodeJS.ProcessEnv = fixture.env) =>
+      spawnSync(join(fixture.linked, "scripts/pr"), ["review-guard", "123"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: { ...env, PR_TEST_COMMAND_STATUS: status },
+      });
+    return { ...fixture, reviewPath, source, run };
+  }
+
+  itPosix("keeps the admitted workflow after a failed command and main advances", () => {
+    const fixture = workflowFixture();
+    const { source, reviewPath } = fixture;
+    const first = fixture.run("1");
+    expect(first.status, first.stderr).toBe(1);
+    expect(first.stdout).toContain(`admitted workflow ${source}`);
+    const ref = "refs/openclaw/pr-workflow-bindings/123";
+    const admitted = fixture.git(fixture.canonical, ["rev-parse", ref]).stdout.trim();
+    writeFileSync(
+      reviewPath,
+      `${readScript(reviewPath)}\nreview_guard() { echo 'new workflow'; }\n`,
+    );
+    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/review.sh"]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: advance workflow"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
+
+    const resumed = fixture.run();
+    expect(resumed.status, resumed.stderr).toBe(0);
+    expect(resumed.stdout).toContain(`admitted workflow ${source}`);
+    expect(resumed.stdout).not.toContain("new workflow");
+    expect(fixture.git(fixture.canonical, ["rev-parse", ref]).stdout.trim()).toBe(admitted);
+    expect(fixture.git(fixture.canonical, ["rev-parse", `${admitted}^`]).stdout.trim()).toBe(
+      source,
+    );
+    expect(resumed.stderr).toContain(`retained PR #123 workflow ${source}`);
+
+    const successor = fixture
+      .git(fixture.canonical, [
+        "commit-tree",
+        `${admitted}^{tree}`,
+        "-p",
+        source,
+        "-m",
+        "successor",
+      ])
+      .stdout.trim();
+    writeFileSync(
+      join(fixture.bin, "node"),
+      `#!/bin/sh
+"${process.execPath}" "$@"
+status=$?
+case "$*" in
+  *'fstatSync(8)'*) "${resolveCommand("git")}" -C "${fixture.canonical}" update-ref ${ref} ${successor} ${admitted} || exit ;;
+esac
+exit "$status"
+`,
+      { mode: 0o755 },
+    );
+    const raced = fixture.run();
+    expect(raced.status, raced.stderr).toBe(1);
+    expect(raced.stderr).toContain("Workflow selection changed across handoff");
+    expect(raced.stdout).not.toContain("admitted workflow");
+    expect(fixture.git(fixture.canonical, ["rev-parse", ref]).stdout.trim()).toBe(successor);
+  });
+
+  itPosix("keeps the captured revision when main advances during archive materialization", () => {
+    const fixture = workflowFixture();
+    writeFileSync(
+      fixture.reviewPath,
+      `${readScript(fixture.reviewPath)}\nreview_guard() { echo 'new workflow'; }\n`,
+    );
+    fixture.git(fixture.canonical, ["add", "scripts/pr-lib/review.sh"]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: future workflow"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
+    const advanced = fixture.git(fixture.canonical, ["rev-parse", "HEAD"]).stdout.trim();
+    fixture.git(fixture.canonical, ["update-ref", "refs/remotes/origin/main", fixture.source]);
+    const selectedGit = join(fixture.root, "selected-git");
+    writeFileSync(
+      selectedGit,
+      `#!/bin/sh
+"${resolveCommand("git")}" "$@"
+status=$?
+case " $* " in
+  *' archive '*) "${resolveCommand("git")}" -C "${fixture.canonical}" update-ref refs/remotes/origin/main ${advanced} ;;
+esac
+exit "$status"
+`,
+      { mode: 0o755 },
+    );
+    const result = fixture.run("0", { ...fixture.env, OPENCLAW_PR_GIT: selectedGit });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`admitted workflow ${fixture.source}`);
+    expect(result.stdout).not.toContain("new workflow");
+    expect(
+      fixture.git(fixture.canonical, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim(),
+    ).toBe(advanced);
+    const record = JSON.parse(
+      fixture.git(fixture.canonical, [
+        "show",
+        "refs/openclaw/pr-workflow-bindings/123:binding.json",
+      ]).stdout,
+    );
+    expect(record.source).toBe(fixture.source);
+    const activeWrapper = result.stdout.match(/^active workflow wrapper (.+)$/m)?.[1] ?? "";
+    expect(activeWrapper).toContain("openclaw-pr-anchor.");
+    expect(existsSync(join(activeWrapper, ".."))).toBe(false);
+  });
+
   itPosix("preserves the caller's gh route environment through startup", () => {
     const fixture = makeMismatchedWrapperRepo();
     cpSync("scripts/lib/plain-gh.sh", join(fixture.canonical, "scripts/lib/plain-gh.sh"));
@@ -559,6 +684,7 @@ describe("scripts/pr wrappers", () => {
     const caller = join(fixture.canonical, "nested");
     mkdirSync(caller);
     fixture.write("scripts/pr-lib/merge.sh", `merge_run() { printf '<%s>\\n' "$@"; }\n`);
+    fixture.commit(["scripts/pr-lib/merge.sh"], true);
     return { fixture, caller };
   }
 
@@ -630,6 +756,7 @@ describe("scripts/pr wrappers", () => {
         "scripts/pr-lib/merge.sh",
         `merge_complete() { printf '<%s>\\n' "$@"; }\nmerge_run() { exit 99; }\n`,
       );
+      fixture.commit(["scripts/pr-lib/merge.sh"], true);
       const oid = outcomeOid;
       for (const args of [
         ["123", oid],
@@ -1872,11 +1999,22 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
       fixture.write("scripts/pr", '#!/bin/sh\necho "stale canonical wrapper executed"\nexit 91\n');
       fixture.commit(["scripts/pr"]);
       const recorder = join(fixture.bin, "node");
-      writeFileSync(recorder, '#!/bin/sh\nprintf \'%s\\0\' "$PWD" "$@"\nexit 73\n');
+      writeFileSync(
+        recorder,
+        '#!/bin/sh\nif [ "$1" = "$PR_TEST_SUPERVISOR" ]; then\n  printf \'%s\\0\' "$PWD" "$@"\n  exit 73\nfi\nexec "$PR_TEST_REAL_NODE" "$@"\n',
+      );
       chmodSync(recorder, 0o755);
       const caller = join(fixture.root, "caller directory");
       mkdirSync(caller);
-      return { ...fixture, caller };
+      return {
+        ...fixture,
+        caller,
+        env: {
+          ...fixture.env,
+          PR_TEST_REAL_NODE: requireNodeTool("node"),
+          PR_TEST_SUPERVISOR: join(fixture.linked, "scripts/pr-lib/process-group-runner.mjs"),
+        },
+      };
     }
 
     itPosix.each([

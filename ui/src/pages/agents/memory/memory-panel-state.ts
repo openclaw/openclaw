@@ -15,11 +15,13 @@ import { formatTimeMs } from "../../../lib/format.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../../lib/gateway-page-binding.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
-import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,
   createDreamingState,
+  createDreamingViewState,
+  DREAM_PHRASE_KEYS,
   loadDreamingResource,
   resolveConfiguredDreaming,
   runDreamDiaryAction,
@@ -27,11 +29,11 @@ import {
   type DreamDiaryActionMethod,
   type DreamingResourceKey,
   type DreamingState,
+  type DreamingViewState,
   type WikiPagePreview,
+  type WikiPreviewState,
 } from "./dreaming.ts";
 import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
-import type { DreamingViewState, WikiPreviewState } from "./view-types.ts";
-import { createDreamingViewState, DREAM_PHRASE_KEYS, type DreamingProps } from "./view.tsx";
 
 registerDreamingEnglish();
 
@@ -460,7 +462,7 @@ export function createAgentMemory(
             message: t("dreaming.actions.confirmRepairDescription"),
             confirmLabel: t("dreaming.scene.repairCache"),
           }),
-      } satisfies Omit<DreamingProps, "viewState" | "onViewStateChange">,
+      },
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,
@@ -515,19 +517,12 @@ export function createAgentMemory(
       }
     }
   }
-  const projection = projectSource(context, {
-    read,
-    subscribe: (_source, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, read);
+  publish = projection.publish;
   onSettled(() => {
     const agentTarget = getInitialAgentTarget();
     const syncAgent = () => setAgentId(agentTarget.read() ?? "");
+    // Agent receipts invalidate prior requests and replace their resource state synchronously.
     const stopAgent = agentTarget.subscribe(syncAgent);
     syncAgent();
     active = true;

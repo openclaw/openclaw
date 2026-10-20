@@ -604,6 +604,8 @@ export {
   SessionApprovalReplaySchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
+  ExecApprovalsNativeCommitParamsSchema,
+  ExecApprovalsNativeRequestSchema,
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,

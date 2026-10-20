@@ -23,7 +23,15 @@ function fixture(source = "export {};\n") {
   fs.mkdirSync(path.join(root, "ui/src"), { recursive: true });
   fs.writeFileSync(path.join(root, "ui/src/view.ts"), source);
   fs.mkdirSync(path.join(root, "config"));
-  for (const pattern of ["createEffect", "untrack", "addEventListener", "querySelector"]) {
+  for (const pattern of [
+    "createEffect",
+    "untrack",
+    "addEventListener",
+    "querySelector",
+    "flush",
+    "getOwner",
+    "runWithOwner",
+  ]) {
     fs.writeFileSync(path.join(root, `config/control-ui-${pattern}-baseline.txt`), "");
   }
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
@@ -68,7 +76,12 @@ describe("Control UI controller guard", () => {
       path.join(root, "ui/src/lib/reactive/binding.ts"),
       "createRenderEffect(read, write);",
     );
-    for (const name of ["view.test.tsx", "view.test-helpers.ts", "view.test-support.ts"]) {
+    for (const name of [
+      "view.test.tsx",
+      "view.test-helpers.ts",
+      "view.test-support.ts",
+      "view.test-harness.ts",
+    ]) {
       fs.writeFileSync(
         path.join(root, "ui/src", name),
         "element.querySelector('button'); element.addEventListener('click', fn);",
@@ -111,6 +124,104 @@ describe("Control UI controller guard", () => {
     expect(fs.readFileSync(baseline, "utf8")).not.toContain(`${file}\t`);
     fs.writeFileSync(target, source);
     expect(main(root, [])).toBe(1);
+  });
+
+  it.each(["flush", "getOwner", "runWithOwner"])(
+    "ratchets imported %s aliases and namespace calls only",
+    (pattern) => {
+      const source = [
+        `import { ${pattern} as action } from "solid-js";`,
+        'import * as signals from "@solidjs/signals";',
+        "action<number>();",
+        `signals.${pattern}?.();`,
+        `signals["${pattern}"]();`,
+      ].join("\n");
+      const root = fixture(source);
+      const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
+      fs.writeFileSync(baseline, "ui/src/view.ts\t3\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "existing Solid calls"]);
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(main(root, [])).toBe(0);
+      fs.appendFileSync(path.join(root, "ui/src/view.ts"), "\naction();\n");
+      expect(main(root, [])).toBe(1);
+      expect(errors.mock.calls.flat().join("\n")).toContain(`${pattern} calls must not increase`);
+    },
+  );
+
+  it.each(["flush", "getOwner", "runWithOwner"])(
+    "ignores non-Solid and shadowed %s bindings",
+    (pattern) => {
+      const root = fixture(
+        [
+          `import { ${pattern} as action } from "solid-js";`,
+          'import * as signals from "@solidjs/signals";',
+          `import { ${pattern} } from "./owner.ts";`,
+          `${pattern}();`,
+          `owner.${pattern}();`,
+          `owner["${pattern}"]();`,
+          "function parameter(action: () => void) { action(); }",
+          `function namespace(signals: any) { signals.${pattern}(); }`,
+          "{ const action = () => {}; action(); }",
+          "function hoisted() { { var action = () => {}; } action(); }",
+          "function destructured({ action }: { action: () => void }) { action(); }",
+          `try {} catch (signals) { signals.${pattern}(); }`,
+        ].join("\n"),
+      );
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(main(root, [])).toBe(0);
+    },
+  );
+
+  it.each([
+    'import { createMemo as memo } from "solid-js"; memo(() => true);',
+    'import { createMemo } from "@solidjs/signals"; createMemo<number>(() => 42);',
+    'import * as solid from "solid-js"; solid.createMemo(() => { return "ready"; });',
+    'import * as solid from "solid-js"; solid["createMemo"](() => null);',
+  ])("rejects a memo that only returns a literal: %s", (source) => {
+    const root = fixture(source);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("createMemo of a literal is unnecessary");
+  });
+
+  it("preserves equality, async, option-bearing, and non-Solid memos", () => {
+    const root = fixture(
+      [
+        'import { createMemo } from "solid-js";',
+        'import { createMemo as otherMemo } from "./owner.ts";',
+        "createMemo(() => props.value);",
+        "createMemo(() => !props.disabled);",
+        "createMemo(() => false, { equals: false });",
+        "createMemo(async () => true);",
+        "createMemo((previous) => 0);",
+        "createMemo(() => { track(); return 1; });",
+        "createMemo(() => ({}));",
+        "createMemo(() => undefined);",
+        "otherMemo(() => true);",
+        "function local(createMemo: any) { createMemo(() => true); }",
+      ].join("\n"),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+  });
+
+  it("ignores type-only imports and omitted bindings", () => {
+    const root = fixture(
+      [
+        'import type { flush, createMemo } from "solid-js";',
+        'import { type getOwner } from "@solidjs/signals";',
+        "const [, second] = pair;",
+        "flush(); getOwner(); createMemo(() => true);",
+      ].join("\n"),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
   });
 
   it("checks staged Solid debt instead of the working tree", () => {

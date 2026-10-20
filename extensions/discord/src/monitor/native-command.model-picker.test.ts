@@ -157,7 +157,8 @@ function replyText(
   interaction: MockInteraction,
   method: "reply" | "editReply" | "followUp" = "editReply",
 ) {
-  return JSON.stringify(interaction[method].mock.calls[0]?.[0]);
+  const payload = interaction[method].mock.calls[0]?.[0];
+  return JSON.stringify(payload === undefined ? payload : serializePayload(payload));
 }
 
 function recordRecentMock() {

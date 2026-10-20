@@ -39,7 +39,7 @@ import {
 } from "../session-sharing.js";
 import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js";
 import type { SessionsListResult } from "../session-utils.types.js";
-import { createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionReadHandlers as registeredSessionReadHandlers } from "./sessions-read.js";
@@ -346,7 +346,7 @@ it("never previews sessions hidden from sessions.list", () =>
     await initializeSessionReadContext(previewContext);
     const previewFor = async (client: GatewayClient) => {
       const responses: Parameters<RespondFn>[] = [];
-      await createControlUiHandlers()["controlUi.sessionPreview"]?.({
+      await controlUiHandlers["controlUi.sessionPreview"]?.({
         params: { sessionKey },
         client,
         context: previewContext,

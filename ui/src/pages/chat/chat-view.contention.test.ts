@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,

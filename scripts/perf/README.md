@@ -1,5 +1,37 @@
 # Team-shaped synthetic state
 
+## Usage metadata bursts
+
+`chat-metadata-burst-measure.ts` requests `sessions.usage` on a cold 5,000-session
+fixture while ten signed synthetic clients observe the real Gateway. Prepare a
+fresh fixture for every sample; the read populates the usage cache:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 0 --approvals 0 \
+  --cron 0 --projects 0 --transcript-mib 1 --port 41483
+node --import ./scripts/tsx.mjs scripts/perf/chat-metadata-burst-measure.ts \
+  --root /path/to/new-fixture --port 41483 --clients 10 \
+  --duration 60000 --output /path/to/result.json
+```
+
+Results classify metadata frames, count usage publications and their event-loop
+ticks, and record main-thread CPU plus synchronous WebSocket send CPU. Send CPU
+excludes Gateway JSON encoding and asynchronous socket work. Final assertions
+require all 5,000 usage entries to be cached and every socket to have received the
+latest committed usage receipt. The fixture uses synthetic model configuration
+and makes no model calls.
+
+For concurrent A/B pairs, use identical separate fixtures and `--start-at` with
+the same future epoch milliseconds to synchronize Gateway launch. The measurement
+starts once each Gateway's sockets connect; waiting for idle would let startup
+warm the usage cache and erase the cold workload. The script rejects fixtures with
+existing usage rollups and rejects any run where startup publishes usage before
+all clients connect, including partially warmed samples.
+`--metadata-owner /path/to/server-chat-metadata-lifecycle.baseline.ts` replaces
+only that module; place the baseline beside the original so relative imports
+remain valid. Swap the CPU halves for the next pair and compare paired differences.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
@@ -216,7 +248,17 @@ slots from that shared start time; a missed slot fails the run. Use
 `--expect-session <key>` to assert the committed session and `--open-details` for
 chat Details. Optional `--request-stacks` adds caller stacks for diagnosis;
 leave it off for paired timing. Use only synthetic requests:
-parameters and stacks are retained, while auth and response payloads are omitted.
+parameters, stacks, and model rows are retained; authentication and other response
+payloads are omitted.
+
+To isolate session activity from model selection, use
+`--activity-patch-sessions <key-a>,<key-b>` with `--load-runs 1` against existing
+synthetic sessions. This alternates navigation between those conversations and
+changes their labels at `--interval-ms`, without inference or model changes.
+It excludes `--activity-session` and `--activity-cron`. Catalog observations
+retain model rows for before/after option comparisons; use only synthetic
+catalogs. Compare warm session-scoped request counts and activity blocking time,
+keeping the initial catalogs separate from the activity window.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -630,11 +672,55 @@ text and a 256×128 synthetic noise PNG, executes three real `read` tools with
 16 KiB text results, receives one synthetic output-limit stop,
 and completes the resulting transcript continuation. The driver requires one
 completed tool batch, output-limit response, and recovered response per child,
-and verifies inline images reach all three provider requests. These are
+and verifies inline images reach all three provider requests. Each provider
+response includes a distinct deterministic 16 KiB synthetic reasoning signature;
+the driver verifies that tool and recovery continuations replay the exact completed
+signature and omit the reasoning-only output-limit signature, as required by the
+replay owner. These are
 direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
 Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
 intentionally retained live histories from the trend.
+
+For a steady memory soak with real tool execution and attached viewers, use:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/team-shape --scenario memory-soak \
+  --clients 8 --runs 4 --chunks 100 --chunk-interval-ms 10 \
+  --warmup-ms 300000 --duration-ms 3600000 --round-interval-ms 15000 \
+  --memory-interval-ms 60000 --retained-profile-ms 600000 \
+  --reset-every-rounds 20 --list-interval-ms 2000 --heap-snapshot
+```
+
+This runs paced cohorts after five minutes of warmup, with one real `read` tool
+and a streamed completion per turn, including the same synthetic reasoning
+signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
+enabled. Session generations reset every twenty cohorts (including warmup) to
+bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
+instead. The report records resets and completed cohorts. It does not exercise
+the image/output-limit recovery of `attempt-retention`. `--rounds` is ignored;
+an admitted cohort drains before the duration ends, so a slow cohort may overrun.
+
+`memory-samples.jsonl` records Gateway heap, external, ArrayBuffer and RSS memory
+after completed cohorts at the requested interval, including exact timestamps.
+Periodic samples use natural GC; initial and final settled samples explicitly
+collect garbage. Sampling cadence is bounded by cohort duration. The final
+window writes `retained.heapprofile` with both include-collected flags false and
+a forced collection before stopping. Its `sampledRetainedBytes` and
+`topRetainedSites` describe allocations surviving that window, not allocation
+churn or all objects retained since startup. `--retained-profile-ms 0` disables
+this capture; it cannot run with allocation-churn capture. The optional
+`settled.heapsnapshot` supports retainer inspection. A smoke run can use
+`--warmup-ms 0 --duration-ms 30000 --retained-profile-ms 15000`.
+
+Use identical fixtures, driver revisions and options for concurrent A/B pairs,
+separate state/ports, the existing `--start-at` barrier after warmup, the shared
+measurement lock and swapped sixteen-core halves. Check paired settled-memory
+changes alongside raw sample trends; compare the same session-reset phase.
+The soak preserves explicitly configured fixture plugin entries; prepare any
+synthetic diagnostic listener fixture separately and record its version. It
+does not install production-only listeners or copy their operator state.
 
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,
@@ -911,11 +997,12 @@ maintenance, repack, garbage collection, or change repository configuration.
 node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
   --state-dir /path/to/new-rpc-fixture --boundary rpc --seed
 node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
-  --state-dir /path/to/new-rpc-fixture --boundary rpc --port 41473 \
+  --state-dir /path/to/new-rpc-fixture --boundary rpc --summary --port 41473 \
   --tabs 3 --background 8 --maintenance 2 --agents 2 --mutate --observe-git-queues --duration-ms 30000 --poll-ms 250 \
   --start-at <epoch-ms> --output /path/to/rpc-result.json
 ```
 
+RPC mode returns full diffs by default; add `--summary` to exercise summary polls.
 Each tab polls the same session, so queued duplicate polls exercise the existing
 read owner. `--mutate` writes a tracked file before every polling round; every
 response must include the exact current added-line count, which varies by round.
@@ -940,6 +1027,69 @@ swapping CPU halves, separate state directories and loopback ports. The
 contention acceptance rule is at least a 60% paired RPC p99 reduction with no
 agent Git regression. Inspect command counts and queue waits to distinguish
 scheduling changes from reduced Git work.
+
+### Large-worktree revision validation
+
+Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
+exercise production-sized indexes and directory trees. Nonzero `--tracked`
+creates a real linked worktree with that many additional unchanged tracked empty
+files, arranged in directories of 1,000. The three changed tracked files and four
+untracked edge cases remain. Writes are sequential; on Linux, generation checks
+Dirty memory every 1,000 files, pauses at 1 GiB, and stops at 2 GiB. Seed one side
+at a time under the host's preparation CPU allocation. This bounds content bytes,
+but inode metadata still consumes disk space: record actual fixture size and do
+not expand the workload on a production-shared volume without checking capacity.
+
+Measure unchanged summary polls with `--summary --tabs 3 --background 0 --maintenance 0
+--agents 0 --poll-ms 250 --duration-ms 30000`. The report separates warmed samples
+from startup and records `sessions.diff` and `checkout.diff` phase diagnostics by
+cache outcome when those are available. Stage milliseconds are overlapping owner
+observations, not additive: cache validation includes its worker queue and Git
+work. Compare cache-hit and periodic fallback-cache misses separately. Git
+operation counts and queue observations remain available on older revisions.
+
+For a revision-validator change, acceptance is at least a 50% paired cache-hit
+p50 reduction, with no material p95/p99 regression. The explicitly requested
+histogram may land with neutral timing. Run at least two simultaneous A/B pairs
+under the host's exclusive lock, swapping 16-core halves between pairs, separate
+fixtures and loopback ports, matching options and start times. Retain per-pair
+differences and outside CPU load; do not compare unrelated absolute runs. Two
+large synthetic worktrees model file/index size and concurrent polling, not the
+production fleet's full filesystem working set or cold disk behavior.
+
+Add `--churn-ms 1000` to simulate an agent saving identical tracked `unchanged.txt`
+content and running `git status` on the polled checkout, while build output is
+created and removed below the ignored directory. This refreshes index stat data
+without changing the visible diff. Every unchanged RPC response must match its
+warmup hash. After measurement, the script makes a real tracked edit and checks
+that every tab receives the new line count, then restores that file. Summary
+fallbacks may intentionally retain a result for 10 seconds when no revision is
+available. The report separates first-poll visibility (`editFirstPollVisible`)
+from eventual visibility (`editVisibilityMs`), polling for up to 12 seconds.
+It saves the report before asserting eventual visibility. The report
+includes churn counts/timings, cache outcomes, and `editControlVerified`; phase
+samples retain diagnostic miss reasons when the revision supports them.
+
+For cache-reuse changes, compare both the 267,000-file fixture and a small
+fixture with `--summary --tabs 3 --background 0 --maintenance 0 --agents 0 --poll-ms 250
+--churn-ms 1000 --duration-ms 30000`. Run full-diff comparisons separately by
+omitting `--summary`: oversized summaries retain their existing 10-second
+fallback, while full diffs require fresh validation. Require unchanged response
+hashes, a passing edit control, and fewer diff collections with a higher cache
+hit rate on the repaired path, without a material paired latency regression.
+Native Git status used to validate a revision still counts as Git work; cache
+hits do not imply zero subprocesses.
+
+For a second scenario with independent revision checks, add
+`--poll-state-dir <other seeded fixture>` on each side. Both isolated Gateways
+then poll both existing synthetic worktrees concurrently, using a separate
+session per checkout and `--tabs` peers per session. This option is repeatable,
+requires RPC mode, and rejects `--mutate`: shared checkout contents stay read-only
+with optional Git index refresh disabled through `GIT_OPTIONAL_LOCKS=0`,
+while Gateway state and temporary diff indexes remain owned by each side's
+`--state-dir`. The report includes the extra fixture inventories, checkout count,
+and each sample's checkout index. This adds multiple-root contention without
+generating another large filesystem tree; it still does not model a whole fleet.
 
 ## Sandbox measurements
 

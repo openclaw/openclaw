@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
@@ -21,7 +22,6 @@ import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
-  groupBuildCandidates,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -511,7 +511,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner,
     };
   });
-  const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
+  const groups = groupRecords(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {
