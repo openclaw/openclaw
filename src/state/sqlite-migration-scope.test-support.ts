@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { foldSqliteIdentifierCase, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import {
+  foldSqliteIdentifierCase as fold,
+  quoteSqliteIdentifier as quote,
+} from "../infra/sqlite-schema-sql.js";
 
 type TableSnapshot = { schema: string; content: string };
 
@@ -9,26 +12,20 @@ function captureUndeclaredTables(
   declaredTables: ReadonlySet<string>,
 ): Map<string, TableSnapshot> {
   const objects = database
-    .prepare(
-      `SELECT type, name, tbl_name, sql FROM main.sqlite_schema
-       WHERE type IN ('table', 'index', 'trigger', 'view') ORDER BY type, name`,
-    )
+    .prepare(`
+    SELECT type, name, tbl_name, sql FROM main.sqlite_schema
+    WHERE type IN ('table', 'index', 'trigger', 'view') ORDER BY type, name
+  `)
     .all();
   const tables = database
-    .prepare(
-      `SELECT name, wr FROM pragma_table_list
-       WHERE schema = 'main' AND type IN ('table', 'virtual', 'shadow')
-         AND name != 'sqlite_schema'`,
-    )
+    .prepare(`
+    SELECT name, wr FROM pragma_table_list
+    WHERE schema = 'main' AND type IN ('table', 'virtual', 'shadow') AND name != 'sqlite_schema'
+  `)
     .all();
   const snapshots = new Map<string, TableSnapshot>();
   const schemaFor = (name: string) =>
-    JSON.stringify(
-      objects.filter(
-        (object) =>
-          foldSqliteIdentifierCase(String(object.tbl_name)) === foldSqliteIdentifierCase(name),
-      ),
-    );
+    JSON.stringify(objects.filter((object) => fold(String(object.tbl_name)) === fold(name)));
   // Table scopes cannot restore views, including views over declared tables.
   for (const object of objects.filter((entry) => entry.type === "view")) {
     snapshots.set(String(object.name), {
@@ -42,42 +39,40 @@ function captureUndeclaredTables(
       continue;
     }
     const columns = database
-      .prepare(`PRAGMA main.table_xinfo(${quoteSqliteIdentifier(name)})`)
+      .prepare(`PRAGMA main.table_xinfo(${quote(name)})`)
       .all()
       .filter((column) => column.hidden !== 1);
     const names = columns.map((column) => String(column.name));
-    let order: string[];
-    if (table.wr === 1) {
-      order = columns
-        .filter((column) => Number(column.pk) > 0)
-        .toSorted((left, right) => Number(left.pk) - Number(right.pk))
-        .map((column) => String(column.name));
-    } else {
-      const rowid = ["rowid", "_rowid_", "oid"].find(
-        (alias) => !names.some((column) => column.toLowerCase() === alias),
-      );
-      if (!rowid) {
-        throw new Error(`Cannot prove migration scope: ${name} hides every implicit rowid alias`);
-      }
-      names.unshift(rowid);
-      order = [rowid];
+    const rowid =
+      table.wr === 1
+        ? undefined
+        : ["rowid", "_rowid_", "oid"].find(
+            (alias) => !names.some((column) => column.toLowerCase() === alias),
+          );
+    if (table.wr !== 1 && !rowid) {
+      throw new Error(`Cannot prove migration scope: ${name} hides every implicit rowid alias`);
     }
-    const selections = names.flatMap((column, index) => {
-      const quoted = quoteSqliteIdentifier(column);
-      return [
-        `typeof(${quoted}) AS type_${index}`,
-        // Preserve storage classes, integer precision, embedded NULs and raw BLOB bytes.
-        `CASE typeof(${quoted})
+    if (rowid) {
+      names.unshift(rowid);
+    }
+    const order = rowid
+      ? [rowid]
+      : columns
+          .filter((column) => Number(column.pk) > 0)
+          .toSorted((left, right) => Number(left.pk) - Number(right.pk))
+          .map((column) => String(column.name));
+    // Preserve storage classes, integer precision, embedded NULs and raw BLOB bytes.
+    const selections = names.map((column, index) => {
+      const quoted = quote(column);
+      return `typeof(${quoted}) AS type_${index}, CASE typeof(${quoted})
            WHEN 'integer' THEN CAST(${quoted} AS TEXT)
            WHEN 'real' THEN printf('%!.26g', ${quoted})
            WHEN 'text' THEN CAST(${quoted} AS BLOB)
-           ELSE ${quoted} END AS value_${index}`,
-      ];
+           ELSE ${quoted} END AS value_${index}`;
     });
     const hash = createHash("sha256").update(JSON.stringify(names));
     const rows = database.prepare(
-      `SELECT ${selections.join(", ")} FROM main.${quoteSqliteIdentifier(name)}
-       ORDER BY ${order.map(quoteSqliteIdentifier).join(", ")}`,
+      `SELECT ${selections.join(", ")} FROM main.${quote(name)} ORDER BY ${order.map(quote).join(", ")}`,
     );
     for (const row of rows.iterate()) {
       for (let index = 0; index < names.length; index++) {
@@ -87,17 +82,12 @@ function captureUndeclaredTables(
         }
         const bytes =
           value === null ? Buffer.alloc(0) : typeof value === "string" ? Buffer.from(value) : value;
-        hash
-          .update(`${String(row[`type_${index}`])}:${bytes.byteLength}:`)
-          .update(bytes)
-          .update(";");
+        const header = `${String(row[`type_${index}`])}:${bytes.byteLength}:`;
+        hash.update(header).update(bytes).update(";");
       }
       hash.update("\n");
     }
-    snapshots.set(name, {
-      schema: schemaFor(name),
-      content: hash.digest("hex"),
-    });
+    snapshots.set(name, { schema: schemaFor(name), content: hash.digest("hex") });
   }
   return snapshots;
 }
@@ -119,11 +109,10 @@ export async function assertSqliteMigrationScopePreserved<T>(
     if (!original || !current) {
       changes.push(`${name}: ${original ? "removed" : "created"}`);
     } else {
-      if (original.schema !== current.schema) {
-        changes.push(`${name}: schema changed`);
-      }
-      if (original.content !== current.content) {
-        changes.push(`${name}: content changed`);
+      for (const field of ["schema", "content"] as const) {
+        if (original[field] !== current[field]) {
+          changes.push(`${name}: ${field} changed`);
+        }
       }
     }
   }

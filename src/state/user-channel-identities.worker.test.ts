@@ -1,35 +1,33 @@
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { listUserChannelIdentitiesInDatabase } from "./user-channel-identities.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
+import { useProfileDatabase } from "./user-profiles-fixture.test-support.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
+const { options } = useProfileDatabase("channel-admission-");
 
 it.each(
   (["transaction", "commit"] as const).flatMap((stage) =>
     (["retry", "exhaust", "revoke"] as const).map((outcome) => ({ stage, outcome })),
   ),
 )("releases the WAL after withheld $stage admission before $outcome", ({ stage, outcome }) => {
-  const options = { path: join(tempDirs.make("channel-admission-"), "state.sqlite") };
   const profile = ensureProfileForEmail("owner@example.test", options);
   const database = openOpenClawStateDatabase(options);
-  const checkpoint = new DatabaseSync(options.path);
+  using checkpoint = new DatabaseSync(options.path);
   checkpoint.exec("PRAGMA busy_timeout = 0");
+  const assertCheckpoint = () =>
+    expect(checkpoint.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toEqual({
+      busy: 0,
+      log: 0,
+      checkpointed: 0,
+    });
   const identity = { channelId: "discord", accountId: "test-bot", senderId: "1234" };
   let now = process.hrtime.bigint();
   vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
@@ -63,11 +61,7 @@ it.each(
           .prepare("SELECT * FROM user_profile_identities WHERE provider = 'channel.identity'")
           .all(),
       ).toEqual([]);
-      expect(checkpoint.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toEqual({
-        busy: 0,
-        log: 0,
-        checkpointed: 0,
-      });
+      assertCheckpoint();
       checkpoints += 1;
     }
     if (pendingStage === stage && (outcome === "exhaust" || attempts === 1)) {
@@ -89,11 +83,6 @@ it.each(
   try {
     if (outcome === "retry") {
       expect(change()).toMatchObject({ ok: true, value: { kind: "linked" } });
-      expect(listUserChannelIdentitiesInDatabase(database.db, profile.id)).toEqual([
-        { profileId: profile.id, identity },
-      ]);
-      expect(attempts).toBe(2);
-      expect(withheld).toBe(1);
     } else {
       expect(change).toThrow(
         outcome === "exhaust"
@@ -103,19 +92,18 @@ it.each(
       if (outcome === "revoke") {
         expect(admission.failure).toEqual(new Error("Channel administrator authority was revoked"));
       }
-      expect(listUserChannelIdentitiesInDatabase(database.db, profile.id)).toEqual([]);
-      expect(attempts).toBe(outcome === "exhaust" ? 3 : 2);
-      expect(withheld).toBe(outcome === "exhaust" ? 3 : 1);
     }
-    expect(checkpoints).toBe(attempts - 1);
+    expect(listUserChannelIdentitiesInDatabase(database.db, profile.id)).toEqual(
+      outcome === "retry" ? [{ profileId: profile.id, identity }] : [],
+    );
+    expect({ attempts, withheld, checkpoints }).toEqual(
+      outcome === "exhaust"
+        ? { attempts: 3, withheld: 3, checkpoints: 2 }
+        : { attempts: 2, withheld: 1, checkpoints: 1 },
+    );
     expect(database.db.isTransaction).toBe(false);
-    expect(checkpoint.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toEqual({
-      busy: 0,
-      log: 0,
-      checkpointed: 0,
-    });
+    assertCheckpoint();
   } finally {
     admission.finish();
-    checkpoint.close();
   }
 });

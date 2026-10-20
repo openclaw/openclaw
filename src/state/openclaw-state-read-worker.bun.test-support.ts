@@ -16,72 +16,58 @@ import {
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 
 const root = process.argv[2] ?? "";
-assert(root);
-assert(process.versions.bun);
+assert(root && process.versions.bun);
 ensureSqliteLibrarySelected();
 const { explicitSqliteCloseReleasesNativeResources: capable } =
   process.argv[3] === "admitted"
     ? await initializeSqliteRuntimeCapabilities()
     : getSqliteRuntimeCapabilities();
-const admissionWorkers = getTrackedWorkerLifecycleSnapshot();
-for (const worker of admissionWorkers.workerLifecycle) {
-  assert.equal(worker.script, "other", "the builtins-only probe uses native Worker tracking");
-  assert.equal(worker.started, 1, "admission starts at most one private probe");
+const { workerCount: admissionCount, workerLifecycle: admissionWorkers } =
+  getTrackedWorkerLifecycleSnapshot();
+for (const worker of admissionWorkers) {
+  assert.deepEqual([worker.script, worker.started], ["other", 1], "one builtins-only probe");
 }
 assert.ok(
-  admissionWorkers.workerCount === 0 ||
-    (!capable &&
-      admissionWorkers.workerCount === 1 &&
-      admissionWorkers.workerLifecycle.length === 1),
+  admissionCount === 0 || (!capable && admissionCount === 1 && admissionWorkers.length === 1),
   "only conservative admission may retain one private probe",
 );
 const filename = path.join(root, "state.sqlite");
 const privateLocation = path.join(root, "private.sqlite");
+function seed(location: string, sql: string) {
+  using database = openNodeSqliteDatabase(location);
+  database.exec(sql);
+}
 for (const location of [filename, privateLocation]) {
-  const seed = openNodeSqliteDatabase(location);
-  seed.exec(
+  seed(
+    location,
     "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '1', 1)",
   );
-  seed.close();
 }
 
-function assertLifecycle(expected: [number, number, number], message: string) {
+const READER = "openclaw-state-read.worker.js";
+const SUPERVISOR = "worker-native-lifecycle.worker.js";
+function assertLifecycle(expected: [number, number], message: string) {
   const snapshot = getTrackedWorkerLifecycleSnapshot();
-  const worker = snapshot.workerLifecycle.find(
-    ({ script }) => script === "openclaw-state-read.worker.js",
-  );
-  const supervisor = snapshot.workerLifecycle.find(
-    ({ script }) => script === "worker-native-lifecycle.worker.js",
-  );
+  const rows = snapshot.workerLifecycle.map(({ script, started, retired }) => ({
+    script,
+    started,
+    retired: retired.reduce((sum, { count }) => sum + count, 0),
+  }));
+  const worker = rows.find(({ script }) => script === READER);
   assert(worker);
-  assert(supervisor);
-  const probes = snapshot.workerLifecycle.filter(
-    ({ script }) =>
-      script !== "openclaw-state-read.worker.js" && script !== "worker-native-lifecycle.worker.js",
-  );
+  const probes = rows.filter(({ script }) => script !== READER && script !== SUPERVISOR);
   // Conservative admission can finish while its unreferenced probe is still retiring.
   assert.deepEqual(
-    probes.map(({ script, started }) => ({ script, started })),
-    admissionWorkers.workerLifecycle.map(({ script, started }) => ({ script, started })),
-    "only the SQL reader and its retained supervisor start after admission",
+    probes.map(({ script, started }) => [script, started]),
+    admissionWorkers.map(({ script, started }) => [script, started]),
   );
-  const retired = worker.retired.reduce((total, { count }) => total + count, 0);
-  const supervisorRetired = supervisor.retired.reduce((total, { count }) => total + count, 0);
   assert.deepEqual(
-    { started: supervisor.started, retired: supervisorRetired },
-    { started: 1, retired: 0 },
-    "the unbound SQL-free supervisor remains until process exit",
+    rows.find(({ script }) => script === SUPERVISOR),
+    { script: SUPERVISOR, started: 1, retired: 0 },
   );
-  const live = worker.started - retired;
-  const liveProbes = probes.reduce(
-    (total, probe) =>
-      total +
-      probe.started -
-      probe.retired.reduce((count, retirement) => count + retirement.count, 0),
-    0,
-  );
-  assert.equal(snapshot.workerCount, live + supervisor.started - supervisorRetired + liveProbes);
-  assert.deepEqual([worker.started, retired, live], expected, message);
+  const live = rows.reduce((sum, row) => sum + row.started - row.retired, 0);
+  assert.equal(snapshot.workerCount, live);
+  assert.deepEqual([worker.started, worker.retired], expected, message);
 }
 
 async function read(location = filename, checkFreshAdmission = false) {
@@ -110,22 +96,17 @@ try {
   for (let index = 0; index < 5; index++) {
     await read();
   }
-  assertLifecycle([1, 0, 1], "successful reads reuse");
+  assertLifecycle([1, 0], "successful reads reuse");
   await closeOpenClawStateDatabaseByPathAsync(filename);
-  assertLifecycle(
-    [1, capable ? 0 : 1, capable ? 1 : 0],
-    "host close joins native cleanup and retains capable workers",
-  );
+  assertLifecycle([1, capable ? 0 : 1], "host close joins native cleanup");
   await read();
-  assertLifecycle([capable ? 1 : 2, capable ? 0 : 1, 1], "closed reader reopens");
+  assertLifecycle([capable ? 1 : 2, capable ? 0 : 1], "closed reader reopens");
   await read(privateLocation);
-  assertLifecycle([capable ? 1 : 2, capable ? 0 : 2, capable ? 1 : 0], "internal close settles");
+  assertLifecycle([capable ? 1 : 2, capable ? 0 : 2], "internal close settles");
   fs.mkdirSync(path.join(root, "state"));
-  const quarantine = openNodeSqliteDatabase(path.join(root, "state", "openclaw-quarantine.sqlite"));
-  quarantine.exec("PRAGMA user_version = 0");
-  quarantine.close();
+  seed(path.join(root, "state", "openclaw-quarantine.sqlite"), "PRAGMA user_version = 0");
   await read(filename, true);
-  assertLifecycle([capable ? 1 : 3, capable ? 0 : 3, capable ? 1 : 0], "admission close settles");
+  assertLifecycle([capable ? 1 : 3, capable ? 0 : 3], "admission close settles");
   console.log(`Bun shared-state worker reuse and native cleanup passed (capable=${capable})`);
 } finally {
   await closeOpenClawStateDatabaseAsync();

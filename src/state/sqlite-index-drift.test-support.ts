@@ -20,9 +20,7 @@ export function createUnsafeIndexDrift(databasePath: string): void {
   using database = new DatabaseSync(databasePath);
   database.exec(`
       CREATE TABLE unsafe_index_records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
+        id INTEGER PRIMARY KEY, indexed_value TEXT NOT NULL, alternate_value TEXT NOT NULL
       );
       CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
       INSERT INTO unsafe_index_records (indexed_value, alternate_value)
@@ -49,12 +47,8 @@ export function createCacheExpiryIndexPhysicalDrift(databasePath: string): void 
     "idx_agent_cache_expiry",
     "CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL",
   );
-  expect(database.prepare("PRAGMA integrity_check('cache_entries')").all()).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        integrity_check: expect.stringMatching(/idx_agent_cache_expiry/),
-      }),
-    ]),
+  expect(database.prepare("PRAGMA integrity_check('cache_entries')").all()).toContainEqual(
+    expect.objectContaining({ integrity_check: expect.stringMatching(/idx_agent_cache_expiry/) }),
   );
 }
 
@@ -70,28 +64,17 @@ export function createTranscriptIdempotencyIndexDrift(
         ON transcript_event_identities(session_id, event_id);
       INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES ('agent:worker-1:session-1', 'session-1', '{}', 1);
-      INSERT INTO session_windows (
-        session_id, session_key, session_scope, created_at, updated_at
-      ) VALUES (
-        'session-1', 'agent:worker-1:session-1', 'conversation', 1, 1
-      );
+      INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at)
+      VALUES ('session-1', 'agent:worker-1:session-1', 'conversation', 1, 1);
       INSERT INTO transcript_events (session_id, seq, event_json, created_at)
-      VALUES
-        ('session-1', 1, '{}', 1),
-        ('session-1', 2, '{}', 2);
-      INSERT INTO transcript_event_identities (
-        session_id, event_id, seq, message_idempotency_key, created_at
-      ) VALUES (
-        'session-1', 'event-1', 1, 'message-1', 1
-      );
+      VALUES ('session-1', 1, '{}', 1), ('session-1', 2, '{}', 2);
+      INSERT INTO transcript_event_identities (session_id, event_id, seq, message_idempotency_key, created_at)
+      VALUES ('session-1', 'event-1', 1, 'message-1', 1);
     `);
   if (options.duplicateRows) {
     database.exec(`
-        INSERT INTO transcript_event_identities (
-          session_id, event_id, seq, message_idempotency_key, created_at
-        ) VALUES (
-          'session-1', 'event-2', 2, 'message-1', 2
-        );
+        INSERT INTO transcript_event_identities (session_id, event_id, seq, message_idempotency_key, created_at)
+        VALUES ('session-1', 'event-2', 2, 'message-1', 2);
       `);
   }
   if (options.hideWithCanonicalSql) {
@@ -131,8 +114,6 @@ export function createCanonicalAgentIndexDrift(databasePath: string): void {
         VALUES ('trajectory-session', 0, NULL, '{"type":"unassigned"}', 1),
                ('trajectory-session', 1, 'run-1', '{"type":"named"}', 2);
     `);
-  expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
-    integrity_check: "ok",
-  });
+  expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   expect(drifted.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 }
