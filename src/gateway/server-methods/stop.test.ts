@@ -123,18 +123,15 @@ it.each(["signal", "client invalidation", "transport authority", "stop preparati
   async (loss) => {
     const reached = createDeferred();
     const released = createDeferred();
+    const pause = async <T>(value: T) => {
+      reached.resolve();
+      await released.promise;
+      return value;
+    };
     if (loss === "stop preparation") {
-      prepareHostedGatewayStop.mockImplementationOnce(async () => {
-        reached.resolve();
-        await released.promise;
-        return nativeStop;
-      });
+      prepareHostedGatewayStop.mockImplementationOnce(() => pause(nativeStop));
     } else {
-      readActiveGatewayLockIdentity.mockImplementationOnce(async () => {
-        reached.resolve();
-        await released.promise;
-        return activeLock;
-      });
+      readActiveGatewayLockIdentity.mockImplementationOnce(() => pause(activeLock));
     }
     const abort = new AbortController();
     let current = true;

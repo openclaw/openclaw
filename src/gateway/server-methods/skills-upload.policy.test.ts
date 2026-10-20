@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -42,6 +43,15 @@ async function call(stage: string, params: Record<string, unknown>) {
   });
   return respond;
 }
+function expectDisabled(respond: Awaited<ReturnType<typeof call>>) {
+  expect
+    .soft(respond)
+    .toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
+    );
+}
 function snapshot() {
   const { db } = openOpenClawStateDatabase();
   return {
@@ -61,12 +71,7 @@ async function prepare(stage: string) {
     undefined,
   );
   const payload: unknown = expectDefined(begun.mock.calls[0], "begin response")[1];
-  if (
-    !payload ||
-    typeof payload !== "object" ||
-    !("uploadId" in payload) ||
-    typeof payload.uploadId !== "string"
-  ) {
+  if (!isRecord(payload) || typeof payload.uploadId !== "string") {
     throw new Error("missing upload ID");
   }
   const uploadId = payload.uploadId;
@@ -129,13 +134,7 @@ it.each(["begin", "chunk", "commit"])(
       ]);
       setEnabled(false);
       release.resolve();
-      expect
-        .soft(await pending)
-        .toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
-        );
+      expectDisabled(await pending);
       expect(snapshot()).toEqual(before);
       expect(lock).toHaveBeenCalled();
     } finally {
@@ -162,13 +161,7 @@ it.each(
       }
       admit(request, grant);
     });
-    expect
-      .soft(await call(stage, params))
-      .toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } }),
-      );
+    expectDisabled(await call(stage, params));
     expect(fence).toHaveBeenCalled();
     expect(reached).toBe(true);
     expect(snapshot()).toEqual(before);
