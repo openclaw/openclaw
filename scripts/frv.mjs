@@ -71,6 +71,8 @@ const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCH_POLL_MS = 60_000;
 const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_FILENAME = "full-release-execution-plan.json";
+const USAGE =
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
 
 function requiredValue(value, label) {
   const normalized = String(value ?? "").trim();
@@ -127,6 +129,9 @@ function parseArgs(argv) {
     runId: "",
   };
   const publicationRequested = argv.includes("--publication-run");
+  if (["--help", "-h", "help"].includes(command) && argv.length === 1) {
+    return { ...options, command: "help" };
+  }
   const seen = new Set();
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -169,9 +174,7 @@ function parseArgs(argv) {
   if (
     !["cancel", "continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)
   ) {
-    throw new Error(
-      "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>",
-    );
+    throw new Error(USAGE);
   }
   if (options.force && command !== "cancel") {
     throw new Error("--force is valid only with cancel");
@@ -1706,6 +1709,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       const selected = status.children.find((child) => child.key === target.childKey);
       if (selected.status !== "active" && !ownedAttempts.has(selected.runId)) {
         if (target.name === undefined) {
+          if (selected.status === "passed") {
+            return { action: "nothing-to-rerun", status };
+          }
           if (selected.status !== "failed") {
             throw new Error(`child ${selected.key} is ${selected.status}; nothing to rerun`);
           }
@@ -3085,6 +3091,10 @@ function print(value, json) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.command === "help") {
+    console.log(USAGE);
+    return;
+  }
   if (options.publicationRunId) {
     const value = await inspectPublicationStatus(options);
     print(value, options.json);

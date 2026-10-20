@@ -1732,7 +1732,7 @@ describe("FRV child rerun", () => {
     const passed = rerunScenario({ childSource: [1, "success"] });
     await expect(
       continueFailed(plan([passed.selected]), "77", passed.client, { child: "normalCi" }),
-    ).rejects.toThrow("child normalCi is passed; nothing to rerun");
+    ).resolves.toMatchObject({ action: "nothing-to-rerun" });
     expect(scenario.counters.posts.child + passed.counters.posts.child).toBe(0);
   });
 });
