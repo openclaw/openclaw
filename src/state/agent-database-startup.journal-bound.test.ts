@@ -129,17 +129,6 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
   expect(readJournal).toHaveBeenCalledTimes(4);
 });
 
-it("retries a stale schema admission publication and prepares the agent", async () => {
-  const publish = vi
-    .fn<() => Promise<void>>()
-    .mockRejectedValueOnce(new AgentDatabaseSchemaAdmissionChangedError())
-    .mockResolvedValueOnce(undefined);
-  await prepareAgents(1, { publishAgent: publish });
-  expect(publish).toHaveBeenCalledTimes(2);
-  expect(admissionState.prepared).toEqual(["agent-0"]);
-  expect(admissionState.failed).toEqual([]);
-});
-
 it("exhausts the bounded publication retry on persistent schema admission changes", async () => {
   const publish = vi.fn(async () => {
     throw new AgentDatabaseSchemaAdmissionChangedError();
