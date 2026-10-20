@@ -10,11 +10,7 @@ function createCall(fetchImpl: typeof fetch, onCallAllocated = vi.fn(), sdp = "v
   return createOpenAIQuicksilverCall(
     {
       auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
-      requestIds: {
-        realtimeSessionId: "realtime-test",
-        sessionId: "session-test",
-        threadId: "thread-test",
-      },
+      requestIds: { realtimeSessionId: "realtime", sessionId: "session", threadId: "thread" },
       sdp,
       session: { type: "realtime", model: "gpt-realtime-2.1" },
       gaSideband: true,
@@ -28,6 +24,7 @@ function createCall(fetchImpl: typeof fetch, onCallAllocated = vi.fn(), sdp = "v
 describe("OpenAI Realtime sideband call wire", () => {
   it("posts bounded server-owned session config and returns the fixed sideband URL", async () => {
     const onCallAllocated = vi.fn();
+    const sdp = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.method).toBe("POST");
       expect(init?.headers).toMatchObject({
@@ -39,7 +36,7 @@ describe("OpenAI Realtime sideband call wire", () => {
       }
       const form = init.body;
       expect(form).toContain('name="sdp"');
-      expect(form).toContain("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n");
+      expect(form).toContain(sdp);
       expect(form).toContain('name="session"');
       expect(form).toContain('"type":"realtime","model":"gpt-realtime-2.1"');
       return new Response("v=0\r\na=answer\r\n", {
@@ -48,9 +45,7 @@ describe("OpenAI Realtime sideband call wire", () => {
       });
     });
 
-    await expect(
-      createCall(fetchImpl, onCallAllocated, "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"),
-    ).resolves.toEqual({
+    await expect(createCall(fetchImpl, onCallAllocated, sdp)).resolves.toEqual({
       kind: "ga-sideband",
       answerSdp: "v=0\r\na=answer\r\n",
       callId: "call_test-123",

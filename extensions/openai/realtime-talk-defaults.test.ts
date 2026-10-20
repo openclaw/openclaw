@@ -92,17 +92,12 @@ describe("OpenAI Talk account defaults", () => {
       });
 
       expect(providerConfig.model).toBe(model);
+      const sessionContext = { cfg, agentId: "voice-agent", providerConfig };
       const api = readInternalRealtimeVoiceProviderApi(provider);
-      const capabilities = await api.resolveBrowserSessionCapabilitiesAsync({
-        cfg,
-        agentId: "voice-agent",
-        providerConfig,
-      });
+      const capabilities = await api.resolveBrowserSessionCapabilitiesAsync(sessionContext);
       expect(capabilities).toMatchObject({ handlesAgentConsult: true, supportsToolCalls: false });
       await provider.createBrowserSession?.({
-        cfg,
-        providerConfig,
-        agentId: "voice-agent",
+        ...sessionContext,
         workspaceDir: "/tmp/openclaw-voice-workspace",
         initialItems: [],
         runAgentConsult: async () => ({ text: "Done" }),

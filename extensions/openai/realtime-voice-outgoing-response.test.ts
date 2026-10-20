@@ -20,6 +20,7 @@ const {
   connectReadyBridge,
   parseSent,
   emitServerEvent,
+  emitAssistantPlayback,
   emitCompletedToolCalls,
   resetTestState,
   restoreTestEnvironment,
@@ -31,12 +32,8 @@ const {
 type Socket = Parameters<typeof parseSent>[0];
 const responses = (socket: Socket, type = "response.create") =>
   parseSent(socket).filter((event) => event.type === type);
-function emitAudio(socket: Socket, item_id: string) {
-  emitServerEvent(socket, {
-    type: "response.audio.delta",
-    item_id,
-    delta: Buffer.alloc(320).toString("base64"),
-  });
+function playResponse(socket: Socket, responseId: string, itemId: string) {
+  emitAssistantPlayback(socket, { responseId, itemId, audio: Buffer.alloc(320) });
 }
 function finishResponse(socket: Socket, id: string, status = "completed") {
   emitServerEvent(socket, { type: "response.done", response: { id, status, output: [] } });
@@ -87,15 +84,13 @@ describe("OpenAI realtime outgoing response ownership", () => {
           .filter((event) => event.type.startsWith("response."))
           .map((event) => event.type),
       ).toEqual(["response.create", "response.cancel"]);
-      emitServerEvent(socket, { type: "response.created", response: { id: "cancelled" } });
-      emitAudio(socket, "discarded");
+      playResponse(socket, "cancelled", "discarded");
       expect(onAudio).not.toHaveBeenCalled();
       bridge.sendUserMessage?.("Follow-up response.");
       expect(responses(socket)).toHaveLength(1);
       finishResponse(socket, "cancelled", "cancelled");
       expect(responses(socket)).toHaveLength(2);
-      emitServerEvent(socket, { type: "response.created", response: { id: "recovery" } });
-      emitAudio(socket, "heard");
+      playResponse(socket, "recovery", "heard");
       expect(onAudio).toHaveBeenCalledTimes(1);
       await bridge.close();
     },
@@ -132,9 +127,7 @@ describe("OpenAI realtime outgoing response ownership", () => {
     const bridge = createNativeBridge({
       autoRespondToAudio: false,
       getPlaybackState: () => [{ itemId: "completed-a", audioEndMs: 500 }],
-      onClearAudio: () => {
-        trace.push("sink.clear");
-      },
+      onClearAudio: () => trace.push("sink.clear"),
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "conversation.item.truncate") {
           bridge.sendUserMessage?.("Replacement B.");

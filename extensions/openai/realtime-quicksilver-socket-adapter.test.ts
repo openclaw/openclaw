@@ -7,9 +7,8 @@ import type {
 
 const { createWorkerMock } = vi.hoisted(() => ({ createWorkerMock: vi.fn() }));
 vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     Worker: function MockWorker() {
       return createWorkerMock();
     },
@@ -59,9 +58,7 @@ const final = JSON.stringify({ type: "session.close" });
 const commandsOf = (worker: ControlledWorker, type: QuicksilverSocketCommand["type"]) =>
   worker.commands.filter((command) => command.type === type);
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 describe("GPT-Live worker socket control drain", () => {
   it("posts close before open and does not reopen on a late worker open", () => {

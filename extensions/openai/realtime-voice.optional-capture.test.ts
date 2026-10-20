@@ -1,10 +1,12 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
-const { FakeWebSocket } = await vi.hoisted(async () => {
+const state = await vi.hoisted(async () => {
   const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
   return createOpenAIRealtimeMockState();
 });
+const { FakeWebSocket } = state;
 const mocks = vi.hoisted(() => ({
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
   proxyAgent: { fixture: "configured-proxy" },
@@ -31,31 +33,25 @@ it.each(["present", "rejected"] as const)(
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
     const { buildOpenAIRealtimeVoiceProvider } = await import("./realtime-voice-provider.js");
+    const { createNativeBridge, connectReadyBridge, parseSent } = createOpenAIRealtimeTestSupport({
+      ...state,
+      buildOpenAIRealtimeVoiceProvider,
+    });
     const onReady = vi.fn();
     const onError = vi.fn();
     const onClose = vi.fn();
-    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+    const bridge = createNativeBridge({
       providerConfig: { apiKey: "fixture-key" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
       onReady,
       onError,
       onClose,
     });
     try {
-      const connecting = bridge.connect();
-      const socket = FakeWebSocket.instances[0];
-      if (!socket) {
-        throw new Error("OpenAI realtime socket is unavailable");
-      }
+      const socket = await connectReadyBridge(bridge);
       expect(socket.args[1]).toMatchObject({ agent: mocks.proxyAgent });
-      socket.readyState = FakeWebSocket.OPEN;
-      socket.emit("open");
-      socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-      await connecting;
       expect(onReady).toHaveBeenCalledOnce();
       bridge.sendAudio(Buffer.from("voice"));
-      expect(socket.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      expect(parseSent(socket)).toContainEqual({
         type: "input_audio_buffer.append",
         audio: Buffer.from("voice").toString("base64"),
       });
