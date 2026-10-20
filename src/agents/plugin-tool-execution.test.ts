@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "./admitted-run-context.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
@@ -26,7 +29,6 @@ function sandboxFixture(source = "openclaw-managed") {
   const sourceFile = "/managed/autoreview/SKILL.md";
   const sandbox = createAgentToolsSandboxContext({
     workspaceDir: root,
-    agentWorkspaceDir: root,
     containerWorkdir: "/guest/repo",
     workspaceAccess: "none",
   });
@@ -56,17 +58,10 @@ function sandboxFixture(source = "openclaw-managed") {
     finalizeExec: finalize,
     prepareProcessCleanup: (env) => ({ env, terminate, interrupt: async () => false }),
   };
+  const selectedSource = { filePath: sourceFile, fileHost: "gateway" as const };
   const snapshot: SkillSnapshot = {
     prompt: "",
-    skills: [
-      {
-        name: "autoreview",
-        source: {
-          filePath: sourceFile,
-          fileHost: "gateway",
-        },
-      },
-    ],
+    skills: [{ name: "autoreview", source: selectedSource }],
     resolvedSkills: [
       {
         name: "autoreview",
@@ -83,6 +78,34 @@ function sandboxFixture(source = "openclaw-managed") {
   const capabilities = (skillsSnapshot = snapshot, assertCurrent = () => {}) =>
     preparePluginToolExecutionCapabilities({ sandbox, skillsSnapshot })(assertCurrent);
   return { sandbox, backend: sandbox.backend, snapshot, build, terminate, finalize, capabilities };
+}
+
+function modelExecution(
+  models: string[],
+  options: Pick<AdmittedRunOperatorAuthority, "onModelPolicyChanged"> & {
+    allows?: () => boolean;
+    allow?: string[];
+  } = {},
+) {
+  const caller = {
+    model: "fixture/default",
+    ...(options.allow ? { modelPolicy: { allow: options.allow } } : {}),
+  };
+  return preparePluginToolExecutionCapabilities({
+    agentId: "caller",
+    config: { agents: { entries: { caller } } },
+    authority: createAdmittedRunOperatorAuthority({
+      profileId: "caller",
+      scopes: [],
+      assertCurrent() {},
+      onModelPolicyChanged: options.onModelPolicyChanged,
+      modelPolicy: {
+        models: models.map((model) => ({ provider: "fixture", model })),
+        allows: (ref) =>
+          ref.provider === "fixture" && models.includes(ref.model) && (options.allows?.() ?? true),
+      },
+    }),
+  })(() => {}).modelExecution!;
 }
 
 it.each(["openclaw-managed", "openclaw-library", "openclaw-bundled", "agents-skills-personal"])(
@@ -166,44 +189,44 @@ it.each(["/guest/repo/skills", "/guest/repo/skills/autoreview/scripts"])(
   },
 );
 
-it("refuses a retained command if invocation closes during backend preparation", async () => {
+it.each([
+  { kind: "retired", error: "retired" },
+  { kind: "cancelled", error: "signal" },
+  { kind: "stdin", error: "does not support piped" },
+])("finalizes owned command resources after $kind rejection", async ({ kind, error }) => {
   const fixture = sandboxFixture();
   const prepared = createDeferred();
   let active = true;
-  fixture.build.mockImplementation(async () => {
-    await prepared.promise;
-    return { argv: ["fixed-sandbox-transport"], env: {}, stdinMode: "pipe-closed" };
-  });
+  if (kind === "retired") {
+    const build = fixture.build.getMockImplementation()!;
+    fixture.build.mockImplementation(async () => {
+      await prepared.promise;
+      return build();
+    });
+  }
+  if (kind === "cancelled") {
+    run.mockResolvedValue({ termination: "signal", code: null, stdout: "", stderr: "" });
+  }
   const capability = preparePluginToolExecutionCapabilities({ sandbox: fixture.sandbox })(() => {
     if (!active) {
       throw new Error("retired");
     }
   });
-  const pending = capability.sandbox!.run({ argv: ["trusted-helper", "literal; argument"] });
-  active = false;
-  prepared.resolve();
-  await expect(pending).rejects.toThrow("retired");
-  expect(run).not.toHaveBeenCalled();
-  expect(fixture.terminate).toHaveBeenCalledOnce();
-  expect(fixture.finalize).toHaveBeenCalledOnce();
-});
-
-it("joins only its owned sandbox cleanup when a command is cancelled", async () => {
-  const fixture = sandboxFixture();
-  run.mockResolvedValue({ termination: "signal", code: null, stdout: "", stderr: "" });
-  const capability = preparePluginToolExecutionCapabilities({ sandbox: fixture.sandbox })(() => {});
-  await expect(capability.sandbox!.run({ argv: ["trusted-helper"] })).rejects.toThrow("signal");
-  expect(fixture.terminate).toHaveBeenCalledOnce();
-  expect(fixture.finalize).toHaveBeenCalledOnce();
-});
-
-it("does not send input to a backend that explicitly closes stdin", async () => {
-  const fixture = sandboxFixture();
-  const capability = preparePluginToolExecutionCapabilities({ sandbox: fixture.sandbox })(() => {});
-  await expect(
-    capability.sandbox!.run({ argv: ["trusted-helper"], input: "complete response" }),
-  ).rejects.toThrow("does not support piped");
-  expect(run).not.toHaveBeenCalled();
+  const pending = capability.sandbox!.run({
+    argv: ["trusted-helper", "literal; argument"],
+    ...(kind === "stdin" ? { input: "complete response" } : {}),
+  });
+  if (kind === "retired") {
+    active = false;
+    prepared.resolve();
+  }
+  await expect(pending).rejects.toThrow(error);
+  if (kind !== "cancelled") {
+    expect(run).not.toHaveBeenCalled();
+  }
+  if (kind !== "stdin") {
+    expect(fixture.terminate).toHaveBeenCalledOnce();
+  }
   expect(fixture.finalize).toHaveBeenCalledOnce();
 });
 
@@ -269,14 +292,8 @@ it("releases managed workspace admission while the helper waits for exchange com
 it("selects the permitted default before execution and holds its current authority", async () => {
   let allowed = true;
   let changed: (() => void) | undefined;
-  const authority = createAdmittedRunOperatorAuthority({
-    profileId: "caller",
-    scopes: [],
-    assertCurrent() {},
-    modelPolicy: {
-      models: [{ provider: "fixture", model: "default" }],
-      allows: (model) => allowed && model.model === "default",
-    },
+  const execution = modelExecution(["default"], {
+    allows: () => allowed,
     onModelPolicyChanged: (callback) => {
       changed = callback;
       return () => {
@@ -284,27 +301,20 @@ it("selects the permitted default before execution and holds its current authori
       };
     },
   });
-  const capability = preparePluginToolExecutionCapabilities({
-    authority,
-    agentId: "caller",
-    config: { agents: { entries: { caller: { model: "fixture/default" } } } },
-  })(() => {});
-  expect(capability.modelExecution?.cliEntryPath).toBe(
-    path.resolve(import.meta.dirname, "../../openclaw.mjs"),
-  );
+  expect(execution.cliEntryPath).toBe(path.resolve(import.meta.dirname, "../../openclaw.mjs"));
   const action = vi.fn(async ({ model, agentId }: { model: string; agentId: string }) => ({
     model,
     agentId,
   }));
   await expect(
-    capability.modelExecution!.run({ model: "fixture/preferred", explicit: true }, action),
+    execution.run({ model: "fixture/preferred", explicit: true }, action),
   ).rejects.toThrow("cannot use this model");
   expect(action).not.toHaveBeenCalled();
   await expect(
-    capability.modelExecution!.run({ model: "fixture/preferred", explicit: false }, action),
+    execution.run({ model: "fixture/preferred", explicit: false }, action),
   ).resolves.toEqual({ model: "fixture/default", agentId: "caller" });
   await expect(
-    capability.modelExecution!.run({ model: null, explicit: false }, async ({ signal, model }) => {
+    execution.run({ model: null, explicit: false }, async ({ signal, model }) => {
       expect(model).toBe("fixture/default");
       allowed = false;
       changed?.();
@@ -314,50 +324,26 @@ it("selects the permitted default before execution and holds its current authori
   ).rejects.toThrow("cannot use this model");
   expect(changed).toBeUndefined();
   await expect(
-    capability.modelExecution!.run({ model: "fixture/preferred", explicit: false }, action),
+    execution.run({ model: "fixture/preferred", explicit: false }, action),
   ).rejects.toThrow("cannot use this model");
 });
 
 it("keeps an allowed canonical model and refuses an empty permitted selection", async () => {
-  const make = (models: { provider: string; model: string }[], allow?: string[]) =>
-    preparePluginToolExecutionCapabilities({
-      agentId: "caller",
-      config: {
-        agents: {
-          entries: {
-            caller: { model: "fixture/default", ...(allow ? { modelPolicy: { allow } } : {}) },
-          },
-        },
-      },
-      authority: createAdmittedRunOperatorAuthority({
-        profileId: "caller",
-        scopes: [],
-        assertCurrent() {},
-        modelPolicy: {
-          models,
-          allows: (ref) =>
-            models.some((model) => model.provider === ref.provider && model.model === ref.model),
-        },
-      }),
-    })(() => {}).modelExecution!;
   await expect(
-    make([{ provider: "fixture", model: "preferred" }]).run(
+    modelExecution(["preferred"]).run(
       { model: "fixture/preferred", explicit: false },
       async ({ model }) => model,
     ),
   ).resolves.toBe("fixture/preferred");
   await expect(
-    make(
-      [
-        { provider: "fixture", model: "preferred" },
-        { provider: "fixture", model: "default" },
-      ],
-      ["fixture/default"],
-    ).run({ model: "fixture/preferred", explicit: false }, async ({ model }) => model),
+    modelExecution(["preferred", "default"], { allow: ["fixture/default"] }).run(
+      { model: "fixture/preferred", explicit: false },
+      async ({ model }) => model,
+    ),
   ).resolves.toBe("fixture/default");
   const action = vi.fn(async () => "must not execute");
   await expect(
-    make([]).run({ model: "fixture/preferred", explicit: false }, action),
+    modelExecution([]).run({ model: "fixture/preferred", explicit: false }, action),
   ).rejects.toThrow("No permitted reviewer model");
   expect(action).not.toHaveBeenCalled();
 });

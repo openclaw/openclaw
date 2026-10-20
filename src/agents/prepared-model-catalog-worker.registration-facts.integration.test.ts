@@ -4,6 +4,7 @@ import { threadId } from "node:worker_threads";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
+import { readFixtureLines } from "./prepared-model-catalog-worker.shared.test-support.js";
 import { PROVIDER_ID, writeFixtureFiles } from "./prepared-model-catalog-worker.test-support.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
@@ -18,10 +19,9 @@ it.each([true, false])(
   "keeps unrelated setup outside catalog requests (explicit allowlist=%s)",
   async (explicitAllowlist) => {
     const setupId = "unrelated-setup-fixture";
-    let observations = "";
     const fixture = await createFleetFixture(
       (seed) => {
-        observations = path.join(seed.root, "setup-observations.jsonl");
+        const observations = path.join(seed.root, "setup-observations.jsonl");
         fs.writeFileSync(observations, "");
         const observe = (event: string) =>
           `require("node:fs").appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ event: ${JSON.stringify(event)}, threadId: require("node:worker_threads").threadId }) + "\\n");`;
@@ -54,18 +54,13 @@ module.exports = { id: ${JSON.stringify(setupId)}, register(api) {
           delete plugins.allow;
         }
         seed.config.plugins.load.paths.push(setupDir);
-        Object.assign(seed.config.plugins.entries, {
-          [setupId]: { enabled: true, config: { configured: true } },
-        });
+        seed.config.plugins.entries[setupId] = { enabled: true, config: { configured: true } };
       },
       true,
       { agentCount: 1, publication: "individual" },
     );
     const readObservations = (): Array<{ event: string; threadId: number }> =>
-      fs
-        .readFileSync(observations, "utf8")
-        .trim()
-        .split("\n")
+      readFixtureLines(fixture.root, "setup-observations.jsonl")
         .filter(Boolean)
         .map((line) => JSON.parse(line));
     const snapshot = fixture.snapshots[0]!;

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -8,28 +8,22 @@ import {
   getPreparedModelCatalogWorkerPoolSnapshot,
 } from "./prepared-model-catalog-worker.js";
 import {
+  catalogAgentFacts,
+  stubCatalogEnv,
+} from "./prepared-model-catalog-worker.shared.test-support.js";
+import {
   createCatalogFixture,
   PROVIDER_ID,
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 it("bounds native ESM payloads across alternating unchanged loader workspaces", async () => {
-  const fixture = await createCatalogFixture(makeTempDir, 0);
-  for (const key of [
-    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_WORKER_CATALOG_MARKER",
-    "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH",
-    "OPENCLAW_WORKER_REF_ONLY_API_KEY",
-    "OPENCLAW_WORKER_REF_ONLY_TOKEN",
-  ] as const) {
-    vi.stubEnv(key, fixture.env[key]);
-  }
-  const plugin = path.join(fixture.root, "plugin");
+  const { root, env, config, marker } = await createCatalogFixture(makeTempDir, 0);
+  stubCatalogEnv(env);
+  const plugin = path.join(root, "plugin");
   writeFixtureFiles(plugin, {
     "payload.mjs": `
 export class CatalogWorkspacePayload {
@@ -50,7 +44,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     state.calls++;
     if (state.calls === 1 || state.calls === 5 || state.calls === 20) v8.queryObjects(WeakRef);
     const memory = process.memoryUsage();
-    fs.writeFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
+    fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
       calls: state.calls, memory,
       payloads: state.payloads.filter(ref => ref.deref()).length,
       callbacks: state.callbacks.filter(ref => ref.deref()).length,
@@ -71,42 +65,38 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   });
   const inventories: ReturnType<typeof loadPluginMetadataSnapshot>[] = [];
   const workers = ["one", "two"].map((agentId) => {
-    const workspaceDir = path.join(fixture.root, `workspace-${agentId}`);
-    const agentDir = path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", agentId, "agent");
+    const workspaceDir = path.join(root, `workspace-${agentId}`);
+    const agentDir = path.join(env.OPENCLAW_STATE_DIR!, "agents", agentId, "agent");
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(agentDir, { recursive: true });
     const retirement = new AbortController();
     retireAfterTest(() => retirement.abort());
     const metadata = loadPluginMetadataSnapshot({
-      config: fixture.config,
+      config,
       env: process.env,
       workspaceDir,
     });
     inventories.push(metadata);
     return createPreparedModelCatalogWorker({
-      agentFacts: {
-        input: {
+      agentFacts: catalogAgentFacts(
+        {
           agentId,
           agentDir,
           workspaceDir,
-          config: fixture.config,
+          config,
           allowGatewaySubagentBinding: true,
         },
-        env: process.env,
-        authStore: {
-          version: 1,
-          profiles: {
-            fixture: { type: "api_key", provider: PROVIDER_ID, key: `synthetic-${agentId}` },
+        process.env,
+        {
+          authStore: {
+            version: 1,
+            profiles: {
+              fixture: { type: "api_key", provider: PROVIDER_ID, key: `synthetic-${agentId}` },
+            },
           },
+          providerIds: [PROVIDER_ID],
         },
-        credentials: {},
-        templateAuthStorage: AuthStorage.inMemory({}),
-        providerIds: [PROVIDER_ID],
-        configuredModelRefs: [],
-        configuredRuntimeModels: [],
-        runtimeCapabilityModels: [],
-        configuredGeneratedCatalogPluginIds: [],
-      },
+      ),
       pluginMetadataSnapshot: metadata,
       isCurrent: () => !retirement.signal.aborted,
       retirementSignal: retirement.signal,
@@ -124,17 +114,11 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   }> = [];
   for (let turn = 0; turn < 20; turn++) {
     const result = await workers[turn % workers.length]!.loadCatalog();
-    expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
-      workers: 1,
-      workersCreated: 1,
-    });
-    expect(result.modelCatalog.entries).toContainEqual(
-      expect.objectContaining({
-        id: "workspace-model",
-        name: `synthetic-${turn % 2 ? "two" : "one"}`,
-      }),
-    );
-    samples.push(JSON.parse(fs.readFileSync(fixture.marker, "utf8")));
+    const pool = getPreparedModelCatalogWorkerPoolSnapshot();
+    expect(pool).toMatchObject({ workers: 1, workersCreated: 1 });
+    const entry = { id: "workspace-model", name: `synthetic-${turn % 2 ? "two" : "one"}` };
+    expect(result.modelCatalog.entries).toContainEqual(expect.objectContaining(entry));
+    samples.push(JSON.parse(fs.readFileSync(marker, "utf8")));
   }
   const last = samples.at(-1)!;
   expect(last).toMatchObject({ threadId: samples[0]!.threadId, payloads: 2, callbacks: 2 });

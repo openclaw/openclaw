@@ -12,13 +12,11 @@ import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
   createCatalogFixture,
   catalogEntry,
-  EXTERNAL_AUTH_PATH_ENV,
   PROVIDER_ID,
-  REF_ONLY_API_ENV,
-  REF_ONLY_TOKEN_ENV,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -29,16 +27,7 @@ const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 async function createFixture() {
   const fixture = await createCatalogFixture(makeTempDir, 0);
-  for (const name of [
-    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_WORKER_CATALOG_MARKER",
-    EXTERNAL_AUTH_PATH_ENV,
-    REF_ONLY_API_ENV,
-    REF_ONLY_TOKEN_ENV,
-  ] as const) {
-    vi.stubEnv(name, fixture.env[name]);
-  }
+  stubCatalogEnv(fixture.env);
   return fixture;
 }
 

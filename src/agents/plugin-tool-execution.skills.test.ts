@@ -73,9 +73,7 @@ it.each(
     };
     const sandbox = createAgentToolsSandboxContext({
       workspaceDir: workspace,
-      agentWorkspaceDir: workspace,
       skillsWorkspaceDir: sandboxDir,
-      workspaceAccess: "rw",
       containerWorkdir: "/guest/repo",
     });
     sandbox.backend = {
@@ -96,7 +94,7 @@ it.each(
         createFileExclusive: vi.fn(),
         stat: vi.fn(),
       },
-      loadSkills: async (request) => readWorkspaceSkillSources(request),
+      loadSkills: readWorkspaceSkillSources,
     });
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "caller",
@@ -131,14 +129,13 @@ it.each(
       };
     };
     try {
+      const helperPath = path.join("scripts", "autoreview");
+      const helperText = "# protected helper fixture\n";
       await writeSkill({ dir: original, name: "autoreview", description: "Installed reviewer" });
       await fs.mkdir(path.dirname(installation), { recursive: true });
       await fs.symlink(original, installation, "dir");
       await fs.mkdir(path.join(installation, "scripts"));
-      await fs.writeFile(
-        path.join(installation, "scripts", "autoreview"),
-        "# protected helper fixture\n",
-      );
+      await fs.writeFile(path.join(installation, helperPath), helperText);
       if (access === "ro-instructions") {
         const metadata = path.join(original, "metadata");
         await fs.mkdir(metadata);
@@ -152,14 +149,14 @@ it.each(
         await fs.symlink(mountedSource, alias, "dir");
         sandbox.docker.binds = [`${alias}:/installed-source:${access === "ro" ? "ro" : "rw"}`];
       }
-      const installed = await bind();
-      expect(installed.snapshot.discoverySkills).toEqual([
+      const { snapshot, capabilities, tool } = await bind();
+      expect(snapshot.discoverySkills).toEqual([
         expect.objectContaining({
           source: source === "personal" ? "agents-skills-personal" : "openclaw-managed",
           fileHost: "gateway",
         }),
       ]);
-      expect(installed.snapshot.skills[0]?.source).toEqual({
+      expect(snapshot.skills[0]?.source).toEqual({
         filePath: path.join(await fs.realpath(installation), "SKILL.md"),
         fileHost: "gateway",
       });
@@ -174,20 +171,12 @@ it.each(
           }).writable,
         ).toBe(access !== "ro");
       }
-      expect(installed.capabilities.sandbox?.installedSkillRoots).toEqual(
+      expect(capabilities.sandbox?.installedSkillRoots).toEqual(
         admitted ? { autoreview: "/guest/repo/.openclaw/sandbox-skills/skills/autoreview" } : {},
       );
-      if (admitted) {
-        expect(installed.tool).not.toBeNull();
-      } else {
-        expect(installed.tool).toBeNull();
-      }
-      expect(
-        await fs.readFile(
-          path.join(sandboxDir, "skills", "autoreview", "scripts", "autoreview"),
-          "utf8",
-        ),
-      ).toBe("# protected helper fixture\n");
+      expect(tool === null).toBe(!admitted);
+      const syncedHelper = path.join(sandboxDir, "skills", "autoreview", helperPath);
+      expect(await fs.readFile(syncedHelper, "utf8")).toBe(helperText);
       if (source === "personal" && access === "unmounted") {
         await writeSkill({
           dir: path.join(workspace, ".agents", "skills", "autoreview"),
