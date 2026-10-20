@@ -69,8 +69,6 @@ describe("resolveReplyToMode", () => {
     register({
       ...createChannelTestPluginBase({
         id: "whatsapp",
-        label: "WhatsApp",
-        capabilities: { chatTypes: ["direct", "group"] },
       }),
       threading: {
         resolveReplyToMode: ({ accountId }) => (accountId === "work" ? "first" : "all"),
@@ -85,8 +83,6 @@ describe("resolveReplyToMode", () => {
     register(
       createChannelTestPluginBase({
         id: "whatsapp",
-        label: "WhatsApp",
-        capabilities: { chatTypes: ["direct", "group"] },
         config: { listAccountIds: () => ["work"] },
       }),
     );

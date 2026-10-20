@@ -307,36 +307,31 @@ describe("reply operation backend readiness", () => {
     operation.complete();
   });
 
-  it("keeps startup waiters bound to their key across rekey and replacement", async () => {
-    const operation = createTestReplyOperation();
-    const previousKey = operation.key;
-    const oldWait = waitForReplyOperationBackend(operation);
-    operation.updateSessionKey("agent:main:rekeyed");
-    const movedWait = waitForReplyOperationBackend(operation);
-    const replacement = createTestReplyOperation({ sessionKey: previousKey });
-    replacement.setPhase("running");
-    replacement.attachBackend({ kind: "embedded", cancel: vi.fn() });
-    await expect(oldWait).resolves.toBe(false);
-    operation.setPhase("running");
-    operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
-    await expect(movedWait).resolves.toBe(true);
-    operation.complete();
-    replacement.complete();
-  });
-
-  it("does not revive an old startup waiter when its owner returns to the same key", async () => {
-    const operation = createTestReplyOperation();
-    const originalKey = operation.key;
-    const retired = waitForReplyOperationBackend(operation);
-    operation.updateSessionKey("agent:main:temporary-target");
-    operation.updateSessionKey(originalKey);
-    const current = waitForReplyOperationBackend(operation);
-    operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
-    operation.setPhase("running");
-    await expect(retired).resolves.toBe(false);
-    await expect(current).resolves.toBe(true);
-    operation.complete();
-  });
+  it.each(["replacement", "return"] as const)(
+    "keeps retired startup waiters fenced across rekey and %s",
+    async (kind) => {
+      const operation = createTestReplyOperation();
+      const originalKey = operation.key;
+      const retired = waitForReplyOperationBackend(operation);
+      operation.updateSessionKey("agent:main:rekeyed");
+      if (kind === "return") {
+        operation.updateSessionKey(originalKey);
+      }
+      const current = waitForReplyOperationBackend(operation);
+      const replacement =
+        kind === "replacement" ? createTestReplyOperation({ sessionKey: originalKey }) : undefined;
+      if (replacement) {
+        replacement.setPhase("running");
+        replacement.attachBackend({ kind: "embedded", cancel: vi.fn() });
+      }
+      await expect(retired).resolves.toBe(false);
+      operation.setPhase("running");
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
+      await expect(current).resolves.toBe(true);
+      operation.complete();
+      replacement?.complete();
+    },
+  );
 
   it("retains physical source settlement after its queued operation moves to another key", async () => {
     const source = captureSessionTarget({
