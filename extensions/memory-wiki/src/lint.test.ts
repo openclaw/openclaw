@@ -84,155 +84,108 @@ describe("lintMemoryWikiVault", () => {
     );
   });
 
-  it("keeps malformed imported source bodies visible to structure lint", async () => {
-    const { config, write } = await createLintVault();
-    const notes = "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
-    await write(
-      "sources/bridge-alpha.md",
-      [
-        "# Memory Bridge: Alpha",
-        "## Bridge Source\n- Workspace: `/tmp/workspace`\n- Relative path: `MEMORY.md`",
-        "## Content\nalpha bridge body",
-        notes,
-      ].join("\n\n"),
-    );
-    await write(
-      "sources/unsafe-local-source.md",
-      [
-        "# Unsafe Local Import: alpha.md",
-        "## Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
-        "## Content\nalpha unsafe-local body",
-        notes,
-      ].join("\n\n"),
-    );
-
-    const result = await lintMemoryWikiVault(config);
-
-    expect(issueCodesForPath(result, "sources/bridge-alpha.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type"]),
-    );
-    expect(issueCodesForPath(result, "sources/unsafe-local-source.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type"]),
-    );
-  });
-
-  it("keeps fully truncated tracked imported source pages visible to structure lint", async () => {
-    const { config, write } = await createLintVault();
-    const truncated = `## Related\n${WIKI_RELATED_START_MARKER}\n- No related pages yet.\n${WIKI_RELATED_END_MARKER}\n`;
-    await write("sources/bridge-truncated.md", truncated);
-    await write("sources/unsafe-truncated.md", truncated);
-    await writeMemoryWikiSourceSyncState(config.vault.path, {
-      version: 1,
-      entries: {
-        bridge: {
-          group: "bridge",
-          pagePath: "sources/bridge-truncated.md",
-          sourcePath: "/tmp/MEMORY.md",
+  it.each([false, true])(
+    "keeps malformed imported sources visible to structure lint (tracked truncation: %s)",
+    async (tracked) => {
+      const { config, write } = await createLintVault();
+      const paths = ["sources/bridge.md", "sources/unsafe.md"] as const;
+      if (tracked) {
+        const body = `## Related\n${WIKI_RELATED_START_MARKER}\n- No related pages yet.\n${WIKI_RELATED_END_MARKER}\n`;
+        for (const pagePath of paths) {
+          await write(pagePath, body);
+        }
+        const entry = {
+          sourcePath: "/tmp/input",
           sourceUpdatedAtMs: 1,
           sourceSize: 2,
-          renderFingerprint: "bridge-fingerprint",
-        },
-        unsafe: {
-          group: "unsafe-local",
-          pagePath: "sources/unsafe-truncated.md",
-          sourcePath: "/tmp/private/alpha.md",
-          sourceUpdatedAtMs: 3,
-          sourceSize: 4,
-          renderFingerprint: "unsafe-fingerprint",
-        },
-      },
-    });
+          renderFingerprint: "tracked",
+        };
+        await writeMemoryWikiSourceSyncState(config.vault.path, {
+          version: 1,
+          entries: {
+            bridge: { ...entry, group: "bridge", pagePath: paths[0] },
+            unsafe: { ...entry, group: "unsafe-local", pagePath: paths[1] },
+          },
+        });
+      } else {
+        const notes = "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
+        await write(
+          paths[0],
+          [
+            "# Memory Bridge: Alpha",
+            "## Bridge Source\n- Workspace: `/tmp/workspace`\n- Relative path: `MEMORY.md`",
+            "## Content\nalpha bridge body",
+            notes,
+          ].join("\n\n"),
+        );
+        await write(
+          paths[1],
+          [
+            "# Unsafe Local Import: alpha.md",
+            "## Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
+            "## Content\nalpha unsafe-local body",
+            notes,
+          ].join("\n\n"),
+        );
+      }
+      const result = await lintMemoryWikiVault(config);
+      for (const pagePath of paths) {
+        expect(issueCodesForPath(result, pagePath)).toEqual(
+          expect.arrayContaining(["missing-id", "missing-page-type"]),
+        );
+      }
+    },
+  );
 
-    const result = await lintMemoryWikiVault(config);
-
-    expect(issueCodesForPath(result, "sources/bridge-truncated.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type"]),
-    );
-    expect(issueCodesForPath(result, "sources/unsafe-truncated.md")).toEqual(
-      expect.arrayContaining(["missing-id", "missing-page-type"]),
-    );
-  });
-
-  it("keeps path target matching case-sensitive", async () => {
+  it.each([
+    {
+      name: "keeps path target matching case-sensitive",
+      stem: "alpha-db",
+      title: "Alpha Database",
+      links: ["Alpha Database", "alpha-database", "syntheses/Alpha-DB", "Alpha-DB"],
+      broken: ["syntheses/Alpha-DB", "Alpha-DB"],
+    },
+    {
+      name: "preserves question marks in Obsidian title and slug wikilinks",
+      stem: "roadmap",
+      title: "Roadmap",
+      links: [
+        "Roadmap? v2",
+        "roadmap? v2",
+        "syntheses/roadmap?view=compact",
+        "syntheses/roadmap.md?view=compact",
+      ],
+      broken: ["Roadmap? v2", "roadmap? v2"],
+    },
+  ])("$name", async ({ stem, title, links, broken }) => {
     const { config, page } = await createLintVault({
       config: { vault: { renderMode: "obsidian" } },
     });
-
     await page(
-      "sources/bridge-alpha.md",
+      "sources/links.md",
       {
         pageType: "source",
-        id: "source.bridge.alpha",
-        title: "Bridge Alpha",
+        id: "source.links",
+        title: "Links",
         sourceType: "memory-bridge",
         sourcePath: "/workspace/Alpha.md",
         bridgeRelativePath: "Alpha.md",
         bridgeWorkspaceDir: "/workspace",
       },
-      [
-        "# Bridge Alpha",
-        "",
-        "[[Alpha Database]]",
-        "[[alpha-database]]",
-        "[[syntheses/Alpha-DB]]",
-        "[[Alpha-DB]]",
-      ].join("\n"),
+      "# Links\n\n" + links.map((target) => `[[${target}]]`).join("\n"),
     );
-    await page("syntheses/alpha-db.md", {
+    await page(`syntheses/${stem}.md`, {
       pageType: "synthesis",
-      id: "synthesis.alpha.db",
-      title: "Alpha Database",
-      sourceIds: ["source.bridge.alpha"],
+      id: `synthesis.${stem}`,
+      title,
+      sourceIds: ["source.links"],
     });
-
     const result = await lintMemoryWikiVault(config);
-    const brokenTargets = result.issues
-      .filter((issue) => issue.code === "broken-wikilink")
-      .map((issue) => issue.message);
-
-    expect(brokenTargets).toEqual([
-      "Broken wikilink target `syntheses/Alpha-DB`.",
-      "Broken wikilink target `Alpha-DB`.",
-    ]);
-  });
-
-  it("preserves question marks in Obsidian title and slug wikilinks", async () => {
-    const { config, page } = await createLintVault({
-      config: { vault: { renderMode: "obsidian" } },
-    });
-
-    await page(
-      "sources/roadmap-source.md",
-      {
-        pageType: "source",
-        id: "source.roadmap",
-        title: "Roadmap Source",
-      },
-      [
-        "# Roadmap Source",
-        "",
-        "[[Roadmap? v2]]",
-        "[[roadmap? v2]]",
-        "[[syntheses/roadmap?view=compact]]",
-        "[[syntheses/roadmap.md?view=compact]]",
-      ].join("\n"),
-    );
-    await page("syntheses/roadmap.md", {
-      pageType: "synthesis",
-      id: "synthesis.roadmap",
-      title: "Roadmap",
-      sourceIds: ["source.roadmap"],
-    });
-
-    const result = await lintMemoryWikiVault(config);
-    const brokenTargets = result.issues
-      .filter((issue) => issue.code === "broken-wikilink")
-      .map((issue) => issue.message);
-
-    expect(brokenTargets).toEqual([
-      "Broken wikilink target `Roadmap? v2`.",
-      "Broken wikilink target `roadmap? v2`.",
-    ]);
+    expect(
+      result.issues
+        .filter((issue) => issue.code === "broken-wikilink")
+        .map((issue) => issue.message),
+    ).toEqual(broken.map((target) => `Broken wikilink target \`${target}\`.`));
   });
 
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {

@@ -3,125 +3,92 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { deferred } from "./deferred.test-helpers.js";
-import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { withMemoryWikiVaultMutation as mutate } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createMemoryWikiTestHarness();
+function hold(vaultPath: string, work = async (release: Promise<void>) => release) {
+  const entered = deferred();
+  const release = deferred();
+  const done = mutate(vaultPath, async () => {
+    entered.resolve();
+    await work(release.promise);
+  });
+  return { entered: entered.promise, release: release.resolve, done };
+}
 
 describe("withMemoryWikiVaultMutation", () => {
-  it("serializes mutations for one vault and permits nested work", async () => {
-    const firstEntered = deferred();
-    const releaseFirst = deferred();
-    const order: string[] = [];
-
-    const first = withMemoryWikiVaultMutation("/tmp/wiki-a", async () => {
-      order.push("first:start");
-      firstEntered.resolve();
-      await withMemoryWikiVaultMutation("/tmp/wiki-a", async () => {
-        order.push("first:nested");
+  it.each([false, true])(
+    "serializes mutations (physical alias: %s) and permits nested work",
+    async (alias) => {
+      let vaultPath = "/tmp/wiki-a";
+      let secondPath = vaultPath;
+      if (alias) {
+        const root = await createTempDir("memory-wiki-vault-alias-");
+        vaultPath = path.join(root, "vault");
+        secondPath = path.join(root, "vault-alias");
+        await fs.mkdir(vaultPath);
+        await fs.symlink(vaultPath, secondPath, process.platform === "win32" ? "junction" : "dir");
+      }
+      const order: string[] = [];
+      const first = hold(vaultPath, async (release) => {
+        order.push("first:start");
+        await mutate(vaultPath, async () => void order.push("first:nested"));
+        await release;
+        order.push("first:end");
       });
-      await releaseFirst.promise;
-      order.push("first:end");
-    });
-    await firstEntered.promise;
-
-    const second = withMemoryWikiVaultMutation("/tmp/wiki-a", async () => {
-      order.push("second");
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(order).toEqual(["first:start", "first:nested"]);
-
-    releaseFirst.resolve();
-    await Promise.all([first, second]);
-    expect(order).toEqual(["first:start", "first:nested", "first:end", "second"]);
-  });
+      await first.entered;
+      const second = mutate(secondPath, async () => void order.push("second"));
+      try {
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(order).toEqual(["first:start", "first:nested"]);
+        first.release();
+        await Promise.all([first.done, second]);
+        expect(order).toEqual(["first:start", "first:nested", "first:end", "second"]);
+      } finally {
+        first.release();
+        await Promise.allSettled([first.done, second]);
+      }
+    },
+  );
 
   it("allows distinct agent vaults to mutate in parallel", async () => {
-    const firstEntered = deferred();
-    const secondEntered = deferred();
-    const releaseFirst = deferred();
-
-    const first = withMemoryWikiVaultMutation("/tmp/wiki/support", async () => {
-      firstEntered.resolve();
-      await releaseFirst.promise;
-    });
-    await firstEntered.promise;
-    const second = withMemoryWikiVaultMutation("/tmp/wiki/marketing", async () => {
-      secondEntered.resolve();
-    });
-
-    await secondEntered.promise;
-    releaseFirst.resolve();
-    await Promise.all([first, second]);
-  });
-
-  it("serializes physical aliases of one vault", async () => {
-    const root = await createTempDir("memory-wiki-vault-alias-");
-    const vaultPath = path.join(root, "vault");
-    const aliasPath = path.join(root, "vault-alias");
-    await fs.mkdir(vaultPath);
-    await fs.symlink(vaultPath, aliasPath, process.platform === "win32" ? "junction" : "dir");
-    const firstEntered = deferred();
-    const releaseFirst = deferred();
-    let aliasEntered = false;
-    let first: Promise<void> | undefined;
-    let alias: Promise<void> | undefined;
-
+    const first = hold("/tmp/wiki/support");
     try {
-      first = withMemoryWikiVaultMutation(vaultPath, async () => {
-        firstEntered.resolve();
-        await releaseFirst.promise;
-      });
-      await firstEntered.promise;
-      alias = withMemoryWikiVaultMutation(aliasPath, async () => {
-        aliasEntered = true;
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(aliasEntered).toBe(false);
-
-      releaseFirst.resolve();
-      await Promise.all([first, alias]);
-      expect(aliasEntered).toBe(true);
+      await first.entered;
+      await mutate("/tmp/wiki/marketing", async () => {});
     } finally {
-      releaseFirst.resolve();
-      await Promise.allSettled([first, alias].filter((item) => item !== undefined));
+      first.release();
+      await first.done;
     }
   });
+
   it("queues detached work after its inherited transaction has ended", async () => {
     const releaseDetached = deferred();
-    const holderEntered = deferred();
-    const releaseHolder = deferred();
     let detachedEntered = false;
     let detached!: Promise<void>;
-
-    await withMemoryWikiVaultMutation("/tmp/wiki-detached", async () => {
+    await mutate("/tmp/wiki-detached", async () => {
       detached = (async () => {
         await releaseDetached.promise;
-        await withMemoryWikiVaultMutation("/tmp/wiki-detached", async () => {
+        await mutate("/tmp/wiki-detached", async () => {
           detachedEntered = true;
         });
       })();
     });
-
-    const holder = withMemoryWikiVaultMutation("/tmp/wiki-detached", async () => {
-      holderEntered.resolve();
-      await releaseHolder.promise;
-    });
+    const holder = hold("/tmp/wiki-detached");
     try {
-      await holderEntered.promise;
+      await holder.entered;
       releaseDetached.resolve();
       await setImmediate();
       expect(detachedEntered).toBe(false);
-
-      releaseHolder.resolve();
-      await Promise.all([holder, detached]);
+      holder.release();
+      await Promise.all([holder.done, detached]);
       expect(detachedEntered).toBe(true);
     } finally {
       releaseDetached.resolve();
-      releaseHolder.resolve();
-      await Promise.allSettled([holder, detached]);
+      holder.release();
+      await Promise.allSettled([holder.done, detached]);
     }
   });
 });

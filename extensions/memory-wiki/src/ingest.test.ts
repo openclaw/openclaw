@@ -15,7 +15,9 @@ async function sourceFixture(filename: string, content: string) {
   await fs.writeFile(inputPath, content, "utf8");
   const ingest = () =>
     ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, 5, 12) });
-  return { config, inputPath, ingest };
+  const read = (relativePath: string) =>
+    fs.readFile(path.join(config.vault.path, relativePath), "utf8");
+  return { config, inputPath, ingest, read };
 }
 
 describe("ingestMemoryWikiSource", () => {
@@ -41,7 +43,7 @@ describe("ingestMemoryWikiSource", () => {
   });
 
   it("copies a local text file into sources markdown", async () => {
-    const { config, inputPath, ingest } = await sourceFixture(
+    const { inputPath, ingest, read } = await sourceFixture(
       "meeting-notes.txt",
       "hello from source\n",
     );
@@ -51,9 +53,7 @@ describe("ingestMemoryWikiSource", () => {
       pagePath: "sources/meeting-notes.md",
     });
     expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
-    await expect(
-      fs.readFile(path.join(config.vault.path, "sources", "meeting-notes.md"), "utf8"),
-    ).resolves.toBe(
+    await expect(read("sources/meeting-notes.md")).resolves.toBe(
       [
         `---\npageType: source\nid: source.meeting-notes\ntitle: meeting notes\nsourceType: local-file\nsourcePath: ${inputPath}\ningestedAt: 2026-04-05T12:00:00.000Z\nupdatedAt: 2026-04-05T12:00:00.000Z\nstatus: active\n---`,
         "# meeting notes",
@@ -63,14 +63,12 @@ describe("ingestMemoryWikiSource", () => {
         "## Related\n<!-- openclaw:wiki:related:start -->\n- No related pages yet.\n<!-- openclaw:wiki:related:end -->\n",
       ].join("\n\n"),
     );
-    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
-      "[meeting notes](sources/meeting-notes.md)",
-    );
+    await expect(read("index.md")).resolves.toContain("[meeting notes](sources/meeting-notes.md)");
   });
 
   it("ingests a source with many backtick runs without losing its content", async () => {
     const content = "`x".repeat(1_000_000) + "\n````\n";
-    const { config, ingest } = await sourceFixture("backticks.txt", content);
+    const { ingest, read } = await sourceFixture("backticks.txt", content);
     const result = await ingest();
 
     expect(result).toMatchObject({
@@ -79,13 +77,11 @@ describe("ingestMemoryWikiSource", () => {
       created: true,
     });
     expect(result.indexUpdatedFiles.length).toBeGreaterThan(0);
-    const page = await fs.readFile(path.join(config.vault.path, result.pagePath), "utf8");
+    const page = await read(result.pagePath);
     expect(page).toContain(
       ["## Content", "`````text", content, "`````", "", "## Notes"].join("\n"),
     );
-    await expect(fs.readFile(path.join(config.vault.path, "index.md"), "utf8")).resolves.toContain(
-      "[backticks](sources/backticks.md)",
-    );
+    await expect(read("index.md")).resolves.toContain("[backticks](sources/backticks.md)");
   });
 
   it("queues behind a held vault mutation instead of writing mid-transaction", async () => {
@@ -118,15 +114,12 @@ describe("ingestMemoryWikiSource", () => {
     let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
     try {
       ingest = startIngest();
-      // On fixed code this observes ingest joining the held queue before any
-      // filesystem work. On unfixed code it observes nested compile only after
-      // the source page was already written, so the assertion fails.
+      // Pre-fix, only nested compile queued, after the source page was already written.
       await ingestQueued.promise;
       await expect(fs.access(pagePath)).rejects.toThrow();
 
       releaseLock.resolve();
-      // Completion also proves the nested compile re-enters the held vault
-      // lock reentrantly instead of deadlocking.
+      // Completion proves nested compile re-enters instead of deadlocking.
       const result = await ingest;
       await holder;
       expect(result.created).toBe(true);

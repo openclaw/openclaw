@@ -18,20 +18,20 @@ async function createSourceFixture(content = "first body\n") {
     ingestMemoryWikiSource({ config, inputPath, nowMs: Date.UTC(2026, 3, day, 12) });
   await ingest(5);
   const pagePath = path.join(config.vault.path, "sources/notes.md");
-
+  const read = () => fs.readFile(pagePath, "utf8");
+  const edit = async (notes: string, crlf = false) => {
+    const edited = (await read()).replace(EMPTY_NOTES, notes);
+    await fs.writeFile(pagePath, crlf ? edited.replace(/\n/g, "\r\n") : edited, "utf8");
+    return edited;
+  };
   return {
-    pagePath,
-    editNotes: async (note: string, crlf = false) => {
-      const edited = (await fs.readFile(pagePath, "utf8")).replace(
-        EMPTY_NOTES,
-        `${START}\n${note}\n${END}`,
-      );
-      await fs.writeFile(pagePath, crlf ? edited.replace(/\n/g, "\r\n") : edited, "utf8");
-    },
+    read,
+    edit,
+    editNotes: (note: string, crlf = false) => edit(`${START}\n${note}\n${END}`, crlf),
     reingest: async (updatedContent: string) => {
       await fs.writeFile(inputPath, updatedContent, "utf8");
       await ingest(6);
-      return fs.readFile(pagePath, "utf8");
+      return read();
     },
   };
 }
@@ -54,15 +54,11 @@ describe("ingestMemoryWikiSource human notes", () => {
   ] as const)(
     "preserves the source page when handwritten Notes are missing the %s marker",
     async (_name, malformedNotes, missingMarker) => {
-      const { pagePath, reingest } = await createSourceFixture("original source content\n");
-      const existingPage = (await fs.readFile(pagePath, "utf8")).replace(
-        EMPTY_NOTES,
-        malformedNotes,
-      );
-      await fs.writeFile(pagePath, existingPage, "utf8");
+      const { edit, read, reingest } = await createSourceFixture("original source content\n");
+      const existingPage = await edit(malformedNotes);
 
       await expect(reingest("updated source content\n")).rejects.toThrow(missingMarker);
-      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(existingPage);
+      await expect(read()).resolves.toBe(existingPage);
     },
   );
 
