@@ -20,6 +20,7 @@ export type InputDialogOptions = {
    * rename that would change nothing cannot be submitted.
    */
   requireChange?: boolean;
+  /** Explicit admission may allow a same-identity deferred action while offline. */
   canSubmit?: () => boolean;
   /**
    * Runs the operation the dialog was opened for. `null` resolves the dialog; a

@@ -78,9 +78,6 @@ describe("CUA Driver artifact verification", () => {
   it("accepts the pinned SDK and native file digest", () => {
     expect(inspect()).toEqual({
       ok: true,
-      applicable: true,
-      version: "0.20.0",
-      platformPackage: "@trycua/cua-driver-linux-x64-gnu",
     });
   });
 
@@ -105,13 +102,15 @@ describe("CUA Driver artifact verification", () => {
     },
   ])("diagnoses $name", ({ options, code, diagnostic }) => {
     const result = inspect(options);
-    expect(result).toMatchObject({ ok: false, code });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.diagnostic).toMatch(new RegExp(`^${code}:`));
     expect(result.ok ? "" : result.diagnostic).toContain(diagnostic);
   });
 
   it("rejects Linux hosts without a published glibc package", () => {
     const result = inspect({}, "musl");
-    expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED" });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.diagnostic).toMatch(/^COMPUTER_DRIVER_PLATFORM_UNSUPPORTED:/);
     expect(result.ok ? "" : result.diagnostic).toContain("glibc-based Linux");
   });
 });
@@ -128,11 +127,11 @@ describe("verifyInstalledCuaDriverArtifacts (real resolution)", () => {
       const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
       const result = verifyInstalledCuaDriverArtifacts();
       if (process.platform === "linux" || process.platform === "win32") {
-        expect(result).toMatchObject({ ok: true, applicable: true });
+        expect(result).toEqual({ ok: true });
       } else if (!result.ok) {
         // Other hosts are out of the fulfiller's scope but must never report a
         // missing package for an installed SDK.
-        expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+        expect(result.diagnostic).not.toMatch(/^COMPUTER_DRIVER_PACKAGE_MISSING:/);
       }
 
       // macOS does not verify native digests, but must still exercise the real

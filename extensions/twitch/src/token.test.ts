@@ -31,7 +31,6 @@ describe("token", () => {
 
       // Config token should be used even if env var exists
       expect(result.token).toBe("oauth:config-token");
-      expect(result.source).toBe("config");
     });
 
     it("should use env var when config token is empty (simplified config)", () => {
@@ -49,7 +48,6 @@ describe("token", () => {
       const result = resolveTwitchToken(configWithEmptyToken, { accountId: "default" });
 
       expect(result.token).toBe("oauth:env-token");
-      expect(result.source).toBe("env");
     });
 
     it("should not use env var for non-default accounts (multi-account)", () => {
@@ -72,7 +70,6 @@ describe("token", () => {
 
       // Non-default accounts shouldn't use env var
       expect(result.token).toBe("");
-      expect(result.source).toBe("none");
     });
   });
 });

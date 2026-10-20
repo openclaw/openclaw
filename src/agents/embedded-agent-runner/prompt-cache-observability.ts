@@ -1,3 +1,4 @@
+import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -86,6 +87,21 @@ type PromptCacheTracker = {
 };
 
 const trackers = new Map<string, PromptCacheTracker>();
+
+/** Retired session IDs cannot reuse their cross-turn diagnostic baselines. */
+export function clearPromptCacheObservations(sessionId?: string): void {
+  if (sessionId === undefined) {
+    trackers.clear();
+    return;
+  }
+  for (const [key, tracker] of trackers) {
+    if (tracker.sessionId === sessionId) {
+      trackers.delete(key);
+    }
+  }
+}
+registerSessionResourceCleanup(clearPromptCacheObservations);
+
 // Unpublished provider declarations retain their existing identity contract.
 const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;

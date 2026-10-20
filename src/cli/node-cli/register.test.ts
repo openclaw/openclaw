@@ -10,11 +10,7 @@ const SAVED_TLS_FINGERPRINT = "ef".repeat(32);
 type LoadNodeHostConfig = typeof import("../../node-host/config.js").loadNodeHostConfig;
 
 const daemonMocks = vi.hoisted(() => ({
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   loadNodeHostConfig: vi.fn<LoadNodeHostConfig>(async () => null),
   runNodeHost: vi.fn(),
   runNodeHostWorker: vi.fn(),
@@ -28,7 +24,6 @@ vi.mock("./daemon.js", () => daemonMocks);
 vi.mock("../../node-host/config.js", () => ({
   loadNodeHostConfig: daemonMocks.loadNodeHostConfig,
 }));
-
 vi.mock("../../node-host/runner.js", () => ({
   runNodeHost: daemonMocks.runNodeHost,
 }));
@@ -42,9 +37,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 function createProgram(): Command {
-  const program = new Command();
-  program.exitOverride();
-  program.configureOutput({
+  const program = new Command().exitOverride().configureOutput({
     writeErr: () => undefined,
     writeOut: () => undefined,
   });
@@ -55,20 +48,22 @@ function createProgram(): Command {
 const run = (args: string[]) => createProgram().parseAsync(["node", ...args], { from: "user" });
 const expectHost = (expected: Record<string, unknown>) =>
   expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(expect.objectContaining(expected));
-const savedGateway = {
-  host: "10.0.0.2",
-  port: 19001,
-  tls: true,
-  tlsFingerprint: SAVED_TLS_FINGERPRINT,
-  contextPath: "/saved",
+const savedConfig = {
+  version: 1 as const,
+  nodeId: "node-existing",
+  gateway: {
+    host: "10.0.0.2",
+    port: 19001,
+    tls: true,
+    tlsFingerprint: SAVED_TLS_FINGERPRINT,
+    contextPath: "/saved",
+  },
 };
-const pairCode = (overrides: Partial<Parameters<typeof encodePairingSetupCode>[0]> = {}) =>
-  encodePairingSetupCode({
-    url: "wss://gateway.example:8443/openclaw-gw",
-    bootstrapToken: "bootstrap-123",
-    tlsFingerprint: `sha256:${PAIR_TLS_FINGERPRINT.toUpperCase()}`,
-    ...overrides,
-  });
+const pairingPayload = {
+  url: "wss://paired.example:8443",
+  bootstrapToken: "bootstrap-123",
+  tlsFingerprint: `sha256:${PAIR_TLS_FINGERPRINT.toUpperCase()}`,
+};
 
 describe("registerNodeCli", () => {
   beforeEach(() => {
@@ -81,32 +76,26 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeHostWorker).toHaveBeenCalledWith({ desktopSharingEnabled: true });
   });
 
-  it.each(["status", "uninstall"] as const)(
-    "registers node %s and forwards --json",
-    async (command) => {
-      await run([command, "--json"]);
-      if (command === "status") {
-        expect(daemonMocks.runNodeDaemonStatus).toHaveBeenCalledWith({ json: true });
-      } else {
-        expect(daemonMocks.runNodeDaemonLifecycle).toHaveBeenCalledWith(command, { json: true });
-      }
-    },
-  );
+  it.each(["status", "uninstall"] as const)("forwards node %s --json", async (command) => {
+    await run([command, "--json"]);
+    if (command === "status") {
+      expect(daemonMocks.runNodeDaemonStatus).toHaveBeenCalledWith({ json: true });
+    } else {
+      expect(daemonMocks.runNodeDaemonLifecycle).toHaveBeenCalledWith(command, { json: true });
+    }
+  });
 
-  it.each(["install"] as const)(
-    "accepts exact command allowlists before or after node %s",
-    async (leaf) => {
-      for (const args of [
-        ["--commands", "fixture.read,fixture.list", leaf],
-        [leaf, "--commands", "fixture.read", "--commands", "fixture.list,fixture.read"],
-      ]) {
-        await run(args);
-        expect(daemonMocks.runNodeDaemonInstall).toHaveBeenLastCalledWith(
-          expect.objectContaining({ commands: ["fixture.list", "fixture.read"] }),
-        );
-      }
-    },
-  );
+  it("accepts exact command allowlists before or after node install", async () => {
+    for (const args of [
+      ["--commands", "fixture.read,fixture.list", "install"],
+      ["install", "--commands", "fixture.read", "--commands", "fixture.list,fixture.read"],
+    ]) {
+      await run(args);
+      expect(daemonMocks.runNodeDaemonInstall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ commands: ["fixture.list", "fixture.read"] }),
+      );
+    }
+  });
 
   it("rejects empty command ids instead of silently widening the surface", async () => {
     await expect(run(["run", "--commands", "fixture.list,"])).rejects.toThrow(
@@ -115,12 +104,12 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
   });
 
-  it.each(["run"] as const)("rejects conflicting command selections for node %s", async (leaf) => {
+  it("rejects conflicting command selections for node run", async () => {
     for (const args of [
-      [leaf, "--all-commands", "--commands", "fixture.read"],
-      ["--all-commands", leaf, "--commands", "fixture.read"],
-      ["--commands", "fixture.read", leaf, "--all-commands"],
-      ["--commands", "fixture.read", "--all-commands", leaf],
+      ["run", "--all-commands", "--commands", "fixture.read"],
+      ["--all-commands", "run", "--commands", "fixture.read"],
+      ["--commands", "fixture.read", "run", "--all-commands"],
+      ["--commands", "fixture.read", "--all-commands", "run"],
     ]) {
       await expect(run(args)).rejects.toThrow(/--all-commands.*--commands/);
     }
@@ -129,8 +118,8 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.loadNodeHostConfig).not.toHaveBeenCalled();
   });
 
-  it.each(["--ephemeral"])("hosts worker turns only on request: %s", async (flag) => {
-    const program = await run(["run", flag]);
+  it("hosts worker turns only on request: --ephemeral", async () => {
+    const program = await run(["run", "--ephemeral"]);
     expectHost({ forceWorkerRuns: true, ephemeral: true });
     expect(
       program.commands
@@ -141,41 +130,36 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
-  it.each(["--pair", "--pair-if-needed"])(
-    "handles expired pairing according to %s",
-    async (flag) => {
-      await run([
-        "run",
-        flag,
-        pairCode({
-          url: "wss://paired.example/node",
-          bootstrapToken: "expired-test-bootstrap",
-          expiresAtMs: 1,
-          tlsFingerprint: undefined,
-        }),
-      ]);
-      if (flag === "--pair") {
-        expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
-          "Pairing setup code has expired.",
-        );
-        expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
-      } else {
-        expect(daemonMocks.defaultRuntime.error).not.toHaveBeenCalled();
-        expectHost({
-          gatewayHost: "paired.example",
-          gatewayBootstrapToken: "expired-test-bootstrap",
-          gatewayBootstrapExpiresAtMs: 1,
-          preferGatewayBootstrapToken: false,
-        });
-      }
-    },
-  );
+  it.each(["--pair", "--pair-if-needed"])("handles expired pairing: %s", async (flag) => {
+    const code = encodePairingSetupCode({
+      ...pairingPayload,
+      url: "wss://paired.example/node",
+      bootstrapToken: "expired-test-bootstrap",
+      expiresAtMs: 1,
+      tlsFingerprint: undefined,
+    });
+    await run(["run", flag, code]);
+    if (flag === "--pair") {
+      expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+        "Pairing setup code has expired.",
+      );
+      expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    } else {
+      expect(daemonMocks.defaultRuntime.error).not.toHaveBeenCalled();
+      expectHost({
+        gatewayHost: "paired.example",
+        gatewayBootstrapToken: "expired-test-bootstrap",
+        gatewayBootstrapExpiresAtMs: 1,
+        preferGatewayBootstrapToken: false,
+      });
+    }
+  });
 
   it("lets explicit gateway flags override --pair values", async () => {
     await run([
       "run",
       "--pair",
-      pairCode({ url: "wss://paired.example:8443" }),
+      encodePairingSetupCode(pairingPayload),
       "--host",
       "explicit.example",
       "--port",
@@ -216,21 +200,14 @@ describe("registerNodeCli", () => {
     { args: ["--tls-fingerprint", "   "], changed: false, plaintext: false },
     { args: ["--port", "19002"], changed: true, plaintext: false },
     { args: ["--no-tls"], changed: false, plaintext: true },
-  ])(
-    "inherits saved TLS only for the saved endpoint: $args",
-    async ({ args, changed, plaintext }) => {
-      daemonMocks.loadNodeHostConfig.mockResolvedValue({
-        version: 1,
-        nodeId: "node-existing",
-        gateway: savedGateway,
-      });
-      await run(["run", ...args]);
-      expectHost({
-        gatewayTls: plaintext ? false : changed ? undefined : true,
-        gatewayTlsFingerprint: changed || plaintext ? undefined : SAVED_TLS_FINGERPRINT,
-        gatewayContextPath: changed ? undefined : "/saved",
-        ...(!changed ? { gatewayHost: "10.0.0.2", gatewayPort: 19001 } : {}),
-      });
-    },
-  );
+  ])("inherits saved TLS only for its endpoint: $args", async ({ args, changed, plaintext }) => {
+    daemonMocks.loadNodeHostConfig.mockResolvedValue(savedConfig);
+    await run(["run", ...args]);
+    expectHost({
+      gatewayTls: plaintext ? false : changed ? undefined : true,
+      gatewayTlsFingerprint: changed || plaintext ? undefined : SAVED_TLS_FINGERPRINT,
+      gatewayContextPath: changed ? undefined : "/saved",
+      ...(!changed ? { gatewayHost: "10.0.0.2", gatewayPort: 19001 } : {}),
+    });
+  });
 });

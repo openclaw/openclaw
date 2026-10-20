@@ -16,6 +16,7 @@ import {
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
@@ -274,6 +275,7 @@ it("waits through temporary schema custody before reading startup configuration 
       JSON.stringify({
         pid: process.ppid,
         ownerId: "synthetic-schema-owner",
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath,
         role: "sqlite-maintenance",
@@ -496,7 +498,7 @@ it.each([
         runStartupConfigPreflight({ gateway: true, observe: false }),
       ).rejects.toMatchObject({
         code: 78,
-        message: expect.stringContaining("Legacy device identity exists"),
+        message: expect.stringContaining("Legacy client credentials require migration"),
       });
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityRaw);
     } else {

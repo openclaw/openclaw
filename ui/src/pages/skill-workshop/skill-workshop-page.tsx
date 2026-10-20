@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -34,13 +35,11 @@ type WorkshopScope = { client: GatewayBrowserClient; agentId: string; abort: Abo
 
 function resolveWorkshopAgentId(context: ApplicationContext): string {
   const snapshot = context.gateway.snapshot;
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
-  return selectedAgentId
-    ? normalizeAgentId(selectedAgentId)
-    : sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : resolveUiSelectedGlobalAgentId(snapshot);
+  return normalizeAgentId(
+    context.agentSelection.state.selectedId ||
+      parseAgentSessionKey(snapshot.sessionKey)?.agentId ||
+      resolveUiSelectedGlobalAgentId(snapshot),
+  );
 }
 
 class SkillWorkshopPageState {
@@ -61,7 +60,6 @@ class SkillWorkshopPageState {
 
   constructor(
     private readonly context: ApplicationContext,
-    private readonly revision: () => number,
     private readonly changed: () => void,
   ) {
     onSettled(() => {
@@ -70,10 +68,10 @@ class SkillWorkshopPageState {
         changed();
       };
       const stops = [
+        // Connection receipts retire the prior workshop scope before pending operations settle.
         context.gateway.subscribe(sync),
+        // Selection receipts abort prior-agent work before another workshop action starts.
         context.agentSelection.subscribe(sync),
-        context.agents.subscribe(sync),
-        context.runtimeConfig.subscribe(sync),
       ];
       sync();
       return () => stops.forEach((stop) => stop());
@@ -219,9 +217,7 @@ class SkillWorkshopPageState {
       ? undefined
       : list?.archived.find((skill) => skill.name === name)?.versions[0]?.id;
     if (live || versionId) {
-      if (this.tab === "files" || this.viewer?.target.name !== name) {
-        this.tab = this.tab === "history" ? "history" : "instructions";
-      }
+      this.tab = this.tab === "history" ? "history" : "instructions";
       void this.open({ name, filePath: "SKILL.md", versionId });
     }
   };
@@ -391,7 +387,6 @@ class SkillWorkshopPageState {
   };
 
   viewProps() {
-    this.revision();
     const context = this.context;
     return {
       context,
@@ -433,11 +428,19 @@ class SkillWorkshopPageState {
 }
 
 export function SkillWorkshopPage() {
+  const context = useApplication();
+  const agents = projectAgents(context.agents);
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const state = new SkillWorkshopPageState(useApplication(), revision, () => {
+  const state = new SkillWorkshopPageState(context, () => {
     setRevision((value) => value + 1);
   });
-  const view = createMemo(() => state.viewProps());
+  const view = createMemo(() => {
+    revision();
+    agents.read();
+    runtimeConfig.read();
+    return state.viewProps();
+  });
   return (
     <openclaw-skill-workshop-page>
       <SkillWorkshopView view={view} />

@@ -81,7 +81,9 @@ import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
 import {
+  activatePreparedRun,
   baseParams,
+  cleanupPreparedReplyFixtures,
   createInboundBody,
   createInboundTurn,
   createSessionBody,
@@ -168,11 +170,12 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
 }));
 
+// mock-isolation: ingress cases provide config policy without loading active channel or subagent state.
 vi.mock("../../agents/agent-tools.policy.js", () => ({
   resolveEffectiveToolPolicy: (params: {
-    config: { tools?: { allow?: string[]; deny?: string[] } };
+    config?: { tools?: { allow?: string[]; deny?: string[] } };
   }) => ({
-    globalPolicy: params.config.tools
+    globalPolicy: params.config?.tools
       ? { allow: params.config.tools.allow, deny: params.config.tools.deny }
       : undefined,
     globalProviderPolicy: undefined,
@@ -503,17 +506,6 @@ function getActiveReplyRunCount(): number {
   return listActiveReplyRunSessionKeys().length;
 }
 
-const activePreparedFixtures: ReturnType<typeof createReplyOperation>[] = [];
-function activatePreparedRun(sessionKey = "session-key") {
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId: "active-session",
-    resetTriggered: false,
-  });
-  operation.setPhase("running");
-  activePreparedFixtures.push(operation);
-  return operation;
-}
 function preparedTarget(sessionId: string) {
   return captureSessionTarget({
     storeScope: resolveSessionStorePathCore(undefined, { agentId: "default" }),
@@ -995,10 +987,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   afterEach(async () => {
-    for (const operation of activePreparedFixtures.splice(0)) {
-      operation.complete();
-      await operation.ownerSettlement;
-    }
+    await cleanupPreparedReplyFixtures();
     vi.useRealTimers();
     resetSystemEventsForTest();
     expect(preparedReplyMockState.unexpectedCalls).toEqual([]);

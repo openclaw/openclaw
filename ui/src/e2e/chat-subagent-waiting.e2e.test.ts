@@ -645,8 +645,8 @@ suite.define(() => {
           block
             .locator(".chat-working-indicator:not(.chat-working-indicator--subagents)")
             .locator("openclaw-elapsed-time")
-            .evaluate((element) => Reflect.get(element, "startMs"));
-        await expect.poll(requestClock).toBe(history[0]!.timestamp);
+            .textContent();
+        await expect.poll(async () => (await requestClock())?.trim()).toBe("1m 13s");
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await workingTokens()).toBe("4.1k output tokens");
         const answerText = "The backend is complete. I am reviewing the result.";
@@ -687,7 +687,7 @@ suite.define(() => {
         // runs' tokens count on its line.
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
-        expect(await requestClock()).toBe(history[0]!.timestamp);
+        expect((await requestClock())?.trim()).toBe("1m 13s");
         await reportUsage("parent-resumed-run", 256, 3);
         await expect.poll(workingTokens).toBe("4.4k output tokens");
 

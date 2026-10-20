@@ -309,7 +309,10 @@ gateway refreshes that cache in the background; `--verbose` forces a live check 
 Connections and cached health reads share a one-minute background refresh cadence, so
 repeated diagnostic connections do not each rebuild the health snapshot. Explicit live
 checks and refreshes for missing or stale health still run immediately.
-The passive WebSocket `health` event sends the full snapshot only when health changes.
+The passive WebSocket `health` event sends a snapshot only when health changes.
+Clients advertising `health-summary` receive it without agent heartbeat configuration
+and session activity summaries; request the `health` RPC for those details. Other
+clients retain the full event payload.
 Refresh timestamps, check duration, session activity summaries, channel traffic
 timestamps, busy/run counters, run start times, auth age, and event-loop sample
 readings alone do not trigger an event. Event-loop degradation triggers an event

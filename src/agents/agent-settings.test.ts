@@ -20,21 +20,17 @@ const settingsWithReserve = (reserveTokens: number, enabled?: boolean) =>
   });
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
-  it.each([false, true])(
-    "applies and preserves compaction.enabled=%s across a settings reload",
-    async (configuredEnabled) => {
-      const settingsManager = settingsWithReserve(20_000, !configuredEnabled);
-      const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
-      const cfg = compactionConfig({ enabled: configuredEnabled });
-      applySettings({ settingsManager, cfg });
-      await settingsManager.reload();
-      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
-      applySettings({ settingsManager, cfg });
+  it.each([false, true])("applies compaction.enabled=%s idempotently", (configuredEnabled) => {
+    const settingsManager = settingsWithReserve(20_000, !configuredEnabled);
+    const setCompactionEnabled = vi.spyOn(settingsManager, "setCompactionEnabled");
+    const cfg = compactionConfig({ enabled: configuredEnabled });
+    applySettings({ settingsManager, cfg });
+    expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
+    applySettings({ settingsManager, cfg });
 
-      expect(setCompactionEnabled).toHaveBeenCalledExactlyOnceWith(configuredEnabled);
-      expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
-    },
-  );
+    expect(setCompactionEnabled).toHaveBeenCalledExactlyOnceWith(configuredEnabled);
+    expect(settingsManager.getCompactionEnabled()).toBe(configuredEnabled);
+  });
 
   const forcedDisableCases: Array<
     [string, Omit<Parameters<typeof applyGuard>[0], "settingsManager">]
@@ -144,19 +140,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     applySettings({
       settingsManager,
       cfg: { agents: { defaults: { compaction: { mode: "safeguard" } } } },
-    });
-
-    expect(settingsManager.getCompactionKeepRecentTokens()).toBe(20_000);
-    expect(applyOverrides).not.toHaveBeenCalled();
-  });
-
-  it("treats keepRecentTokens=0 as invalid and keeps the current setting", () => {
-    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 25_000 } });
-    const applyOverrides = vi.spyOn(settingsManager, "applyOverrides");
-
-    applySettings({
-      settingsManager,
-      cfg: { agents: { defaults: { compaction: { mode: "safeguard", keepRecentTokens: 0 } } } },
     });
 
     expect(settingsManager.getCompactionKeepRecentTokens()).toBe(20_000);

@@ -12,7 +12,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   createReactiveDraftHarness,
   getComposerTextarea,

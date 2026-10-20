@@ -475,12 +475,11 @@ describe("matrix scenario environment", () => {
     );
   });
 
-  it("passes one deadline through stale-patch preparation calls", async () => {
+  it("surfaces a stale config patch without a second effect", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     let configReadCount = 0;
-    let patchCount = 0;
-    let statusCount = 0;
+    const stale = new Error("config changed since last load");
     const gateway = {
       ...gatewayPaths,
       call: vi.fn(
@@ -494,25 +493,13 @@ describe("matrix scenario environment", () => {
             if (configReadCount === 1) {
               return { config: {} };
             }
-            if (configReadCount <= 3) {
-              return { hash: `base-${configReadCount}` };
-            }
-            return {
-              appliedConfigHash: "patched-config-hash",
-              configRevisionHash: "patched-config-hash",
-              hash: "patched-config-hash",
-            };
+            return { hash: `base-${configReadCount}` };
           }
           if (method === "config.patch") {
-            patchCount += 1;
-            if (patchCount === 1) {
-              throw new Error("config changed since last load");
-            }
-            return { hash: "patched-config-hash", changedPaths: ["channels.matrix"], ok: true };
+            throw stale;
           }
           if (method === "channels.status") {
-            statusCount += 1;
-            return healthyMatrixStatus(statusCount === 1 ? 100 : 200);
+            return healthyMatrixStatus(100);
           }
           throw new Error(`unexpected gateway method ${method}`);
         },
@@ -520,17 +507,24 @@ describe("matrix scenario environment", () => {
     };
     const environment = createEnvironment();
 
-    await environment.prepareFlow({
-      config: {},
-      gateway,
-      outputDir: "/tmp/matrix-qa/output",
-      scenarioId: "matrix-stale-patch",
-      scenarioTitle: "Matrix stale patch",
-      timeoutMs: 8_000,
-      waitForConfigRestartSettle: vi.fn(),
-    });
+    await expect(
+      environment.prepareFlow({
+        config: {},
+        gateway,
+        outputDir: "/tmp/matrix-qa/output",
+        scenarioId: "matrix-stale-patch",
+        scenarioTitle: "Matrix stale patch",
+        timeoutMs: 8_000,
+        waitForConfigRestartSettle: vi.fn(),
+      }),
+    ).rejects.toBe(stale);
 
-    expect(patchCount).toBe(2);
+    expect(gateway.call.mock.calls.map(([method]) => method)).toEqual([
+      "config.get",
+      "channels.status",
+      "config.get",
+      "config.patch",
+    ]);
     expect(
       gateway.call.mock.calls.map((call) => (call[2] as { deadlineMs?: number }).deadlineMs),
     ).toEqual(Array.from({ length: gateway.call.mock.calls.length }, () => 60_000));

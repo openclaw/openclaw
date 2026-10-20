@@ -12,6 +12,14 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
+export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
+  // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
+  return (
+    entry.delivery?.status !== "delivered" ||
+    entry.execution.interruptionReason === "gateway-restart"
+  );
+}
+
 /** Only a known missing result may mint another public continuation; private retries reconcile. */
 export function resolveRequesterSettleRetryState(params: {
   state: RequesterSettleWakeBatchState;

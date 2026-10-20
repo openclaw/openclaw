@@ -8,7 +8,7 @@ import {
 import { isIncompleteTerminalAssistantTurn } from "./incomplete-turn-classification.js";
 import {
   resolveSettledToolBatchEvidence,
-  resolveSettledToolTerminalContinuationInstruction,
+  resolveSettledToolTerminalContinuation,
 } from "./incomplete-turn-recovery.js";
 import { resolveReplayInvalidFlag, resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -31,9 +31,9 @@ function makeAttemptResult(
 function makeSettledContinuationParams(
   attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
   overrides: Partial<
-    Omit<Parameters<typeof resolveSettledToolTerminalContinuationInstruction>[0], "attempt">
+    Omit<Parameters<typeof resolveSettledToolTerminalContinuation>[0], "attempt">
   > = {},
-): Parameters<typeof resolveSettledToolTerminalContinuationInstruction>[0] {
+): Parameters<typeof resolveSettledToolTerminalContinuation>[0] {
   return {
     provider: "openai",
     modelId: "gpt-5.6-luna",
@@ -156,14 +156,16 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   ] as const)(
     "uses prepared terminal $terminal rather than source $source for settled recovery",
     ({ source, terminal, continues }) => {
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
+      const instruction = resolveSettledToolTerminalContinuation(
         makeSettledContinuationParams(
           { ...makeSettledIdleWriteAttempt(), sourceReplyDeliveryState: source },
           { timedOut: true, replyDeliveryState: terminal },
         ),
       );
 
-      expect(instruction).toBe(continues ? SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : null);
+      expect(instruction?.instruction ?? null).toBe(
+        continues ? SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : null,
+      );
     },
   );
 
@@ -172,19 +174,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     // does not say so, the model reaches for a tool, the denied call registers as capability
     // activity, and projectSettledTurnFinalizationAttemptResult throws away the whole result
     // -- including a perfectly good answer produced in the same completion.
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams(makeSettledIdleWriteAttempt(), {
         timedOut: true,
       }),
     );
 
-    expect(instruction).toContain("Tools are unavailable in this step");
-    expect(instruction).toContain("do not attempt any tool call");
+    expect(instruction?.instruction).toContain("Tools are unavailable in this step");
+    expect(instruction?.instruction).toContain("do not attempt any tool call");
+    expect(instruction?.disableTools).toBe(true);
   });
 
   it("suppresses continuation for an exactly matched all-terminal current batch", () => {
     const attempt = makeSettledIdleWriteAttempt();
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams({
         ...attempt,
         toolMetas: [
@@ -203,7 +206,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("continues when terminal metadata belongs to a stale prior call", () => {
     const attempt = makeSettledIdleWriteAttempt();
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams({
         ...attempt,
         toolMetas: [
@@ -217,7 +220,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(instruction?.instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
   it.each([
@@ -235,14 +238,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     "uses the $label current occurrence when a provider reuses a tool-call id",
     ({ currentMeta, expected }) => {
       const attempt = makeSettledIdleWriteAttempt();
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
+      const instruction = resolveSettledToolTerminalContinuation(
         makeSettledContinuationParams({
           ...attempt,
           toolMetas: [{ toolName: "write", toolCallId: "tool_1", terminate: true }, currentMeta],
         }),
       );
 
-      expect(instruction).toBe(expected);
+      expect(instruction?.instruction ?? null).toBe(expected);
     },
   );
 
@@ -255,7 +258,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         { type: "toolCall", id: "tool_2", name: "read", arguments: {} },
       ],
     });
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams({
         ...attempt,
         toolMetas: [
@@ -273,7 +276,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+    expect(instruction?.instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
   it.each([
@@ -293,7 +296,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const attempt = makeSettledIdleWriteAttempt({
         terminal: { kind: "failed", source: "prompt", error: new Error("provider failure") },
       });
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
+      const instruction = resolveSettledToolTerminalContinuation(
         makeSettledContinuationParams(
           hasContext
             ? {
@@ -307,7 +310,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         ),
       );
 
-      expect(instruction === SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION).toBe(
+      expect(instruction?.instruction === SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION).toBe(
         expectedContinuation,
       );
     },
@@ -351,7 +354,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
     },
   ])("does not finalize settled tools after a $label", ({ terminal, aborted, timedOut }) => {
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams(makeSettledIdleWriteAttempt({ terminal }), {
         aborted,
         timedOut,
@@ -362,7 +365,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   });
 
   it("does not use a settled prior-turn batch to authorize idle-timeout finalization", () => {
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams(makeSettledIdleWriteAttempt({ stalePriorTurn: true }), {
         timedOut: true,
       }),
@@ -392,7 +395,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           { type: "toolCall", id: "tool_failed", name: "exec", arguments: {} },
         ],
       });
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
+      const instruction = resolveSettledToolTerminalContinuation(
         makeSettledContinuationParams({
           assistantTexts: [],
           toolMetas: [
@@ -416,8 +419,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         }),
       );
 
-      expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
-      expect(instruction).toContain("If a tool failed, say so; never claim completion or success.");
+      expect(instruction?.instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+      expect(instruction?.instruction).toContain(
+        "If a tool failed, say so; never claim completion or success.",
+      );
     },
   );
 
@@ -459,7 +464,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expectedFinalization,
     }) => {
       const emptyStopAssistant = makeLastAssistant();
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
+      const instruction = resolveSettledToolTerminalContinuation(
         makeSettledContinuationParams(
           {
             assistantTexts: [],
@@ -484,7 +489,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         ),
       );
 
-      expect(instruction).toBe(
+      expect(instruction?.instruction ?? null).toBe(
         expectedFinalization ? SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION : null,
       );
     },
@@ -506,7 +511,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
     });
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams({
         assistantTexts: [],
         toolMetas: [{ toolName: resultToolName, isError: true }],
@@ -537,7 +542,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         { type: "toolCall", id: "tool_2", name: "exec", arguments: {} },
       ],
     });
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec", isError: true }],
@@ -592,7 +597,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       intentionalTermination: true,
     });
     expect(
-      resolveSettledToolTerminalContinuationInstruction(makeSettledContinuationParams(attempt)),
+      resolveSettledToolTerminalContinuation(makeSettledContinuationParams(attempt)),
     ).toBeNull();
     expect(attempt.lastToolError).toBe(lastToolError);
   });
@@ -627,7 +632,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool_1", name: "exec", arguments: {} }],
     });
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams({
         assistantTexts: [],
         toolMetas: [{ toolName: "exec", isError: true }],
@@ -673,7 +678,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       isError,
     }) => {
       const emptyStopAssistant = makeLastAssistant();
-      const instruction = resolveSettledToolTerminalContinuationInstruction(
+      const instruction = resolveSettledToolTerminalContinuation(
         makeSettledContinuationParams(
           {
             assistantTexts: [],
@@ -692,7 +697,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("does not use a stale prior-turn empty stop to prove a settled continuation", () => {
     const staleEmptyStopAssistant = makeLastAssistant();
-    const instruction = resolveSettledToolTerminalContinuationInstruction(
+    const instruction = resolveSettledToolTerminalContinuation(
       makeSettledContinuationParams(
         {
           assistantTexts: [],

@@ -34,7 +34,7 @@ const browserDoctor = await loadBundledPluginFacade<typeof import("../commands/d
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const privateFiles = new Set(["Local State", "Preferences", "Secure Preferences", "Cookies"]);
-const noRepair = { checksRepaired: 0, checksValidated: 0, changes: [], effects: [] };
+const noRepair = { changes: [], effects: [] };
 
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
@@ -121,7 +121,7 @@ it.each([false, true])(
     expect(result?.reason).toContain("Doctor does not inspect personal browser profiles");
     await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual(result);
     const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-    expect(run).toMatchObject({ checksRun: 1, ...noRepair });
+    expect(run).toMatchObject(noRepair);
     expect(run.remainingFindings).toEqual(run.findings);
     expect(run.warnings).toEqual([
       ...result!.warnings!,
@@ -158,7 +158,6 @@ it.each([
     expect(result).toMatchObject({ changes: output.changes, warnings: output.warnings });
     expect([result?.status, result?.reason]).toEqual([status, reason]);
     const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-    expect(run.checksRepaired).toBe(status === "failed" ? 0 : 1);
     expect(run.remainingFindings).toEqual(run.findings);
     expect(run.warnings.join("\n")).toContain(
       status === "failed" ? `repair failed: ${reason}` : "repair left",
@@ -180,7 +179,6 @@ it.each(["loader", "repair hook"])("keeps %s errors as failures", async (source)
   expect(result).toMatchObject({ status: "failed", changes: [] });
   expect(result?.warnings?.join("\n")).toContain("synthetic browser repair unavailable");
   const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-  expect(run.checksRepaired).toBe(0);
   expect(run.remainingFindings).toEqual(run.findings);
   expect(run.warnings.join("\n")).toContain("repair failed:");
   expect(accesses).toEqual([]);

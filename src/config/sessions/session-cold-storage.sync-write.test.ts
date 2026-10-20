@@ -1,19 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
-  appendTranscriptMessageSync,
-  persistCompactionBoundaryWithSessionEntrySync,
+  appendTranscriptMessageSync as appendMessage,
+  persistCompactionBoundaryWithSessionEntrySync as persistBoundary,
   loadTranscriptEventsSync,
-  replaceTranscriptSuffixEventsSync,
+  replaceTranscriptSuffixEventsSync as replaceSuffix,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import {
@@ -66,13 +64,11 @@ it("refuses synchronous writes to cold current history without mutating or resto
   await waitForSessionTranscriptIndexReconcile(options);
   replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
-    executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<DB>(database)
-        .updateTable("session_windows")
-        .set({ updated_at: 1, transcript_updated_at: 1 })
-        .where("session_id", "=", scope.sessionId),
-    );
+    database
+      .prepare(
+        "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+      )
+      .run(scope.sessionId);
   }, options);
   const expectedTranscript = loadTranscriptEventsSync(scope);
   expect(
@@ -88,25 +84,20 @@ it("refuses synchronous writes to cold current history without mutating or resto
   ).toMatchObject({ archivedTranscripts: 1, externalizedTranscripts: 0 });
   const database = openOpenClawAgentDatabase(options).db;
   const descriptor = readSessionColdTranscript(database, scope.sessionId);
-  if (!descriptor) {
-    throw new Error("Fixture did not archive its current transcript");
-  }
+  assert(descriptor, "Fixture did not archive its current transcript");
   const archivePath = resolveSessionColdArchivePath(databasePath, descriptor.archive_name);
   const archiveBytes = await fs.readFile(archivePath);
+  const rows = (table: string) => database.prepare(`SELECT * FROM ${table}`).all();
   const snapshot = () => ({
-    events: database.prepare("SELECT * FROM transcript_events ORDER BY seq").all(),
-    identities: database
-      .prepare("SELECT * FROM transcript_event_identities ORDER BY seq, event_id")
-      .all(),
-    active: database
-      .prepare("SELECT * FROM session_transcript_active_events ORDER BY active_position")
-      .all(),
-    index: database.prepare("SELECT * FROM session_transcript_index_state").all(),
-    search: database.prepare("SELECT * FROM session_transcript_fts ORDER BY message_id").all(),
-    generations: database.prepare("SELECT * FROM transcript_rewrite_watermarks").all(),
-    windows: database.prepare("SELECT * FROM session_windows").all(),
-    nodes: database.prepare("SELECT * FROM session_nodes").all(),
-    archives: database.prepare("SELECT * FROM session_transcript_cold_archives").all(),
+    events: rows("transcript_events ORDER BY seq"),
+    identities: rows("transcript_event_identities ORDER BY seq, event_id"),
+    active: rows("session_transcript_active_events ORDER BY active_position"),
+    index: rows("session_transcript_index_state"),
+    search: rows("session_transcript_fts ORDER BY message_id"),
+    generations: rows("transcript_rewrite_watermarks"),
+    windows: rows("session_windows"),
+    nodes: rows("session_nodes"),
+    archives: rows("session_transcript_cold_archives"),
   });
   const before = snapshot();
   expect(before.events).toEqual([]);
@@ -115,70 +106,36 @@ it("refuses synchronous writes to cold current history without mutating or resto
   );
   const event = { type: "custom", id: "sync-custom", customType: "sync-write", data: {} };
   const message = { role: "user", content: "A new synchronous message", timestamp: 20 };
-  const mutations = [
-    { name: "append event", run: () => appendTranscriptEventSync(scope, event) },
-    { name: "append event snapshot", run: () => appendTranscriptEventSnapshotSync(scope, event) },
-    {
-      name: "append message",
-      run: () => appendTranscriptMessageSync(scope, { message, eventId: "sync-message" }),
-    },
-    {
-      name: "append message snapshot",
-      run: () =>
-        appendTranscriptMessageSnapshotSync(scope, { message, eventId: "sync-message-snapshot" }),
-    },
-    { name: "replace transcript", run: () => replaceTranscriptEventsSync(scope, [event]) },
-    {
-      name: "replace full suffix",
-      run: () =>
-        replaceTranscriptSuffixEventsSync(
-          scope,
-          expectedTranscript,
-          expectedTranscript.slice(0, 1),
-        ),
-    },
-    {
-      name: "replace incremental suffix",
-      run: () =>
-        replaceTranscriptSuffixEventsSync(
-          scope,
-          expectedTranscript.slice(1),
-          [],
-          1,
-          undefined,
-          undefined,
-          true,
-        ),
-    },
-    {
-      name: "compaction boundary",
-      run: () =>
-        persistCompactionBoundaryWithSessionEntrySync(scope, {
-          prepared: {
-            scope,
-            event: {
-              type: "compaction",
-              id: "sync-boundary",
-              parentId: "original-user",
-              timestamp: new Date(20).toISOString(),
-              summary: "Compacted",
-              firstKeptEntryId: "original-user",
-              tokensBefore: 100,
-            },
-          },
-          transcriptByteCompactionLatch: {
-            sessionId: scope.sessionId,
-            activeBytes: 2048,
-            maxBytes: 1024,
-          },
-        }),
-    },
-  ];
-  for (const mutation of mutations) {
-    expect(mutation.run, mutation.name).toThrow(
-      expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
-    );
-    expect(snapshot(), mutation.name).toEqual(before);
-    expect(await fs.readFile(archivePath), mutation.name).toEqual(archiveBytes);
+  const boundary = {
+    type: "compaction" as const,
+    id: "sync-boundary",
+    parentId: "original-user",
+    timestamp: new Date(20).toISOString(),
+    summary: "Compacted",
+    firstKeptEntryId: "original-user",
+    tokensBefore: 100,
+  };
+  const latch = { sessionId: scope.sessionId, activeBytes: 2048, maxBytes: 1024 };
+  const mutations = {
+    "append event": () => appendTranscriptEventSync(scope, event),
+    "append event snapshot": () => appendTranscriptEventSnapshotSync(scope, event),
+    "append message": () => appendMessage(scope, { message, eventId: "sync-message" }),
+    "append message snapshot": () =>
+      appendTranscriptMessageSnapshotSync(scope, { message, eventId: "sync-message-snapshot" }),
+    "replace transcript": () => replaceTranscriptEventsSync(scope, [event]),
+    "replace full suffix": () =>
+      replaceSuffix(scope, expectedTranscript, expectedTranscript.slice(0, 1)),
+    "replace incremental suffix": () =>
+      replaceSuffix(scope, expectedTranscript.slice(1), [], 1, undefined, undefined, true),
+    "compaction boundary": () =>
+      persistBoundary(scope, {
+        prepared: { scope, event: boundary },
+        transcriptByteCompactionLatch: latch,
+      }),
+  };
+  for (const [name, run] of Object.entries(mutations)) {
+    expect(run, name).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));
+    expect(snapshot(), name).toEqual(before);
+    expect(await fs.readFile(archivePath), name).toEqual(archiveBytes);
   }
 });

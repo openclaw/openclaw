@@ -319,13 +319,9 @@ export function createChannelSettingsPresentation(
             return confirmed;
           },
           formatPhoneNumber(value) {
-            current();
             return formatInternationalPhoneNumberForDisplay(value, getLocale()) ?? value;
           },
-          formatDuration(milliseconds) {
-            current();
-            return formatDurationHuman(milliseconds);
-          },
+          formatDuration: formatDurationHuman,
           mountConfig(container) {
             current();
             const stopConfig = render(() => {
@@ -372,18 +368,9 @@ export function createChannelSettingsPresentation(
             }
             await channels.refresh(probe);
           },
-          formatRelativeTimestamp(timestamp) {
-            current();
-            return formatRelativeTimestamp(timestamp);
-          },
-          formatError(error) {
-            current();
-            return formatUiError(error);
-          },
-          formatExternalText(text) {
-            current();
-            return formatUiExternalText(text);
-          },
+          formatRelativeTimestamp,
+          formatError: formatUiError,
+          formatExternalText: formatUiExternalText,
         };
         const mounted = loaded.view.mount(entry.node, context);
         let active = true;
@@ -469,6 +456,7 @@ export function ChannelSettingsSlot(props: {
   const locale = projectI18n(i18n);
   onSettled(() => {
     const detach = props.presentation.attach(props.channelId, container);
+    // Locale receipts refresh the separately mounted channel settings presentation.
     const stopLocale = locale.subscribe(() => props.presentation.sync());
     return () => {
       stopLocale();

@@ -10,6 +10,8 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
+import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import * as dedup from "./dedup.js";
 import {
   monitorSingleAccount,
@@ -97,10 +99,10 @@ function resolveReaction(
     fetchMessage?: typeof send.getMessageFeishu;
   } = {},
 ) {
-  const { fetchMessage = async () => fetchedMessage(), ...options } = params;
+  const { cfg = {}, fetchMessage = async () => fetchedMessage(), ...options } = params;
   vi.spyOn(send, "getMessageFeishu").mockImplementation(fetchMessage);
   return resolveReactionSyntheticEvent({
-    cfg: {},
+    cfg: withFeishuRuntimeDefaults(cfg),
     accountId: "default",
     event: makeReactionEvent(),
     botOpenId: "ou_bot",
@@ -111,7 +113,7 @@ function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
   return {
     cfg: {
       messages: { inbound: { debounceMs: 0, byChannel: { feishu: 20 } } },
-      channels: { feishu: { enabled: true } },
+      channels: { feishu: FeishuConfigSchema.parse({ enabled: true }) },
     } as ClawdbotConfig,
     account: {
       accountId: "default",
@@ -120,7 +122,7 @@ function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
       appId: "cli_test",
       appSecret: "secret_test", // pragma: allowlist secret
       domain: "feishu",
-      config: { enabled: true, connectionMode: "websocket" },
+      config: FeishuConfigSchema.parse({ enabled: true, connectionMode: "websocket" }),
     } as ResolvedFeishuAccount,
     runtime: createNonExitingRuntimeEnv(),
     botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },

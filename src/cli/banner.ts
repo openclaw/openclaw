@@ -14,9 +14,6 @@ import { pickTagline, type TaglineOptions } from "./tagline.js";
 type BannerOptions = TaglineOptions & {
   argv?: string[];
   commit?: string | null;
-  columns?: number;
-  isTty?: boolean;
-  platform?: NodeJS.Platform;
   richTty?: boolean;
 };
 
@@ -42,7 +39,7 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const title = decorativePrefix("🦞", "OpenClaw", options);
   const prefix = decorativeEmoji("🦞", options);
   const indent = prefix ? `${prefix} ` : "";
-  const columns = options.columns ?? process.stdout.columns ?? 120;
+  const columns = process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;
   const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
@@ -67,7 +64,7 @@ function resolveLobsterArt(options: BannerOptions): string | null {
   if (!(options.richTty ?? isRich())) {
     return null;
   }
-  const now = options.now ? options.now() : new Date();
+  const now = new Date();
   const env = options.env ?? process.env;
   if (env.CI || env.VITEST || !isLobsterDay(now)) {
     return null;
@@ -85,8 +82,7 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  const isTty = options.isTty ?? process.stdout.isTTY;
-  if (!isTty) {
+  if (!process.stdout.isTTY) {
     return;
   }
   if (hasJsonFlag(argv)) {

@@ -175,7 +175,9 @@ it(
           token: gateway.token,
           timeoutMs: 60_000,
           scopes,
-          deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path(`${name}.sqlite`) }),
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: state.path(name, "client", "credentials.sqlite"),
+          }),
         });
       owner = await connect(
         "owner",

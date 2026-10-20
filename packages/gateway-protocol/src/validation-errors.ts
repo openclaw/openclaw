@@ -47,8 +47,16 @@ export function checkProtocolJson(data: unknown, maxDepth: number): ValidationEr
   return undefined;
 }
 
-function firstStringParam(value: unknown): string | undefined {
-  return Array.isArray(value) ? value.find(hasNonEmptyString) : readNonBlankString(value);
+const MAX_VALIDATION_ERROR_FIELDS = 8;
+
+function stringParams(value: unknown, fallback?: unknown): string[] {
+  if (hasNonEmptyString(value)) {
+    return [value];
+  }
+  const values = Array.isArray(value)
+    ? value.slice(0, MAX_VALIDATION_ERROR_FIELDS).filter(hasNonEmptyString)
+    : [];
+  return values.length > 0 || fallback === undefined ? values : stringParams(fallback);
 }
 
 /** Convert validator errors into compact operator-facing failure text. */
@@ -64,22 +72,38 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
 
     if (keyword === "additionalProperties") {
-      const additionalProperty =
-        firstStringParam(err?.params?.additionalProperty) ??
-        firstStringParam(err?.params?.additionalProperties);
-      if (additionalProperty) {
+      const additionalProperties = stringParams(
+        err?.params?.additionalProperty,
+        err?.params?.additionalProperties,
+      );
+      if (additionalProperties.length > 0) {
         const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+        for (const property of additionalProperties) {
+          parts.push(`${where}: unexpected property '${property}'`);
+        }
         continue;
       }
     }
     if (keyword === "required") {
-      const missingProperty =
-        firstStringParam(err?.params?.missingProperty) ??
-        firstStringParam(err?.params?.requiredProperties);
-      if (missingProperty) {
+      const missingProperties = stringParams(
+        err?.params?.missingProperty,
+        err?.params?.requiredProperties,
+      );
+      if (missingProperties.length > 0) {
         const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
+        for (const property of missingProperties) {
+          parts.push(`${where}must have required property '${property}'`);
+        }
+        continue;
+      }
+    }
+    if (keyword === "enum") {
+      const allowedValues = stringParams(err?.params?.allowedValues);
+      if (allowedValues.length > 0) {
+        const where = instancePath ? `at ${instancePath}: ` : "";
+        parts.push(
+          `${where}must be one of: ${allowedValues.map((value) => JSON.stringify(value)).join(", ")}`,
+        );
         continue;
       }
     }

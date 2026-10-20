@@ -67,6 +67,7 @@ export function createRuntimeConfigCapability(
       listener(state);
     }
   };
+  // Bootstrap changes update the capability's fallback config before views read it.
   const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
     let result: Promise<T> | undefined;

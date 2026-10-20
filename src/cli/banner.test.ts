@@ -25,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
   Object.defineProperty(process, "platform", platformDescriptor);
   if (stdoutIsTtyDescriptor) {
     Object.defineProperty(process.stdout, "isTTY", stdoutIsTtyDescriptor);
@@ -86,11 +87,10 @@ describe("emitCliBanner", () => {
       setStdoutIsTty(true);
       const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
+      vi.useFakeTimers({ now });
       emitCliBanner("2026.3.7", {
         ...bannerOptions,
         mode: "random",
-        now: () => now,
-        random: () => 0,
         richTty: true,
       });
 
@@ -105,19 +105,18 @@ describe("emitCliBanner", () => {
     { label: "plain terminals", options: { richTty: false } },
     { label: "off mode", options: { mode: "off" as const } },
     { label: "default mode", options: { mode: "default" as const } },
-    { label: "non-lobster days", options: { now: () => new Date(2026, 0, 1) } },
+    { label: "non-lobster days", options: {}, now: new Date(2026, 0, 1) },
     { label: "CI", options: { env: { CI: "1" } } },
     { label: "tests", options: { env: { VITEST: "true" } } },
-  ])("keeps lobster day out of $label", async ({ options }) => {
+  ])("keeps lobster day out of $label", async ({ options, now }) => {
     const { emitCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(true);
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
+    vi.useFakeTimers({ now: now ?? new Date(2026, 1, 26) });
     emitCliBanner("2026.3.7", {
       ...bannerOptions,
       mode: "random",
-      now: () => new Date(2026, 1, 26),
-      random: () => 0,
       richTty: true,
       ...options,
     });

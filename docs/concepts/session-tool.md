@@ -260,6 +260,12 @@ inter-session replies still use the bounded lifecycle preview.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
 
+Children remain reachable when their parent rotates to a new session ID under the
+same key and its recorded predecessor chain still connects to their original
+parent. The current parent's communication policy applies. If that lineage no
+longer connects, re-spawn the child. Resets that retain the parent's session ID
+keep the existing child link.
+
 An explicit `agents.entries.<agentId>.tools.agentToAgent.send` list can authorize
 `sessions_send` to selected agents without exposing their sessions to list,
 history, search, status, or session-control tools. Omission keeps normal global
@@ -436,7 +442,7 @@ Isolated scheduled jobs can wait for an inline reply, but receive no detached re
 
 These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
-An operator with `operator.sessions.write` can use `mode: "notify"` for an authorized session they own, including an owned child. Notifications retain the requester's current authority and target-session checks before queueing. They remain in memory and do not start a run.
+An operator with `operator.sessions.write` can use `mode: "steer"` or `mode: "notify"` for an authorized session they created, including an owned child. Shared visibility and membership do not grant this creator-bound access. Both modes retain the requester's current authority and target-session checks before queueing. Notifications remain in memory and do not start a run.
 
 Child coordination stays in agent context and raw transcripts. The receiving chat hides child reports and automatic coordination replies, while normal task-completion summaries and direct human answers remain visible. Historical messages without source provenance cannot be classified as child traffic.
 

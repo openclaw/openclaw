@@ -113,12 +113,59 @@ describe("PostgreSQL conformance selection", () => {
         runAttempt: 1,
       }),
     ).toBe("ubuntu-24.04");
-    expect(
-      job.steps.find((step: WorkflowStep) => step.name === "Run PostgreSQL conformance").run,
-    ).toBe(
-      "node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}",
+    const conformance = job.steps.find(
+      (step: WorkflowStep) => step.name === "Run PostgreSQL conformance",
     );
+    expect(conformance.uses).toBe("./.ci-harness/.github/actions/postgres-conformance");
+    expect(conformance.with).toEqual({
+      image:
+        "pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d",
+      shard: "${{ matrix.shard }}",
+    });
     expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+  });
+
+  it("qualifies pinned pg16 and pg18 in three shards each on main without adding PR jobs", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/postgres-conformance-weekly.yml", "utf8"),
+    );
+    expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
+    expect(workflow.on.schedule).toEqual([{ cron: "43 6 * * 1" }]);
+    const job = workflow.jobs["postgres-conformance"];
+    expect(job.strategy["max-parallel"]).toBe(3);
+    expect(job.strategy["fail-fast"]).toBe(false);
+    expect(job.strategy.matrix.version).toEqual(["pg16", "pg18"]);
+    expect(job.strategy.matrix.shard).toEqual(
+      readCiWorkflow().jobs["postgres-conformance"].strategy.matrix.shard,
+    );
+    expect(job["timeout-minutes"]).toBe(50);
+    expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
+    expect(job.strategy.matrix.include.map((row: { image: string }) => row.image)).toEqual([
+      "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
+      "pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11",
+    ]);
+    for (const [repository, ref, admitted] of [
+      ["openclaw/openclaw", "refs/heads/main", true],
+      ["openclaw/openclaw", "refs/heads/topic", false],
+      ["fork/openclaw", "refs/heads/main", false],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(job.if, {
+          eventName: "workflow_dispatch",
+          repository,
+          ref,
+          runAttempt: 1,
+        }),
+      ).toBe(admitted);
+    }
+    const conformance = job.steps.find(
+      (step: WorkflowStep) => step.name === "Run PostgreSQL conformance",
+    );
+    expect(conformance.uses).toBe("./.github/actions/postgres-conformance");
+    expect(conformance.with).toEqual({
+      image: "${{ matrix.image }}",
+      shard: "${{ matrix.shard }}",
+    });
   });
 
   it.each<[string[] | null, boolean, Partial<Parameters<typeof runCiManifestFixture>[0]>?]>([
@@ -138,6 +185,7 @@ describe("PostgreSQL conformance selection", () => {
     [["extensions/workboard/src/store.test.ts"], true],
     [["src/config/zod-schema.database.ts"], true],
     [["scripts/test-database-conformance.mjs"], true],
+    [[".github/actions/postgres-conformance/action.yml"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
     [["scripts/lib/weighted-test-shards.mts"], true],
     [["config/postgres-conformance-timings.json"], true],
@@ -973,6 +1021,24 @@ function runControlUiI18nSourceFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+describe("native runtime artifact CI selection", () => {
+  it.each([false, true])(
+    "selects the runtime producer for native policy tests (owner=%s)",
+    (owner) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "schedule",
+        runNode: false,
+        publishedDriverUpdateCapability: false,
+        targetFiles: owner ? ["apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift"] : [],
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_macos_swift).toBe("true");
+      expect(manifest.outputs.run_build_artifacts).toBe(String(owner));
+    },
+  );
+});
+
 describe("channel detail presentation CI selection", () => {
   it.each([
     ["extensions/telegram/control-ui.channel-detail.json", true],
@@ -2756,7 +2822,9 @@ describe("ci workflow guards", () => {
       expect(job.strategy["fail-fast"]).toBe(false);
       expect(job.strategy["max-parallel"]).toBe(2);
       expect(job["continue-on-error"]).not.toBe(true);
-      expect(job.needs).toEqual(["preflight"]);
+      expect(job.needs).toEqual(
+        jobName === "macos-swift" ? ["preflight", "build-artifacts"] : ["preflight"],
+      );
       const workloads =
         jobName === "macos-swift"
           ? {
@@ -3003,7 +3071,10 @@ describe("ci workflow guards", () => {
         runnerBackend: "hybrid" as const,
         additionalNeeds: {
           "check-plan": { outputs },
-          "build-artifacts": { outputs: { published_driver_artifact_id: "fixture-package" } },
+          "build-artifacts": {
+            result: "success" as const,
+            outputs: { published_driver_artifact_id: "fixture-package" },
+          },
         },
         ...overrides,
         preflightOutputs: outputs,
@@ -8795,7 +8866,16 @@ describe("ci workflow guards", () => {
         const job = workflow.jobs[jobName];
         const expression = job.if.startsWith("${{") ? job.if : `\${{ ${job.if} }}`;
         expect(
-          evaluateWorkflowExpression(expression, { ...context, preflightOutputs }),
+          evaluateWorkflowExpression(expression, {
+            ...context,
+            preflightOutputs,
+            additionalNeeds: {
+              "build-artifacts": {
+                result: manifest.outputs.run_build_artifacts === "true" ? "success" : "skipped",
+                outputs: {},
+              },
+            },
+          }),
           jobName,
         ).toBe(selectedJobs.includes(jobName));
       }
@@ -12184,6 +12264,10 @@ describe("ci workflow guards", () => {
           "",
         )
         .replace(/needs\.build-artifacts\.outputs\.published_driver_artifact_id != ''\s*&&\s*/u, "")
+        .replace(
+          /\s*&&\s*\(needs\.build-artifacts\.result == 'success' \|\| needs\.build-artifacts\.result == 'skipped'\)$/u,
+          "",
+        )
         .replace(/!cancelled\(\)\s*&&\s*/gu, "")
         .replace(/\s*&&\s*!github.event.pull_request.draft$/u, "")
         .replace(/\s+/gu, " ")

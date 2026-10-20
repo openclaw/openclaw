@@ -48,7 +48,6 @@ function parseInstallRequest(
       request = resolvePluginInstallPreactionRequest({
         actionCommand,
         commandPath: ["plugins", "install"],
-        argv,
       });
     })
     .action(() => undefined);

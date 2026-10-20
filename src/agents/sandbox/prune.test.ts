@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -38,6 +39,11 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
+const persistentExecMocks = vi.hoisted(() => ({
+  recoverSandboxPersistentExecOrphans:
+    vi.fn<typeof import("./persistent-exec.js").recoverSandboxPersistentExecOrphans>(),
+}));
+
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: configMocks.getRuntimeConfig,
 }));
@@ -55,9 +61,13 @@ vi.mock("./docker-backend.js", () => ({
   dockerSandboxBackendManager: backendMocks,
 }));
 
+// mock-isolation: Persistent-exec tests own recovery; this fixture proves pruning continues after failure.
+vi.mock("./persistent-exec.js", () => persistentExecMocks);
+
 // mock-isolation: Prune selection uses synthetic rows; worker predicate behavior lives in registry tests.
 vi.mock("./registry.js", () => ({
-  assertSandboxBrowserRegistryEntryCurrent: registryMocks.assertSandboxBrowserRegistryEntryCurrent,
+  assertSandboxRegistryRetirementCurrent: (_kind: string, current: unknown) =>
+    registryMocks.assertSandboxBrowserRegistryEntryCurrent(current),
   readBrowserRegistry: registryMocks.readBrowserRegistry,
   readRegistry: registryMocks.readRegistry,
   removeBrowserRegistryEntry: registryMocks.removeBrowserRegistryEntry,
@@ -116,6 +126,9 @@ describe("maybePruneSandboxes", () => {
     backendMocks.getSandboxBackendManager.mockReset().mockReturnValue(backendMocks);
     backendMocks.removeRuntime.mockReset().mockResolvedValue(undefined);
     bridgeMocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
+    persistentExecMocks.recoverSandboxPersistentExecOrphans
+      .mockReset()
+      .mockResolvedValue(undefined);
 
     configMocks.getRuntimeConfig.mockReturnValue({});
     registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
@@ -125,9 +138,16 @@ describe("maybePruneSandboxes", () => {
     ({ maybePruneSandboxes } = await import("./prune.js"));
   });
 
-  it("removes the registry entry after runtime removal succeeds", async () => {
+  it("reports orphan recovery failure and still removes the ordinary runtime and registry entry", async () => {
+    persistentExecMocks.recoverSandboxPersistentExecOrphans.mockRejectedValueOnce(
+      new Error("original Docker daemon unavailable"),
+    );
+
     await maybePruneSandboxes(pruneConfig);
 
+    expect(runtimeMocks.error).toHaveBeenCalledWith(
+      "Sandbox stream allocation cleanup failed: original Docker daemon unavailable",
+    );
     expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(1);
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
   });
@@ -139,6 +159,7 @@ describe("maybePruneSandboxes", () => {
         databasePath: resolveOpenClawStateSqlitePath(),
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: path.join(root, "openclaw.json"),
           role: "gateway",

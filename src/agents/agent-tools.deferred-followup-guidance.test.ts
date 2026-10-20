@@ -111,11 +111,26 @@ describe("createOpenClawCodingTools availability guidance", () => {
     const [exec, process] = tools;
 
     expect(tools.map((entry) => entry.name)).toEqual(["exec", "process", "cron"]);
+    expectGuidance(expectDefined(exec, "exec tool").description, [
+      "background continuation supported",
+      "use automations",
+    ]);
+    expectGuidance(expectDefined(process, "process tool").description, [
+      "Control existing exec",
+      "scheduled follow-up uses automations",
+    ]);
+  });
+
+  it("drops automation guidance when the scheduler is unavailable", () => {
+    const tools = withMockedPlatform("linux", () => describeTools("exec", "process"));
+    const [exec, process] = tools;
+
+    expect(tools.map((entry) => entry.name)).toEqual(["exec", "process"]);
     expect(exec?.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host/node to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
+      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake, when enabled, occurs only after exit; otherwise process confirms completion. Output while still running does not automatically start another turn. Background commands can outlive the turn; use process kill when no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation. Omit host/node to use the session's configured host. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
     );
     expect(process?.description).toBe(
-      "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
+      "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. kill requests termination or returns the retained terminal result for an already-finished session. After a termination request, poll until a terminal result confirms exit and cleanup before saying stopped. A running poll is still pending. remove hides the record and cannot confirm cleanup. Later process results supersede turn-start snapshots. Control sessions by sessionId; a displayed host PID is not a portable sandbox PID.",
     );
   });
 

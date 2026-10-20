@@ -79,7 +79,7 @@ export function DeviceInventory(props: DevicesProps) {
   const gatewayPresence = createMemo(() => findGatewayPresence(presenceSnapshot()));
   const unpairedPresence = createMemo(() => listUnpairedPresence(presenceSnapshot(), groups()));
   const stale = createMemo(() => listStaleInventoryEntries(groups()));
-  const loading = createMemo(() => props.loading || props.devicesLoading);
+  const loading = () => props.loading || props.devicesLoading;
   const actions = (
     <>
       {stale().length > 0 ? (
@@ -107,7 +107,7 @@ export function DeviceInventory(props: DevicesProps) {
   );
   // Pending requests and unpaired presence render in their own sections, so
   // this section's empty state depends only on its own rows.
-  const empty = createMemo(() => groups().length === 0 && !gatewayPresence());
+  const empty = () => groups().length === 0 && !gatewayPresence();
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
@@ -296,15 +296,14 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
 const COMMAND_LINE_LIMIT = 16;
 
 function CommandLine(props: { values: string[] }) {
-  const visible = createMemo(() => props.values.slice(0, COMMAND_LINE_LIMIT));
-  const overflow = createMemo(() => props.values.length - visible().length);
-  const suffix = createMemo(() => (overflow() > 0 ? ` +${overflow()}` : ""));
+  const visible = () => props.values.slice(0, COMMAND_LINE_LIMIT);
+  const overflow = () => props.values.length - visible().length;
   return (
     <Show when={props.values.length > 0}>
       <dt class="settings-row__desc">{t("devices.inventory.commands")}</dt>
       <dd class="settings-row__value settings-row__value--mono">
         {formatList(visible())}
-        {suffix()}
+        {overflow() > 0 ? ` +${overflow()}` : ""}
       </dd>
     </Show>
   );
@@ -377,16 +376,15 @@ function InventoryEntry(props: { entry: DeviceInventoryEntry; devices: DevicesPr
       unavailable: props.entry.node?.connected !== true || !isApprovedNodeEntry(props.entry),
     }),
   );
-  const pendingRequestId = createMemo(() =>
+  const pendingRequestId = () =>
     props.entry.node?.approvalState === "pending-approval" ||
     props.entry.node?.approvalState === "pending-reapproval"
       ? props.entry.node.pendingRequestId
-      : undefined,
-  );
+      : undefined;
   const desktopEnvironment = createMemo(() =>
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
-  const rowConnected = createMemo(() => props.entry.node?.connected ?? props.entry.connected);
+  const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
   const connectionStatus = (
     <SettingsStatus
       kind={rowConnected() ? "ok" : "muted"}
@@ -556,9 +554,8 @@ function TokenRow(props: {
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
 }) {
-  const status = createMemo(() =>
-    props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active"),
-  );
+  const status = () =>
+    props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active");
   const scopes = createMemo(() => formatList(props.tokenSummary.scopes));
   const when = createMemo(() =>
     formatRelativeTimestamp(
@@ -664,16 +661,12 @@ function PendingDevice(props: {
   devices: DevicesProps;
   paired?: PairedDevice;
 }) {
-  const name = createMemo(
-    () => normalizeOptionalString(props.req.displayName) || props.req.deviceId,
-  );
+  const name = () => normalizeOptionalString(props.req.displayName) || props.req.deviceId;
   const age = createMemo(() =>
     props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
   );
   const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
-  const repair = createMemo(() =>
-    props.req.isRepair ? ` · ${t("devices.inventory.repair")}` : "",
-  );
+  const repair = () => (props.req.isRepair ? ` · ${t("devices.inventory.repair")}` : "");
   return (
     <div class="settings-row device-entry">
       <DeviceTile icon={<Icon name="monitorSmartphone" />} />

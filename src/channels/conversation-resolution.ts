@@ -137,9 +137,8 @@ function resolveFallbackConversationTargetId(params: {
           allowNumericShorthand: params.allowNumericTopicShorthand ?? false,
         });
   return (
-    resolveConversationIdFromTargets({
-      targets: [withoutTopic],
-    }) ?? (withoutTopic !== target ? withoutTopic : undefined)
+    resolveConversationIdFromTargets([withoutTopic]) ??
+    (withoutTopic !== target ? withoutTopic : undefined)
   );
 }
 

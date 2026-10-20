@@ -471,7 +471,7 @@ const routedCommandDefinitions = {
   }),
   "agents-list": defineRoutedCommand(parseAgentsListRouteArgs, async (args) => {
     const { agentsListCommand } = await import("../commands/agents.commands.list.js");
-    await agentsListCommand(args, defaultRuntime);
+    await agentsListCommand(args);
   }),
   "config-get": defineRoutedCommand(parseConfigGetRouteArgs, async (args) => {
     const { runConfigGet } = await import("./config-cli.js");

@@ -191,7 +191,7 @@ describe("session workspace state", () => {
       agentId: "main",
     });
     const skeleton = mount.querySelector("openclaw-panel-loading-skeleton");
-    expect(skeleton).toMatchObject({ variant: "files" });
+    expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("files");
     expect(mount.textContent).not.toContain("Loading session workspace");
 
     list.resolve({

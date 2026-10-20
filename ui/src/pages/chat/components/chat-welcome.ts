@@ -41,12 +41,7 @@ export function resolveAssistantDisplayAvatar(props: {
   };
 }
 
-export type WelcomeRecentSession = {
-  key: string;
-  name: string;
-  subtitle: string | undefined;
-  updatedAt: number | null | undefined;
-};
+export type WelcomeRecentSession = ReturnType<typeof prepareWelcomeRecentSessions>[number];
 
 /**
  * Recent user-created chats for the welcome screen: the sidebar's visible-row
@@ -58,7 +53,7 @@ export function prepareWelcomeRecentSessions(
   sessions: SessionsListResult | null | undefined,
   sessionKey: string | undefined,
   defaultAgentId: string,
-): WelcomeRecentSession[] {
+) {
   if (!sessions) {
     return [];
   }

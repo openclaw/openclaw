@@ -50,8 +50,6 @@ vi.mock("./status.scan-overview.js", () => ({
     const scan = await mocks.scan(opts);
     return {
       ...scan,
-      coldStart: false,
-      hasConfiguredChannels: false,
       skipColdStartNetworkChecks: false,
       gatewaySnapshot: {
         gatewayConnection: scan.gatewayConnection,

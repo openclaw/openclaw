@@ -532,6 +532,8 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         agentId: "main",
         storePath: state.storePath,
         sessionKey,
+        // This cell permits metadata to appear while the captured Stop owners stay fixed.
+        matchGeneration: backend !== "new-session",
       });
       const releasePreparation = createDeferred();
       const isCommandTargetCurrent = Object.assign(

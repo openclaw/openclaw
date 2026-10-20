@@ -114,15 +114,7 @@ export function durableMessageBatchMayHaveReachedRecipient(
 
 export type SerializedDurableMessagePayloadOutcome =
   | { index: number; status: "sent"; resultCount: number }
-  | {
-      index: number;
-      status: "suppressed";
-      reason: DurableMessageSuppressionReason;
-      hookEffect?: {
-        cancelReason?: string;
-        metadata?: Record<string, unknown>;
-      };
-    }
+  | Extract<DurableMessagePayloadDeliveryOutcome, { status: "suppressed" }>
   | {
       index: number;
       status: "failed";

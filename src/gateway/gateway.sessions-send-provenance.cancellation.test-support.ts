@@ -208,11 +208,9 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
             expect(scenario.accepted).toMatchObject({ status: "accepted" });
             expect(scenario.sourceRequests.length).toBeGreaterThan(0);
             expect(scenario.targetRequests.length).toBeGreaterThan(0);
-            expect(
-              [...scenario.sourceRequests, ...scenario.targetRequests].some((request) =>
-                request.tools.includes("message"),
-              ),
-            ).toBe(false);
+            expect(scenario.targetRequests[1]?.output).toMatch(
+              /^(Tool message not found|message is not available in this turn\.)/,
+            );
           }
         } finally {
           resume.resolve();

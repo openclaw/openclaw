@@ -53,11 +53,7 @@ it("settles accepted media provenance cleanup across the close prelude before sh
       ...createGatewayMaintenanceStateForTest(),
       scheduler: kernel.scheduler,
       isNixMode: true,
-      runManagedOutgoingMediaGc: async () => ({
-        deletedRecordCount: 0,
-        deletedFileCount: 0,
-        retainedCount: 0,
-      }),
+      runManagedOutgoingMediaGc: async () => {},
     });
     kernel.kernel.setMaintenanceHandles(maintenance);
     maintenance.startMediaCleanup();

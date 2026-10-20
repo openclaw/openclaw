@@ -10,6 +10,7 @@ import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -71,7 +72,7 @@ async function dispatchMessage(params: {
   event: FeishuMessageEvent;
   botOpenId?: string;
 }) {
-  currentRuntimeConfig = params.cfg;
+  currentRuntimeConfig = withFeishuRuntimeDefaults(params.cfg);
   await handleFeishuMessage({ ...params, runtime: createRuntimeEnv() });
 }
 

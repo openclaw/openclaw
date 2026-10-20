@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -351,48 +351,9 @@ async function handleMockOpenAiRequest(
     body += String(chunk);
   }
   requestBodies.push(body);
-  writeMockOpenAiResponse(response);
-}
-
-function writeMockOpenAiResponse(response: ServerResponse): void {
-  const text = "OK";
-  const message = {
-    type: "message",
-    id: "guided-inference-message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: "guided-inference-response",
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  writeOpenAiResponsesSse(response, events);
+  writeOpenAiResponsesText(response, {
+    text: "OK",
+    messageId: "guided-inference-message",
+    responseId: "guided-inference-response",
+  });
 }

@@ -283,22 +283,11 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     const workerEnv = params.workerEnv(directory);
     const outputController = new AbortController();
     let progressPending = Promise.resolve();
+    let progressWriting = false;
+    let nextProgress: UpdateRunStep | undefined;
     let progressFailure: { error: unknown } | undefined;
     const failProgress = (error: unknown) => {
-      if (!progressFailure) {
-        progressFailure = { error };
-      } else if (
-        !hasCommandProcessCleanupError(progressFailure.error) &&
-        hasCommandProcessCleanupError(error)
-      ) {
-        progressFailure = {
-          error: new AggregateError(
-            [progressFailure.error, error],
-            "Update snapshot progress recording failed",
-            { cause: progressFailure.error },
-          ),
-        };
-      }
+      progressFailure = { error };
       outputController.abort(error);
     };
     let stderrOutputExceeded = false;
@@ -319,19 +308,28 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           { env: params.env, stateDir: params.stateDir },
           { maxLength: UPDATE_RUN_TEXT_LIMIT },
         );
-        try {
-          // Invoke at emission so the writer captures this source before it yields.
-          const recording = Promise.resolve(
-            params.onProgress?.({
-              step: "candidate-state-snapshot",
-              status: "in_progress",
-              startedAtMs,
-              detail,
-            }),
-          ).catch(failProgress);
-          progressPending = Promise.all([progressPending, recording]).then(() => {});
-        } catch (error) {
-          failProgress(error);
+        nextProgress = {
+          step: "candidate-state-snapshot",
+          status: "in_progress",
+          startedAtMs,
+          detail,
+        };
+        if (!progressWriting && !progressFailure) {
+          progressWriting = true;
+          progressPending = (async () => {
+            try {
+              // Keep one write in flight and only the latest advisory observation behind it.
+              while (nextProgress) {
+                const step = nextProgress;
+                nextProgress = undefined;
+                await params.onProgress?.(step);
+              }
+            } catch (error) {
+              failProgress(error);
+            } finally {
+              progressWriting = false;
+            }
+          })();
         }
         if (
           progress.snapshot?.status === "completed" &&

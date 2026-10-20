@@ -7,6 +7,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { normalizeAnyChannelId } from "../registry-normalize.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -98,6 +99,8 @@ describe("listChannelPlugins", () => {
 
     expect(listChannelPlugins()).toEqual([firstPlugin]);
     expect(getLoadedChannelPlugin("duplicate")).toBe(firstPlugin);
+    expect(normalizeAnyChannelId("DUPLICATE")).toBe("duplicate");
+    expect(getLoadedChannelPlugin("DUPLICATE")).toBeUndefined();
     expect(getChannelPlugin("duplicate")).toBe(firstPlugin);
     expect(resolveChannelPluginRegistration("duplicate")).toEqual({
       plugin: firstPlugin,
@@ -167,6 +170,7 @@ describe("listChannelPlugins", () => {
     );
     setActivePluginRegistry(registry);
 
+    expect(normalizeAnyChannelId("alpha")).toBe("alpha");
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(resolveChannelPluginRegistration("zeta")?.plugin.meta.label).toBe("zeta");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
@@ -174,6 +178,7 @@ describe("listChannelPlugins", () => {
 
     setActivePluginRegistry(registry);
 
+    expect(normalizeAnyChannelId("zeta")).toBe("zeta");
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
     expect(buildCount).toBe(2);

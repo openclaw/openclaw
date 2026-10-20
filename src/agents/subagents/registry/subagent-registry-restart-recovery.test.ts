@@ -619,6 +619,22 @@ describe("interrupted requester-settle continuation ownership", () => {
     };
   }
 
+  it("does not mark a hard-killed incoming continuation as an orphan", async () => {
+    const { worker } = cohort();
+    worker.execution.status = "running";
+    worker.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+    Object.assign(mocks.entries[childSessionKey]!, {
+      status: undefined,
+      abortedLastRun: false,
+    });
+    rotateAgentEventLifecycleGeneration();
+
+    expect(await recover(worker)).toEqual({ status: "handled" });
+    expect(mocks.entries[childSessionKey]?.abortedLastRun).toBe(false);
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+    expect(restartRecoveryTestHarness.warn).not.toHaveBeenCalled();
+  });
+
   it.each([
     { privateCompletion: false, physicalLocator: false, quiet: false, legacy: false },
     { privateCompletion: false, physicalLocator: true, quiet: false, legacy: false },

@@ -209,6 +209,12 @@ async function buildAgentsApiTurnContext(
     buildHarnessVisibleReplyGuidance({
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       messageToolAvailable: toolNames.has("message"),
+      currentConversation: {
+        agentSessionKey: params.sessionKey,
+        currentChannelProvider: params.messageChannel ?? params.messageProvider,
+        currentChannelId: params.currentChannelId,
+        currentMessagingTarget: params.currentMessagingTarget,
+      },
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
     params.permissionChange?.notice,

@@ -36,7 +36,6 @@ import {
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   listLegacySessionTranscriptFiles,
@@ -222,10 +221,6 @@ export async function runSessionStartupMigration(params: {
   assertCurrent?: () => void;
   log: SessionStartupMigrationLogger;
   handoffDatabase?: (database: OpenClawAgentDatabaseOptions) => Promise<void>;
-  deps?: {
-    migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
-    resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
-  };
 }): Promise<void> {
   params.assertCurrent?.();
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
@@ -233,10 +228,8 @@ export async function runSessionStartupMigration(params: {
   params.assertCurrent?.();
   const deletionRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
   let deletionSnapshot: ReturnType<typeof deletionRead.read> | undefined;
-  const resolveTargets =
-    params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
   const admittedTargets = () =>
-    resolveTargets(params.cfg, {
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, {
       env,
       agentIds: params.agentIds,
       registeredDatabases: registeredDatabaseRows,
@@ -258,9 +251,7 @@ export async function runSessionStartupMigration(params: {
   );
   const { assertAcpSessionKeysMigratedForStartup, assertEmbeddedAcpMetadataMigratedForStartup } =
     await import("../../acp/runtime/session-meta-startup.js");
-  const migrateLegacyMain =
-    params.deps?.migrateLegacyMainSessionKeys ??
-    (await import("./legacy-main-session-migration.js")).migrateLegacyMainSessionKeys;
+  const { migrateLegacyMainSessionKeys } = await import("./legacy-main-session-migration.js");
   // Both inspections are read-only; join them before repair, including on refusal.
   const [, result] = await settleCurrentReadPreparations([
     params.agentIds
@@ -272,7 +263,7 @@ export async function runSessionStartupMigration(params: {
           undefined,
           params.assertCurrent,
         ),
-    migrateLegacyMain({ cfg: params.cfg, env, mode: "detect" }),
+    migrateLegacyMainSessionKeys({ cfg: params.cfg, env, mode: "detect" }),
   ] as const);
   params.assertCurrent?.();
   if (result.warnings.length > 0) {

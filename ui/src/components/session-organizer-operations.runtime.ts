@@ -291,6 +291,14 @@ export async function renameSession(
   await showInputDialog({
     signal: deps.sessionData.sessionDraftSignal,
     gateway: scope.gateway,
+    canSubmit: () =>
+      readSessionMethodAccess(scope.gateway.snapshot, {
+        method: "sessions.patch",
+        params: { key: session.key, label: null },
+        sessionScope: true,
+        session,
+        allowDeferred: true,
+      }).allowed,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
     submit: async (value) => {
@@ -298,7 +306,7 @@ export async function renameSession(
       if (!patch) {
         return null;
       }
-      const currentScope = deps.sessionData.beginSessionMutation();
+      const currentScope = deps.sessionData.beginSessionMutation(true);
       if (!currentScope) {
         return t("sessionsView.actionRequiresConnection");
       }

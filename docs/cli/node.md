@@ -336,7 +336,10 @@ openclaw node identity --json
 ```
 
 It prints the device ID and public key from the `primary` row in
-`state/openclaw.sqlite` and never creates the database or a new identity.
+`client/credentials.sqlite` and never creates the database or a new identity.
+Use `--identity node` or `--identity shareExtension` to inspect the corresponding
+native identity profile. An incomplete credential migration requires
+`openclaw doctor --fix` from the matching installation.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -372,11 +375,11 @@ identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| State                                                                   | Purpose                                                                                                                          |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
-| `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
-| `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+| State                                                                              | Purpose                                                                                                                          |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`)            | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `client/credentials.sqlite` (`device_identities`, `primary`)                       | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `client/credentials.sqlite` (`device_auth_tokens`, `gateway_origin_device_tokens`) | Paired device tokens, keyed by cryptographic device ID, role, and Gateway scope.                                                 |
 
 `gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
 primary device identity in the Gateway's state directory. Overriding `--node-id`

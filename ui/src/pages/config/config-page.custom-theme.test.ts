@@ -29,7 +29,7 @@ function createCustomThemePage(settings: Partial<UiSettings> = {}) {
       },
       patchForm: vi.fn(),
     },
-    theme: { recordServerSelection: vi.fn(), refresh: vi.fn(), serverSelection: null },
+    theme: { recordServerSelection: vi.fn(), refresh: vi.fn() },
   } as unknown as ApplicationContext;
   const page = mountConfigPageState(context, { pageId: "appearance" });
   return { page, context, props: page.state.configProps };

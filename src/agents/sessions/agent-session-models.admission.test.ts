@@ -258,7 +258,7 @@ describe("model transitions after SQLite write admission", () => {
         context: sessionManager.buildSessionContext(),
         model: session.model?.id,
         thinking: session.thinkingLevel,
-        defaultModel: settingsManager.getDefaultModel(),
+        defaultModel: settingsManager.getGlobalSettings().defaultModel,
         defaultThinking: settingsManager.getDefaultThinkingLevel(),
       });
       const beforeRows = readRows();
@@ -295,7 +295,7 @@ describe("model transitions after SQLite write admission", () => {
       });
       expect(session.model?.id).toBe(lastModel.id);
       expect(session.thinkingLevel).toBe("medium");
-      expect(settingsManager.getDefaultModel()).toBe(session.model?.id);
+      expect(settingsManager.getGlobalSettings().defaultModel).toBe(session.model?.id);
       expect(settingsManager.getDefaultThinkingLevel()).toBe(session.thinkingLevel);
       expect(transitions).toHaveLength(1);
       expect(thinkingSelections).toHaveLength(0);
@@ -396,8 +396,8 @@ describe("model transitions after SQLite write admission", () => {
       }
       const before = await loadTranscriptEvents(target);
       const defaults = {
-        provider: settingsManager.getDefaultProvider(),
-        model: settingsManager.getDefaultModel(),
+        provider: settingsManager.getGlobalSettings().defaultProvider,
+        model: settingsManager.getGlobalSettings().defaultModel,
         thinking: settingsManager.getDefaultThinkingLevel(),
       };
       const replacement =
@@ -450,8 +450,8 @@ describe("model transitions after SQLite write admission", () => {
           },
         ]);
         expect({
-          provider: settingsManager.getDefaultProvider(),
-          model: settingsManager.getDefaultModel(),
+          provider: settingsManager.getGlobalSettings().defaultProvider,
+          model: settingsManager.getGlobalSettings().defaultModel,
           thinking: settingsManager.getDefaultThinkingLevel(),
         }).toEqual(defaults);
       } else if (kind === "storage-root") {
@@ -470,7 +470,7 @@ describe("model transitions after SQLite write admission", () => {
       if (kind === "extension") {
         expect(session.model?.id).toBe(nextModel.id);
         expect(session.thinkingLevel).toBe("medium");
-        expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
+        expect(settingsManager.getGlobalSettings().defaultModel).toBe(nextModel.id);
         expect(settingsManager.getDefaultThinkingLevel()).toBe("medium");
       } else if (kind !== "storage-root") {
         expect.soft(session.model?.id).toBe(startModel.id);
@@ -518,7 +518,7 @@ describe("model transitions after SQLite write admission", () => {
         expect(await loadTranscriptEvents(replacement)).toEqual(replacementEntries);
         expect(session.model?.id).toBe(nextModel.id);
         expect(session.thinkingLevel).toBe("high");
-        expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
+        expect(settingsManager.getGlobalSettings().defaultModel).toBe(nextModel.id);
         expect(settingsManager.getDefaultThinkingLevel()).toBe("high");
         if (failure !== undefined || selectedModel === startModel) {
           expect(failure).toMatchObject({ committedTarget: target });
@@ -543,7 +543,7 @@ describe("model transitions after SQLite write admission", () => {
       const failure: unknown = await session.setModel(lastModel).catch((error: unknown) => error);
       expect(readModelChanges()).toEqual([startModel.id, nextModel.id, lastModel.id]);
       expect(session.model?.id).toBe(lastModel.id);
-      expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
+      expect(settingsManager.getGlobalSettings().defaultModel).toBe(nextModel.id);
       expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
       expect(failure).toMatchObject({
         committedTarget: target,
@@ -637,7 +637,7 @@ describe("model transitions after SQLite write admission", () => {
         }
         expect(invalidated).toBe(true);
         expect(session.model?.id).toBe(changesExtension ? selectedModel.id : nextModel.id);
-        expect(settingsManager.getDefaultModel()).toBe(
+        expect(settingsManager.getGlobalSettings().defaultModel).toBe(
           changesExtension ? selectedModel.id : nextModel.id,
         );
         if (changesExtension) {
@@ -704,7 +704,7 @@ describe("model transitions after SQLite write admission", () => {
     const expectedEntry = { type: "thinking_level_change", thinkingLevel: "low" };
     expect(JSON.parse(String(appended[0]?.event_json))).toMatchObject(expectedEntry);
     expect(session.model?.id).toBe(nextModel.id);
-    expect(settingsManager.getDefaultModel()).toBe(nextModel.id);
+    expect(settingsManager.getGlobalSettings().defaultModel).toBe(nextModel.id);
     expect(session.thinkingLevel).toBe("low");
     expect(settingsManager.getDefaultThinkingLevel()).toBe("low");
     for (const read of [
@@ -867,7 +867,7 @@ describe("model transitions after SQLite write admission", () => {
       expect(after.slice(before.length)).toMatchObject([expectedEntry]);
       expect.soft(session.model?.id).toBe(nextModel.id);
       expect.soft(session.thinkingLevel).toBe("medium");
-      expect.soft(settingsManager.getDefaultModel()).toBe(nextModel.id);
+      expect.soft(settingsManager.getGlobalSettings().defaultModel).toBe(nextModel.id);
       expect.soft(settingsManager.getDefaultThinkingLevel()).toBe("medium");
       expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
       expect(failure).toMatchObject({

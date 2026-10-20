@@ -32,7 +32,7 @@ const lifecycleSource: string = runInNewContext(
   { MANAGED_HANDOFF_LEASE_SOURCE },
 );
 const finalizerSource = sourceBetween(
-  "  } finally {\n    clearTimeout(parentExitDeadline);",
+  "  } finally {\n    try { await finishManagedUpdateRun(); }",
   "\n})().catch((err) =>",
 ).replace(
   "${JSON.stringify(SYSTEM_SERVICE_UPDATE_SETTLED_MARKER)}",
@@ -158,7 +158,7 @@ function createBoundary(action: "update" | "triage" = "update") {
     let restorationArmed = true;
     let foregroundParked = false, foregroundClosed = false, foregroundRespawn = false;
     let updaterStarted = true;
-    let finishBeforeParkNotice, parentExitDeadline;
+    let finishBeforeParkNotice;
     ${lifecycleSource}
     ${MANAGED_HANDOFF_RESULT_SOURCE}
     ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}

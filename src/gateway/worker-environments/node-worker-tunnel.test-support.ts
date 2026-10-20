@@ -242,10 +242,8 @@ export function manifestCaptureOutput(manifestRef: string): string {
     memo: [],
     metrics: {
       contentHashCount: 0,
-      contentHashDurationMs: 0,
       memoHitCount: 0,
       memoTruncatedCount: 0,
-      totalDurationMs: 0,
     },
   });
 }

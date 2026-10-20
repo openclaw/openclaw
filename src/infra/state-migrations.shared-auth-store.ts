@@ -171,15 +171,6 @@ function storeConflicts(sourceRow: StoreRow, targetRow: StoreRow): string[] {
   return conflicts;
 }
 
-function assertRowsMatch(expected: AuthRows, actual: AuthRows, label: string): void {
-  if (
-    (expected.store !== null && !rowsMatch(expected.store, actual.store)) ||
-    (expected.state !== null && !rowsMatch(expected.state, actual.state))
-  ) {
-    throw new Error(`shared auth relocation ${label} verification failed`);
-  }
-}
-
 function recordMigrationLedger(
   params: Omit<MigrationSnapshot, "env"> & {
     database: EngineConnection;
@@ -384,7 +375,6 @@ function copyRowsToState(params: MigrationSnapshot): AuthRows {
 
 function advanceMigration(
   params: MigrationSnapshot & {
-    rows: AuthRows;
     stage: "ownership-flipped" | "completed";
   },
 ): boolean {
@@ -392,7 +382,6 @@ function advanceMigration(
   const flipped = flipping && resolveSharedAuthStoreOwnership(params.env).location !== "state-db";
   runOpenClawStateWriteTransaction(
     ({ db: database }) => {
-      assertRowsMatch(params.rows, readTargetRows(database), params.stage);
       if (flipping) {
         const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
         const ownership = {
@@ -443,10 +432,6 @@ async function cleanupSourceRows(params: {
           database,
           db.deleteFrom("auth_profile_state").where("state_key", "=", SOURCE_STORE_KEY),
         );
-        const after = readSharedAuthLegacyRowsFromDatabase(database);
-        if (after.store || after.state) {
-          throw new Error("legacy shared auth rows remain after cleanup");
-        }
         return before.store !== null || before.state !== null;
       },
       {
@@ -556,14 +541,14 @@ export async function migrateSharedAuthStore(params: {
         now,
       };
       const rows = copyRowsToState(snapshot);
-      const ownershipFlipped = advanceMigration({ ...snapshot, rows, stage: "ownership-flipped" });
+      const ownershipFlipped = advanceMigration({ ...snapshot, stage: "ownership-flipped" });
       const sourceCleaned = await cleanupSourceRows({
         env,
         sourcePath: params.detected.sourcePath,
         integrityCheck: params.integrityCheck,
       });
       const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
-      advanceMigration({ ...snapshot, rows, stage: "completed" });
+      advanceMigration({ ...snapshot, stage: "completed" });
       return {
         changes: [
           ...(ownershipFlipped && relocatedRows

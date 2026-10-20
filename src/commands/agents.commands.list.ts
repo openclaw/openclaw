@@ -17,12 +17,13 @@ import type { AgentBinding, AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../plugins/official-external-plugin-repair-hints.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
+import { writeRuntimeJson, defaultRuntime as runtime } from "../runtime.js";
 import {
   evaluateAgentDatabaseAdmissions,
   hasAgentDatabaseAdmissions,
@@ -423,10 +424,7 @@ async function enrichProviderSummaries(
   }
 }
 
-export async function agentsListCommand(
-  opts: AgentsListOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsListCommand(opts: AgentsListOptions) {
   const cfg = await requireValidConfig(runtime, { adoptPluginMetadata: true });
   if (!cfg) {
     return;
@@ -449,13 +447,9 @@ export async function agentsListCommand(
       }
     }
   }
-  const bindingMap = new Map<string, AgentRouteBinding[]>();
-  for (const binding of listRouteBindings(cfg)) {
-    const agentId = normalizeAgentId(binding.agentId);
-    const list = bindingMap.get(agentId) ?? [];
-    list.push(binding);
-    bindingMap.set(agentId, list);
-  }
+  const bindingMap = groupRecords(listRouteBindings(cfg), (binding) =>
+    normalizeAgentId(binding.agentId),
+  );
 
   if (opts.bindings) {
     for (const summary of summaries) {

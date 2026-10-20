@@ -73,7 +73,12 @@ const UPGRADE_SCOPES = [
 ];
 
 function deviceIdentityPath(label: string): string {
-  return path.join(tempDirs.make("openclaw-identity-scopes-"), `${label}.sqlite`);
+  return path.join(
+    tempDirs.make("openclaw-identity-scopes-"),
+    label,
+    "client",
+    "credentials.sqlite",
+  );
 }
 
 function proxyAuth(identityScopes?: GatewayAuthConfig["identityScopes"]): GatewayAuthConfig {

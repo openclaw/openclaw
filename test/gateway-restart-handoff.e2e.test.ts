@@ -184,7 +184,7 @@ it.skipIf(process.platform !== "linux")(
               role: "operator",
               scopes: ["operator.admin", "operator.read", "operator.write"],
               deviceIdentity: loadOrCreateDeviceIdentity({
-                path: gateway.state.path("client-device.sqlite"),
+                path: gateway.state.path("client-device", "client", "credentials.sqlite"),
               }),
               onEvent: ({ event, payload }) => {
                 if (

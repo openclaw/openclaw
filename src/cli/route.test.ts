@@ -153,10 +153,12 @@ describe("tryRouteCli", () => {
     {
       command: "--log-level=debug agents list --json",
       expected: { json: true, bindings: false, tree: false },
+      singleArgument: true,
     },
     {
       command: "agents --json --bindings",
       expected: { json: true, bindings: true, tree: false },
+      singleArgument: true,
     },
     {
       command:

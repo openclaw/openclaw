@@ -6,7 +6,7 @@
  * Grammar opinions (indented `##`, empty `## `, ordered lists, nested
  * sub-bullets) live in lint rules, not the parser.
  *
- * Byte-fidelity: `parseMd(raw).ast.raw === raw`.
+ * Byte-fidelity: `parseMd(raw).raw === raw`.
  *
  * @module @openclaw/oc-path/parse
  */
@@ -14,7 +14,7 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isScalar, parseDocument } from "yaml";
-import type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult } from "./ast.js";
+import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
 type Token = ReturnType<MarkdownItParser["parse"]>[number];
@@ -35,12 +35,11 @@ export function parseMdItemKeyValue(text: string): AstItem["kv"] {
       };
 }
 
-export function parseMd(raw: string): ParseResult {
-  const diagnostics: Diagnostic[] = [];
+export function parseMd(raw: string): MdAst {
   const withoutBom = raw.startsWith(BOM) ? raw.slice(BOM.length) : raw;
   const lines = withoutBom.split(/\r?\n/);
 
-  const fm = detectFrontmatter(lines, diagnostics);
+  const fm = detectFrontmatter(lines);
   const bodyStartIdx = fm === null ? 0 : fm.endLine + 1;
   const bodyLines = lines.slice(bodyStartIdx);
   const bodyFileLine = bodyStartIdx + 1;
@@ -49,15 +48,12 @@ export function parseMd(raw: string): ParseResult {
   const { preamble, blocks } = walkBlocks(tokens, bodyLines, bodyFileLine);
 
   return {
-    ast: {
-      kind: "md",
-      raw,
-      frontmatter: fm?.entries ?? [],
-      ...(fm === null ? {} : { frontmatterEndLine: fm.endLine + 1 }),
-      preamble,
-      blocks,
-    },
-    diagnostics,
+    kind: "md",
+    raw,
+    frontmatter: fm?.entries ?? [],
+    ...(fm === null ? {} : { frontmatterEndLine: fm.endLine + 1 }),
+    preamble,
+    blocks,
   };
 }
 
@@ -67,10 +63,7 @@ interface FrontmatterRange {
   readonly endLine: number;
 }
 
-function detectFrontmatter(
-  lines: readonly string[],
-  diagnostics: Diagnostic[],
-): FrontmatterRange | null {
+function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   if (lines.length < 2 || lines.at(0) !== FENCE) {
     return null;
   }
@@ -82,12 +75,6 @@ function detectFrontmatter(
     }
   }
   if (closeIndex === -1) {
-    diagnostics.push({
-      line: 1,
-      message: "frontmatter opens with --- but never closes",
-      severity: "warning",
-      code: "OC_FRONTMATTER_UNCLOSED",
-    });
     return null;
   }
   const entries: FrontmatterEntry[] = [];

@@ -9,13 +9,6 @@ export type KillScope = {
   stateContext: OpenClawStateWorkerContext;
 };
 
-export type KillPublicationPreparation<T> = {
-  prepare: (
-    publish: (prepareRows?: (publishResult: () => void) => Promise<void>) => Promise<void>,
-  ) => Promise<void>;
-  publishSnapshot?: (result: T) => void;
-};
-
 /** Exact source/target references retained across a kill's admission cleanup. */
 export type SubagentKillInputSnapshot = {
   input: SessionControllerInput;

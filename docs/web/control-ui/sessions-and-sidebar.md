@@ -129,9 +129,10 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears in the sidebar immediately, at the top of the
-session list or under its agent in the agent roster, clearing the previous chat’s
-highlight without changing the saved session until creation is accepted.
+A temporary selected row appears at the top of the sidebar session list
+immediately, clearing the previous chat’s highlight without changing the saved
+session until creation is accepted. The agent roster (**Show all**) lists agents
+rather than sessions, so it shows no temporary row.
 The temporary row has no session actions; a failed creation restores the draft.
 Sessions created by another client or an agent appear through the sidebar's batched
 refresh, normally within five seconds. A busy Gateway can extend the refresh interval

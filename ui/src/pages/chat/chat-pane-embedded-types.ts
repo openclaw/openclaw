@@ -7,6 +7,7 @@ import type {
   BrowserTabSelection,
   BrowserTabTarget,
 } from "../../components/browser/browser-target.ts";
+import type { HostDesktopRuntimeConfig } from "../../components/desktop/host-desktop-setup.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
@@ -18,10 +19,9 @@ import type {
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
-import type {
-  SessionWorkspaceProps,
-  SessionWorkspaceState,
-} from "./components/chat-session-workspace-types.ts";
+import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
+import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
+import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
@@ -63,6 +63,7 @@ export type SidebarPanelDefinitionParams = {
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
+  desktopRuntimeConfig: HostDesktopRuntimeConfig | null;
   desktopFocusHref: string;
   portalPresented?: PresentationValue;
   onDesktopFocusTargetChange: (
@@ -75,6 +76,7 @@ export type SidebarPanelDefinitionParams = {
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  companionModelControls?: ChatModelControlsProps;
   companionPresented: PresentationValue;
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
@@ -82,6 +84,7 @@ export type SidebarPanelDefinitionParams = {
   onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   connected: boolean;
   onClearCompanion: () => void;
+  onCreateClaw?: () => void;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;

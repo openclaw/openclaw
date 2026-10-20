@@ -506,18 +506,11 @@ export async function writeMemoryWikiCompiledCache(
   snapshot: MemoryWikiCompiledCacheSnapshot,
   publicationId: string,
   parentPublicationId: string | null,
-  validatePublication: () => Promise<void>,
   commitPublication: () => Promise<void>,
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   const store = requireConfiguredStore();
   const { activeVault, serializedSnapshot } = await store.write(config, snapshot, publicationId);
-  try {
-    await validatePublication();
-  } catch (error) {
-    await store.deletePublication(config, publicationId);
-    throw error;
-  }
   if (resolveActiveVault(config) !== activeVault) {
     await store.deletePublication(config, publicationId);
     throw new Error("Memory Wiki cache owner retired before publication.");

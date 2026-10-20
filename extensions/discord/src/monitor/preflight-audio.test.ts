@@ -63,7 +63,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
         agentDir: undefined,
       });
       expect(result).toEqual({
-        hasAudioAttachment: true,
         hasTypedText: false,
         transcript: "hello from dm",
       });
@@ -84,7 +83,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(result).toEqual({
-      hasAudioAttachment: true,
       hasTypedText: true,
     });
   });
@@ -109,7 +107,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(result).toEqual({
-      hasAudioAttachment: false,
       hasTypedText: false,
     });
   });

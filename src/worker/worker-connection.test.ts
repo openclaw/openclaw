@@ -655,7 +655,7 @@ it("isolates listener failures and binds terminal errors during nested transitio
   expect(observed).toEqual(["fenced", "stopped"]);
 });
 
-describe("WorkerConnection inference listener isolation", () => {
+describe("WorkerConnection inference callback isolation", () => {
   it.each([
     ["invalid payload", { ...inferenceEventFrame(1), payload: {} }],
     [
@@ -672,11 +672,10 @@ describe("WorkerConnection inference listener isolation", () => {
         payload: { ...inferenceTerminalFrame(1).payload, runEpoch: 2 },
       },
     ],
-  ])("rejects %s before notifying inference listeners", (_label, frame) => {
+  ])("rejects %s before notifying the inference callback", (_label, frame) => {
     const dispatcher = createFrameDispatcher();
     const listener = vi.fn();
-    dispatcher.onInferenceEvent(listener);
-    dispatcher.onInferenceTerminal(listener);
+    dispatcher.onInferenceFrame = listener;
     const close = vi.fn();
     const socket = { readyState: WebSocket.OPEN, close };
 
@@ -690,20 +689,18 @@ describe("WorkerConnection inference listener isolation", () => {
     "continues %s delivery after observer failures",
     (kind) => {
       const dispatcher = createFrameDispatcher();
-      const subscribe =
-        kind === "event"
-          ? dispatcher.onInferenceEvent.bind(dispatcher)
-          : dispatcher.onInferenceTerminal.bind(dispatcher);
       const makeFrame = kind === "event" ? inferenceEventFrame : inferenceTerminalFrame;
       const observed: number[] = [];
-      subscribe(() => {
+      const socket = { readyState: WebSocket.OPEN, close: vi.fn() };
+      dispatcher.onInferenceFrame = () => {
         throw new Error("induced observer failure");
-      });
-      subscribe((frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame) => {
+      };
+      expect(() => dispatcher.dispatchReadyFrame(makeFrame(1), socket)).not.toThrow();
+      dispatcher.onInferenceFrame = (frame) => {
         observed.push(frame.payload.seq);
-      });
+      };
       for (const seq of [1, 2]) {
-        expect(() => dispatcher.dispatchReadyFrame(makeFrame(seq), {} as WebSocket)).not.toThrow();
+        expect(() => dispatcher.dispatchReadyFrame(makeFrame(seq), socket)).not.toThrow();
       }
       expect(observed).toEqual([1, 2]);
     },

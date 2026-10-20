@@ -19,13 +19,11 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
-import { SettingsManager } from "./settings-manager.js";
 import type { SettingsScope } from "./settings-storage.js";
-import { FileSettingsStorage } from "./settings-storage.js";
+import { FileSettingsStorage, readSettingsScope } from "./settings-storage.js";
 
 const fixtures = createFixtureLifetime();
 const storageUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsStorage);
-const managerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsManager);
 
 function settingsFixture(label: string, scope: SettingsScope = "global", initial?: string) {
   const root = fixtures.createTempDir(`openclaw-settings-${label}-`);
@@ -138,13 +136,13 @@ function startSettingsProcess(source: string, args: string[], signal: AbortSigna
 const readerSource = String.raw`
               import fs from "node:fs";
               import { syncBuiltinESMExports } from "node:module";
-              const [moduleUrl, root, agentDir, settingsPath] = fixtureArgs;
-              const { SettingsManager } = await import(moduleUrl);
+              const [moduleUrl, root, agentDir, scope, settingsPath] = fixtureArgs;
+              const { FileSettingsStorage, readSettingsScope } = await import(moduleUrl);
               const originalExists = fs.existsSync;
               const originalLstat = fs.lstatSync;
               let committedDuringRead = false;
               // Preserve the observation, then commit before the next probe. A file-first
-              // reader returns stale defaults; the lock-first reader sees the committed theme.
+              // reader returns stale defaults; the lock-first reader sees the committed thinking level.
               const observe = (observed, selected) => {
                 if (selected && !committedDuringRead) {
                   committedDuringRead = true;
@@ -156,11 +154,11 @@ const readerSource = String.raw`
               fs.existsSync = (filePath) => observe(originalExists(filePath), filePath === settingsPath);
               fs.lstatSync = (...args) => observe(originalLstat(...args), args[0] === settingsPath + ".lock");
               syncBuiltinESMExports();
-              const manager = SettingsManager.create(root, agentDir);
+              const result = readSettingsScope(new FileSettingsStorage(root, agentDir), scope);
               console.log(JSON.stringify({
                 committedDuringRead,
-                errors: manager.drainErrors(),
-                theme: manager.getTheme(),
+                errors: result.loadError ? [result.loadError] : [],
+                thinkingLevel: result.settings.defaultThinkingLevel,
               }));
             `;
 const contenderSource = String.raw`
@@ -197,22 +195,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   syncBuiltinESMExports();
   await fixtures.cleanup();
-});
-
-it("preserves provider retry settings across an upgraded settings write", async () => {
-  const provider = { maxRetries: 7, timeoutMs: 1_000 };
-  const { root, agentDir, settingsPath } = settingsFixture(
-    "retry-migration",
-    "global",
-    JSON.stringify({ retry: { provider } }),
-  );
-  const manager = SettingsManager.create(root, agentDir);
-  expect(manager.drainErrors()).toEqual([]);
-  expect(manager.getProviderRetrySettings()).toMatchObject(provider);
-  manager.setRetryEnabled(false);
-  await manager.flush();
-  const stored = JSON.parse(readFileSync(settingsPath, "utf8"));
-  expect(stored.retry.provider).toEqual(provider);
 });
 
 it("keeps the original settings when a write fails partway", () => {
@@ -306,10 +288,9 @@ it("loads absent unlocked settings without syncing writer sidecars", () => {
   mkdirSync(join(root, ".openclaw"));
   const fsync = vi.spyOn(fs, "fsyncSync");
   syncBuiltinESMExports();
-  const manager = SettingsManager.create(root, agentDir);
-  expect(manager.drainErrors()).toEqual([]);
-  expect(manager.getGlobalSettings()).toEqual({});
-  expect(manager.getProjectSettings()).toEqual({});
+  const storage = new FileSettingsStorage(root, agentDir);
+  expect(readSettingsScope(storage, "global")).toEqual({ settings: {}, loadError: null });
+  expect(readSettingsScope(storage, "project")).toEqual({ settings: {}, loadError: null });
   expect(fsync).not.toHaveBeenCalled();
 });
 
@@ -346,21 +327,22 @@ it.for([
               if (current !== undefined) throw new Error("first-writer fixture already has settings");
               writeSync(1, "ready\n");
               waitForRelease();
-              return JSON.stringify(field === "theme" ? { theme: scope + "-committed" } : { defaultModel: "mock-model" });
+              return JSON.stringify(field === "defaultThinkingLevel" ? { defaultThinkingLevel: scope === "global" ? "medium" : "high" } : { defaultModel: "mock-model" });
             });
           `,
-        [storageUrl.href, root, agentDir, scope, reading ? "theme" : "defaultModel"],
+        [storageUrl.href, root, agentDir, scope, reading ? "defaultThinkingLevel" : "defaultModel"],
       );
       try {
         await writer.waitFor("ready", "first writer exited before its peer");
         expect(existsSync(settingsPath)).toBe(false);
         expect(existsSync(`${settingsPath}.lock`)).toBe(true);
-        const peer = start(
-          reading ? readerSource : contenderSource,
-          reading
-            ? [managerUrl.href, root, agentDir, settingsPath]
-            : [storageUrl.href, root, agentDir, scope, settingsPath],
-        );
+        const peer = start(reading ? readerSource : contenderSource, [
+          storageUrl.href,
+          root,
+          agentDir,
+          scope,
+          settingsPath,
+        ]);
         await peer.waitFor(reading ? "observed" : "contended", "peer exited before its gate");
         expect(existsSync(settingsPath)).toBe(false);
         expect(existsSync(`${settingsPath}.lock`)).toBe(true);
@@ -373,7 +355,7 @@ it.for([
           expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({
             committedDuringRead: true,
             errors: [],
-            theme: `${scope}-committed`,
+            thinkingLevel: scope === "global" ? "medium" : "high",
           });
         } else {
           expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({

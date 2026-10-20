@@ -383,45 +383,74 @@
   -webkit-user-select: none;
 }
 
+/* Window-chrome insets make the header padding asymmetric. The outer columns
+   absorb that difference so the agent stays centered on the whole pane, while
+   leading and trailing items still span into them without overlapping it. */
 .chat-pane__header--agent {
+  --chat-pane-header-start: var(--chat-pane-header-inset-start, 8px);
+  --chat-pane-header-end: var(--chat-pane-header-inset-end, 8px);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  grid-template-columns:
+    max(0px, var(--chat-pane-header-end) - var(--chat-pane-header-start))
+    minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr)
+    max(0px, var(--chat-pane-header-start) - var(--chat-pane-header-end));
+  column-gap: 0;
   padding-inline: 8px;
 }
 
 .chat-pane__header-agent {
-  grid-column: 2;
+  grid-column: 3;
   min-width: 0;
   max-width: min(360px, 100%);
   justify-self: center;
+  /* Symmetric gutters keep the pill centered on the chat column while leaving
+     room for it to grow rightward when hover reveals settings. */
+  padding-inline: 32px;
+  box-sizing: border-box;
 }
 
 .chat-pane__header--agent > .chat-pane__header-leading {
-  grid-column: 1;
+  grid-column: 1 / 3;
   justify-self: start;
 }
 
 .chat-pane__header--agent > .chat-pane__header-trailing {
-  grid-column: 3;
+  grid-column: 4 / 6;
   margin-left: 0;
 }
 
+.chat-pane__header--agent > .chat-pane__subagents-running {
+  grid-column: 1 / -1;
+}
+
+/* The pill surface wraps the context trigger and the settings button so the
+   hover reveal grows the pill itself. */
 .chat-pane__agent-identity {
+  /* Settings width minus the trigger's trailing padding it replaces. */
+  --chat-agent-settings-reveal: 20px;
   position: relative;
+  display: flex;
+  align-items: center;
   min-width: 0;
   max-width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
 }
 
 .chat-pane__agent-identity > button:not(.chat-pane__agent-settings) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   max-width: 100%;
-  min-height: 36px;
-  padding: 4px 32px 4px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--secondary);
+  min-height: 34px;
+  padding: 3px 12px 3px 3px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -443,27 +472,19 @@
   white-space: nowrap;
 }
 
-.chat-pane__agent-identity > button:not(.chat-pane__agent-settings) > svg {
-  position: absolute;
-  right: 12px;
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  color: var(--muted);
-}
-
+/* Collapsed until hover; it stays in the tab order so keyboard focus can
+   reveal it. */
 .chat-pane__agent-settings {
-  position: absolute;
-  top: 50%;
-  right: 4px;
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  width: 0;
   height: 28px;
   padding: 0;
-  transform: translateY(-50%);
+  overflow: hidden;
   border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
@@ -472,19 +493,9 @@
 }
 
 .chat-pane__agent-settings svg {
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
-}
-
-.chat-pane__agent-identity:is(:hover, :focus-within)
-  > button:not(.chat-pane__agent-settings)
-  > svg {
-  opacity: 0;
-}
-
-.chat-pane__agent-identity:is(:hover, :focus-within) > .chat-pane__agent-settings {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .chat-pane__agent-settings:is(:hover, :focus-visible) {
@@ -492,12 +503,35 @@
   color: var(--text);
 }
 
+/* Keyboard focus reveals it too; a mouse click alone must not pin it visible.
+   The negative end margin keeps the pill's layout width unchanged, so it grows
+   rightward instead of recentering and shifting the avatar and name. */
+@media (hover: hover) {
+  .chat-pane__agent-identity:is(:hover, :has(:focus-visible)) {
+    max-width: calc(100% + var(--chat-agent-settings-reveal));
+    margin-inline-end: calc(0px - var(--chat-agent-settings-reveal));
+  }
+
+  .chat-pane__agent-identity:is(:hover, :has(:focus-visible))
+    > button:not(.chat-pane__agent-settings) {
+    padding-right: 4px;
+  }
+
+  .chat-pane__agent-identity:is(:hover, :has(:focus-visible)) > .chat-pane__agent-settings {
+    width: 28px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Touch has no hover, so the pill always includes settings and stays centered. */
 @media (hover: none) {
-  .chat-pane__agent-identity > button:not(.chat-pane__agent-settings) > svg {
-    opacity: 0;
+  .chat-pane__agent-identity > button:not(.chat-pane__agent-settings) {
+    padding-right: 4px;
   }
 
   .chat-pane__agent-settings {
+    width: 28px;
     opacity: 1;
     pointer-events: auto;
   }
@@ -989,7 +1023,8 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav, .shell--settings)
     .sidebar-region--narrow
   )
   [data-region-header="side"] {
-  padding-left: var(--shell-titlebar-inset);
+  --chat-pane-header-inset-start: var(--shell-titlebar-inset);
+  padding-left: var(--chat-pane-header-inset-start);
 }
 
 /* Native pane headers share the window controls' centerline. Drawer layouts
@@ -1025,7 +1060,8 @@ html.openclaw-native-desktop
         ):not(.sidebar-region--narrow)
     )
     [data-region-header="side"] {
-    padding-right: calc(var(--openclaw-native-window-controls-width, 0px) + 6px);
+    --chat-pane-header-inset-end: calc(var(--openclaw-native-window-controls-width, 0px) + 6px);
+    padding-right: var(--chat-pane-header-inset-end);
     min-height: var(--openclaw-native-titlebar-height, 52px);
   }
 }

@@ -30,6 +30,8 @@ import { sessionLog } from "./sessions-shared.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { RespondFn } from "./types.js";
 
+const diagnostics = channel("openclaw.session.list");
+
 const reusedRowMetrics = {
   pid: process.pid,
   threadId,
@@ -45,7 +47,6 @@ const reusedRowMetrics = {
 };
 
 function captureDiagnostics(events: unknown[]) {
-  const diagnostics = channel("openclaw.session.list");
   const collect = (event: unknown) => events.push(event);
   diagnostics.subscribe(collect);
   return { [Symbol.dispose]: () => diagnostics.unsubscribe(collect) };

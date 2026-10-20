@@ -136,6 +136,7 @@ export async function add(
         ? (state.store?.jobs.filter(opts.matchesExisting).map((job) => job.id) ?? [])
         : undefined,
       options: {
+        streamSandbox: opts?.streamSandbox,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
@@ -179,6 +180,7 @@ export async function add(
         previousJob: existing,
         nextJob: job,
         commitGuard: opts?.commitGuard,
+        streamAuthority: opts,
         agentId,
         mutationMethod: "cron.add",
         jobMutation: mutation,
@@ -191,6 +193,7 @@ export async function add(
       source,
       method: "cron.add",
       assertCurrent: opts?.commitGuard,
+      streamAuthority: opts,
       agentId,
       expectedJob: existing
         ? { id: existing.id, configRevision: resolveCronJobConfigRevision(existing) }
@@ -284,6 +287,7 @@ async function updateLoadedJob(params: {
     id,
     patch,
     options: {
+      streamSandbox: opts?.streamSandbox,
       inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
@@ -316,6 +320,7 @@ async function updateLoadedJob(params: {
     nextJob,
     source,
     commitGuard: opts?.commitGuard,
+    streamAuthority: opts,
     agentId:
       patch.agentId !== undefined
         ? resolveCronJobEffectiveAgentId(nextJob, resolveCurrentDefaultAgentId(state))

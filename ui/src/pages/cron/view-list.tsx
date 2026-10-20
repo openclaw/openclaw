@@ -116,7 +116,7 @@ function ListTabs(props: CronProps) {
           }
           props.onListTabChange("tasks");
           if (value !== props.jobsEnabledFilter) {
-            void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+            props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
           }
         },
       }}
@@ -145,7 +145,7 @@ function Toolbar(
               aria-label={t("cron.list.searchPlaceholder")}
               placeholder={t("cron.list.searchPlaceholder")}
               onInput={(e) =>
-                void props.onJobsFiltersChange({
+                props.onJobsFiltersChange({
                   cronJobsQuery: e.currentTarget.value,
                 })
               }

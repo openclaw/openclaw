@@ -695,11 +695,10 @@ function createLeaseStore(
     validFailure: (value: unknown) => triageFailureSchema.safeParse(value).success,
   };
   const prepareRepair = prepareManagedHandoffRepair.bind(null, store, {
-    rows: { handle, updateRow, row, descendants },
+    rows: { handle, updateRow, deleteRow, row, descendants },
     withDatabase,
     processState,
     reclaimable,
-    cas,
   });
   return Object.assign(store, { prepareRepair });
 }

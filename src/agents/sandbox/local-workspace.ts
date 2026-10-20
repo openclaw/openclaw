@@ -11,6 +11,10 @@ import {
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
 import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
+import {
+  bindSandboxPersistentExecCapability,
+  getSandboxPersistentExecCapability,
+} from "./persistent-exec.types.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
@@ -155,6 +159,27 @@ export function bindLocalSandboxWorkspace(
   const backend = sandbox.backend;
   if (!backend) {
     throw new Error("Managed guest project has no sandbox execution owner");
+  }
+  const persistent = getSandboxPersistentExecCapability(backend);
+  if (persistent) {
+    bindSandboxPersistentExecCapability(backend, {
+      ...persistent,
+      prepare: async (params) => {
+        const prepared = await projection.provision(() =>
+          persistent.prepare({
+            ...params,
+            assertCurrent: () => {
+              projection.assertCurrent();
+              params.assertCurrent();
+            },
+          }),
+        );
+        return {
+          ...prepared,
+          start: (admit: () => Promise<void>) => projection.provision(() => prepared.start(admit)),
+        };
+      },
+    });
   }
   const prepareCleanup = backend.prepareProcessCleanup?.bind(backend);
   if (prepareCleanup) {

@@ -40,10 +40,6 @@ class PreparedRegistryResources {
   ) {
     state.views.add(this);
     state.registries.set(acquired.registry, this);
-    void this.completion.promise.then(
-      () => state.views.delete(this),
-      () => {},
-    );
   }
 
   get primaryRegistry(): PluginRegistry {
@@ -99,6 +95,7 @@ class PreparedRegistryResources {
             ),
           );
         } else {
+          state.views.delete(this);
           this.completion.resolve();
         }
       })();

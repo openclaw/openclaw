@@ -660,7 +660,7 @@ export function projectionOperations(
       }
       const { readLocalWorkspaceRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");
-      if ((await readLocalWorkspaceRuntimes(selected.projection_path)).length) {
+      if ((await readLocalWorkspaceRuntimes(selected.projection_path, { env: owner.env })).length) {
         throw new Error("Local sandbox runtime still owns its workspace; cleanup deferred");
       }
       const parent = path.dirname(selected.projection_path);

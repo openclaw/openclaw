@@ -164,7 +164,7 @@ it.each(["unresolved-unknown", "windows-queued", "windows-startup-unknown", "spl
         );
         expect(fs.existsSync(sourcePath)).toBe(false);
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-        const action = "Restart the Gateway you launched manually after the update.";
+        const action = "Stop the Gateway through its owner";
         expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(action));
         expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
           resultPath,

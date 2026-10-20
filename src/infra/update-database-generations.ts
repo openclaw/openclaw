@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import { sha256Hex } from "./crypto-digest.js";
-import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
-import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
 import { ignoreMissingPath } from "./errno.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -30,7 +28,8 @@ export type UpdateDatabaseWriteReceipt = {
 function readCommittedContent(
   pathname: string,
   generation: SqliteFileGeneration,
-): { sha256: string; engine: BackupEngine["engine"] } {
+  inspectImage?: (imagePath: string, sourcePath: string) => void,
+): string {
   // Checkpoint only a private copy: opening the source would compete with the
   // restore owner's native exclusion. SQLite owns WAL/journal interpretation.
   const prepared = prepareSqliteReadOnlyLocationSyncInProcess(
@@ -52,17 +51,17 @@ function readCommittedContent(
     );
     // Native admission still rejects malformed catalogs. With no recovery data,
     // checkpointing leaves the digest-bound private image unchanged.
-    const { engine } = readBackupEngineImage(prepared.location, pathname);
+    inspectImage?.(prepared.location, pathname);
     const content = prepared.journalFreeContent;
     if (content) {
       assertPublishedFileIdentitySync(prepared.location, content.identity, content);
-      return { sha256: content.sha256, engine };
+      return content.sha256;
     }
     const descriptor = fs.openSync(prepared.location, "r");
     return runWithSqliteCleanup(
       { release: () => fs.closeSync(descriptor) },
       "Database generation digest",
-      () => ({ sha256: hashFileDescriptorSync(descriptor).sha256, engine }),
+      () => hashFileDescriptorSync(descriptor).sha256,
     );
   });
 }
@@ -103,9 +102,11 @@ function readWalIndexHeader(pathname: string): Buffer | null {
 /** Run only in an isolated process, after all source handles drain, or under a
  * schema-maintenance owner before live reads are admitted: raw close
  * can release this process's SQLite locks. Inspect only the supplied inventory. */
-function readUpdateDatabaseGenerations(paths: readonly string[]) {
-  const postgres: string[] = [];
-  const generations: UpdateDatabaseGenerations = Object.fromEntries(
+export function readUpdateDatabaseGenerations(
+  paths: readonly string[],
+  inspectImage?: (imagePath: string, sourcePath: string) => void,
+): UpdateDatabaseGenerations {
+  return Object.fromEntries(
     paths.map((pathname) => {
       const entry = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
       if (!entry) {
@@ -125,7 +126,7 @@ function readUpdateDatabaseGenerations(paths: readonly string[]) {
       // Acquisition binds this provisional observation; the final stable read
       // below verifies the whole family before its generation can be published.
       const generation = readSqliteFileGeneration(pathname);
-      const content = readCommittedContent(pathname, generation);
+      const content = readCommittedContent(pathname, generation, inspectImage);
       const current = readStableSqliteFileGeneration(pathname);
       const after = readWalIndexHeader(pathname);
       if (
@@ -134,11 +135,6 @@ function readUpdateDatabaseGenerations(paths: readonly string[]) {
         (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
       ) {
         throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
-      }
-      // Classify the same verified image; reacquiring the live family here would
-      // repeat a full snapshot and could observe a different engine generation.
-      if (content.engine === "postgres") {
-        postgres.push(pathname);
       }
       // Checkpoints preserve iChange and the last committed frame checksum,
       // including TRUNCATE, which resets frame count and salts. Rebuilding the
@@ -154,7 +150,7 @@ function readUpdateDatabaseGenerations(paths: readonly string[]) {
             generation.database.dev.toString(),
             generation.database.ino.toString(),
             readDatabaseIdentityBirthtime(entry),
-            content.sha256,
+            content,
             after?.subarray(8, 12).toString("hex") ?? null,
             after?.subarray(24, 32).toString("hex") ?? null,
           ]),
@@ -162,25 +158,4 @@ function readUpdateDatabaseGenerations(paths: readonly string[]) {
       ];
     }),
   );
-  return { generations, postgres };
-}
-
-export async function readUpdatePhysicalDatabaseGenerations(
-  paths: readonly string[],
-  pluginOwners?: DatabasePortPluginOwners,
-) {
-  const { generations, postgres } = readUpdateDatabaseGenerations(paths);
-  if (postgres.length) {
-    const { fingerprintPostgresBackup } = await import("../snapshot/database-backup.js");
-    const { createConfigIO } = await import("../config/io.js");
-    const { config } = await createConfigIO({
-      observe: false,
-      pluginValidation: "core-only",
-      shellEnvFallback: "defer",
-    }).readConfigFileSnapshot();
-    for (const pathname of postgres) {
-      generations[pathname] = await fingerprintPostgresBackup(pathname, config, pluginOwners);
-    }
-  }
-  return generations;
 }

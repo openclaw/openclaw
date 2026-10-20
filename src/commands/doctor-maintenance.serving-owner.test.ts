@@ -9,6 +9,7 @@ import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -97,6 +98,7 @@ it.each([
                   pid: servingPid,
                   host: kind === "foreign-host" ? "other-host.invalid" : hostname(),
                   startedAt,
+                  processNamespace: readGatewayLockProcessNamespace(),
                 },
                 port: 19483,
                 mode: "supervised",
@@ -111,6 +113,7 @@ it.each([
           databasePath,
           payload: {
             pid: process.pid,
+            processNamespace: readGatewayLockProcessNamespace(),
             role: "gateway",
             createdAt: new Date().toISOString(),
             configPath: state.configPath,
