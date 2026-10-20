@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   closeAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -13,27 +13,21 @@ const sessionTarget = {
 };
 
 const admissions: ReturnType<typeof prepareSystemAgentRunAdmission>[] = [];
-afterEach(() => {
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
-});
+afterEach(() => admissions.splice(0).forEach((admission) => admission.close()));
 
-const hoisted = vi.hoisted(() => ({
-  buildTrajectoryRunMetadata: vi.fn(() => ({ trace: "metadata" })),
-  createTrajectoryRuntimeRecorder: vi.fn(),
-  resolveAttemptTrajectorySessionFile: vi.fn(async () => "/tmp/trajectory.jsonl"),
+const { metadata, createRecorder, sessionFile } = vi.hoisted(() => ({
+  metadata: vi.fn((_input: unknown) => ({ trace: "metadata" })),
+  createRecorder: vi.fn(),
+  sessionFile: vi.fn(async (_input: unknown) => "/tmp/trajectory.jsonl"),
 }));
 
-vi.mock("../../../trajectory/metadata.js", () => ({
-  buildTrajectoryRunMetadata: hoisted.buildTrajectoryRunMetadata,
-}));
+vi.mock("../../../trajectory/metadata.js", () => ({ buildTrajectoryRunMetadata: metadata }));
 // mock-isolation: Recorder persistence is outside the attempt metadata contract.
 vi.mock("../../../trajectory/runtime.js", () => ({
-  createTrajectoryRuntimeRecorder: hoisted.createTrajectoryRuntimeRecorder,
+  createTrajectoryRuntimeRecorder: createRecorder,
 }));
 vi.mock("./attempt-transcript-helpers.js", () => ({
-  resolveAttemptTrajectorySessionFile: hoisted.resolveAttemptTrajectorySessionFile,
+  resolveAttemptTrajectorySessionFile: sessionFile,
 }));
 
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
@@ -63,8 +57,6 @@ async function createInput(retained = false, disableTrajectory = false, abortSig
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:session-1",
       sessionTarget,
-      thinkLevel: "medium",
-      trigger: "user",
       workspaceDir: "/tmp/workspace",
     },
     clientToolCount: 2,
@@ -75,76 +67,63 @@ async function createInput(retained = false, disableTrajectory = false, abortSig
   };
 }
 
-describe("prepareEmbeddedAttemptTrajectory", () => {
-  beforeEach(() => vi.clearAllMocks());
+beforeEach(() => vi.clearAllMocks());
 
-  it.each([false, true])(
-    "creates trajectory metadata with retained target: %s",
-    async (retained) => {
-      const recorder = { recordEvent: vi.fn() };
-      hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
+it.each([false, true])("creates trajectory metadata with retained target: %s", async (retained) => {
+  const recorder = { recordEvent: vi.fn() };
+  createRecorder.mockReturnValue(recorder);
 
-      const input = await createInput(retained);
-      const result = await prepareEmbeddedAttemptTrajectory(input as never);
-
-      expect(result).toBe(recorder);
-      if (retained) {
-        expect(hoisted.resolveAttemptTrajectorySessionFile).not.toHaveBeenCalled();
-      } else {
-        expect(hoisted.resolveAttemptTrajectorySessionFile).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: "main",
-            sessionFile: "/tmp/session.jsonl",
-            sessionId: "session-1",
-          }),
-        );
-      }
-      expect(hoisted.createTrajectoryRuntimeRecorder).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-1",
-          sessionFile: retained ? input.attempt.sessionKey : "/tmp/trajectory.jsonl",
-          sessionId: "session-1",
-          sessionTarget: expect.objectContaining(sessionTarget),
-        }),
-      );
-      expect(recorder.recordEvent.mock.calls.slice(0, 2)).toEqual([
-        ["session.started", expect.objectContaining({ toolCount: 7, clientToolCount: 2 })],
-        ["trace.metadata", { trace: "metadata" }],
-      ]);
-      expect(hoisted.buildTrajectoryRunMetadata).toHaveBeenCalledWith(
-        expect.objectContaining({ fastMode: true, provider: "provider-1" }),
-      );
-    },
-  );
-
-  it.each(["revoke", "abort"])(
-    "does not record prepared metadata after %s during sink preparation",
-    async (change) => {
-      const abort = new AbortController();
-      const input = await createInput(true, false, abort.signal);
-      const recorder = { recordEvent: vi.fn() };
-      hoisted.createTrajectoryRuntimeRecorder.mockImplementation(async () => {
-        if (change === "revoke") {
-          closeAdmittedRunDelegatedAuthority(input.attempt.admittedRunContext);
-        } else {
-          abort.abort();
-        }
-        return recorder;
-      });
-      await expect(prepareEmbeddedAttemptTrajectory(input as never)).rejects.toThrow(
-        "admitted run authority is no longer active",
-      );
-      expect(recorder.recordEvent).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps trajectory path resolution but skips recorder creation when disabled", async () => {
-    await expect(
-      prepareEmbeddedAttemptTrajectory((await createInput(false, true)) as never),
-    ).resolves.toBeNull();
-
-    expect(hoisted.resolveAttemptTrajectorySessionFile).toHaveBeenCalledOnce();
-    expect(hoisted.createTrajectoryRuntimeRecorder).not.toHaveBeenCalled();
-    expect(hoisted.buildTrajectoryRunMetadata).not.toHaveBeenCalled();
+  const input = await createInput(retained);
+  expect(await prepareEmbeddedAttemptTrajectory(input as never)).toBe(recorder);
+  if (retained) {
+    expect(sessionFile).not.toHaveBeenCalled();
+  } else {
+    expect(sessionFile.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "main",
+      sessionFile: "/tmp/session.jsonl",
+      sessionId: "session-1",
+    });
+  }
+  expect(createRecorder.mock.calls[0]?.[0]).toMatchObject({
+    runId: "run-1",
+    sessionFile: retained ? input.attempt.sessionKey : "/tmp/trajectory.jsonl",
+    sessionId: "session-1",
+    sessionTarget,
   });
+  expect(recorder.recordEvent.mock.calls.slice(0, 2)).toEqual([
+    ["session.started", expect.objectContaining({ toolCount: 7, clientToolCount: 2 })],
+    ["trace.metadata", { trace: "metadata" }],
+  ]);
+  expect(metadata.mock.calls[0]?.[0]).toMatchObject({ fastMode: true, provider: "provider-1" });
+});
+
+it.each(["revoke", "abort"])(
+  "does not record prepared metadata after %s during sink preparation",
+  async (change) => {
+    const abort = new AbortController();
+    const input = await createInput(true, false, abort.signal);
+    const recorder = { recordEvent: vi.fn() };
+    createRecorder.mockImplementation(async () => {
+      if (change === "revoke") {
+        closeAdmittedRunDelegatedAuthority(input.attempt.admittedRunContext);
+      } else {
+        abort.abort();
+      }
+      return recorder;
+    });
+    await expect(prepareEmbeddedAttemptTrajectory(input as never)).rejects.toThrow(
+      "admitted run authority is no longer active",
+    );
+    expect(recorder.recordEvent).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps trajectory path resolution but skips recorder creation when disabled", async () => {
+  const input = await createInput(false, true);
+  expect(await prepareEmbeddedAttemptTrajectory(input as never)).toBeNull();
+  expect([
+    sessionFile.mock.calls.length,
+    createRecorder.mock.calls.length,
+    metadata.mock.calls.length,
+  ]).toEqual([1, 0, 0]);
 });

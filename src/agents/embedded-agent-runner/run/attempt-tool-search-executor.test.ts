@@ -1,15 +1,12 @@
-import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 
 function createExecutorHarness(prepareArguments: NonNullable<AnyAgentTool["prepareArguments"]>) {
   const execute = vi.fn(async () => ({ content: [], details: {} }));
   const tool: AnyAgentTool = {
-    name: "memory_search",
-    label: "Memory search",
-    description: "Search fixture",
-    parameters: Type.Object({}),
+    ...createStubTool("memory_search"),
     prepareArguments,
     execute,
   };
@@ -46,28 +43,26 @@ function createExecutorHarness(prepareArguments: NonNullable<AnyAgentTool["prepa
   };
 }
 
-describe("createSubscribedToolSearchExecutor", () => {
-  it("prepares tool arguments before lifecycle and execution", async () => {
-    const input = { query: "orchid codename", min_score: 0.01, max_results: 3 };
-    const preparedInput = { query: "orchid codename", maxResults: 3 };
-    const prepareArguments = vi.fn(() => preparedInput);
-    const { run, execute, runToolLifecycle } = createExecutorHarness(prepareArguments);
-    await run(input);
-    expect(prepareArguments).toHaveBeenCalledWith(input);
-    expect(runToolLifecycle.mock.calls[0]?.[0].args).toBe(preparedInput);
-    expect(execute).toHaveBeenCalledWith("call", preparedInput, expect.any(AbortSignal), undefined);
-  });
+it("prepares tool arguments before lifecycle and execution", async () => {
+  const input = { query: "orchid codename", min_score: 0.01, max_results: 3 };
+  const preparedInput = { query: "orchid codename", maxResults: 3 };
+  const prepareArguments = vi.fn(() => preparedInput);
+  const { run, execute, runToolLifecycle } = createExecutorHarness(prepareArguments);
+  await run(input);
+  expect(prepareArguments).toHaveBeenCalledWith(input);
+  expect(runToolLifecycle.mock.calls[0]?.[0].args).toBe(preparedInput);
+  expect(execute).toHaveBeenCalledWith("call", preparedInput, expect.any(AbortSignal), undefined);
+});
 
-  it("runs argument preparation failures through the nested lifecycle", async () => {
-    const input = { query: "orchid codename", min_score: 0.01 };
-    const error = new Error("invalid arguments");
-    const prepareArguments = vi.fn(() => {
-      throw error;
-    });
-    const { run, execute, runToolLifecycle } = createExecutorHarness(prepareArguments);
-    await expect(run(input)).rejects.toBe(error);
-    expect(prepareArguments).toHaveBeenCalledWith(input);
-    expect(runToolLifecycle.mock.calls[0]?.[0].args).toBe(input);
-    expect(execute).not.toHaveBeenCalled();
+it("runs argument preparation failures through the nested lifecycle", async () => {
+  const input = { query: "orchid codename", min_score: 0.01 };
+  const error = new Error("invalid arguments");
+  const prepareArguments = vi.fn(() => {
+    throw error;
   });
+  const { run, execute, runToolLifecycle } = createExecutorHarness(prepareArguments);
+  await expect(run(input)).rejects.toBe(error);
+  expect(prepareArguments).toHaveBeenCalledWith(input);
+  expect(runToolLifecycle.mock.calls[0]?.[0].args).toBe(input);
+  expect(execute).not.toHaveBeenCalled();
 });

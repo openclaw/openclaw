@@ -1,5 +1,15 @@
-import { createFakeStream, type FakeWrappedStream } from "./attempt-stream.test-helpers.js";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  collectStreamEvents,
+  createFakeStream,
+  type FakeWrappedStream,
+} from "./attempt-stream.test-helpers.js";
 import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
+
+export const record = createRequireRecord("object", "expected-label");
+export const messageContent = (message: unknown) => record(message, "message").content as unknown[];
+export const collectPromotionEvents = async (stream: FakeWrappedStream) =>
+  (await collectStreamEvents(stream)).map((event) => record(event, "event"));
 
 export const assistantMessage = (content: unknown[] = []) => ({
   role: "assistant",
