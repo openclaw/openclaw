@@ -6,13 +6,18 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { captureUiProof, sessionsListResponse } from "./session-management.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "missing session link",
   startServerBeforeBrowser: true,
 });
+const contextOptions = createControlUiE2eContextOptions();
+const mainKey = "agent:main:main";
 
 async function rememberSession(page: Page, savedSessionKey: string) {
   await page.addInitScript(
@@ -37,28 +42,23 @@ suite.define(() => {
   it.each([
     ["missing session", "agent:main:15cf8259-0000-4000-8000-000000000001"],
     ["removed agent", "agent:retired:main"],
-  ])("opens a usable main chat with a remembered %s", async (name, savedKey) => {
-    const mainKey = "agent:main:main";
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, { sessions: [], mainSessionKey: mainKey });
-        await rememberSession(page, savedKey);
+  ])("opens a usable main chat with a remembered %s", async (_name, savedKey) => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, { sessions: [], mainSessionKey: mainKey });
+      await rememberSession(page, savedKey);
 
-        await page.goto(suite.server.baseUrl);
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-        const activeComposer = page.locator(
-          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea',
-        );
-        await activeComposer.waitFor({ state: "visible" });
-        expect(await activeComposer.count()).toBe(1);
-        expect(await page.locator(".session-route-not-found").count()).toBe(0);
-        expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
-          sessionKey: mainKey,
-        });
-        await captureUiProof(suite, page, `remembered-${name.replaceAll(" ", "-")}.png`);
-      },
-    );
+      await page.goto(suite.server.baseUrl);
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+      const activeComposer = page.locator(
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea',
+      );
+      await activeComposer.waitFor({ state: "visible" });
+      expect(await activeComposer.count()).toBe(1);
+      expect(await page.locator(".session-route-not-found").count()).toBe(0);
+      expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
+        sessionKey: mainKey,
+      });
+    });
   });
 
   it("restores the exact remembered session when its short prefix collides", async () => {
@@ -100,67 +100,54 @@ suite.define(() => {
   });
 
   it("keeps an explicitly requested missing session as a visible dead end", async () => {
-    const mainKey = "agent:main:main";
     const savedActiveKey = "agent:main:saved-active-session";
     const attemptedPath = "/chat/main/deadbeef";
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
-          },
-          mainSessionKey: mainKey,
-          sessionKey: savedActiveKey,
-        });
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
+        },
+        mainSessionKey: mainKey,
+        sessionKey: savedActiveKey,
+      });
 
-        await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
-        const state = page.locator(".session-route-not-found");
-        await state.getByText("Session not found", { exact: true }).waitFor();
-        expect(new URL(page.url()).pathname).toBe(attemptedPath);
-        await state
-          .getByText("The session may have been removed, or the link may be incorrect.", {
-            exact: true,
-          })
-          .waitFor();
-        const currentSession = state.getByRole("button", { name: "Go to main session" });
-        const sessions = state.getByRole("button", { name: "View sessions" });
-        expect(
-          await currentSession.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await sessions.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await state
-            .locator(".lazy-view-error__subtitle")
-            .evaluate((element) => getComputedStyle(element).textWrap),
-        ).toBe("balance");
-        expect(await page.locator("openclaw-chat-page").count()).toBe(0);
-        expect(await page.locator(".agent-chat__input textarea").count()).toBe(0);
-        expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(0);
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.resolve")).toEqual([
-          expect.objectContaining({
-            params: expect.objectContaining({ shortId: "deadbeef", agentId: "main" }),
-          }),
-          expect.objectContaining({
-            params: expect.objectContaining({ reference: { key: "agent:main:deadbeef" } }),
-          }),
-        ]);
-        await captureUiProof(suite, page, "session-link-not-found-after.png");
+      await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
+      const state = page.locator(".session-route-not-found");
+      await state.getByText("Session not found", { exact: true }).waitFor();
+      expect(new URL(page.url()).pathname).toBe(attemptedPath);
+      await state
+        .getByText("The session may have been removed, or the link may be incorrect.", {
+          exact: true,
+        })
+        .waitFor();
+      const currentSession = state.getByRole("button", { name: "Go to main session" });
+      const sessions = state.getByRole("button", { name: "View sessions" });
+      for (const action of [currentSession, sessions]) {
+        const decoration = await action.evaluate((el) => getComputedStyle(el).textDecorationLine);
+        expect(decoration).toBe("none");
+      }
+      const subtitle = state.locator(".lazy-view-error__subtitle");
+      expect(await subtitle.evaluate((el) => getComputedStyle(el).textWrap)).toBe("balance");
+      const suppressed =
+        "openclaw-chat-page, .agent-chat__input textarea, openclaw-toast-host .app-toast";
+      expect(await page.locator(suppressed).count()).toBe(0);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      const resolutions = await gateway.getRequests("sessions.resolve");
+      expect(resolutions.map(({ params }) => params)).toEqual([
+        expect.objectContaining({ shortId: "deadbeef", agentId: "main" }),
+        expect.objectContaining({ reference: { key: "agent:main:deadbeef" } }),
+      ]);
 
-        await currentSession.click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-        await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await currentSession.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
 
-        await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
-        await page.getByRole("button", { name: "View sessions" }).click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
-        const sessionsHeader = page.locator("openclaw-sessions-page .sessions-hub-header");
-        await sessionsHeader.waitFor({ state: "visible" });
-        expect(await sessionsHeader.textContent()).toContain("Active sessions and defaults.");
-      },
-    );
+      await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
+      await page.getByRole("button", { name: "View sessions" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
+      const sessionsHeader = page.locator("openclaw-sessions-page .sessions-hub-header");
+      await sessionsHeader.waitFor({ state: "visible" });
+      expect(await sessionsHeader.textContent()).toContain("Active sessions and defaults.");
+    });
   });
 });
