@@ -11,10 +11,12 @@ export const sessionPullRequestStateIcons = {
 } as const;
 
 /** All session surfaces put active work before merged/closed history. */
-export function orderSessionPullRequests(requests: readonly ControlUiSessionPullRequest[]) {
-  return requests.toSorted(
-    (left, right) => STATE_ORDER.indexOf(left.state) - STATE_ORDER.indexOf(right.state),
-  );
+export function orderSessionPullRequests<T extends { state?: PullRequestState }>(
+  requests: readonly T[],
+): T[] {
+  const rank = (state: PullRequestState | undefined) =>
+    state === undefined ? 1.5 : STATE_ORDER.indexOf(state);
+  return requests.toSorted((left, right) => rank(left.state) - rank(right.state));
 }
 
 export function primarySessionPullRequest(requests: readonly ControlUiSessionPullRequest[]) {

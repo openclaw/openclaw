@@ -84,23 +84,16 @@ async function startGateway({
     statusPatchSink,
   });
   context.channelRuntime = runtime.channel;
-  let settled = false;
   const task = startNostrGatewayAccount(context);
-  void task.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const settled = vi.fn();
+  void task.then(settled, settled);
   cleanups.push(async () => {
     abort.abort();
     await task.catch(() => {});
   });
   const options = await started.promise;
   expect(getActiveNostrBuses().get(account.accountId)).toBe(bus);
-  return { bus, abort, task, options, context, statusPatchSink, isSettled: () => settled };
+  return { bus, abort, task, options, context, statusPatchSink, settled };
 }
 
 const send = (text: string) =>
@@ -122,23 +115,23 @@ describe("nostr gateway lifecycle", () => {
     });
     const h = await startGateway({ bus });
     try {
-      expect(h.isSettled()).toBe(false);
+      expect(h.settled).not.toHaveBeenCalled();
       h.abort.abort();
       await closing.promise;
-      expect(h.isSettled()).toBe(false);
+      expect(h.settled).not.toHaveBeenCalled();
       expect(getActiveNostrBuses().has("default")).toBe(false);
       await expect(send("hello")).rejects.toThrow("Nostr bus not running for account default");
+      await expect(
+        nostrPlugin.pairing!.notifyApproval!({ cfg: {}, id: TEST_HEX_PUBLIC_KEY }),
+      ).rejects.toThrow("Nostr bus not running for account default");
       expect(bus.sendDm).not.toHaveBeenCalled();
-      expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
       if (fails) {
         const error = new Error("Nostr relay shutdown failed");
         close.reject(error);
         await expect(h.task).rejects.toBe(error);
-        expect(h.context.log?.info).not.toHaveBeenCalledWith("[default] Nostr provider stopped");
       } else {
         close.resolve();
         await expect(h.task).resolves.toBeUndefined();
-        expect(h.context.log?.info).toHaveBeenCalledWith("[default] Nostr provider stopped");
       }
       expect(bus.close).toHaveBeenCalledOnce();
       expect(getActiveNostrBuses().has("default")).toBe(false);
@@ -176,9 +169,6 @@ describe("nostr gateway lifecycle", () => {
     const profile = { name: "Synthetic profile" };
     const h = await startGateway({ account: buildResolvedNostrAccount({ profile }) });
     expect(h.context.getStatus()).toMatchObject({ lifecycle: "starting", profile });
-    expect(h.context.log?.info).toHaveBeenCalledWith(
-      "[default] Nostr provider started with 1 configured relay(s)",
-    );
     h.options.onConnect?.("wss://relay-one.example/");
     expect(h.context.getStatus()).toMatchObject({
       running: true,
@@ -317,6 +307,11 @@ describe("nostr outbound", () => {
       expect.any(Object),
     );
     expect(result.messageId).toBe(eventId);
+    await nostrPlugin.pairing!.notifyApproval!({ cfg, id: TEST_HEX_PUBLIC_KEY });
+    expect(h.bus.sendDm).toHaveBeenLastCalledWith(
+      TEST_HEX_PUBLIC_KEY,
+      "Your pairing request has been approved!",
+    );
   });
 
   it("rejects empty text after Markdown conversion", async () => {

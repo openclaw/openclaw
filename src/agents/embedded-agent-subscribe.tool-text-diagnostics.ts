@@ -1,6 +1,3 @@
-/**
- * Warns when assistant text appears to expose raw tool-call syntax.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { detectToolCallShapedText } from "../../packages/tool-call-repair/src/index.js";
 import type { AssistantMessage } from "../llm/types.js";

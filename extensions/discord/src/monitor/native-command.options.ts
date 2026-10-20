@@ -17,11 +17,7 @@ import type { AutocompleteInteraction, CommandOptions } from "../internal/discor
 const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
 
 export function truncateDiscordCommandDescription(params: { value: string }): string {
-  const { value } = params;
-  if (value.length <= DISCORD_COMMAND_DESCRIPTION_MAX) {
-    return value;
-  }
-  return truncateUtf16Safe(value, DISCORD_COMMAND_DESCRIPTION_MAX);
+  return truncateUtf16Safe(params.value, DISCORD_COMMAND_DESCRIPTION_MAX);
 }
 
 export function truncateDiscordCommandDescriptionLocalizations(params: {

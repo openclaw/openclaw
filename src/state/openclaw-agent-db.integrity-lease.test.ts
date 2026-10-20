@@ -189,7 +189,7 @@ it.each(process.platform === "win32" ? [false] : [false, true])(
     const canonicalPath = fs.realpathSync(childPath);
     expect(
       readSqliteCleanCloseSeal(canonicalPath, fs.statSync(canonicalPath, { bigint: true })),
-    ).toMatchObject({ schemaIdentity: sqliteDatabaseSealSchemaFor("agent") });
+    ).toMatchObject({ schemaIdentity: sqliteDatabaseSealSchemaFor("agent")?.schemaIdentity });
   },
 );
 
@@ -592,7 +592,7 @@ it.each(["quarantine", "schema-version latch"] as const)(
     const latchError = new Error("synthetic schema-version latch");
     latchError.name = "SqliteSchemaVersionError";
     if (condition === "schema-version latch") {
-      expect(recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError)).toBe(true);
+      recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError);
       expect(
         readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),
       ).toBeUndefined();

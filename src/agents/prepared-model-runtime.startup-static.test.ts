@@ -82,6 +82,7 @@ const mocks = await vi.hoisted(async () => {
     getOAuthProviders: vi.fn(() => []),
   };
   const modelRegistry = {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((nextAuthStorage: unknown) => ({ authStorage: nextAuthStorage })),
     getAll: vi.fn(() => []),
     find: vi.fn<ModelRegistry["find"]>(() => undefined),
@@ -265,8 +266,11 @@ vi.mock("./models-config.providers.implicit.js", () => ({
   prepareImplicitProviderStaticCatalog: mocks.prepareStaticCatalog,
 }));
 
+// mock-isolation: static catalog fixtures supply registrations without evaluating plugin runtimes.
 vi.mock("./runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandleAsync: async (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal) => ({

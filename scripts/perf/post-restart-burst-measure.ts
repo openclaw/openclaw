@@ -35,11 +35,16 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     port: { type: "string", default: "41058" },
     "mock-port": { type: "string", default: "41059" },
-    clients: { type: "string", default: "50" },
+    clients: { type: "string" },
+    "reconnect-waves": { type: "boolean", default: false },
+    "reconnect-count": { type: "string" },
+    waves: { type: "string", default: "10" },
+    "start-at": { type: "string" },
     runs: { type: "string", default: "30" },
     seconds: { type: "string", default: "300" },
     "poll-ms": { type: "string", default: "5000" },
     "writer-reads": { type: "boolean", default: false },
+    "worktree-churn": { type: "boolean", default: false },
     "cheap-handlers": { type: "boolean", default: false },
     "transcript-reads": { type: "boolean", default: false },
     "sqlite-queues": { type: "boolean", default: false },
@@ -55,10 +60,43 @@ const mockPort = integer(values["mock-port"], "--mock-port", 40000);
 if (port > 65535 || mockPort > 65535 || port === mockPort) {
   throw new Error("ports must be distinct and between 40000 and 65535");
 }
-const clientCount = integer(values.clients, "--clients");
+const reconnectWaves = values["reconnect-waves"];
+const clientCount = integer(values.clients ?? (reconnectWaves ? "40" : "50"), "--clients");
+const reconnectCount = values["reconnect-count"]
+  ? integer(values["reconnect-count"], "--reconnect-count")
+  : Math.min(30, clientCount - 1);
+const waveCount = integer(values.waves, "--waves");
+const measurementStartAt = values["start-at"]
+  ? integer(values["start-at"], "--start-at")
+  : undefined;
+if (measurementStartAt !== undefined && !reconnectWaves) {
+  throw new Error("--start-at requires --reconnect-waves");
+}
+if (values["reconnect-count"] !== undefined && !reconnectWaves) {
+  throw new Error("--reconnect-count requires --reconnect-waves");
+}
+if (reconnectWaves && reconnectCount >= clientCount) {
+  throw new Error("--reconnect-count must be less than --clients to retain background traffic");
+}
+if (
+  reconnectWaves &&
+  (clientCount < 2 ||
+    values["writer-reads"] ||
+    values["worktree-churn"] ||
+    values["cheap-handlers"] ||
+    values["transcript-reads"] ||
+    values["sqlite-queues"])
+) {
+  throw new Error("--reconnect-waves requires at least two clients and no restart workload flags");
+}
 const runCount = integer(values.runs, "--runs");
 const durationMs = integer(values.seconds, "--seconds") * 1000;
 const pollMs = integer(values["poll-ms"], "--poll-ms");
+if (values["worktree-churn"] && durationMs < 180_000) {
+  throw new Error(
+    "--worktree-churn requires --seconds at least 180 for a separate post-reconnect burst",
+  );
+}
 const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
@@ -66,11 +104,24 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture; never use live state");
 }
+const worktreeProject = Array.isArray(fixture.projectWorktrees)
+  ? fixture.projectWorktrees[0]
+  : undefined;
+const worktreeProjectId =
+  isRecord(worktreeProject) && typeof worktreeProject.projectId === "string"
+    ? worktreeProject.projectId
+    : undefined;
+if (values["worktree-churn"] && !worktreeProjectId) {
+  throw new Error("Worktree churn requires a seeded project");
+}
 const output = path.join(root, `post-restart-burst-${Date.now()}`);
 mkdirSync(output);
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 const token = "synthetic-post-restart-burst-token";
 cfg.gateway = { ...cfg.gateway, auth: { mode: "token", token } };
+if (reconnectWaves) {
+  cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
+}
 applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
 cfg.agents.defaults = { ...cfg.agents.defaults, maxConcurrent: runCount, skipBootstrap: true };
 cfg.memory = { ...cfg.memory, search: { enabled: false } };
@@ -80,7 +131,12 @@ cfg.plugins = {
   enabled: true,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
-if (values["writer-reads"] || values["cheap-handlers"] || values["transcript-reads"]) {
+if (
+  values["writer-reads"] ||
+  values["cheap-handlers"] ||
+  values["transcript-reads"] ||
+  values["worktree-churn"]
+) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
@@ -321,8 +377,15 @@ if (isMainThread) {
       const kind = body.input.kind;
       const request = body.input.request?.kind;
       if (typeof kind === 'string' && /^[a-z-]{1,80}$/.test(kind) && (taskCounts.has(kind) || taskCounts.size < 128)) {
-        const label = kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
-          ? kind + ':' + request : kind;
+        const input = body.input;
+        const label = kind === 'session-exact-entries'
+          ? [kind, input.projection ?? 'full', input.selection?.kind ?? 'keys',
+              input.snapshotFields?.length === 0 ? 'metadata' : 'snapshots',
+              input.transcript ? 'transcript' : 'entry',
+              input.includeMembers ? 'members' : 'no-members',
+              input.includeAuthorization ? 'authorization' : 'no-authorization'].join(':')
+          : kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
+            ? kind + ':' + request : kind;
         taskCounts.set(label, (taskCounts.get(label) ?? 0) + 1);
       }
     }
@@ -525,6 +588,9 @@ function launch(name: string) {
     throw new Error("Benchmark launch helper did not provide an explicit auth mode");
   }
   args[authIndex + 1] = "token";
+  if (reconnectWaves) {
+    args.push("--verbose", "--ws-log", "compact");
+  }
   if (recovering) {
     restartAt = performance.now();
   }
@@ -624,6 +690,9 @@ function launch(name: string) {
       loopDelayMaxMs: sample.loopDelayMaxMs,
       mainThreadCpuMs: sample.mainThreadCpuMs,
     };
+    if (reconnectWaves && row.elapsedMs < row.intervalMs) {
+      return;
+    }
     eluSamples.push(row);
     consecutiveLowSamples =
       performance.now() - sample.intervalMs >= loadStartedAt && sample.elu < 0.8
@@ -663,9 +732,10 @@ async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
   params: unknown,
+  timeoutMs = 360_000,
 ) {
   assertAlive();
-  const reply = await client.request(method, params, 360_000);
+  const reply = await client.request(method, params, timeoutMs);
   assertAlive();
   if (!reply.ok) {
     throw new Error(`${method}: ${JSON.stringify(reply.error)}`);
@@ -740,7 +810,24 @@ function createSyntheticDevice() {
   };
 }
 const devices = new Map<number, ReturnType<typeof createSyntheticDevice>>();
-async function connect(index: number) {
+type ConnectAttempt = {
+  client: number;
+  wave: number;
+  startedAtMs: number;
+  startedMs: number;
+  elapsedMs: number;
+  openMs?: number;
+  challengeMs?: number;
+  connectMs?: number;
+  connId?: string;
+  presenceRows?: number;
+  extensions?: string;
+  error?: string;
+};
+async function connect(index: number, options?: { proxy?: boolean; attempt?: ConnectAttempt }) {
+  const startedAt = performance.now();
+  let connectStartedAt: number | undefined;
+  const attempt = options?.attempt;
   const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
   void challenge.promise.catch(() => {});
   const challengeTimer = setTimeout(
@@ -749,6 +836,15 @@ async function connect(index: number) {
   );
   const client = createGatewayWsClient({
     url: `ws://127.0.0.1:${port}`,
+    ...(options?.proxy
+      ? {
+          headers: {
+            "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "gateway.example.test",
+          },
+        }
+      : {}),
     handshakeTimeoutMs: 30_000,
     openTimeoutMs: 30_000,
     onEvent: (event) => {
@@ -766,7 +862,17 @@ async function connect(index: number) {
   clients.add(client);
   try {
     await client.waitOpen();
+    if (attempt) {
+      attempt.openMs = performance.now() - startedAt;
+      attempt.extensions = client.ws.extensions;
+    }
+    if (options?.proxy && !client.ws.extensions.split(",").includes("permessage-deflate")) {
+      throw new Error("Synthetic proxy connection did not negotiate permessage-deflate");
+    }
     const { nonce, ts } = await challenge.promise;
+    if (attempt) {
+      attempt.challengeMs = performance.now() - startedAt;
+    }
     let device = devices.get(index);
     if (!device) {
       device = createSyntheticDevice();
@@ -792,22 +898,31 @@ async function connect(index: number) {
       token,
       nonce,
     });
-    const hello = await rpc(client, "connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: identity,
-      role: "operator",
-      scopes,
-      auth: { token },
-      device: {
-        id: device.id,
-        publicKey: device.publicKey,
-        signedAt: ts,
-        nonce,
-        signature: signEd25519Payload(device.privateKey, payload),
+    connectStartedAt = performance.now();
+    const hello = await rpc(
+      client,
+      "connect",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: identity,
+        role: "operator",
+        scopes,
+        auth: { token },
+        device: {
+          id: device.id,
+          publicKey: device.publicKey,
+          signedAt: ts,
+          nonce,
+          signature: signEd25519Payload(device.privateKey, payload),
+        },
+        caps: [],
       },
-      caps: [],
-    });
+      options?.proxy ? 30_000 : undefined,
+    );
+    if (attempt) {
+      attempt.connectMs = performance.now() - connectStartedAt;
+    }
     if (
       !isRecord(hello) ||
       !isRecord(hello.auth) ||
@@ -820,8 +935,20 @@ async function connect(index: number) {
     if (scopes.some((scope) => !authorizedScopes.includes(scope))) {
       throw new Error("Benchmark device authentication did not retain requested operator scopes");
     }
+    if (attempt) {
+      if (!isRecord(hello.server) || typeof hello.server.connId !== "string") {
+        throw new Error("Synthetic connect response did not identify its connection");
+      }
+      attempt.connId = hello.server.connId;
+      if (isRecord(hello.snapshot) && Array.isArray(hello.snapshot.presence)) {
+        attempt.presenceRows = hello.snapshot.presence.length;
+      }
+    }
     // Reconnecting cheap handlers start immediately after auth, without warming a profile read.
-    if (!recovering || (!values["cheap-handlers"] && !values["transcript-reads"])) {
+    if (
+      !options?.proxy &&
+      (!recovering || (!values["cheap-handlers"] && !values["transcript-reads"]))
+    ) {
       const self = await rpc(client, "users.self", {});
       if (
         !isRecord(self) ||
@@ -835,11 +962,178 @@ async function connect(index: number) {
     }
     return client;
   } catch (error) {
+    if (attempt) {
+      attempt.error = String(error);
+      if (connectStartedAt !== undefined && attempt.connectMs === undefined) {
+        attempt.connectMs = performance.now() - connectStartedAt;
+      }
+    }
     client.close();
     clients.delete(client);
     throw error;
   } finally {
+    if (attempt) {
+      attempt.elapsedMs = performance.now() - startedAt;
+    }
     clearTimeout(challengeTimer);
+  }
+}
+async function scrapeWriterMetrics(name: string) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Diagnostic metrics scrape failed: ${response.status}`);
+  }
+  const metrics = await response.text();
+  writeFileSync(path.join(output, `${name}.prom`), metrics);
+  const byClass: Record<string, { count: number; waitSeconds: number }> = {};
+  for (const line of metrics.split("\n")) {
+    const match = /^openclaw_worker_queue_wait_seconds_(sum|count)\{([^}]+)\} ([\d.e+-]+)$/.exec(
+      line,
+    );
+    const labels = match?.[2];
+    if (!match || !labels?.includes('kind="sqlite_writer"')) {
+      continue;
+    }
+    const requestClass = /request_class="([^"]+)"/.exec(labels)?.[1];
+    if (!requestClass) {
+      continue;
+    }
+    const entry = (byClass[requestClass] ??= { count: 0, waitSeconds: 0 });
+    entry[match[1] === "count" ? "count" : "waitSeconds"] = Number(match[3]);
+  }
+  return { elapsedMs: performance.now() - restartAt, byClass };
+}
+async function settleWorktreeOperations<T>(operations: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(operations);
+  return results.map((result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  });
+}
+async function settleArchivedWorktreeCleanup(client: ReturnType<typeof createGatewayWsClient>) {
+  const deadline = performance.now() + 60_000;
+  let jobId: string | undefined;
+  for (let firstPoll = true; performance.now() < deadline; firstPoll = false) {
+    // Receipt polls consume the same 30-per-minute control-plane budget as GC requests.
+    if (!firstPoll) {
+      await delay(2_100);
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    let receipt: unknown;
+    try {
+      receipt = await rpc(
+        client,
+        "worktrees.gc",
+        jobId ? { jobId } : {},
+        Math.max(1, deadline - performance.now()),
+      );
+    } catch (error) {
+      // Archive notifications can queue a follow-up pass that replaces the latest receipt.
+      if (error instanceof Error && error.message.includes("only the latest job is retained")) {
+        jobId = undefined;
+        continue;
+      }
+      throw error;
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    if (!isRecord(receipt) || typeof receipt.jobId !== "string") {
+      throw new Error("worktrees.gc did not return a cleanup receipt");
+    }
+    if (receipt.state === "failed" || receipt.outcome === "partial") {
+      throw new Error(`Archive cleanup failed: ${JSON.stringify(receipt)}`);
+    }
+    if (receipt.state === "completed") {
+      return receipt;
+    }
+    jobId = receipt.jobId;
+  }
+  throw new Error("Archive cleanup did not settle within 60 seconds");
+}
+async function measureWorktreeChurn() {
+  await delay(Math.max(0, 120_000 - (performance.now() - restartAt)));
+  const firstTwoMinutes = await scrapeWriterMetrics("worktree-first-120s");
+  const client = await connect(clientCount);
+  try {
+    const before = await scrapeWriterMetrics("worktree-burst-before");
+    const sessions = await settleWorktreeOperations(
+      Array.from({ length: 12 }, async (_, index) => {
+        const key = `agent:main:worktree-burst-${cohort}-${index}`;
+        const created = await rpc(client, "sessions.create", {
+          key,
+          projectId: worktreeProjectId,
+          worktree: true,
+          worktreeBaseRef: "main",
+          worktreeName: `burst-${index}`,
+          visibility: "shared",
+          displayName: `Synthetic worktree ${index}`,
+        });
+        if (
+          !isRecord(created) ||
+          typeof created.sessionId !== "string" ||
+          !isRecord(created.worktree) ||
+          typeof created.worktree.id !== "string"
+        ) {
+          throw new Error("sessions.create did not return an owned worktree");
+        }
+        return { key, expectedSessionId: created.sessionId };
+      }),
+    );
+    const created = await scrapeWriterMetrics("worktree-burst-created");
+    await settleWorktreeOperations(
+      sessions.map((session) =>
+        rpc(client, "sessions.patch", {
+          ...session,
+          archived: true,
+        }),
+      ),
+    );
+    const archiveCleanup = await settleArchivedWorktreeCleanup(client);
+    const archived = await scrapeWriterMetrics("worktree-burst-archived");
+    await settleWorktreeOperations(
+      sessions.map(async (session) => {
+        const deleted = await rpc(client, "sessions.delete", {
+          ...session,
+          archivedOnly: true,
+          deleteTranscript: true,
+        });
+        if (!isRecord(deleted) || deleted.deleted !== true || deleted.worktreePreserved) {
+          throw new Error("sessions.delete did not finish synthetic worktree cleanup");
+        }
+      }),
+    );
+    const cleaned = await scrapeWriterMetrics("worktree-burst-cleaned");
+    if (
+      !Object.entries(cleaned.byClass).some(
+        ([requestClass, sample]) =>
+          requestClass.startsWith("worktrees.") &&
+          sample.count > (before.byClass[requestClass]?.count ?? 0),
+      )
+    ) {
+      throw new Error("Worktree burst produced no per-operation writer queue observations");
+    }
+    return {
+      count: sessions.length,
+      firstTwoMinutes,
+      before,
+      created,
+      archived,
+      archiveCleanup,
+      cleaned,
+      boundary:
+        "cumulative exporter counts; subtract adjacent snapshots for create/archive/cleanup; concurrent reconnect reads remain included",
+    };
+  } finally {
+    client.close();
+    clients.delete(client);
   }
 }
 const shapes: Array<{ method: string; params: Record<string, unknown> }> = [
@@ -863,7 +1157,14 @@ const shapes: Array<{ method: string; params: Record<string, unknown> }> = [
   { method: "sessions.catalog.list", params: { catalogId, agentId: "main", limitPerHost: 100 } },
   { method: "projects.list", params: {} },
 ];
-const timings: Array<{ method: string; startedMs: number; elapsedMs: number; error?: string }> = [];
+const timings: Array<{
+  method: string;
+  startedMs: number;
+  elapsedMs: number;
+  error?: string;
+  client?: number;
+  wave?: number;
+}> = [];
 const connectionErrors: Array<{ client: number; elapsedMs: number; error: string }> = [];
 const connectedClients = new Set<number>();
 const ownerProfileIds = new Set<string>();
@@ -935,6 +1236,211 @@ async function observeClient(index: number) {
     await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
   }
 }
+function summarize(rows: typeof timings) {
+  const successful = rows
+    .filter((row) => row.error === undefined)
+    .map((row) => row.elapsedMs)
+    .toSorted((a, b) => a - b);
+  const percentile = (fraction: number) =>
+    successful[Math.max(0, Math.ceil(successful.length * fraction) - 1)] ?? null;
+  return {
+    started: rows.length,
+    completed: successful.length,
+    errors: rows.length - successful.length,
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
+    p99Ms: percentile(0.99),
+    maxMs: successful.at(-1) ?? null,
+  };
+}
+async function closeMeasuredClient(client: ReturnType<typeof createGatewayWsClient>) {
+  if (client.ws.readyState !== client.ws.CLOSED) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        client.ws.terminate();
+        reject(new Error("Synthetic reconnect socket did not close"));
+      }, 10_000);
+      client.ws.once("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      client.close();
+    });
+  }
+  clients.delete(client);
+}
+async function measureReconnectWaves(initialClients: Awaited<ReturnType<typeof connect>>[]) {
+  const active = [...initialClients];
+  const clientIndices = Array.from({ length: clientCount }, (_, index) => index);
+  const attempts: ConnectAttempt[] = [];
+  async function replace(indices: number[], wave?: number) {
+    const closed = await Promise.allSettled(
+      indices.map((index) => closeMeasuredClient(active[index]!)),
+    );
+    const closeFailures = closed.filter((result) => result.status === "rejected");
+    if (closeFailures.length) {
+      throw new AggregateError(
+        closeFailures.map((result) => result.reason),
+        "Reconnect close failed",
+      );
+    }
+    const connected = await Promise.allSettled(
+      indices.map(async (index) => {
+        const attempt: ConnectAttempt | undefined =
+          wave === undefined
+            ? undefined
+            : {
+                client: index,
+                wave,
+                startedAtMs: Date.now(),
+                startedMs: performance.now() - restartAt,
+                elapsedMs: 0,
+              };
+        if (attempt) {
+          attempts.push(attempt);
+        }
+        active[index] = await connect(index, { proxy: true, attempt });
+      }),
+    );
+    const connectFailures = connected.filter((result) => result.status === "rejected");
+    if (connectFailures.length) {
+      throw new AggregateError(
+        connectFailures.map((result) => result.reason),
+        "Reconnect attempt failed",
+      );
+    }
+  }
+  async function listBatch(index: number, wave?: number) {
+    await Promise.all(
+      shapes.map(async ({ method, params }) => {
+        const startedMs = performance.now() - restartAt;
+        let error: string | undefined;
+        try {
+          await rpc(active[index]!, method, params, 30_000);
+        } catch (cause) {
+          error = String(cause);
+        }
+        if (wave !== undefined) {
+          timings.push({
+            method,
+            client: index,
+            wave,
+            startedMs,
+            elapsedMs: performance.now() - restartAt - startedMs,
+            ...(error ? { error } : {}),
+          });
+        } else if (error) {
+          throw new Error(error);
+        }
+      }),
+    );
+  }
+  // Pair locally once, then warm every device through the same attributed ingress as measurement.
+  for (let offset = 0; offset < clientCount; offset += 32) {
+    await replace(clientIndices.slice(offset, offset + 32));
+  }
+  await Promise.all(active.map((_client, index) => listBatch(index)));
+  console.log(
+    `PHASE reconnect-ready clients=${active.length} reconnecting=${reconnectCount} waves=${waveCount}`,
+  );
+  if (measurementStartAt !== undefined) {
+    if (Date.now() > measurementStartAt) {
+      throw new Error("Reconnect setup missed --start-at; choose a later paired start time");
+    }
+    await delay(measurementStartAt - Date.now());
+  }
+  recovering = true;
+  restartAt = performance.now();
+  loadStartedAt = restartAt;
+  const measuredStartedAtMs = Date.now();
+  let measurementError: string | undefined;
+  let completedWaves = 0;
+  for (let wave = 0; wave < waveCount; wave++) {
+    const waveStartedAt = performance.now();
+    const rotated = clientIndices.map((offset) => (wave * reconnectCount + offset) % clientCount);
+    const stop = Promise.withResolvers<void>();
+    let finished = false;
+    const polling = Promise.all(
+      rotated.slice(reconnectCount).map(async (index) => {
+        for (;;) {
+          await listBatch(index, wave);
+          await Promise.race([delay(pollMs, undefined, { ref: false }), stop.promise]);
+          if (finished) {
+            return;
+          }
+        }
+      }),
+    );
+    try {
+      await replace(rotated.slice(0, reconnectCount), wave);
+      await delay(Math.max(0, pollMs - (performance.now() - waveStartedAt)));
+      assertAlive();
+      completedWaves++;
+    } catch (error) {
+      measurementError = String(error);
+    } finally {
+      finished = true;
+      stop.resolve();
+      await polling;
+    }
+    if (measurementError) {
+      break;
+    }
+  }
+  const connectTimings = attempts.map((attempt) => ({
+    method: "connect",
+    startedMs: attempt.startedMs,
+    elapsedMs: attempt.connectMs ?? attempt.elapsedMs,
+    ...(attempt.error ? { error: attempt.error } : {}),
+  }));
+  const result = {
+    output,
+    fixture,
+    mode: "warm-reconnect-waves",
+    clientCount,
+    reconnectCount,
+    pollingClientCount: clientCount - reconnectCount,
+    waveCount,
+    expectedAttempts: waveCount * reconnectCount,
+    completedWaves,
+    pollMs,
+    measurementStartAt,
+    measuredStartedAtMs,
+    durationMs: performance.now() - restartAt,
+    transport:
+      "loopback trusted proxy attribution; signed paired devices; permessage-deflate negotiated; hello uncompressed",
+    phaseLog: path.join(output, "gateway-reconnect.log"),
+    connectionTiming:
+      "connectMs measures the connect RPC through hello, excluding users.self; elapsedMs includes socket open and challenge",
+    connect: summarize(connectTimings),
+    requests: Object.fromEntries(
+      shapes.map(({ method }) => [
+        method,
+        summarize(timings.filter((row) => row.method === method)),
+      ]),
+    ),
+    attempts,
+    timings,
+    eluSamples,
+    ...(measurementError ? { error: measurementError } : {}),
+  };
+  writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  console.log(
+    JSON.stringify(
+      { ...result, attempts: undefined, timings: undefined, eluSamples: undefined },
+      null,
+      2,
+    ),
+  );
+  if (
+    measurementError ||
+    completedWaves !== waveCount ||
+    attempts.some((row) => row.error) ||
+    timings.some((row) => row.error)
+  ) {
+    throw new Error(`incomplete reconnect measurement; inspect ${output}/result.json`);
+  }
+}
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
@@ -1003,12 +1509,14 @@ for (const [signal, exitCode] of [
 }
 try {
   await assertPortAvailable(port);
-  await assertPortAvailable(mockPort);
-  await new Promise<void>((resolve, reject) => {
-    mock.once("error", reject);
-    mock.listen(mockPort, "127.0.0.1", resolve);
-  });
-  const initial = launch("gateway-before-crash");
+  if (!reconnectWaves) {
+    await assertPortAvailable(mockPort);
+    await new Promise<void>((resolve, reject) => {
+      mock.once("error", reject);
+      mock.listen(mockPort, "127.0.0.1", resolve);
+    });
+  }
+  const initial = launch(reconnectWaves ? "gateway-reconnect" : "gateway-before-crash");
   await ready(initial);
   const initialClients: Awaited<ReturnType<typeof connect>>[] = [];
   // Pair devices before the measured restart without exhausting the per-IP preauth budget.
@@ -1021,6 +1529,20 @@ try {
       )),
     );
   }
+  if (reconnectWaves) {
+    await measureReconnectWaves(initialClients);
+  } else {
+    await measureRestartBurst(initial, initialClients);
+  }
+} finally {
+  if (!closing) {
+    await cleanup();
+  }
+}
+async function measureRestartBurst(
+  initial: ChildProcess,
+  initialClients: Awaited<ReturnType<typeof connect>>[],
+) {
   const sender = initialClients[0];
   if (!sender) {
     throw new Error("No synthetic sender connected");
@@ -1219,25 +1741,11 @@ try {
   void diagnosticMetrics.catch((error: unknown) => {
     failure ??= error instanceof Error ? error : new Error(String(error));
   });
-  await Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index)));
+  const [worktreeChurn] = await Promise.all([
+    values["worktree-churn"] ? measureWorktreeChurn() : Promise.resolve(undefined),
+    Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index))),
+  ]);
   assertAlive();
-  const summarize = (rows: typeof timings) => {
-    const successful = rows
-      .filter((row) => row.error === undefined)
-      .map((row) => row.elapsedMs)
-      .toSorted((a, b) => a - b);
-    const percentile = (fraction: number) =>
-      successful[Math.max(0, Math.ceil(successful.length * fraction) - 1)] ?? null;
-    return {
-      started: rows.length,
-      completed: successful.length,
-      errors: rows.length - successful.length,
-      p50Ms: percentile(0.5),
-      p95Ms: percentile(0.95),
-      p99Ms: percentile(0.99),
-      maxMs: successful.at(-1) ?? null,
-    };
-  };
   const metrics = await diagnosticMetrics;
   const transcriptTaskCounts = await transcriptMetrics;
   const sqliteQueues = await sqliteQueueMetrics;
@@ -1249,6 +1757,7 @@ try {
     durationMs,
     pollMs,
     sqliteQueues,
+    worktreeChurn,
     nativeTaskInputs: {
       windowMs: Math.min(durationMs, 120_000),
       counts: transcriptTaskCounts,
@@ -1360,9 +1869,5 @@ try {
     eluSamples.length === 0
   ) {
     throw new Error(`incomplete measurement; inspect ${output}/result.json`);
-  }
-} finally {
-  if (!closing) {
-    await cleanup();
   }
 }

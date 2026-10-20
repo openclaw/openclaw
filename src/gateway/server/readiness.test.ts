@@ -7,7 +7,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
-import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 import { createReadinessChecker } from "./readiness.js";
 
@@ -109,7 +109,6 @@ describe("createReadinessChecker", () => {
     let pending = true;
     const { manager, readiness } = createReadinessHarness({
       [getter]: () => pending,
-      cacheTtlMs: 1_000,
     });
     expect(readiness()).toEqual(failingSnapshot([reason]));
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
@@ -122,7 +121,6 @@ describe("createReadinessChecker", () => {
     let failure: Error | undefined;
     const { manager, readiness } = createReadinessHarness({
       getStateDatabaseFailure: () => failure,
-      cacheTtlMs: 1_000,
     });
     expect(readiness()).toEqual(readySnapshot());
 
@@ -195,7 +193,6 @@ describe("createReadinessChecker", () => {
       let refusals: AgentDatabaseAdmissionRefusal[] = [];
       const { readiness } = createReadinessHarness({
         accounts: channelFailed ? { discord: stoppedAccount({ connected: false }) } : {},
-        cacheTtlMs: 1_000,
         shouldSkipChannelReadiness: () => skipChannels,
         getAgentDatabaseAdmissionRefusals: () => refusals,
       });
@@ -294,12 +291,9 @@ describe("createReadinessChecker", () => {
   });
 
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
-    const { manager, readiness } = discordHarness(
-      {
-        lastTransportActivityAt: Date.now() - 1_000,
-      },
-      { cacheTtlMs: 1_000 },
-    );
+    const { manager, readiness } = discordHarness({
+      lastTransportActivityAt: Date.now() - 1_000,
+    });
     expect(readiness()).toEqual(readySnapshot());
     vi.advanceTimersByTime(500);
     expect(readiness()).toEqual(readySnapshot(300_500));
@@ -313,7 +307,6 @@ describe("createReadinessChecker", () => {
   it("refreshes stopped channels when the clock moves behind cached readiness", () => {
     const { manager, readiness } = createReadinessHarness({
       accounts: { discord: managedAccount({ lifecycle: "ready" }) },
-      cacheTtlMs: 1_000,
     });
 
     expect(readiness()).toEqual(readySnapshot());

@@ -6,7 +6,6 @@ import {
   resolvePluginSetupCliBackend,
   resolvePluginSetupRegistry,
 } from "../plugins/setup-registry.js";
-import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
@@ -28,6 +27,7 @@ export type ResolvedCliBackend = Pick<
   | "resolveExecutionArgs"
   | "resolveModelId"
   | "parseJsonlEvent"
+  | "classifyErrorCode"
   | "parseJsonlLifecycleEvent"
   | "toolAvailabilityEnforcement"
   | "projectNativeToolAuthority"
@@ -219,7 +219,6 @@ export function resolveCliBackendConfig(
     ...(options.agentId ? { agentId: options.agentId } : {}),
     ...(cfg ? { config: cfg } : {}),
   };
-  const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const registered = resolveRuntimeCliBackends().find(
     (entry) => normalizeProviderId(entry.id) === normalized,
   );
@@ -245,7 +244,7 @@ export function resolveCliBackendConfig(
     bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
     ...(registered ? { pluginId: registered.pluginId } : {}),
     transformSystemPrompt: backend.transformSystemPrompt,
-    textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),
+    textTransforms: mergePluginTextTransforms(backend.textTransforms),
     defaultAuthProfileId: backend.defaultAuthProfileId,
     authEpochMode: backend.authEpochMode,
     autoSelectAuthProfile: backend.autoSelectAuthProfile,
@@ -256,6 +255,7 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,
+    classifyErrorCode: backend.classifyErrorCode,
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,

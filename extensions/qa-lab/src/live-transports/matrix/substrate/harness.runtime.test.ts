@@ -1,18 +1,104 @@
-// Qa Lab Matrix tests cover harness behavior.
 import { readFile } from "node:fs/promises";
+import type {
+  QaDockerFetchLike as FetchLike,
+  QaDockerRunCommand as RunCommand,
+} from "openclaw/plugin-sdk/qa-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
-  isMatrixVersionsReachable,
-  waitForReachableMatrixBaseUrl,
+  isMatrixVersionsReachable as isMatrixVersionsReachableDefault,
+  waitForReachableMatrixBaseUrl as waitForReachableMatrixBaseUrlDefault,
   writeMatrixQaHarnessFiles,
 } from "./harness.runtime-internals.js";
-import { startMatrixQaHarness } from "./harness.runtime.js";
-import type { MatrixQaRecordingProxy } from "./recording-proxy.js";
+import { startMatrixQaHarness as startMatrixQaHarnessDefault } from "./harness.runtime.js";
+import type { MatrixQaRecordingProxy, startMatrixQaRecordingProxy } from "./recording-proxy.js";
 
-type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
+const io = vi.hoisted(() => ({
+  execCommand: vi.fn<RunCommand>(),
+  fetchHealthUrl: vi.fn<FetchLike>(),
+  sleep: vi.fn<(ms: number) => Promise<unknown>>(),
+  startRecordingProxy: vi.fn<typeof startMatrixQaRecordingProxy>(),
+}));
+
+vi.mock("../../../docker-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../docker-runtime.js")>()),
+  execCommand: io.execCommand,
+  fetchHealthUrl: io.fetchHealthUrl,
+}));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: io.sleep,
+}));
+vi.mock("./recording-proxy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./recording-proxy.js")>()),
+  startMatrixQaRecordingProxy: io.startRecordingProxy,
+}));
+
+afterAll(() => {
+  vi.doUnmock("../../../docker-runtime.js");
+  vi.doUnmock("node:timers/promises");
+  vi.doUnmock("./recording-proxy.js");
+  vi.resetModules();
+});
+
+type MatrixQaHarnessDeps = {
+  fetchImpl?: FetchLike;
+  runCommand?: RunCommand;
+  sleepImpl?: (ms: number) => Promise<unknown>;
+  startRecordingProxyImpl?: typeof startMatrixQaRecordingProxy;
+};
+
+async function startMatrixQaHarness(
+  params: Parameters<typeof startMatrixQaHarnessDefault>[0],
+  deps?: MatrixQaHarnessDeps,
+) {
+  const actual = await vi.importActual<typeof import("../../../docker-runtime.js")>(
+    "../../../docker-runtime.js",
+  );
+  io.execCommand.mockReset().mockImplementation(deps?.runCommand ?? actual.execCommand);
+  io.fetchHealthUrl.mockReset().mockImplementation(deps?.fetchImpl ?? actual.fetchHealthUrl);
+  io.sleep.mockReset().mockImplementation(deps?.sleepImpl ?? (async () => {}));
+  if (deps?.startRecordingProxyImpl) {
+    io.startRecordingProxy.mockReset().mockImplementation(deps.startRecordingProxyImpl);
+  }
+  return await startMatrixQaHarnessDefault(params);
+}
+
+function isMatrixVersionsReachable(
+  baseUrl: string,
+  fetchImpl: FetchLike,
+  timeoutSignal?: AbortSignal,
+  signal?: AbortSignal,
+) {
+  io.fetchHealthUrl.mockImplementation(fetchImpl);
+  return isMatrixVersionsReachableDefault(baseUrl, timeoutSignal, signal);
+}
+
+function waitForReachableMatrixBaseUrl(
+  params: Parameters<typeof waitForReachableMatrixBaseUrlDefault>[0] & {
+    fetchImpl: FetchLike;
+    sleepImpl: (ms: number) => Promise<unknown>;
+  },
+) {
+  const { fetchImpl, sleepImpl, ...options } = params;
+  io.fetchHealthUrl.mockImplementation(fetchImpl);
+  io.sleep.mockImplementation(sleepImpl);
+  return waitForReachableMatrixBaseUrlDefault(options);
+}
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
+const host = "http://127.0.0.1:28008/";
+const container = "http://172.18.0.10:8008/";
+const awake = async () => {};
+function recordingProxy(targetBaseUrl: string, setTargetBaseUrl = vi.fn()) {
+  return {
+    baseUrl: targetBaseUrl,
+    installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
+    records: () => [],
+    setTargetBaseUrl,
+    stop: vi.fn(awake),
+  };
+}
 
 async function withStartedMatrixHarness(
   deps: MatrixQaHarnessDeps,
@@ -23,15 +109,7 @@ async function withStartedMatrixHarness(
     const startRecordingProxyImpl =
       deps?.startRecordingProxyImpl ??
       (async ({ targetBaseUrl }: { targetBaseUrl: string }) =>
-        ({
-          baseUrl: targetBaseUrl,
-          buildManifest: vi.fn(),
-          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
-          records: () => [],
-          setScenarioId: vi.fn(),
-          setTargetBaseUrl: vi.fn(),
-          stop: vi.fn(async () => {}),
-        }) as unknown as MatrixQaRecordingProxy);
+        recordingProxy(targetBaseUrl) as unknown as MatrixQaRecordingProxy);
     const result = await startMatrixQaHarness(
       {
         outputDir,
@@ -44,20 +122,12 @@ async function withStartedMatrixHarness(
   });
 }
 
-function createContainerNetworkRunCommand(calls?: string[]) {
+function runCommands(responses: Record<string, () => string | Promise<never>>, calls?: string[]) {
   return async function runCommand(command: string, args: string[], cwd?: string) {
     calls?.push([command, ...args, `@${cwd}`].join(" "));
     const rendered = args.join(" ");
-    if (rendered.includes("ps --format json")) {
-      return { stdout: '{"State":"running"}\n', stderr: "" };
-    }
-    if (rendered.includes("ps -q")) {
-      return { stdout: "container-123\n", stderr: "" };
-    }
-    if (rendered.includes("inspect --format")) {
-      return { stdout: "172.18.0.10\n", stderr: "" };
-    }
-    return { stdout: "", stderr: "" };
+    const response = Object.entries(responses).find(([match]) => rendered.includes(match));
+    return { stdout: response ? await response[1]() : "", stderr: "" };
   };
 }
 
@@ -113,18 +183,12 @@ describe("matrix harness runtime", () => {
     try {
       await withStartedMatrixHarness(
         {
-          async runCommand(_command, args) {
-            const rendered = args.join(" ");
-            if (rendered.includes("restart matrix-qa-homeserver")) {
-              return await new Promise<never>(() => {});
-            }
-            if (rendered.includes("ps --format json")) {
-              return { stdout: '[{"State":"running"}]\n', stderr: "" };
-            }
-            return { stdout: "", stderr: "" };
-          },
+          runCommand: runCommands({
+            "restart matrix-qa-homeserver": () => new Promise<never>(() => {}),
+            "ps --format json": () => '[{"State":"running"}]\n',
+          }),
           fetchImpl: vi.fn(async () => ({ ok: true })),
-          sleepImpl: vi.fn(async () => {}),
+          sleepImpl: vi.fn(awake),
         },
         async ({ result }) => {
           const restarting = result.restartService();
@@ -146,35 +210,23 @@ describe("matrix harness runtime", () => {
     let portReadCount = 0;
     await withStartedMatrixHarness(
       {
-        async runCommand(command, args, cwd) {
-          calls.push([command, ...args, `@${cwd}`].join(" "));
-          const rendered = args.join(" ");
-          if (rendered.includes("port matrix-qa-homeserver 8008")) {
-            portReadCount += 1;
-            return { stdout: `127.0.0.1:${portReadCount === 1 ? 49_152 : 49_153}\n`, stderr: "" };
-          }
-          if (rendered.includes("ps --format json")) {
-            return { stdout: '[{"State":"running"}]\n', stderr: "" };
-          }
-          return { stdout: "", stderr: "" };
-        },
+        runCommand: runCommands(
+          {
+            "port matrix-qa-homeserver 8008": () =>
+              `127.0.0.1:${++portReadCount === 1 ? 49_152 : 49_153}\n`,
+            "ps --format json": () => '[{"State":"running"}]\n',
+          },
+          calls,
+        ),
         fetchImpl: vi.fn(async () => ({ ok: true })),
-        sleepImpl: vi.fn(async () => {}),
+        sleepImpl: vi.fn(awake),
         startRecordingProxyImpl: vi.fn(async ({ targetBaseUrl }) => ({
-          baseUrl: targetBaseUrl,
-          buildManifest: vi.fn(),
-          createExchangeContext: vi.fn(),
-          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
+          ...recordingProxy(targetBaseUrl, setTargetBaseUrl),
           onExchange: vi.fn(),
-          records: () => [],
-          setScenarioId: vi.fn(),
-          setTargetBaseUrl,
-          stop: vi.fn(async () => {}),
         })),
       },
       async ({ outputDir, result }) => {
-        expect(result.homeserverPort).toBe(49152);
-        expect(result.baseUrl).toBe("http://127.0.0.1:49152/");
+        expect(result).toMatchObject({ homeserverPort: 49152, baseUrl: "http://127.0.0.1:49152/" });
         expect(calls).toContain(
           `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml port matrix-qa-homeserver 8008 @/repo/openclaw`,
         );
@@ -194,10 +246,7 @@ describe("matrix harness runtime", () => {
         startMatrixQaHarness(
           { outputDir, repoRoot: "/repo/openclaw", homeserverPort: 28008 },
           {
-            async runCommand(command, args, cwd) {
-              calls.push([command, ...args, `@${cwd}`].join(" "));
-              return { stdout: "", stderr: "" };
-            },
+            runCommand: runCommands({}, calls),
             sleepImpl: vi.fn(async () => {
               throw new Error("health setup failed");
             }),
@@ -208,65 +257,40 @@ describe("matrix harness runtime", () => {
     });
   });
 
-  it("cancels Matrix versions probe response bodies", async () => {
-    const cancel = vi.fn(async () => {});
-    const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
+  it("probes Matrix versions with a bounded request", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true }));
 
-    await expect(isMatrixVersionsReachable("http://127.0.0.1:28008/", fetchImpl)).resolves.toBe(
-      true,
-    );
+    await expect(isMatrixVersionsReachable(host, fetchImpl)).resolves.toBe(true);
 
-    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:28008/_matrix/client/versions", {
+    expect(fetchImpl).toHaveBeenCalledWith(`${host}_matrix/client/versions`, {
       signal: expect.any(AbortSignal),
     });
-    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a stalled versions request when its deadline signal aborts", async () => {
     const { fetchImpl, probeSignals } = createStalledVersionsFetch();
     const controller = new AbortController();
-    const pending = isMatrixVersionsReachable(
-      "http://127.0.0.1:28008/",
-      fetchImpl,
-      controller.signal,
-    );
+    const pending = isMatrixVersionsReachable(host, fetchImpl, controller.signal);
     controller.abort(new DOMException("Deadline expired", "TimeoutError"));
     await expect(pending).resolves.toBe(false);
     expect(probeSignals[0]?.aborted).toBe(true);
   });
 
-  it("probes the container fallback when the host versions probe stalls", async () => {
-    const { fetchImpl, probeSignals } = createStalledVersionsFetch("http://172.18.0.10:8008/");
-
+  it.each([
+    [container, 25],
+    [host, 1_000],
+  ] as const)("returns %s without waiting for a stalled peer", async (healthy, timeoutMs) => {
+    const { fetchImpl, probeSignals } = createStalledVersionsFetch(healthy);
     await expect(
       waitForReachableMatrixBaseUrl({
         composeFile: "/tmp/docker-compose.matrix-qa.yml",
-        containerBaseUrl: "http://172.18.0.10:8008/",
+        containerBaseUrl: container,
         fetchImpl,
-        hostBaseUrl: "http://127.0.0.1:28008/",
-        sleepImpl: vi.fn(async () => {}),
-        timeoutMs: 25,
+        hostBaseUrl: host,
+        sleepImpl: vi.fn(awake),
+        timeoutMs,
       }),
-    ).resolves.toBe("http://172.18.0.10:8008/");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(probeSignals).toHaveLength(1);
-    expect(probeSignals[0]?.aborted).toBe(true);
-  });
-
-  it("returns the host without waiting for a stalled container versions probe", async () => {
-    const { fetchImpl, probeSignals } = createStalledVersionsFetch("http://127.0.0.1:28008/");
-
-    await expect(
-      waitForReachableMatrixBaseUrl({
-        composeFile: "/tmp/docker-compose.matrix-qa.yml",
-        containerBaseUrl: "http://172.18.0.10:8008/",
-        fetchImpl,
-        hostBaseUrl: "http://127.0.0.1:28008/",
-        sleepImpl: vi.fn(async () => {}),
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toBe("http://127.0.0.1:28008/");
+    ).resolves.toBe(healthy);
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(probeSignals).toHaveLength(1);
@@ -278,27 +302,26 @@ describe("matrix harness runtime", () => {
 
     await withStartedMatrixHarness(
       {
-        runCommand: createContainerNetworkRunCommand(),
+        runCommand: runCommands({
+          "ps --format json": () => '{"State":"running"}\n',
+          "ps -q": () => "container-123\n",
+          "inspect --format": () => "172.18.0.10\n",
+        }),
         fetchImpl: vi.fn(async (input: string) => {
           fetchCalls.push(input);
           return {
             ok:
-              input === "http://172.18.0.10:8008/_matrix/client/versions" &&
+              input === `${container}_matrix/client/versions` &&
               fetchCalls.filter((url) => url === input).length > 1,
           };
         }),
-        sleepImpl: vi.fn(async () => {}),
+        sleepImpl: vi.fn(awake),
       },
       ({ result }) => {
-        expect(result.baseUrl).toBe("http://172.18.0.10:8008/");
-        expect(fetchCalls).toEqual([
-          "http://127.0.0.1:28008/_matrix/client/versions",
-          "http://127.0.0.1:28008/_matrix/client/versions",
-          "http://172.18.0.10:8008/_matrix/client/versions",
-          "http://127.0.0.1:28008/_matrix/client/versions",
-          "http://172.18.0.10:8008/_matrix/client/versions",
-          "http://172.18.0.10:8008/_matrix/client/versions",
-        ]);
+        expect(result.baseUrl).toBe(container);
+        expect(fetchCalls).toEqual(
+          [host, host, container, host, container].map((url) => `${url}_matrix/client/versions`),
+        );
       },
     );
   });

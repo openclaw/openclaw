@@ -61,17 +61,14 @@ async function fixtureEventBeforeSettlement(
       throw error;
     });
   // The first-commit record precedes replies and exit; receipt delivery uses a separate pipe.
+  const requireReady = async (error: unknown) => {
+    if (!(await readReady())) {
+      throw error;
+    }
+  };
   const settled = Promise.resolve(operation).then(
-    async () => {
-      if (!(await readReady())) {
-        throw new Error(`Independent WAL writer exited before publishing ${file}`);
-      }
-    },
-    async (error: unknown) => {
-      if (!(await readReady())) {
-        throw error;
-      }
-    },
+    () => requireReady(new Error(`Independent WAL writer exited before publishing ${file}`)),
+    requireReady,
   );
   await Promise.race([receipts.waitFor(file, "ready"), settled]);
 }
@@ -80,6 +77,16 @@ async function readWriterGeneration(file: string): Promise<number> {
   // Ignore an in-flight final record; only newline-terminated commits are observable.
   const generations = (await fs.readFile(file, "utf8")).split("\n");
   return Number(generations.at(-2) ?? -1);
+}
+
+function checkDatabase(db: ReturnType<typeof openNodeSqliteDatabase>) {
+  expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  expect(db.prepare("SELECT rowid, value FROM evidence").all()).toEqual([
+    { rowid: 71, value: "preserved" },
+  ]);
+  expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
+    bytes: 4194304,
+  });
 }
 
 it.for(["snapshot", "discover"] as const)(
@@ -100,24 +107,20 @@ it.for(["snapshot", "discover"] as const)(
       const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
       for (const file of [shared, agent]) {
         await fs.mkdir(path.dirname(file), { recursive: true });
-        const db = openNodeSqliteDatabase(file);
-        try {
-          db.exec(`
+        using db = openNodeSqliteDatabase(file);
+        db.exec(`
           PRAGMA journal_mode = WAL;
           PRAGMA user_version = 3;
           CREATE TABLE witness (id INTEGER PRIMARY KEY, generation INTEGER, inverse INTEGER);
           INSERT INTO witness VALUES (1, 0, 0), (2, 0, 0);
           CREATE TABLE payload (bytes BLOB);
           INSERT INTO payload VALUES (zeroblob(4194304));
+          CREATE TABLE evidence(value TEXT);
+          INSERT INTO evidence(rowid, value) VALUES(71, 'preserved');
         `);
-          if (file === shared) {
-            db.exec("CREATE TABLE agent_databases (path TEXT);");
-            db.prepare("INSERT INTO agent_databases VALUES (?)").run(
-              path.relative(stateDir, agent),
-            );
-          }
-        } finally {
-          db.close();
+        if (file === shared) {
+          db.exec("CREATE TABLE agent_databases (path TEXT);");
+          db.prepare("INSERT INTO agent_databases VALUES (?)").run(path.relative(stateDir, agent));
         }
       }
       await fs.mkdir(candidateRoot);
@@ -284,52 +287,30 @@ it.for(["snapshot", "discover"] as const)(
             ]),
           );
           for (const source of [shared, agent]) {
-            const db = openNodeSqliteDatabase(
+            using db = openNodeSqliteDatabase(
               path.join(targetStateDir, path.relative(stateDir, source)),
               { readOnly: true },
             );
-            try {
-              expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-              const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
-              expect(rows).toHaveLength(2);
-              expect(rows[0]).toEqual(rows[1]);
-              expect(rows[0]?.generation).toBeGreaterThanOrEqual(before);
-              expect(rows[0]?.generation).toBeLessThanOrEqual(after);
-              expect(Number(rows[0]?.generation) + Number(rows[0]?.inverse)).toBe(0);
-              expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
-                bytes: 4194304,
-              });
-            } finally {
-              db.close();
-            }
+            checkDatabase(db);
+            const rows = db.prepare("SELECT generation, inverse FROM witness ORDER BY id").all();
+            expect(rows).toHaveLength(2);
+            expect(rows[0]).toEqual(rows[1]);
+            expect(rows[0]?.generation).toBeGreaterThanOrEqual(before);
+            expect(rows[0]?.generation).toBeLessThanOrEqual(after);
+            expect(Number(rows[0]?.generation) + Number(rows[0]?.inverse)).toBe(0);
           }
         }
-        console.log(
-          JSON.stringify({
-            mode,
-            writerPid: Number(await fs.readFile(ready, "utf8")),
-            before,
-            after,
-          }),
-        );
       } finally {
         await fs.writeFile(stop, "stop");
         const ended = await writing;
         expect(ended.code, ended.stderr.toString()).toBe(0);
       }
       for (const source of [shared, agent]) {
-        const db = openNodeSqliteDatabase(source, { readOnly: true });
-        try {
-          expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-          expect(
-            db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
-          ).toEqual({ n: 0 });
-          expect(db.prepare("SELECT length(bytes) AS bytes FROM payload").get()).toEqual({
-            bytes: 4194304,
-          });
-        } finally {
-          db.close();
-        }
+        using db = openNodeSqliteDatabase(source, { readOnly: true });
+        checkDatabase(db);
+        expect(
+          db.prepare("SELECT count(*) AS n FROM witness WHERE generation + inverse != 0").get(),
+        ).toEqual({ n: 0 });
       }
     }, signal));
   },

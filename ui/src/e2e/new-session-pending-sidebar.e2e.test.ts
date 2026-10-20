@@ -60,18 +60,23 @@ suite.define(() => {
     },
   );
 
-  it.each(["chip", "roster"] as const)(
-    "selects a visible provisional row in its %s destination without admitting it and removes it on rejection",
-    async (mode) => {
+  it.each([
+    { destination: "chip", mode: "chip", pinned: false },
+    { destination: "roster", mode: "roster", pinned: false },
+    { destination: "pinned agent", mode: "roster", pinned: true },
+  ] as const)(
+    "shows a provisional row only where the admitted row appears ($destination) and restores the draft on rejection",
+    async ({ destination, mode, pinned }) => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
         async ({ page }) => {
           await page.addInitScript(
-            ({ key, sidebarAgentsMode }) =>
-              localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode })),
+            ({ key, sidebarAgentsMode, pinnedAgentIds }) =>
+              localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode, pinnedAgentIds })),
             {
               key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
               sidebarAgentsMode: mode,
+              pinnedAgentIds: pinned ? ["main"] : [],
             },
           );
           const old = {
@@ -84,7 +89,15 @@ suite.define(() => {
           const gateway = await installMockGateway(page, { sessionKey: old.key, sessions: [old] });
           await page.goto(new URL(controlUiSessionPath(old.key), suite.server.baseUrl).href);
           const oldRow = page.locator('[data-session-key="' + old.key + '"]');
-          await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          if (mode === "chip") {
+            await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          } else if (pinned) {
+            await page.locator('[data-pinned-agent="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          } else {
+            await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          }
           await navigateInApp(page, "new-session", "?agent=main");
           await page
             .locator(".new-session-page__message")
@@ -94,40 +107,54 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.create");
           await page.locator("openclaw-pending-session-create .chat-pane__header").waitFor();
           const provisional = page.locator(".sidebar-recent-session--creating");
-          await expect.poll(() => provisional.count()).toBe(1);
+          if (mode === "chip") {
+            await expect.poll(() => provisional.count()).toBe(1);
+          } else {
+            // The agent-only roster never lists the admitted session, so a handoff row
+            // there would flash under the agent header and vanish on admission.
+            await page.locator('[data-agent-id="main"]').waitFor();
+            expect(await provisional.count()).toBe(0);
+          }
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             const sessions = page.locator(".sidebar-shell__body");
             const frame = await takeControlUiScreenshotFrame(
               page,
               page.locator("body"),
-              [sessions, provisional, page.locator(".chat-pane__header")],
+              [sessions, page.locator(".chat-pane__header")],
               { animations: "disabled", elements: [sessions] },
             );
             await writeFile(
-              path.join(suite.artifactDir, `pending-session-${mode}.png`),
+              path.join(suite.artifactDir, `pending-session-${destination.replace(" ", "-")}.png`),
               frame.elements[0]!.png,
             );
           }
-          // The handoff occupies the slot its admitted row will take, not a detached
-          // row above the list and its agent header.
-          const destination =
-            mode === "roster"
-              ? '.sidebar-sessions [data-agent-group="main"]'
-              : ".sidebar-sessions .sidebar-recent-sessions";
-          expect(
-            await page.locator(destination + " .sidebar-recent-session--creating").count(),
-          ).toBe(1);
-          const titleInset = (row: typeof provisional) =>
-            row
-              .locator(".sidebar-recent-session__text")
-              .evaluate((element) => Math.round(element.getBoundingClientRect().left));
-          expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
-          expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
-          expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
-          expect(await provisional.locator("button, a[href]").count()).toBe(0);
-          expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
+          if (mode === "chip") {
+            // The handoff occupies the slot its admitted row will take, not a detached
+            // row above the list.
+            expect(
+              await page
+                .locator(
+                  ".sidebar-sessions .sidebar-recent-sessions .sidebar-recent-session--creating",
+                )
+                .count(),
+            ).toBe(1);
+            const titleInset = (row: typeof provisional) =>
+              row
+                .locator(".sidebar-recent-session__text")
+                .evaluate((element) => Math.round(element.getBoundingClientRect().left));
+            expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+            // Row spacing, not section spacing: admission swaps rows without moving the rest.
+            const bounds = (row: typeof provisional) =>
+              row.evaluate((element) => element.getBoundingClientRect().toJSON() as DOMRect);
+            const [pendingBox, oldBox] = [await bounds(provisional), await bounds(oldRow)];
+            expect(Math.round(oldBox.top - pendingBox.bottom)).toBe(2);
+            expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
+            expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
+            expect(await provisional.locator("button, a[href]").count()).toBe(0);
+            expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
+          }
           const bars = page.locator(".session-title-placeholder > span");
-          expect(await bars.count()).toBe(2);
+          expect(await bars.count()).toBe(mode === "chip" ? 2 : 1);
           for (const bar of await bars.all()) {
             const style = await bar.evaluate((element) => {
               const computed = getComputedStyle(element);
@@ -166,7 +193,15 @@ suite.define(() => {
           );
           await navigateInApp(page, "chat");
           await waitForCommittedChatRoute(page);
-          await oldRow.locator('[aria-current="page"]').waitFor();
+          if (mode === "chip") {
+            await oldRow.locator('[aria-current="page"]').waitFor();
+          } else if (pinned) {
+            expect(await page.locator('[data-pinned-agent="main"]').count()).toBe(1);
+          } else {
+            expect(
+              await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').count(),
+            ).toBe(1);
+          }
         },
       );
     },

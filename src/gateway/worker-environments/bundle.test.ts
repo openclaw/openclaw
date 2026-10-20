@@ -20,12 +20,21 @@ import {
   resolveWorkerNpmInstallationArtifact,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
+import type { WorkerBundleBuildOptions } from "./node-bootstrap-artifact-contract.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+
+// mock-isolation: keep staging fault injection beside the builder; the worker suite covers isolation.
+vi.mock("./node-bootstrap-artifact-worker.js", () => ({
+  prepareNodeArtifactInWorker: async (_kind: "bundle", options: WorkerBundleBuildOptions) => {
+    const { prepareWorkerBundle } = await import("./bundle.js");
+    return await prepareWorkerBundle(options);
+  },
+}));
 
 async function writeFixture(
   packageRoot: string,
@@ -45,9 +54,12 @@ async function writeFixture(
     "utf8",
   );
   for (const [artifactName, contents] of [
+    ["client-credential.worker.mjs", "export const clientCredentials = true;\n"],
     ["code-mode-node.worker.mjs", "export const codeModeNode = true;\n"],
     ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
     ["file-tool-read.worker.mjs", "export const fileToolRead = true;\n"],
+    ["fs-safe-darwin-arm64.node", "arm64-native-fixture"],
+    ["fs-safe-darwin-x64.node", "x64-native-fixture"],
     ["gateway-state-owner-heartbeat.worker.mjs", "export const heartbeat = true;\n"],
     ["github-exec-launcher.mjs", "export const launcher = true;\n"],
     ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
@@ -227,9 +239,12 @@ describe("worker bundle producer", () => {
       expect(first.tarballBytes).toBe(compressed.byteLength);
       const entries = await listTarball(first.tarballPath);
       expect(entries).toEqual([
+        "client-credential.worker.mjs",
         "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
+        "fs-safe-darwin-arm64.node",
+        "fs-safe-darwin-x64.node",
         "gateway-state-owner-heartbeat.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
@@ -251,8 +266,11 @@ describe("worker bundle producer", () => {
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
       for (const [artifactName, expectedContents] of [
+        ["client-credential.worker.mjs", "export const clientCredentials = true;\n"],
         ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
         ["file-tool-read.worker.mjs", "export const fileToolRead = true;\n"],
+        ["fs-safe-darwin-arm64.node", "arm64-native-fixture"],
+        ["fs-safe-darwin-x64.node", "x64-native-fixture"],
         ["gateway-state-owner-heartbeat.worker.mjs", "export const heartbeat = true;\n"],
         ["github-exec-launcher.mjs", "export const launcher = true;\n"],
         ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
@@ -293,8 +311,11 @@ describe("worker bundle producer", () => {
 
       let previousHash = first.bundleHash;
       for (const artifactName of [
+        "client-credential.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
+        "fs-safe-darwin-arm64.node",
+        "fs-safe-darwin-x64.node",
         "gateway-state-owner-heartbeat.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
@@ -728,9 +749,12 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "client-credential.worker.mjs",
         "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
+        "fs-safe-darwin-arm64.node",
+        "fs-safe-darwin-x64.node",
         "gateway-state-owner-heartbeat.worker.mjs",
         "github-exec-launcher.mjs",
         "image-processor.worker.mjs",
@@ -750,6 +774,7 @@ describe("worker bundle producer", () => {
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
       "worker-chunk-symlink.mjs",
+      "client-credential.worker.mjs",
       "file-tool-planning.worker.mjs",
       "file-tool-read.worker.mjs",
       "gateway-state-owner-heartbeat.worker.mjs",

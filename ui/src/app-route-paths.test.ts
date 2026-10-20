@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
+  APP_ROUTE_OFFLINE_PREFIXES,
   clawCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   dynamicRouteFromPath,
@@ -544,23 +545,43 @@ describe("Plugin Settings route paths", () => {
 });
 
 describe("Claw detail route paths", () => {
-  it("uses a public package slug and restores its official package identity", () => {
-    const pathname = pathForClawCatalogEntry("@openclaw/workflow-operator", "/ui");
-    expect(pathname).toBe("/ui/agents/claws/workflow-operator");
-    expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe("@openclaw/workflow-operator");
-    expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
-    expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
-      "claws",
-      "__openclawClawsPath",
-      pathname,
-    ]);
+  it.each(["@openclaw/workflow-operator", "@community/travel-planner", "personal-claw"])(
+    "round trips the public package identity %s",
+    (packageName) => {
+      const pathname = pathForClawCatalogEntry(packageName, "/ui");
+      expect(pathname).toBe(`/ui/agents/claws/packages/${encodeURIComponent(packageName)}`);
+      expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
+      expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
+      expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
+        "claws",
+        "__openclawClawsPath",
+        pathname,
+      ]);
+    },
+  );
+
+  it("preserves existing official detail links", () => {
+    expect(clawCatalogPackageNameFromPath("/agents/claws/workflow-operator")).toBe(
+      "@openclaw/workflow-operator",
+    );
   });
 
-  it("rejects malformed or non-OpenClaw package routes", () => {
-    expect(() => pathForClawCatalogEntry("@community/travel-planner")).toThrow(
-      "Only official Claws",
-    );
+  it.each(["@maker/../private", "@Maker/claw", "../private", "@maker/claw/extra"])(
+    "rejects invalid package identity %s",
+    (packageName) => {
+      expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
+      expect(
+        clawCatalogPackageNameFromPath(`/agents/claws/packages/${encodeURIComponent(packageName)}`),
+      ).toBeNull();
+    },
+  );
+
+  it("rejects malformed or unencoded package routes", () => {
     expect(clawCatalogPackageNameFromPath("/agents/claws/@openclaw/workflow-operator")).toBeNull();
+    expect(
+      clawCatalogPackageNameFromPath("/agents/claws/packages/@maker/travel-planner"),
+    ).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/agents/claws/packages/%ZZ")).toBeNull();
   });
 });
 
@@ -582,5 +603,13 @@ describe("terminal route paths", () => {
   it("does not consume a different mount's terminal identity", () => {
     expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
     expect(routeIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
+  });
+});
+
+describe("offline route admission", () => {
+  it("never claims Gateway-owned plugin HTTP namespaces", () => {
+    expect(APP_ROUTE_OFFLINE_PREFIXES).toContain("/chat/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES).not.toContain("/plugin/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES.some((prefix) => prefix.startsWith("/plugins"))).toBe(false);
   });
 });

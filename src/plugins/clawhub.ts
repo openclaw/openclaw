@@ -55,10 +55,7 @@ import {
   normalizeClawHubClawPackInstallFields,
   type ClawHubPluginInstallRecordFields,
 } from "./clawhub-install-records.js";
-import {
-  isDefaultOfficialClawHubPackage,
-  isTrustedSourceLinkedOfficialPackage,
-} from "./clawhub-official-source.js";
+import { isDefaultOfficialClawHubPackage } from "./clawhub-official-source.js";
 import {
   formatClawHubReleaseLabel,
   formatClawHubSpecifier,
@@ -914,8 +911,7 @@ export async function installPluginFromClawHub(
         archivePath: archive.archivePath,
         verification,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
-        trustedSourceLinkedOfficialInstall:
-          officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
+        trustedSourceLinkedOfficialInstall: officialClawHubPackage,
         config: params.config,
         logger: params.logger,
         mode: params.mode,

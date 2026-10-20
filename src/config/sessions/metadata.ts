@@ -34,14 +34,14 @@ export function deriveSessionOrigin(
     label: normalizeOptionalString(resolveConversationLabel(ctx)),
     provider: normalizeMessageChannel(providerRaw),
     surface: normalizeOptionalLowercaseString(ctx.Surface),
-    chatType: normalizeChatType(ctx.ChatType) ?? undefined,
+    chatType: normalizeChatType(ctx.ChatType),
     from: normalizeOptionalString(ctx.From),
     to: normalizeOptionalString(typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To),
     nativeChannelId: normalizeOptionalString(ctx.NativeChannelId),
     nativeDirectUserId: normalizeOptionalString(ctx.NativeDirectUserId),
     avatar: normalizeOptionalString(ctx.ConversationAvatar),
     accountId: normalizeOptionalString(ctx.AccountId),
-    threadId: ctx.MessageThreadId ?? undefined,
+    threadId: ctx.MessageThreadId,
   });
 }
 

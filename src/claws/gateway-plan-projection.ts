@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type {
   ClawActionEffect,
   ClawConfiguredAccess,
@@ -11,10 +11,12 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { digestClawValue } from "./digest.js";
 import { clawActionNeedsEffect, projectClawAddActionEffect } from "./gateway-action-effects.js";
 import { projectClawAddScheduledJobs, projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { projectClawManifestDisclosure } from "./gateway-manifest-disclosure.js";
+import { collectClawSkillWarningReviews } from "./skill-warning-review.js";
 import type {
   ClawAddPlan,
   ClawDiagnostic,
@@ -45,15 +47,11 @@ function safeAction(action: { kind: string; id: string; action: string; blocked:
 
 function projectActionsWithEffects<
   T extends { kind: string; id: string; action: string; blocked: boolean },
->(
-  operation: "add" | "update" | "remove",
-  actions: readonly T[],
-  projectEffect: (action: T) => ClawActionEffect | undefined,
-) {
+>(actions: readonly T[], projectEffect: (action: T) => ClawActionEffect | undefined) {
   const blockers: Array<{ code: string; path: string; message: string }> = [];
   const projected = actions.map((action) => {
     const safe = safeAction(action);
-    if (!clawActionNeedsEffect(operation, action)) {
+    if (!clawActionNeedsEffect(action)) {
       return safe;
     }
     try {
@@ -101,34 +99,9 @@ function requestedPolicyBlockers(
 }
 
 function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
-  return plan.actions.flatMap((action) => {
-    const details = action.details;
-    if (
-      action.kind !== "package" ||
-      action.blocked ||
-      details?.kind !== "skill" ||
-      details.ownerAction !== "install" ||
-      typeof details.riskWarning !== "string" ||
-      !details.riskWarning
-    ) {
-      return [];
-    }
-    if (
-      typeof details.ref !== "string" ||
-      typeof details.version !== "string" ||
-      typeof details.integrity !== "string"
-    ) {
-      throw new Error("The Claw skill trust review is incomplete.");
-    }
-    const review = {
-      actionId: action.id,
-      ref: details.ref,
-      version: details.version,
-      integrity: details.integrity,
-      riskWarning: details.riskWarning,
-    };
-    return [{ ...review, reviewToken: digestClawValue(review) }];
-  });
+  return collectClawSkillWarningReviews(plan).map((review) =>
+    Object.assign(review, { reviewToken: digestClawValue(review) }),
+  );
 }
 
 function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {
@@ -141,16 +114,14 @@ function sealClawLifecyclePlan(
   plan: Omit<ClawLifecyclePlanResult, "schemaVersion" | "planIntegrity">,
   canonicalPlanIntegrity: string,
 ): ClawLifecyclePlanResult {
-  const planIntegrity = `sha256:${createHash("sha256")
-    .update(stableStringify({ canonicalPlanIntegrity, plan }))
-    .digest("hex")}`;
+  const planIntegrity = `sha256:${sha256Hex(stableStringify({ canonicalPlanIntegrity, plan }))}`;
   return { schemaVersion: "openclaw.clawsGatewayPlan.v1", planIntegrity, ...plan };
 }
 
 function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
   const root = path.resolve(sourceRoot);
-  const visit = (current: unknown): unknown => {
-    if (typeof current === "string" && path.isAbsolute(current)) {
+  return mapNestedStrings(value, (current) => {
+    if (path.isAbsolute(current)) {
       const relative = path.relative(root, path.resolve(current));
       if (relative === "") {
         return "$CLAW_SOURCE";
@@ -164,22 +135,13 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
       }
       return current;
     }
-    if (Array.isArray(current)) {
-      return current.map(visit);
-    }
-    if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current).map(([key, entry]) => [key, visit(entry)]));
-    }
     return current;
-  };
-  return visit(value);
+  });
 }
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {
   const { planIntegrity: _planIntegrity, ...content } = plan;
-  return `sha256:${createHash("sha256")
-    .update(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))
-    .digest("hex")}`;
+  return `sha256:${sha256Hex(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))}`;
 }
 
 export function plansMatchAcrossSourceRoots(params: {
@@ -203,7 +165,7 @@ export function projectClawAddPlan(
   config: OpenClawConfig,
   source?: Extract<ClawReadResult, { ok: true }>,
 ): ClawLifecyclePlanResult {
-  const effects = projectActionsWithEffects("add", plan.actions, (action) =>
+  const effects = projectActionsWithEffects(plan.actions, (action) =>
     projectClawAddActionEffect(action, sourceRoot),
   );
   let scheduledJobs: ClawScheduledJobs | undefined;

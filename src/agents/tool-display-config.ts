@@ -5,7 +5,7 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
-import { MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
+import { displayAction, MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon: string;
@@ -19,10 +19,6 @@ type ToolDisplayConfig = {
 
 function displayTool(icon: string, title: string, detailKeys?: string[]): ToolDisplaySpec {
   return detailKeys === undefined ? { icon, title } : { icon, title, detailKeys };
-}
-
-function displayAction(label: string, detailKeys?: string[]) {
-  return detailKeys === undefined ? { label } : { label, detailKeys };
 }
 
 function mediaGenerationTool(icon: string, title: string, detailKeys: string[]): ToolDisplaySpec {

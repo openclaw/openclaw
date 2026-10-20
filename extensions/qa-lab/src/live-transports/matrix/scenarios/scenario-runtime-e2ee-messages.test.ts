@@ -83,11 +83,8 @@ describe("runMatrixQaE2eeStateAfterMissingEncryptionScenario", () => {
     expect(installFaultRule).toHaveBeenCalledWith(
       expect.objectContaining({ id: MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID }),
     );
-    expect(result.artifacts).toMatchObject({
-      faultProxyBaseUrl: context.baseUrl,
-      stateAfterFaultHitCount: 0,
-      strippedSyncStateAfterParam: true,
-    });
+    expect(result.details).toContain(`fault proxy: ${context.baseUrl}`);
+    expect(result.details).toContain("state_after sync opt-in hits: 0");
   });
 
   it("removes the in-place rule when the encrypted turn fails", async () => {

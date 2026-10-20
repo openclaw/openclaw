@@ -266,6 +266,7 @@ Use the grouped namespaces for new plugin code:
 
 - `api.session.state.registerSessionExtension(...)`
 - `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.steerActiveRun(...)`
 - `api.session.workflow.registerSessionSchedulerJob(...)`
 - `api.session.workflow.sendSessionAttachment(...)`
 - `api.session.workflow.scheduleSessionTurn(...)`
@@ -277,18 +278,16 @@ Use the grouped namespaces for new plugin code:
 - `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
 - `api.lifecycle.registerRuntimeLifecycle(...)`
 
-The equivalent flat methods remain available as deprecated compatibility
-aliases for existing plugins. The compatibility registry deprecated them on
+The flat aliases `api.emitAgentEvent`, `api.setRunContext`, `api.getRunContext`,
+`api.clearRunContext`, `api.registerSessionAction`, `api.sendSessionAttachment`,
+`api.scheduleSessionTurn`, and `api.unscheduleSessionTurnsByTag` have been removed.
+Use their grouped replacements above. These aliases were deprecated on
 2026-07-25 with a `removeAfter` date of 2026-10-01; see the
-[removal timeline](/plugins/sdk-migration/removal-timeline). Do not add new
-plugin code that calls
-`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
-`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
-`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
-`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
-`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
-`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
-`api.unscheduleSessionTurnsByTag` directly.
+[removal timeline](/plugins/sdk-migration/removal-timeline).
+
+The other equivalent flat methods remain deprecated compatibility aliases for
+existing plugins. New plugin code should use the grouped namespaces. Steering
+is exposed only through `api.session.workflow.steerActiveRun(...)`.
 
 `api.agent.events.registerAgentEventSubscription(...)` accepts optional `streams`
 and `phases` filters:
@@ -513,13 +512,13 @@ The UI clears removed contributions and ignores stale request results.
 
 The `linkReader` fields are:
 
-| Field           | Contract                                                                                                                                                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                               |
-| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.    |
-| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                  |
-| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
-| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+| Field           | Contract                                                                                                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                                         |
+| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.              |
+| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
+| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                            |
 
 A reader may opt into progressive detail loading with `progressive: true`.
 The host requests `section: "overview"` first; that response is a normal document
@@ -546,8 +545,12 @@ method must authorize the current operator and exact session before reading priv
 data. Hovercard caches and seeds retire when that pane changes sessions. Readers
 without this flag retain the public request shape.
 
-Preview and detail requests include the selected `agentId` when available; detail
-requests also accept `refresh: true`. The receiving owner must authorize identity
+Preview and detail requests include the selected `agentId` when available and
+accept `refresh: true` to wait for fresh metadata. An explicitly `stale` preview
+gets one refresh attempt; a still-stale or failed refresh retains a labeled cached
+preview with short backoff. Fresh reader details update matching hovercards in
+the same connection, agent, and pane session without waiting for their browser cache
+to expire. The receiving owner must authorize identity
 selection rather than treating this hint as access authority.
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS

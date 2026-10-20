@@ -11,13 +11,16 @@ import {
 } from "../../daemon/service.test-helpers.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import {
@@ -54,6 +57,8 @@ it.each([
   "preserves service admission authority ($platform, $outcome)",
   async ({ platform, outcome }) => {
     stubNodeRuntime();
+    // Platform simulation cannot host native reconciliation workers.
+    vi.spyOn(updateRunLedger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
     const home = dirs.make("update-service-admission-");
     const callerRoot = path.join(home, "caller-package");
     const serviceRoot = path.join(home, "service-package");
@@ -74,6 +79,12 @@ it.each([
       OPENCLAW_UPDATE_POST_CORE: undefined,
     })) {
       vi.stubEnv(key, value);
+    }
+    if (outcome === "redirect") {
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: serviceState },
+      });
+      closeOpenClawStateDatabaseForTest();
     }
     mockProcessPlatform(platform);
     mockSystemAccountHome();
@@ -154,7 +165,7 @@ it.each([
     expect(root).toBe(outcome === "unavailable" ? callerRoot : serviceRoot);
     expect(env.OPENCLAW_STATE_DIR).toBe(outcome === "unavailable" ? callerState : serviceState);
     if (outcome === "pending") {
-      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      const runId = updateRunLedger.createUpdateRun({ trigger: "cli" }, { env }).runId;
       const from = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
       const retained = createRetainedUpdateRecovery(
         { runId, from, to: { ...from, version: "2.0.0" } },
@@ -180,7 +191,7 @@ it.each([
         expect(inspected.serviceUpdateVerdict).toMatchObject({
           kind: "unavailable",
           inspectionReason: "service-manager-unavailable",
-          message: expect.stringContaining("Restart the Gateway you launched manually"),
+          message: expect.stringContaining("openclaw --profile caller gateway stop"),
         });
         expect(inspected.blockMessage).toBeUndefined();
         expect(inspected.serviceEnv).toBeUndefined();

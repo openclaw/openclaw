@@ -1,4 +1,5 @@
 // Coverage for prompt-cache diagnostic tracking across turns.
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
@@ -495,6 +496,36 @@ describe("prompt cache observability", () => {
         changes: null,
       });
     });
+  });
+
+  it("clears every retired session affinity while preserving other sessions until global cleanup", () => {
+    const retiredSessionId = scopedKey("retired-session");
+    const retired = ["primary", "secondary"].map((affinity) => ({
+      sessionId: retiredSessionId,
+      promptCacheKey: scopedKey(affinity),
+    }));
+    const retained = {
+      sessionId: scopedKey("retained-session"),
+      promptCacheKey: retired[0]!.promptCacheKey,
+    };
+    for (const identity of [...retired, retained]) {
+      beginOpenAIObservation(identity);
+      completePromptCacheObservation({ ...identity, usage: { cacheRead: 8_000 } });
+    }
+
+    cleanupSessionResources(retiredSessionId);
+
+    for (const identity of retired) {
+      expect(beginOpenAIObservation(identity)).toMatchObject({
+        previousCacheRead: null,
+        prefixUnchanged: false,
+      });
+    }
+    expect(beginOpenAIObservation(retained).previousCacheRead).toBe(8_000);
+
+    cleanupSessionResources();
+
+    expect(beginOpenAIObservation(retained).previousCacheRead).toBeNull();
   });
 
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {

@@ -1,4 +1,4 @@
-import { readSessionWorkspaceRecoveryRequiredError } from "../../../packages/gateway-protocol/src/index.js";
+import { readSessionWorkspaceRecoveryRequiredError } from "../../../packages/gateway-protocol/src/session-workspace-recovery-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";

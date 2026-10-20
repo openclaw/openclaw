@@ -49,6 +49,41 @@ function failedPlacement(
   };
 }
 
+it("uses the chosen identity at completion rather than stale roster artwork", async () => {
+  const published = createDeferred();
+  const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => {
+    published.resolve();
+    return true;
+  });
+  const { context, flow, dispose } = nativeBackgroundFixture({
+    agents: [{ id: "main", name: "Old name", identity: { avatar: "data:image/png;base64,b2xk" } }],
+    request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
+  });
+  vi.spyOn(context.agentIdentity, "get").mockReturnValue({
+    agentId: "main",
+    name: "Garden keeper",
+    nameSource: "config",
+    avatar: "data:image/webp;base64,bmV3",
+    emoji: "🌱",
+  });
+  try {
+    await flow.submit(undefined, true);
+    await published.promise;
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        avatar: {
+          id: "main",
+          name: "Garden keeper",
+          avatar: "data:image/webp;base64,bmV3",
+          textAvatar: "🌱",
+        },
+      }),
+    );
+  } finally {
+    dispose();
+  }
+});
+
 it.each([
   [true, "replacement Gateway"],
   [true, "changed credentials"],

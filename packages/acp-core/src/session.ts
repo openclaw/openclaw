@@ -26,8 +26,6 @@ type InMemoryAcpSessionStore = AcpSessionStore & {
 
 type AcpSessionStoreOptions = {
   maxSessions?: number;
-  idleTtlMs?: number;
-  now?: () => number;
   /**
    * Invoked for every session that leaves the store, whichever path removes it:
    * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
@@ -45,8 +43,6 @@ export function createInMemorySessionStore(
   options: AcpSessionStoreOptions = {},
 ): InMemoryAcpSessionStore {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
-  const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
-  const now = options.now ?? Date.now;
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
 
@@ -62,7 +58,7 @@ export function createInMemorySessionStore(
   };
 
   const reapIdleSessions = (nowMs: number) => {
-    const idleBefore = nowMs - idleTtlMs;
+    const idleBefore = nowMs - DEFAULT_IDLE_TTL_MS;
     for (const [sessionId, session] of sessions.entries()) {
       if (session.activeRunId || session.abortController) {
         continue;
@@ -96,12 +92,12 @@ export function createInMemorySessionStore(
   const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
-    session.lastTouchedAt = now();
+    session.lastTouchedAt = Date.now();
   };
 
   return {
     createSession(params) {
-      const nowMs = now();
+      const nowMs = Date.now();
       const sessionId = params.sessionId ?? randomUUID();
       const existingSession = sessions.get(sessionId);
       if (existingSession) {
@@ -138,7 +134,7 @@ export function createInMemorySessionStore(
     getSession(sessionId) {
       const session = sessions.get(sessionId);
       if (session) {
-        session.lastTouchedAt = now();
+        session.lastTouchedAt = Date.now();
       }
       return session;
     },
@@ -149,7 +145,7 @@ export function createInMemorySessionStore(
       }
       session.activeRunId = runId;
       session.abortController = abortController;
-      session.lastTouchedAt = now();
+      session.lastTouchedAt = Date.now();
     },
     clearActiveRun(sessionId, expectedRunId) {
       const session = sessions.get(sessionId);

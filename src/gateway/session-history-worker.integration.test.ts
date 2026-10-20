@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -10,6 +14,7 @@ import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
@@ -21,11 +26,23 @@ import {
   historicalId,
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
+import type { ChatHistoryPageParams } from "../config/sessions/session-history-types.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import { isSessionHistoryWorkerCold } from "../config/sessions/session-transcript-worker-runtime.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
+import {
+  expectMessageIds,
+  historyParams,
+  historyTarget,
+  messageEvent,
+  observeHistorySql,
+  withHistoryState,
+} from "./session-history-events.test-support.js";
 import { readSessionHistorySnapshotAsync } from "./session-history-state.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
@@ -35,58 +52,157 @@ import {
 } from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
-function historyParams(
-  target: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
-  entry?: { sessionId: string; updatedAt: number },
-) {
-  return {
-    entry,
-    provider: undefined,
-    sessionId: target.sessionId,
-    storePath: target.storePath,
-    sessionAgentId: target.agentId,
-    canonicalKey: target.sessionKey,
-    max: 10,
-    maxHistoryBytes: 100_000,
-    effectiveMaxChars: 8000,
-    offset: undefined,
-    messageId: undefined,
-  };
+async function sourceDigest(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
 }
 
-function observeColdMetadataReads(database: DatabaseSync) {
-  const prototype: StatementSync = Object.getPrototypeOf(database.prepare("SELECT 1"));
-  const metadataReads: string[] = [];
-  const record = (sql: string) => {
-    if (
-      /^select\b.*\bfrom\s+["`]?session_transcript_cold_archives["`]?/is.test(sql) &&
-      sql.includes("archive_sha256")
-    ) {
-      metadataReads.push(sql);
+it("reads oversized native history without caller-thread JSON.parse and survives ordinary close", async (test) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const scope = {
+      agentId: "main",
+      sessionId: "large-native-history",
+      sessionKey: "agent:main:large-native-history",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const nativeId = "5b8b202c-f6bb-4046-9475-d2f15fd07539";
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: nativeId } },
+    };
+    const canonical = { role: "user", content: "Canonical history stays intact", timestamp: 1 };
+    // The fixture owns one reader lifecycle, not unrelated automatic maintenance.
+    await patchSessionEntryCore(scope, () => entry, {
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "canonical",
+      now: 1,
+      message: canonical,
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const projectDir = path.join(state.home, ".claude", "projects", "large-history");
+    const nativePath = path.join(projectDir, `${nativeId}.jsonl`);
+    await fs.mkdir(projectDir, { recursive: true });
+    const nativeRow = (uuid: string, role: string, content: string, second: number) =>
+      JSON.stringify({
+        type: role,
+        uuid,
+        timestamp: new Date(Date.UTC(2026, 9, 14, 0, 0, second)).toISOString(),
+        message: { role, content },
+      }) + "\n";
+    await fs.writeFile(nativePath, nativeRow("warm-native", "assistant", "Warm native reader", 0));
+    const params: ChatHistoryPageParams = {
+      entry,
+      provider: "claude-cli",
+      sessionId: scope.sessionId,
+      storePath: scope.storePath,
+      sessionAgentId: scope.agentId,
+      canonicalKey: scope.sessionKey,
+      max: 10,
+      maxHistoryBytes: 64 * 1024,
+      effectiveMaxChars: 4096,
+      offset: undefined,
+      messageId: undefined,
+    };
+    const read = (ignoreCliSessionImports = false) =>
+      withinTest(
+        readChatHistoryPage({ ...params, ignoreCliSessionImports }, test.signal),
+        test.signal,
+      );
+    const close = async () => {
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      await closeOpenClawStateDatabaseAsync();
+    };
+    try {
+      // Load the native importer before the large read; this is not a fresh parse-only isolate.
+      expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
+        "canonical",
+        "warm-native",
+      ]);
+      expect(isSessionHistoryWorkerCold()).toBe(false);
+      await fs.writeFile(nativePath, "");
+      for (const [uuid, role, mib, second] of [
+        ["native-2m", "user", 2, 1],
+        ["native-34m", "assistant", 34, 2],
+      ] as const) {
+        await fs.appendFile(
+          nativePath,
+          nativeRow(uuid, role, "q".repeat(mib * 1024 * 1024), second),
+        );
+      }
+      await fs.appendFile(
+        nativePath,
+        nativeRow("native-after", "user", "External history continues", 3),
+      );
+      const originalSource = await sourceDigest(nativePath);
+      const parse = JSON.parse;
+      const largeCallerParses: number[] = [];
+      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((source, reviver) => {
+        if (typeof source === "string" && source.length > 1024 * 1024) {
+          largeCallerParses.push(source.length);
+        }
+        return parse(source, reviver);
+      });
+      try {
+        const page = await read();
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual([
+          "canonical",
+          "native-2m",
+          "native-34m",
+          "native-after",
+        ]);
+        const placeholder =
+          "[Claude CLI history record omitted from context because it exceeded 1 MiB.]";
+        expect(page.messages).toMatchObject([
+          canonical,
+          { role: "user", content: placeholder, __openclaw: { externalId: "native-2m" } },
+          { role: "assistant", content: placeholder, __openclaw: { externalId: "native-34m" } },
+          { role: "user", content: "External history continues" },
+        ]);
+        expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(4096);
+        expect(largeCallerParses).toEqual([]);
+        const ordinary = await read(true);
+        expect(ordinary.messages).toMatchObject([canonical]);
+        expect(ordinary.messages.map(readChatHistoryMessageId)).toEqual(["canonical"]);
+
+        await close();
+        expect(isSessionHistoryWorkerCold()).toBe(true);
+        const reopened = await read(true);
+        expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["canonical"]);
+        expect(reopened.messages).toMatchObject([canonical]);
+        expect(largeCallerParses).toEqual([]);
+        expect(await sourceDigest(nativePath)).toBe(originalSource);
+      } finally {
+        parseSpy.mockRestore();
+      }
+    } finally {
+      await close();
     }
-  };
-  const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
-    const original = prototype[method];
-    return vi.spyOn(prototype, method).mockImplementation(
-      new Proxy(original, {
-        apply(read, receiver: StatementSync, args) {
-          record(receiver.sourceSQL);
-          return Reflect.apply(read, receiver, args);
-        },
-      }),
-    );
   });
-  return {
-    metadataReads,
-    restore: () => observers.forEach((observer) => observer.mockRestore()),
-  };
+});
+
+function observeColdMetadataReads(database: DatabaseSync) {
+  const { queries: metadataReads, restore } = observeHistorySql(
+    database,
+    (sql) =>
+      /^select\b.*\bfrom\s+["`]?session_transcript_cold_archives["`]?/is.test(sql) &&
+      sql.includes("archive_sha256"),
+  );
+  return { metadataReads, restore };
 }
 
 it.each(["rpc", "message-by-id"] as const)(
   "restores %s history without reading cold metadata on the caller",
   async (transport) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withHistoryState(async (state) => {
       const fixture = await createSessionColdStorageFixture(state.statePath("cold-history.sqlite"));
       expect(
         await runSessionColdStorageMaintenance({
@@ -126,8 +242,7 @@ it.each(["rpc", "message-by-id"] as const)(
 );
 
 it("appends hot transcript events without reading cold metadata on the caller", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
+  await withHistoryState(async (state) => {
     const fixture = await createSessionColdStorageFixture(state.statePath("hot-write.sqlite"));
     const target = { ...fixture.scope, sessionId: currentId };
     await waitForSessionTranscriptProjection(target);
@@ -157,8 +272,7 @@ it("appends hot transcript events without reading cold metadata on the caller", 
 
 it("validates worker admission for normalized logical inputs in a shared store", async () => {
   const input = { agentId: "Other", sessionKey: "Agent:Other:Fenced-History" };
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
+  await withHistoryState(async (state) => {
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       env: state.env,
@@ -174,24 +288,13 @@ it("validates worker admission for normalized logical inputs in a shared store",
     await replaceSessionEntry(target, entry);
     await replaceTranscriptEvents(target, [
       { type: "session", version: 3, id: target.sessionId },
-      {
-        type: "message",
-        id: "before",
-        parentId: null,
-        message: { role: "user", content: "Visible requested history" },
-      },
-      {
-        type: "message",
-        id: "admitted",
-        parentId: "before",
-        message: { role: "user", content: "Current turn" },
-      },
-      {
-        type: "message",
-        id: "later",
-        parentId: "admitted",
-        message: { role: "assistant", content: "After the admitted boundary" },
-      },
+      messageEvent("before", { role: "user", content: "Visible requested history" }),
+      messageEvent("admitted", { role: "user", content: "Current turn" }, "before"),
+      messageEvent(
+        "later",
+        { role: "assistant", content: "After the admitted boundary" },
+        "admitted",
+      ),
     ]);
     await waitForSessionTranscriptProjection(target);
     const anchor = readActiveTranscriptEntryAnchor({ ...target, entryId: "admitted" });
@@ -213,13 +316,9 @@ it("validates worker admission for normalized logical inputs in a shared store",
         limit: 10,
       });
     const page = await runWithSessionTranscriptReadFence(admission, readRpc);
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["before", "admitted", "later"]);
+    expectMessageIds(page.messages, ["before", "admitted", "later"]);
     const http = await runWithSessionTranscriptReadFence(admission, readHttp);
-    expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([
-      "before",
-      "admitted",
-      "later",
-    ]);
+    expectMessageIds(http.history.messages, ["before", "admitted", "later"]);
     expect(http.transcriptPath).toBe(input.sessionKey);
     // Display rows remain visible, but normalization must not lose admission validation.
     const invalidAdmission = { ...admission, storePath: `${database.path}.other` };
@@ -245,31 +344,25 @@ it("validates worker admission for normalized logical inputs in a shared store",
 });
 
 it("reads a sparse page in the transcript worker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
-    const target = {
-      agentId: "main",
-      sessionId: "worker-sparse-history",
-      sessionKey: "agent:main:worker-sparse-history",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+  await withHistoryState(async (state) => {
+    const target = historyTarget(state, "worker-sparse-history");
     const entry = { sessionId: target.sessionId, updatedAt: 1 };
     await replaceSessionEntry(target, entry);
     const ids = Array.from({ length: 252 }, (_, index) => `row-${index}`);
     await replaceTranscriptEvents(target, [
       { type: "session", version: 3, id: target.sessionId },
-      ...ids.map((id, index) => ({
-        type: "message",
-        id,
-        parentId: ids[index - 1] ?? null,
-        message:
+      ...ids.map((id, index) =>
+        messageEvent(
+          id,
           index === 0
             ? { role: "user", content: "Question before silent activity" }
             : {
                 role: "assistant",
                 content: index === ids.length - 1 ? "Visible final answer" : "NO_REPLY",
               },
-      })),
+          ids[index - 1] ?? null,
+        ),
+      ),
     ]);
     await waitForSessionTranscriptProjection(target);
     const params = { ...historyParams(target, entry), max: 2 };
@@ -289,7 +382,7 @@ it("reads a sparse page in the transcript worker", async () => {
     diagnostics.subscribe(record);
     try {
       const page = await readChatHistoryPage(params);
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
+      expectMessageIds(page.messages, [ids[0], ids.at(-1)]);
       expect(page.pagination).toMatchObject({ totalMessages: 252, rawPageMessages: 252 });
       expect(tasks.length).toBeGreaterThan(0);
     } finally {
@@ -301,24 +394,18 @@ it("reads a sparse page in the transcript worker", async () => {
       limit: 2,
     });
     expect(http.history.items).toBe(http.history.messages);
-    expect(http.history.messages.map(readChatHistoryMessageId)).toEqual([ids[0], ids.at(-1)]);
+    expectMessageIds(http.history.messages, [ids[0], ids.at(-1)]);
     expect(http.history.hasMore).toBe(false);
     expect(http.rawTranscriptSeq).toBe(252);
 
     const anchored = await readChatHistoryPage({ ...params, messageId: ids[0] });
-    expect(anchored.messages.map(readChatHistoryMessageId)).toEqual([ids[0]]);
+    expectMessageIds(anchored.messages, [ids[0]]);
   });
 });
 
 it("waits for a missing projection and serves the original history request", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
-    const target = {
-      agentId: "main",
-      sessionId: "worker-history-rebuild",
-      sessionKey: "agent:main:worker-history-rebuild",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+  await withHistoryState(async (state) => {
+    const target = historyTarget(state, "worker-history-rebuild");
     const entry = { sessionId: target.sessionId, updatedAt: 1 };
     await replaceSessionEntry(target, entry);
     await replaceTranscriptEvents(target, [
@@ -336,7 +423,7 @@ it("waits for a missing projection and serves the original history request", asy
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const page = await readChatHistoryPage(historyParams(target, entry));
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+      expectMessageIds(page.messages, ["recovered"]);
     } finally {
       vi.useRealTimers();
     }
@@ -344,20 +431,14 @@ it("waits for a missing projection and serves the original history request", asy
 });
 
 it("reads a new branch and reset interval after earlier worker pages settle", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
-    const target = {
-      agentId: "main",
-      sessionId: "worker-history-branch",
-      sessionKey: "agent:main:worker-history-branch",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+  await withHistoryState(async (state) => {
+    const target = historyTarget(state, "worker-history-branch");
     const entry = { sessionId: target.sessionId, updatedAt: 1 };
     await replaceSessionEntry(target, entry);
     await replaceTranscriptEvents(target, [
       { type: "session", version: 3, id: target.sessionId },
-      { type: "message", id: "A", parentId: null, message: { role: "user", content: "Branch A" } },
-      { type: "message", id: "B", parentId: null, message: { role: "user", content: "Branch B" } },
+      messageEvent("A", { role: "user", content: "Branch A" }),
+      messageEvent("B", { role: "user", content: "Branch B" }),
       { type: "leaf", id: "select-A", parentId: "B", targetId: "A", appendParentId: "A" },
     ]);
     await waitForSessionTranscriptProjection(target);
@@ -375,7 +456,7 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
       return delta.kind === "page" ? delta.cursor : undefined;
     };
     const beforeBranch = await readDelta();
-    expect((await read()).history.messages.map(readChatHistoryMessageId)).toEqual(["A"]);
+    expectMessageIds((await read()).history.messages, ["A"]);
     await appendTranscriptEvent(target, {
       type: "leaf",
       id: "select-B",
@@ -385,7 +466,7 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
     });
     await waitForSessionTranscriptProjection(target);
     const beforeReset = await readDelta(beforeBranch);
-    expect((await read()).history.messages.map(readChatHistoryMessageId)).toEqual(["B"]);
+    expectMessageIds((await read()).history.messages, ["B"]);
     await appendTranscriptEvent(target, {
       type: "reset",
       id: "reset-B",
@@ -396,14 +477,13 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
     await waitForSessionTranscriptProjection(target);
     await readDelta(beforeReset);
     const reset = await read();
-    expect(reset.history.messages.map(readChatHistoryMessageId)).toEqual(["reset-B"]);
+    expectMessageIds(reset.history.messages, ["reset-B"]);
     expect(reset.rawTranscriptSeq).toBe(1);
   });
 });
 
 it("reduces full transcript recovery, usage, and MCP facts without caller-thread SQLite scans", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
+  await withHistoryState(async (state) => {
     const target = {
       agentId: "main",
       sessionId: "worker-summary",
@@ -455,34 +535,15 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
     ];
     await replaceTranscriptEvents(target, [
       { type: "session", version: 3, id: target.sessionId },
-      ...messages.map((message, index) => ({
-        type: "message",
-        id: `summary-${index}`,
-        parentId: index ? `summary-${index - 1}` : null,
-        message,
-      })),
+      ...messages.map((message, index) =>
+        messageEvent(`summary-${index}`, message, index ? `summary-${index - 1}` : null),
+      ),
     ]);
     await waitForSessionTranscriptProjection(target);
     const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
-    const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
-    const scans: string[] = [];
-    const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
-      const original = prototype[method];
-      return vi.spyOn(prototype, method).mockImplementation(
-        new Proxy(original, {
-          apply(read, receiver: StatementSync, args) {
-            if (
-              /\b(?:transcript_events|session_transcript_active_events)\b/iu.test(
-                receiver.sourceSQL,
-              )
-            ) {
-              scans.push(receiver.sourceSQL);
-            }
-            return Reflect.apply(read, receiver, args);
-          },
-        }),
-      );
-    });
+    const { queries: scans, restore } = observeHistorySql(db, (sql) =>
+      /\b(?:transcript_events|session_transcript_active_events)\b/iu.test(sql),
+    );
     try {
       expect(await readMainSessionRecoveryCheckpoint(target)).toEqual({
         replaySafe: true,
@@ -505,7 +566,7 @@ it("reduces full transcript recovery, usage, and MCP facts without caller-thread
       });
       expect(scans).toEqual([]);
     } finally {
-      observers.forEach((observer) => observer.mockRestore());
+      restore();
     }
   });
 });

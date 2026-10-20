@@ -32,7 +32,7 @@ import {
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { normalizeIMessageMessageId } from "./message-guid.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
-import { getCachedIMessagePrivateApiStatus } from "./probe.js";
+import { getCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { sendMessageIMessage } from "./send.js";
 import { parseIMessageTarget } from "./targets.js";
 

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { captureStalledGatewayStartup } from "../infra/gateway-startup-owner.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -54,6 +55,7 @@ beforeAll(async () => {
       pid: holder.pid!,
       ownerId: "stalled-owner",
       startTime,
+      processNamespace: readGatewayLockProcessNamespace(),
       role: "gateway",
       createdAt: new Date(startupAt).toISOString(),
       configPath: path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json"),

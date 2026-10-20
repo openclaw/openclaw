@@ -1,6 +1,6 @@
-import { createMemo, Show, untrack } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
-import "../../../components/mcp-app-catalog.tsx";
+import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../components/tooltip.ts";
@@ -104,7 +104,7 @@ function FileAction(props: {
         class={["btn btn--sm sidebar-file-view__action", props.class]}
         type="button"
         // Native refs run unowned; capture the callback in its rendering scope.
-        ref={untrack(() => props.ref)}
+        ref={props.ref}
         aria-label={props.label}
         aria-pressed={props.pressed === undefined ? undefined : props.pressed ? "true" : "false"}
         disabled={props.disabled}
@@ -166,13 +166,11 @@ export function SidebarFile(props: {
             {props.content.path}
           </span>
           <FileCopyButton action="path" controls={props.controls} />
-          <openclaw-mcp-app-catalog
+          <McpAppCatalog
             surface="file"
-            prop:sessionKey={
-              props.runtime?.sessionKey ?? props.content.draftContext?.sessionKey ?? ""
-            }
-            prop:agentId={props.runtime?.agentId ?? ""}
-            prop:filePath={props.content.path}
+            sessionKey={props.runtime?.sessionKey ?? props.content.draftContext?.sessionKey ?? ""}
+            agentId={props.runtime?.agentId ?? ""}
+            filePath={props.content.path}
           />
         </div>
         <Show when={props.controls}>
@@ -278,8 +276,7 @@ export function SidebarFile(props: {
           <div class="file-view__search" onKeyDown={(event) => controls().onSearchKeydown(event)}>
             <input
               type="search"
-              // Resolve the narrowed Show accessor before the unowned ref callback runs.
-              ref={untrack(() => controls().searchInputRef)}
+              ref={controls().searchInputRef}
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}
               value={controls().query}
@@ -357,7 +354,7 @@ export function SidebarFile(props: {
         <Show when={mountIdentity()} keyed>
           {(_identity) => (
             // The editor mount retains its callback through control replacement.
-            <div class="file-view__mount" ref={untrack(() => props.controls?.editorRef)} />
+            <div class="file-view__mount" ref={props.controls?.editorRef} />
           )}
         </Show>
         <Show when={props.controls?.loadingEditor}>

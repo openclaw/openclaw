@@ -15,7 +15,12 @@ import {
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuControls,
+  type MenuEntry,
+} from "../../../components/solid/menu.tsx";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -135,7 +140,10 @@ export function ChatSessionPublicIndicator(props: ChatSessionSharingProps) {
   );
 }
 
-export function useChatSessionSharingMenu(props: ChatSessionSharingProps): {
+export function useChatSessionSharingMenu(
+  props: ChatSessionSharingProps,
+  controls?: MenuControls,
+): {
   items: () => readonly MenuEntry[];
 } {
   const result = () => props.state?.result;
@@ -175,6 +183,7 @@ export function useChatSessionSharingMenu(props: ChatSessionSharingProps): {
       content: (
         <div class="people-menu__search" onClick={(event) => event.stopPropagation()}>
           <input
+            ref={controls?.ref()}
             type="search"
             data-search=""
             data-form-control=""
@@ -315,6 +324,7 @@ export function useChatSessionSharingMenu(props: ChatSessionSharingProps): {
                       </Show>
                     </span>
                     <PersonName
+                      ref={controls?.ref()}
                       label={person().label ?? person().id ?? t("chat.sessionSharing.owner")}
                       link={ownerActivity()}
                       class="session-menu__text"
@@ -465,7 +475,8 @@ export function useChatSessionSharingMenu(props: ChatSessionSharingProps): {
 
 export function ChatSessionSharing(props: ChatSessionSharingProps) {
   const id = createUniqueId();
-  const sharing = useChatSessionSharingMenu(props);
+  const controls = createMenuControls();
+  const sharing = useChatSessionSharingMenu(props, controls);
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
@@ -512,6 +523,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
       >
         <ChatSessionPublicIndicator {...props} />
         <Menu
+          controls={controls}
           lazy
           id={id}
           class={["chat-pane__sharing-menu", { "chat-pane__sharing-menu--capped": capped() }]}

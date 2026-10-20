@@ -1,8 +1,10 @@
-// @vitest-environment node
+// @vitest-environment jsdom
+import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
@@ -21,35 +23,44 @@ it.each([
   "load failure after reconnect",
 ] as const)("retains outbox ownership across recovery module loading (%s)", async (scenario) => {
   const sessionKey = "agent:main:outbox-loading";
-  const host = makeChatHost({
-    sessionKey,
-    currentSessionId: "outbox-session",
-    chatRunId: "finished-run",
-    chatMessage: "Retained outbox message",
-    chatError: null,
-    lastError: null,
-    requestHandlers: {
-      "chat.history": {
-        messages: [],
-        sessionInfo: {
-          key: sessionKey,
-          sessionId: "outbox-session",
-          kind: "direct",
-          updatedAt: 2,
-          status: "done",
-          hasActiveRun: false,
-          lastRunId: "finished-run",
+  const host = createTestPageState(
+    makeChatHost({
+      sessionKey,
+      currentSessionId: "outbox-session",
+      chatRunId: "finished-run",
+      chatMessage: "Retained outbox message",
+      chatError: null,
+      lastError: null,
+      requestHandlers: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: {
+            key: sessionKey,
+            sessionId: "outbox-session",
+            kind: "direct",
+            updatedAt: 2,
+            status: "done",
+            hasActiveRun: false,
+            lastRunId: "finished-run",
+          },
         },
+        "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
       },
-      "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
-    },
-  });
+    }),
+  );
   await handleSendChat(host, undefined, { followUpMode: "queue" });
   expect(host.chatQueue).toHaveLength(1);
   const renderedErrors: Array<string | null | undefined> = [];
-  host.requestUpdate = () => {
-    renderedErrors.push(host.chatError);
-  };
+  const dispose = createRoot((stop) => {
+    createEffect(
+      () => host.chatError,
+      (value) => {
+        renderedErrors.push(value);
+      },
+    );
+    return stop;
+  });
+  flush();
 
   const started = createDeferred();
   const ready = createDeferred();
@@ -85,6 +96,7 @@ it.each([
       ready.resolve();
     }
     await draining;
+    flush();
 
     if (scenario === "current") {
       expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
@@ -110,6 +122,7 @@ it.each([
       }
     }
   } finally {
+    dispose();
     ready.resolve();
     await draining;
     host.sessions.dispose();

@@ -25,6 +25,7 @@ afterEach(async () => {
   await owner?.stop();
   owner = undefined;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it("reconciles a fourth merged PR without expanding or poisoning displayed PRs", async () => {
@@ -51,16 +52,16 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
       response: () => githubJson({ sha: head, tree: { sha: tree } }),
     },
   ]);
+  vi.stubGlobal("fetch", fetchImpl);
   const broadcastToConnIds = vi.fn();
   owner = createTestControlUiSessionPrSubscriptions({
     scheduler: createTestGatewayScheduler(),
     broadcastToConnIds,
+    prepareRead,
     load: (params, cacheSignal, read) =>
       loadControlUiSessionPullRequests(params, {
         cacheSignal,
-        read,
-        fetchImpl,
-        resolveGitContext: async () => testGitContext,
+        read: { ...read, target: { ...read.target, source: testGitContext } },
       }),
   });
   const resolve = await prepareRead("connection", { sessionKey: "agent:main:main" });
@@ -81,7 +82,6 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
   };
   expect(
     await isGitHubPublicationSuperseded(snapshot, candidates.pullRequests, {
-      fetchImpl,
       assertCurrent: current,
     }),
   ).toBe(true);
@@ -89,7 +89,7 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
     await isGitHubPublicationSuperseded(
       { ...snapshot, workspace_tree: "c".repeat(40) },
       candidates.pullRequests,
-      { fetchImpl, assertCurrent: current },
+      { assertCurrent: current },
     ),
   ).toBe(false);
   expect((await owner.read(target, current)).pullRequests).toEqual(displayed.pullRequests);
@@ -125,8 +125,9 @@ it("reads known merged heads without network access only for the same live sessi
         ]),
     },
   ]);
+  vi.stubGlobal("fetch", fetchImpl);
   const sessionKey = "agent:main:known-merged-heads";
-  await load({ sessionKey }, { fetchImpl, resolveGitContext: async () => testGitContext });
+  await load({ sessionKey }, { resolveGitContext: async () => testGitContext });
   expect(fetchImpl).toHaveBeenCalledOnce();
   const resolve = await prepareRead("connection", { sessionKey });
   const resolveOther = await prepareRead("connection", {
@@ -137,9 +138,8 @@ it("reads known merged heads without network access only for the same live sessi
   if (!target || !otherTarget) {
     throw new Error("Missing fixture target");
   }
-  const network = vi
-    .spyOn(globalThis, "fetch")
-    .mockRejectedValue(new Error("Unexpected cache fetch"));
+  const network = vi.fn<typeof fetch>().mockRejectedValue(new Error("Unexpected cache fetch"));
+  vi.stubGlobal("fetch", network);
   const expected = [{ sha: head, baseRef: "main", mergeCommitSha }];
   let releasedRead: ControlUiSessionPrReadContext | undefined;
   await withControlUiSessionPrSource(target.readSource, async (assertCurrent, sourceIdentity) => {

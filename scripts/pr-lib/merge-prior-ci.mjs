@@ -782,7 +782,7 @@ async function verifyPriorCiAdmin({
     immutable.jobs
       ? [{ jobs: immutable.jobs, total_count: immutable.jobs.length }]
       : read(
-          `repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}/jobs?per_page=100`,
+          `repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}/jobs?per_page=20`,
           true,
         ),
   ]);

@@ -22,34 +22,26 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
-
   const out: string[] = [];
   const candidate = schema as {
     properties?: Record<string, unknown>;
     additionalProperties?: unknown;
     items?: unknown;
   };
-
   if (candidate.properties && typeof candidate.properties === "object") {
     for (const [key, value] of Object.entries(candidate.properties)) {
       const path = prefix ? `${prefix}.${key}` : key;
-      out.push(path);
-      out.push(...collectSchemaPaths(value, path));
+      out.push(path, ...collectSchemaPaths(value, path));
     }
   }
 
-  if (
-    candidate.additionalProperties &&
-    typeof candidate.additionalProperties === "object" &&
-    !Array.isArray(candidate.additionalProperties)
-  ) {
-    const path = prefix ? `${prefix}.*` : "*";
-    out.push(...collectSchemaPaths(candidate.additionalProperties, path));
-  }
-
-  if (candidate.items && typeof candidate.items === "object" && !Array.isArray(candidate.items)) {
-    const path = prefix ? `${prefix}[]` : "[]";
-    out.push(...collectSchemaPaths(candidate.items, path));
+  for (const [child, path] of [
+    [candidate.additionalProperties, prefix ? `${prefix}.*` : "*"],
+    [candidate.items, prefix ? `${prefix}[]` : "[]"],
+  ] as const) {
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      out.push(...collectSchemaPaths(child, path));
+    }
   }
 
   return out;
@@ -119,9 +111,7 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["matrix", "nextcloud-talk", "tlon"];
-
-    for (const pluginId of pluginIds) {
+    for (const pluginId of ["matrix", "nextcloud-talk", "tlon"]) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
@@ -129,13 +119,8 @@ describe("config footprint guardrails", () => {
         throw new Error(`${pluginId} metadata missing`);
       }
       const paths = new Set(collectSchemaPaths(metadata.schema));
-      expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
-        false,
-      );
-      expect(
-        paths.has("network.dangerouslyAllowPrivateNetwork"),
-        `${pluginId} missing canonical network.dangerouslyAllowPrivateNetwork`,
-      ).toBe(true);
+      expect([...paths], pluginId).not.toContain("allowPrivateNetwork");
+      expect([...paths], pluginId).toContain("network.dangerouslyAllowPrivateNetwork");
     }
   });
 

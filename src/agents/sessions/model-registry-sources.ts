@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelCatalog } from "../models-config.merge.js";
 import { loadPersistedPluginModelCatalogs } from "../plugin-model-catalog-execution.js";
-import type { PersistedPluginModelCatalog } from "../plugin-model-catalog.read-operation.js";
+import type { PersistedPluginModelCatalog } from "../plugin-model-catalog-read.types.js";
 import type { ModelsConfig, ProviderAuthMode } from "./model-registry-schema.js";
 
 export type RegistryProviderSources = Record<

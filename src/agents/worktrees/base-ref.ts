@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
   executeGitCommand,
@@ -29,13 +29,14 @@ type ResolvedWorktreeBase = {
   commit: string;
   gitOperand: string;
   recordRef: string;
+  noOrigin?: true;
   fetchSucceeded?: boolean;
   warning?: string;
   preparationKey?: string;
 };
 
 type RemoteDefaultAttempt = {
-  pending: Promise<ResolvedWorktreeBase & { branch: string }>;
+  pending: Promise<ResolvedWorktreeBase & { branch?: string }>;
   forwarded?: boolean;
   refreshedAt?: number;
 };
@@ -214,7 +215,7 @@ export async function withWorktreeBasePreparation<T>(
     if (!attempt) {
       const started: RemoteDefaultAttempt = {
         pending: timeWorktreePreparationPhase("baseRefresh", () =>
-          fetchRemoteDefault(repository.repoRoot, options),
+          prepareDefaultBase(repository.repoRoot, options),
         ).then(async (base) => {
           // Immutable commits share hydration across refreshes while the Git worker lives.
           const preparationKey = base.commit;
@@ -241,9 +242,12 @@ export async function withWorktreeBasePreparation<T>(
       attempt.pending = settled(
         attempt,
         attempt.pending.then(async (base) => {
-          const warning = await timeWorktreePreparationPhase("baseFastForward", () =>
-            fastForwardLocalDefault(repository, base.branch, base.commit, options),
-          );
+          const { branch } = base;
+          const warning = branch
+            ? await timeWorktreePreparationPhase("baseFastForward", () =>
+                fastForwardLocalDefault(repository, branch, base.commit, options),
+              )
+            : undefined;
           return warning
             ? {
                 ...base,
@@ -276,6 +280,19 @@ export async function withWorktreeBasePreparation<T>(
       remoteDefaults.delete(key);
     }
   }
+}
+
+async function prepareDefaultBase(
+  repoRoot: string,
+  options: NonNullable<Parameters<typeof runGit>[2]>,
+): Promise<ResolvedWorktreeBase & { branch?: string }> {
+  const remotes = await requireGit(repoRoot, ["remote"], options);
+  if (remotes.split("\n").includes("origin")) {
+    return await fetchRemoteDefault(repoRoot, options);
+  }
+  const primary = (await listGitWorktrees(repoRoot, options))[0]?.path ?? repoRoot;
+  const commit = await requireGit(primary, ["rev-parse", "--verify", "HEAD^{commit}"], options);
+  return { commit, gitOperand: commit, recordRef: "HEAD", noOrigin: true };
 }
 
 async function fetchRemoteDefault(
@@ -368,12 +385,9 @@ async function assertWorktreeGitOperationsIdle(
 ): Promise<void> {
   try {
     const worktreesDir = path.join(commonDir, "worktrees");
-    const worktrees = await fs.readdir(worktreesDir).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return [];
-      }
-      throw error;
-    });
+    const worktrees = await fs
+      .readdir(worktreesDir)
+      .catch((error: unknown) => ignoreMissingPath(error) ?? []);
     const busy = () =>
       new LocalDefaultBusyError(
         "Local default retained: finish or abort the Git rebase, am, or bisect operation reserving it before advancing it.",
@@ -383,12 +397,7 @@ async function assertWorktreeGitOperationsIdle(
       throw busy();
     }
     const read = async (directory: string, name: string) =>
-      await fs.readFile(path.join(directory, name), "utf8").catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      await fs.readFile(path.join(directory, name), "utf8").catch(ignoreMissingPath);
     // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
     // Read only reservation files, with bounded I/O and no per-worktree directory listing.
     const checked = await runTasksWithConcurrency({
@@ -555,7 +564,9 @@ export async function logWorktreeBase(
   );
   const ageDays = Math.max(0, (context.now / 1000 - committedAt) / 86_400);
   const stale = ageDays > 7;
-  const message = `worktree base ${base.recordRef} at ${commit} (commit age ${ageDays.toFixed(1)} days; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? "; base is older than 7 days. Check origin before starting work." : ""}`;
+  const label = base.noOrigin ? "local HEAD (no origin remote)" : base.recordRef;
+  const staleHint = `; base is older than 7 days. Check ${base.noOrigin ? "local HEAD" : "origin"} before starting work.`;
+  const message = `worktree base ${label} at ${commit} (commit age ${ageDays.toFixed(1)} days; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
   const metadata = {
     worktreePath: context.worktreePath,
     ownerId: context.ownerId,

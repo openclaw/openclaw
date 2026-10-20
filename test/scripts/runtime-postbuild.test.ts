@@ -173,7 +173,8 @@ describe("runtime postbuild static assets", () => {
       outputs: string[];
       sources: string[];
       packageOutputs: string[];
-    }>(`
+    }>(
+      `
       const assets = await import("./scripts/lib/static-extension-assets.mts");
       const discovered = assets.discoverStaticExtensionAssets();
       const packageAssets = assets.discoverStaticExtensionAssets({ includeExternalPlugins: true });
@@ -182,13 +183,16 @@ describe("runtime postbuild static assets", () => {
         sources: assets.listStaticExtensionAssetSources(),
         packageOutputs: packageAssets.map(({ dest }) => dest),
       };
-    `);
+    `,
+      { allowedExistsSyncPaths: [path.join(MODULE_ROOT, ".git")] },
+    );
 
     expect(payload.outputs).toEqual([
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
       "dist/extensions/code-mode-quickjs/assets/encoding.so",
       "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
+      "dist/extensions/logbook/src/logbook-schema.postgres.sql",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
@@ -203,6 +207,28 @@ describe("runtime postbuild static assets", () => {
     expect(payload.sources).not.toContain("extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.packageOutputs).toContain("dist/extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
+  });
+
+  it("ships the PostgreSQL schema read by the packaged Logbook port descriptor", async () => {
+    const rootDir = createTempDir("openclaw-logbook-port-assets-");
+    const pluginPath = "extensions/logbook";
+    const schemaPath = `${pluginPath}/src/logbook-schema.postgres.sql`;
+    for (const relativePath of [`${pluginPath}/package.json`, schemaPath]) {
+      const destination = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.copyFile(path.join(MODULE_ROOT, relativePath), destination);
+    }
+    await fs.mkdir(path.join(rootDir, "dist-runtime/extensions"), { recursive: true });
+
+    copyStaticExtensionAssets({ rootDir });
+    copyStaticExtensionAssetsToRuntimeOverlay({ rootDir });
+
+    const schema = await fs.readFile(path.join(MODULE_ROOT, schemaPath), "utf8");
+    for (const outputRoot of ["dist", "dist-runtime"]) {
+      await expect(fs.readFile(path.join(rootDir, outputRoot, schemaPath), "utf8")).resolves.toBe(
+        schema,
+      );
+    }
   });
 
   it("copies each package asset once with multiple Git index stages", async () => {
@@ -1193,7 +1219,7 @@ describe("previous release update compatibility", () => {
     fsSync.writeFileSync(file, contents);
   }
 
-  function recordFixture(): UpdateCompatibilityInventory & {
+  function recordFixture(includePrivateWorker = false): UpdateCompatibilityInventory & {
     releases: [UpdateCompatibilityRelease];
   } {
     const root = createTempDir("update-compat-release-");
@@ -1228,6 +1254,24 @@ describe("previous release update compatibility", () => {
         "export { resolveRunner as r, resolveMode as m };",
       ].join("\n"),
     );
+    if (includePrivateWorker) {
+      const worker = "state/openclaw-state-read.worker";
+      write(
+        root,
+        `dist/${worker}.js`,
+        `//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n`,
+      );
+      write(
+        root,
+        "dist/state/openclaw-state-read-command.mjs",
+        `//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n`,
+      );
+      write(
+        root,
+        "dist/state/openclaw-state-read-service-abcdefgh.mjs",
+        '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
+      );
+    }
     return {
       schemaVersion: 1,
       releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
@@ -2131,7 +2175,8 @@ describe("previous release update compatibility", () => {
   });
 
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {
-    const inventory = recordFixture();
+    const inventory = recordFixture(true);
+    expect(inventory.releases[0].chunks).toHaveLength(1);
     expect(inventory.releases[0].chunks).toMatchObject([
       {
         path: "service-abcdefgh.js",

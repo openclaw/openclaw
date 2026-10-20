@@ -44,7 +44,7 @@ function createToolHandlerCtx() {
   return {
     params: { runId: "integration-test", session: { messages: [] } },
     hookRunner: hookMocks.runner,
-    state: { ...createBaseToolHandlerState(), successfulCronAdds: 0 },
+    state: createBaseToolHandlerState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,

@@ -246,9 +246,7 @@ async function gatherDaemonStatusImpl(
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
           bind: gateway.bindMode,
-          mode: "quick",
           port: daemonPort,
-          platform: process.platform,
         })
       : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
@@ -508,7 +506,6 @@ async function gatherDaemonStatusImpl(
         ? {
             gatewayHeap: inspectGatewayHeapLimit(
               command.environment?.NODE_OPTIONS,
-              {},
               command.programArguments,
             ),
           }

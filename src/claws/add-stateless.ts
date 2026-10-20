@@ -66,13 +66,6 @@ export type StatelessClawAddOptions = {
     Partial<Pick<ClawCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
   rollbackNewAgent?: (plan: ClawAddPlan, cronJobs: PersistedClawCronRef[]) => Promise<void>;
-  installPackages?: typeof installClawPackages;
-  rollbackPackages?: typeof rollbackStatelessClawPackages;
-  installMcpServers?: typeof installClawMcpServersStateless;
-  rollbackMcpServers?: typeof rollbackStatelessClawMcpServers;
-  installCronJobs?: typeof installClawCronJobsStateless;
-  createWorkspaceFiles?: typeof createClawWorkspaceFiles;
-  seedPackageBootstrap?: typeof seedClawPackageBootstrap;
 };
 
 export type StatelessClawAddResult = {
@@ -289,11 +282,8 @@ export async function stageClawAddHostRequirementsStateless(
     const cleanupErrors = await rollback();
     if (!workspaceExposed && !configCommitted) {
       cleanupErrors.push(
-        ...(await (options.rollbackMcpServers ?? rollbackStatelessClawMcpServers)(
-          mcpServers,
-          options,
-        )),
-        ...(await (options.rollbackPackages ?? rollbackStatelessClawPackages)(packages, options)),
+        ...(await rollbackStatelessClawMcpServers(mcpServers, options)),
+        ...(await rollbackStatelessClawPackages(packages, options)),
       );
     }
     const message = coerceErrorMessage(error);
@@ -316,10 +306,7 @@ export async function stageClawAddHostRequirementsStateless(
     assertForwardCurrent();
     const hostPlan = planWithPackageActions(plan, (action) => action.details?.kind === "plugin");
     if (hostPlan.actions.some((action) => action.kind === "package")) {
-      packages = await (options.installPackages ?? installClawPackages)(hostPlan, {
-        ...stageOptions(),
-        stateless: true,
-      });
+      packages = await installClawPackages(hostPlan, stageOptions());
     }
   } catch (error) {
     if (error instanceof ClawPackageInstallError) {
@@ -355,28 +342,16 @@ export async function stageClawAddHostRequirementsStateless(
         assertWorkspacePathUnchanged(workspace);
         await mkdir(workspace);
         workspaceCreated = true;
-        await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, stageOptions());
-        workspaceFiles = await (options.createWorkspaceFiles ?? createClawWorkspaceFiles)(plan, {
-          ...stageOptions(),
-          stateless: true,
-        });
+        await seedClawPackageBootstrap(plan, stageOptions());
+        workspaceFiles = await createClawWorkspaceFiles(plan, stageOptions());
         const workspacePlan = planWithPackageActions(
           plan,
           (action) => action.details?.kind !== "plugin",
         );
         if (workspacePlan.actions.some((action) => action.kind === "package")) {
-          packages = [
-            ...packages,
-            ...(await (options.installPackages ?? installClawPackages)(workspacePlan, {
-              ...stageOptions(),
-              stateless: true,
-            })),
-          ];
+          packages = [...packages, ...(await installClawPackages(workspacePlan, stageOptions()))];
         }
-        mcpServers = await (options.installMcpServers ?? installClawMcpServersStateless)(
-          plan,
-          stageOptions(),
-        );
+        mcpServers = await installClawMcpServersStateless(plan, stageOptions());
         workspaceBeforeExposure = await workspaceIdentity(workspace);
         const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
         if (deletion && !deletion.cleanupCompleted) {
@@ -414,7 +389,7 @@ export async function stageClawAddHostRequirementsStateless(
           );
         }
         assertForwardCurrent("after-agent-commit");
-        cronJobs = await (options.installCronJobs ?? installClawCronJobsStateless)(plan, {
+        cronJobs = await installClawCronJobsStateless(plan, {
           ...stageOptions("after-agent-commit"),
           gateway: options.cronGateway,
         });

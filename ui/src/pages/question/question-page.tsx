@@ -1,7 +1,7 @@
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onCleanup, For, Show, untrack } from "solid-js";
+import { createSignal, onCleanup, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
@@ -17,7 +17,9 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
@@ -27,9 +29,15 @@ type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 type QuestionPageProps = { questionId: string };
 
-function createQuestionPage(context: ApplicationContext, props: QuestionPageProps) {
-  // External callbacks and completion checks read the live ID; effect admission receives its ID.
-  const questionId = () => untrack(() => props.questionId);
+const questionIdHandlers = new WeakMap<HTMLElement, () => void>();
+
+function createQuestionPage(
+  context: ApplicationContext,
+  props: QuestionPageProps,
+  host: SolidBridgeElement<QuestionPageProps>,
+) {
+  // The bridge owns this live value; callbacks must see changes before the next render.
+  const questionId = () => host.questionId;
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [requestError, setRequestError] = createSignal<QuestionPageRequestError>(null, {
     ownedWrite: true,
@@ -60,8 +68,6 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
     equality: "revision",
   });
   const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
-  const previousDocumentTitle = document.title;
-  let activeDocumentTitle: string | undefined;
   // Gateway receipts retire question operations and rebind the prompt client synchronously before reconnect.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   const stopGatewayEvents = context.gateway.subscribeEvents((event) => {
@@ -71,41 +77,36 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
   });
   applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
+    questionIdHandlers.delete(host);
     stopGateway();
     stopGatewayEvents();
     operationGeneration += 1;
     clientOwner = null;
     disposeQuestionPromptState(questionState);
-    if (!activeDocumentTitle || document.title === activeDocumentTitle) {
-      document.title = previousDocumentTitle;
-    }
   });
-  // Gateway requests, browser title, and return focus follow the current question ID.
-  createEffect(
-    () => props.questionId,
-    (id, previous) => {
-      if (previous === undefined || id === previous) {
+  // Native ID receipts retire operations before another question can dispatch.
+  questionIdHandlers.set(host, () => {
+    const id = questionId();
+    const generation = ++operationGeneration;
+    rememberPanelFocus();
+    // Keep successive native writes in one turn on a single lookup.
+    queueMicrotask(() => {
+      if (operationGeneration !== generation) {
         return;
       }
-      operationGeneration += 1;
-      rememberPanelFocus();
       setRequestError(id ? null : "unavailable");
       setLoading(Boolean(id));
       if (id && clientOwner) {
         void loadQuestion(clientOwner, id);
       }
-    },
-  );
-  createEffect(
-    () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`,
-    (title) => {
-      document.title = title;
-      activeDocumentTitle = title;
-      if (questionPanelHadFocus && !questionPanel?.isConnected) {
-        heading?.focus({ preventScroll: true });
-      }
-    },
-  );
+    });
+  });
+  const title = () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`;
+  createDocumentTitle(title);
+  createPendingFocus(title, {
+    requested: () => questionPanelHadFocus && !questionPanel?.isConnected,
+    focus: () => heading?.focus({ preventScroll: true }),
+  });
 
   function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {
     rememberPanelFocus();
@@ -156,16 +157,12 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
       if (clientOwner !== client || operationGeneration !== generation || questionId() !== id) {
         return;
       }
-      if (!isRecord(result) || !isRecord(result.question) || result.question.id !== id) {
+      if (result.question.id !== id) {
         setRequestError("unavailable");
         return;
       }
       const record = result.question;
       if (
-        (record.status !== "pending" &&
-          record.status !== "answered" &&
-          record.status !== "cancelled" &&
-          record.status !== "expired") ||
         !handleQuestionPromptEvent(questionState, {
           event: "question.requested",
           payload: { ...record, status: "pending" },
@@ -290,9 +287,12 @@ function QuestionSummary(props: { prompt: QuestionPrompt }) {
   );
 }
 
-function QuestionPageContent(props: QuestionPageProps) {
+function QuestionPageContent(
+  props: QuestionPageProps,
+  host: SolidBridgeElement<QuestionPageProps>,
+) {
   const context = useApplication();
-  const page = createQuestionPage(context, props);
+  const page = createQuestionPage(context, props, host);
   const panelProps = () => {
     const prompt = page.prompt();
     return prompt
@@ -367,8 +367,11 @@ function QuestionPageContent(props: QuestionPageProps) {
 
 defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
-  (props) => <QuestionPageContent questionId={props.questionId} />,
-  { properties: { questionId: { default: "", attribute: "question-id" } } },
+  (props, host) => QuestionPageContent(props, host),
+  {
+    properties: { questionId: { default: "", attribute: "question-id" } },
+    propertyChanged: (host) => questionIdHandlers.get(host)?.(),
+  },
 );
 
 declare global {

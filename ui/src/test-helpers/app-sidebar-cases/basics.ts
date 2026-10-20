@@ -338,12 +338,10 @@ describe("AppSidebar agent chip", () => {
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
-    const connectionStatus = sidebar.querySelector(".gateway-status");
-    expect(
-      sidebar.querySelector('.sidebar-footer-bar > [role="status"]')?.getAttribute("aria-live"),
-    ).toBe("polite");
-    expect(connectionStatus?.textContent).not.toContain("Offline");
-    expect(connectionStatus?.textContent).toContain("Reconnecting…");
+    expect(sidebar.querySelector(".gateway-status")).toBeNull();
+    expect(card?.getAttribute("data-connection-status")).toBe("reconnecting");
+    expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
+    expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Reconnecting…");
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
 
     card?.click();
@@ -357,6 +355,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     expect(sidebar.querySelector(".gateway-status")).toBeNull();
+    expect(card?.getAttribute("data-connection-status")).toBeNull();
   });
 
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
@@ -476,11 +475,9 @@ describe("AppSidebar agent chip", () => {
 
     // Main navigation and its unread state belong to the agent header, not a duplicate row.
     expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
-    expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).toBeNull();
     expect(
-      sidebar.querySelector(
-        '[data-agent-group=main] .sidebar-agent-roster__header [aria-label="Unread"]',
-      ),
+      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row'),
     ).not.toBeNull();
   });
 

@@ -14,8 +14,10 @@ import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import {
+  isPluginManifestOnboardingScope,
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
+  normalizeProviderAssistantVisibility,
   omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
@@ -28,7 +30,6 @@ import type {
   PluginManifestCliCommand,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
-  PluginManifestOnboardingScope,
   PluginManifestProviderAuthChoice,
   PluginManifestQaRunner,
   PluginManifestSetup,
@@ -303,8 +304,7 @@ export function normalizeProviderAuthChoices(
       return undefined;
     }
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
-      (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+      isPluginManifestOnboardingScope,
     );
     return omitUndefinedManifestFields<PluginManifestProviderAuthChoice>({
       provider,
@@ -322,12 +322,7 @@ export function normalizeProviderAuthChoices(
         typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
           ? entry.assistantPriority
           : undefined,
-      assistantVisibility:
-        entry.assistantVisibility === "manual-only" ||
-        entry.assistantVisibility === "visible" ||
-        entry.assistantVisibility === "detected-only"
-          ? entry.assistantVisibility
-          : undefined,
+      assistantVisibility: normalizeProviderAssistantVisibility(entry.assistantVisibility),
       deprecatedChoiceIds: normalizeOptionalTrimmedStringList(entry.deprecatedChoiceIds),
       groupId: normalizeOptionalString(entry.groupId),
       groupLabel: normalizeOptionalString(entry.groupLabel),

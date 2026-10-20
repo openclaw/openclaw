@@ -10,16 +10,19 @@ import { spawnLspServerProcess } from "./agent-bundle-lsp-process.js";
 const resolveWindowsSpawnProgramMock = vi.fn<typeof windowsSpawn.resolveWindowsSpawnProgram>();
 const sanitizeHostExecEnvMock = vi.fn<typeof hostEnvSecurity.sanitizeHostExecEnv>();
 const spawnMock = vi.fn<typeof ownedStdio.createOwnedStdioProcess>();
-const { spawnWithFallbackMock } = vi.hoisted(() => ({ spawnWithFallbackMock: vi.fn() }));
+const { spawnAndWaitMock } = vi.hoisted(() => ({ spawnAndWaitMock: vi.fn() }));
 
-vi.mock("../process/spawn-utils.js", () => ({ spawnWithFallback: spawnWithFallbackMock }));
+vi.mock("../process/spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/spawn-utils.js")>()),
+  spawnAndWait: spawnAndWaitMock,
+}));
 
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(hostEnvSecurity, "sanitizeHostExecEnv").mockImplementation(sanitizeHostExecEnvMock);
     spawnMock.mockRejectedValue(new Error("stop after spawn"));
-    spawnWithFallbackMock.mockRejectedValue(new Error("captured Windows spawn"));
+    spawnAndWaitMock.mockRejectedValue(new Error("captured Windows spawn"));
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -114,7 +117,7 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       ),
     ).rejects.toThrow("captured Windows spawn");
 
-    expect(spawnWithFallbackMock).toHaveBeenCalledExactlyOnceWith(
+    expect(spawnAndWaitMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         argv: [
           "C:\\Program Files\\language-server.cmd",

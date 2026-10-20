@@ -1,5 +1,6 @@
 // Copilot BYOK transport proxy keeps OpenClaw in charge of outbound network policy.
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -55,13 +56,7 @@ export async function createCopilotByokProxy(
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, LOOPBACK_HOST, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, LOOPBACK_HOST), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     server.close();

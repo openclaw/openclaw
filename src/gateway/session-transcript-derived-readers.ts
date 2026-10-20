@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/cjk-chars";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -64,17 +65,17 @@ function extractTranscriptUsageSnapshot(
     (typeof costUsd === "number" &&
       Number.isFinite(costUsd) &&
       (source === "artifact" || costUsd > 0));
-  const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
+  const isTranscriptArtifact = isTranscriptArtifactProvider(modelProvider);
   if (!hasMeaningfulUsage && !modelProvider && !model) {
     return null;
   }
-  if (isDeliveryMirror && !hasMeaningfulUsage) {
+  if (isTranscriptArtifact && !hasMeaningfulUsage) {
     return null;
   }
   return {
     ...(usage?.usageReport ? { usageReport: usage.usageReport } : {}),
-    ...(!isDeliveryMirror && modelProvider ? { modelProvider } : {}),
-    ...(!isDeliveryMirror && model ? { model } : {}),
+    ...(!isTranscriptArtifact && modelProvider ? { modelProvider } : {}),
+    ...(!isTranscriptArtifact && model ? { model } : {}),
     ...(typeof normalizedUsage.input === "number" ? { inputTokens: normalizedUsage.input } : {}),
     ...(typeof normalizedUsage.output === "number" ? { outputTokens: normalizedUsage.output } : {}),
     ...(typeof normalizedUsage.cacheRead === "number"

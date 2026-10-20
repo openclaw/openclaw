@@ -488,6 +488,11 @@ diagnostics. It remains optional on the legacy manager interface. Consumers that
 accept third-party managers can await `readMemorySearchManagerStatus(manager)`;
 the helper selects `statusAsync` when available and otherwise uses the retained
 `status` contract. An async failure is not retried synchronously.
+The built-in synchronous `status()` warns once per calling plugin and method,
+including the replacement and January 2027 removal window. The retained fallback
+for third-party managers remains available through 2026-12-31; implementing
+`statusAsync` avoids synchronous storage reads and prepares the manager for removal
+of that fallback in the first January 2027 stable release.
 
 ## Reply, observer, and harness preparation
 

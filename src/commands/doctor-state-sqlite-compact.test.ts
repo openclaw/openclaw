@@ -31,44 +31,36 @@ function createStateEnv(): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
-function seedStateDatabase(params: {
-  env: NodeJS.ProcessEnv;
-  role?: string;
-  schemaVersion?: number;
-  withBloat?: boolean;
-}): string {
-  const sqlitePath = resolveOpenClawStateSqlitePath(params.env);
-  fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(sqlitePath);
-  const schemaVersion = params.schemaVersion ?? OPENCLAW_STATE_SCHEMA_VERSION;
+function withDatabase<T>(
+  sqlitePath: string,
+  readOnly: boolean,
+  run: (database: DatabaseSync) => T,
+) {
+  const database = new (requireNodeSqlite().DatabaseSync)(sqlitePath, { readOnly });
   try {
+    return run(database);
+  } finally {
+    database.close();
+  }
+}
+
+function seedStateDatabase(env: NodeJS.ProcessEnv, withBloat = false): string {
+  const sqlitePath = resolveOpenClawStateSqlitePath(env);
+  fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+  withDatabase(sqlitePath, false, (database) => {
     database.exec(`
       PRAGMA auto_vacuum = NONE;
       PRAGMA journal_mode = WAL;
       ${OPENCLAW_STATE_SCHEMA_SQL}
-      CREATE TABLE compact_payload (
-        id INTEGER PRIMARY KEY,
-        payload TEXT NOT NULL
-      );
-      PRAGMA user_version = ${schemaVersion};
+      CREATE TABLE compact_payload (id INTEGER PRIMARY KEY, payload TEXT NOT NULL);
+      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
     `);
     database
-      .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, NULL, NULL, 1, 1)
-        `,
-      )
-      .run("primary", params.role ?? "global", schemaVersion);
-    if (params.withBloat) {
+      .prepare(`INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`)
+      .run(OPENCLAW_STATE_SCHEMA_VERSION);
+    if (withBloat) {
       const insert = database.prepare("INSERT INTO compact_payload (payload) VALUES (?)");
       database.exec("BEGIN IMMEDIATE;");
       for (let index = 0; index < 512; index += 1) {
@@ -76,9 +68,7 @@ function seedStateDatabase(params: {
       }
       database.exec("COMMIT; DELETE FROM compact_payload; PRAGMA wal_checkpoint(TRUNCATE);");
     }
-  } finally {
-    database.close();
-  }
+  });
   if (process.platform !== "win32") {
     fs.chmodSync(sqlitePath, 0o666);
   }
@@ -91,9 +81,7 @@ function readPragma(database: DatabaseSync, name: string): number {
 }
 
 function createUnsafeIndexDrift(sqlitePath: string): void {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(sqlitePath);
-  try {
+  withDatabase(sqlitePath, false, (database) => {
     database.exec(`
       CREATE TABLE unsafe_index_records (
         id INTEGER PRIMARY KEY,
@@ -113,9 +101,17 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
       .run();
     database.exec("PRAGMA writable_schema = OFF;");
     database.exec(`PRAGMA schema_version = ${readPragma(database, "schema_version") + 1};`);
-  } finally {
-    database.close();
-  }
+  });
+}
+
+function expectUnsafeIndex(database: DatabaseSync) {
+  expect(database.prepare("PRAGMA integrity_check").all()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
+      }),
+    ]),
+  );
 }
 
 function expectOwnerOnlySqlitePermissions(sqlitePath: string): void {
@@ -141,7 +137,7 @@ describe("runDoctorStateSqliteCompact", () => {
 
   it("clears authoritative quarantine after compaction", async () => {
     const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    const sqlitePath = seedStateDatabase(env, true);
     seedOpenClawDatabaseQuarantine({
       env,
       kind: "state",
@@ -157,7 +153,7 @@ describe("runDoctorStateSqliteCompact", () => {
 
   it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", async () => {
     const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    const sqlitePath = seedStateDatabase(env, true);
 
     await runDoctorStateSqliteCompact({ env });
 
@@ -170,7 +166,7 @@ describe("runDoctorStateSqliteCompact", () => {
       const env = createStateEnv();
       const canonicalPath = resolveOpenClawStateSqlitePath(env);
       const externalEnv = createStateEnv();
-      const externalPath = seedStateDatabase({ env: externalEnv });
+      const externalPath = seedStateDatabase(externalEnv);
       fs.mkdirSync(path.dirname(canonicalPath), { recursive: true });
       fs.symlinkSync(externalPath, canonicalPath);
 
@@ -189,7 +185,7 @@ describe("runDoctorStateSqliteCompact", () => {
 
   it("treats a busy truncating checkpoint as failure", async () => {
     const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env });
+    const sqlitePath = seedStateDatabase(env);
     seedOpenClawDatabaseQuarantine({
       env,
       kind: "state",
@@ -222,40 +218,21 @@ describe("runDoctorStateSqliteCompact", () => {
 
   it("rejects stale secondary indexes before mutating the database", async () => {
     const env = createStateEnv();
-    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    const sqlitePath = seedStateDatabase(env, true);
     createUnsafeIndexDrift(sqlitePath);
-    const sqlite = requireNodeSqlite();
-    const before = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
+    withDatabase(sqlitePath, true, (before) => {
       expect(before.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expect(before.prepare("PRAGMA integrity_check").all()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
-          }),
-        ]),
-      );
-    } finally {
-      before.close();
-    }
+      expectUnsafeIndex(before);
+    });
 
     await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
       /integrity_check failed.*missing from index unsafe_index_records_value/iu,
     );
 
-    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
+    withDatabase(sqlitePath, true, (after) => {
       expect(readPragma(after, "auto_vacuum")).toBe(0);
       expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
-      expect(after.prepare("PRAGMA integrity_check").all()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            integrity_check: expect.stringMatching(/missing from index unsafe_index_records_value/),
-          }),
-        ]),
-      );
-    } finally {
-      after.close();
-    }
+      expectUnsafeIndex(after);
+    });
   });
 });

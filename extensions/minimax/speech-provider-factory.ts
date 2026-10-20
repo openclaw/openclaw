@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -14,14 +15,34 @@ import {
   asFiniteNumberInRange,
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
+  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  DEFAULT_MINIMAX_TTS_BASE_URL,
-  MINIMAX_TTS_MODELS,
-  MINIMAX_TTS_VOICES,
-  minimaxTTS,
-  normalizeMinimaxTtsBaseUrl,
-} from "./tts.js";
+
+const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
+const MINIMAX_TTS_MODELS = [
+  "speech-2.8-hd",
+  "speech-2.8-turbo",
+  "speech-2.6-hd",
+  "speech-2.6-turbo",
+  "speech-02-hd",
+  "speech-02-turbo",
+  "speech-01-hd",
+  "speech-01-turbo",
+] as const;
+const MINIMAX_TTS_VOICES = [
+  "English_expressive_narrator",
+  "Chinese (Mandarin)_Warm_Girl",
+  "Chinese (Mandarin)_Lively_Girl",
+  "Chinese (Mandarin)_Gentle_Boy",
+  "Chinese (Mandarin)_Steady_Boy",
+] as const;
+
+function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  return trimmed
+    ? trimmed.replace(/\/+$/, "").replace(/\/(?:anthropic|v1)$/i, "")
+    : DEFAULT_MINIMAX_TTS_BASE_URL;
+}
 
 const MINIMAX_PORTAL_PROVIDER_ID = "minimax-portal";
 const MINIMAX_TOKEN_PLAN_ENV_VARS = [
@@ -44,21 +65,6 @@ function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): str
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 
-async function resolveMinimaxTtsApiKey(params: {
-  cfg: OpenClawConfig | undefined;
-  configApiKey?: string;
-}): Promise<string | undefined> {
-  const { resolveProviderAuthProfileApiKey } = await import("openclaw/plugin-sdk/provider-auth");
-  return resolveSpeechProviderApiKey(
-    params.configApiKey,
-    await resolveProviderAuthProfileApiKey({
-      cfg: params.cfg,
-      provider: MINIMAX_PORTAL_PROVIDER_ID,
-    }),
-    resolveMinimaxDirectTtsApiKey(),
-  );
-}
-
 function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefined {
   return resolveSpeechProviderApiKey(
     configApiKey,
@@ -69,7 +75,7 @@ function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefine
 
 function normalizeMinimaxProviderConfig(rawConfig: Record<string, unknown>, cfg?: OpenClawConfig) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.minimax) ?? asOptionalRecord(rawConfig.minimax);
+  const raw = asOptionalRecord(providers?.minimax);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -110,7 +116,7 @@ function normalizeMinimaxPitch(value: unknown): number | undefined {
 
 function readMinimaxProviderConfig(config: SpeechProviderConfig, cfg?: OpenClawConfig) {
   return normalizeMinimaxProviderConfig(
-    { minimax: { ...config, apiKey: trimToUndefined(config.apiKey) } },
+    { providers: { minimax: { ...config, apiKey: trimToUndefined(config.apiKey) } } },
     cfg,
   );
 }
@@ -223,24 +229,73 @@ export function buildMinimaxSpeechProvider({
     synthesize: async (req) => {
       const config = readMinimaxProviderConfig(req.providerConfig, req.cfg);
       const overrides = readMinimaxOverrides(req.providerOverrides);
-      const apiKey = await resolveMinimaxTtsApiKey({
-        cfg: req.cfg,
-        configApiKey: config.apiKey,
-      });
+      const { resolveProviderAuthProfileApiKey } =
+        await import("openclaw/plugin-sdk/provider-auth");
+      const apiKey = resolveSpeechProviderApiKey(
+        config.apiKey,
+        await resolveProviderAuthProfileApiKey({
+          cfg: req.cfg,
+          provider: MINIMAX_PORTAL_PROVIDER_ID,
+        }),
+        resolveMinimaxDirectTtsApiKey(),
+      );
       if (!apiKey) {
         throw new Error("MiniMax TTS auth missing");
       }
-      const audioBuffer = await minimaxTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        model: overrides.model ?? config.model,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        speed: overrides.speed ?? config.speed,
-        vol: overrides.vol ?? config.vol,
-        pitch: overrides.pitch ?? config.pitch,
-        timeoutMs: req.timeoutMs,
-      });
+      const safeTimeoutMs = resolveTimerTimeoutMs(req.timeoutMs, 1);
+      const text = req.text;
+      const { assertOkOrThrowProviderError, readProviderJsonObjectResponse } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+        await import("openclaw/plugin-sdk/ssrf-runtime");
+      const { assertMinimaxBaseResp, normalizeMinimaxHexAudio } =
+        await import("./media-provider-runtime.js");
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
+      let audioBuffer: Buffer;
+      try {
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${config.baseUrl}/v1/t2a_v2`,
+          init: {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: overrides.model ?? config.model,
+              text,
+              stream: false,
+              output_format: "hex",
+              voice_setting: {
+                voice_id: overrides.voiceId ?? config.voiceId,
+                speed: overrides.speed ?? config.speed ?? 1,
+                vol: overrides.vol ?? config.vol ?? 1,
+                pitch: Math.trunc(overrides.pitch ?? config.pitch ?? 0),
+              },
+              audio_setting: { format: "mp3", sample_rate: 32000 },
+            }),
+            signal: controller.signal,
+          },
+          timeoutMs: safeTimeoutMs,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(config.baseUrl),
+          auditContext: "minimax.tts",
+        });
+        try {
+          await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
+          const body = await readProviderJsonObjectResponse(response, "minimax.tts");
+          assertMinimaxBaseResp(body.base_resp, "MiniMax TTS API error");
+          const hexAudio = readStringField(asOptionalRecord(body.data), "audio");
+          if (!hexAudio) {
+            throw new Error("MiniMax TTS API returned no audio data");
+          }
+          audioBuffer = Buffer.from(normalizeMinimaxHexAudio(hexAudio, "MiniMax TTS API"), "hex");
+        } finally {
+          await release();
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
       if (req.target === "voice-note") {
         const { transcodeAudioBufferToOpus } = await import("openclaw/plugin-sdk/media-runtime");
         const opusBuffer = await transcodeAudioBufferToOpus({

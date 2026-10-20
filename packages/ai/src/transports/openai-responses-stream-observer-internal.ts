@@ -1,7 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
-import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
+import {
+  isResponsesTerminalEventType,
+  type OpenAIResponsesRequestParams,
+} from "./openai-responses-contracts.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-internal.js";
 import { log } from "./openai-transport-shared.js";
 import { iterateModelStream } from "./transport-stream-shared.js";
@@ -33,10 +36,7 @@ export async function* adaptResponsesStream(
       throw new Error(`Responses stream delivered malformed ${event.type} item`);
     }
     if (
-      (event.type === "response.created" ||
-        event.type === "response.completed" ||
-        event.type === "response.incomplete" ||
-        event.type === "response.failed") &&
+      (event.type === "response.created" || isResponsesTerminalEventType(event.type)) &&
       !isRecord(event.response)
     ) {
       throw new Error(`Responses stream delivered malformed ${event.type} response`);
@@ -88,11 +88,7 @@ export async function* observeResponsesStream<TEvent>(
           reasoningTokens = details.reasoning_tokens;
         }
       }
-      if (
-        type === "response.completed" ||
-        type === "response.incomplete" ||
-        type === "response.failed"
-      ) {
+      if (isResponsesTerminalEventType(type)) {
         terminalType = type;
         const details = response?.incomplete_details;
         if (isRecord(details) && typeof details.reason === "string") {

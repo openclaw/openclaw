@@ -17,13 +17,12 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import {
   base64url,
-  composeOutbound,
+  seal,
   generateIdentity,
   type GuardAdapter,
   type SignedReceipt,
   type Verdict,
 } from "../protocol/index.js";
-import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
 import { openReefAuditStore } from "./audit-state.js";
 import { ReefChannelConfigSchema, type ReefChannelConfig } from "./config-schema.js";
 import type { ReefPeerTrust } from "./friend-types.js";
@@ -170,17 +169,12 @@ export async function envelope(
   id: string,
   text: string,
 ) {
-  return (
-    await composeOutbound({
-      id,
-      from: "alice#1",
-      to: "bob#1",
-      body: { text },
-      senderSigningSecretKey: sender.signing.secretKey,
-      recipientEncryptionPublicKey: recipient.encryption.publicKey,
-      guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(3)),
-      policyVersion: "v1",
-    })
-  ).envelope;
+  return seal({
+    id,
+    from: "alice#1",
+    to: "bob#1",
+    body: { text },
+    senderSigningSecretKey: sender.signing.secretKey,
+    recipientEncryptionPublicKey: recipient.encryption.publicKey,
+  });
 }

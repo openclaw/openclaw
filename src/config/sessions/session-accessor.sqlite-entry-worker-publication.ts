@@ -6,6 +6,10 @@ import {
 } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  retainConversationWorkerPublication,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
+import {
   pendingSessionEntryPublications,
   markSessionSharingAuthorityUnknown,
   prepareSessionEntryPublicationFacts,
@@ -129,6 +133,10 @@ export function retainSessionEntryWorkerPublication(params: {
 }) {
   const creation = preparedSharingChanges.current.getStore();
   const transcript = retainSessionTranscriptWorkerPublication(params);
+  const conversation = retainConversationWorkerPublication(
+    params.databaseIdentity,
+    params.storePath,
+  );
   const completion = createDeferredCore();
   const owner: PendingSessionEntryPublication = {
     superseded: new Set(),
@@ -150,16 +158,20 @@ export function retainSessionEntryWorkerPublication(params: {
       generationUnchangedKeys: readonly string[] = [],
       transcriptPublication?: readonly SessionTranscriptAuthorityReceipt[],
       entryPostimages?: ReadonlyMap<string, SessionEntry>,
+      conversationReceipts?: readonly ConversationPublication[],
+      fullEntryPostimages?: ReadonlyMap<string, SessionEntry>,
     ) {
       if (pending) {
         return;
       }
       keys = [...new Set(sessionKeys)];
       transcript.begin(transcriptPublication);
+      conversation.begin(conversationReceipts ?? []);
       owner.membershipInvalidated = new Set(membershipInvalidatedKeys);
       owner.sharingUnchanged = new Set(sharingUnchangedKeys);
       owner.generationUnchanged = new Set(generationUnchangedKeys);
       owner.entryPostimages = entryPostimages;
+      owner.fullEntryPostimages = fullEntryPostimages;
       pending = true;
       for (const sessionKey of keys) {
         const key = `${identityKey}\0${sessionKey}`;
@@ -176,6 +188,7 @@ export function retainSessionEntryWorkerPublication(params: {
       participantProjections?: PendingSessionEntryPublication["participantProjections"],
       entryPostimages?: ReadonlyMap<string, SessionEntry>,
       authorityChanged = true,
+      fullEntryPostimages?: ReadonlyMap<string, SessionEntry>,
     ): void {
       if (pending) {
         return;
@@ -189,6 +202,8 @@ export function retainSessionEntryWorkerPublication(params: {
         generationUnchangedKeys,
         undefined,
         entryPostimages,
+        undefined,
+        fullEntryPostimages,
       );
     },
     settleChanges<T>(
@@ -248,6 +263,7 @@ export function retainSessionEntryWorkerPublication(params: {
               []) {
               publishRetainedSessionEntryPredicate(read, record.value.entry, true, {
                 preserveMatchingEntry: true,
+                fullEntry: record.value.fullEntry,
               });
             }
             continue;
@@ -261,6 +277,7 @@ export function retainSessionEntryWorkerPublication(params: {
               record.sessionKey,
               facts,
               entry,
+              record.value.fullEntry,
             );
           } else {
             publishRetainedSessionEntryChange(
@@ -272,6 +289,7 @@ export function retainSessionEntryWorkerPublication(params: {
                 : undefined,
               true,
               entry,
+              record.value.fullEntry,
             );
           }
           const change = { ...changes[index]!, facts };
@@ -333,6 +351,7 @@ export function retainSessionEntryWorkerPublication(params: {
       transcriptChanges: readonly SessionRowChange[] = [],
     ) {
       if (!pending) {
+        conversation.settle(receipt?.conversationPublication, outcomeUnknown);
         sessionChanges.emitBatch([
           ...transcriptChanges,
           ...transcript.settle(Boolean(receipt), outcomeUnknown, receipt?.transcriptPublication),
@@ -351,6 +370,7 @@ export function retainSessionEntryWorkerPublication(params: {
         // Lost completion delivery does not erase this owner's acknowledged COMMIT facts.
         unknown = false;
       }
+      conversation.settle(unknown ? undefined : receipt?.conversationPublication, unknown);
       if (unknown && sharingAuthorityChanged) {
         for (const sessionKey of keys) {
           markSessionSharingAuthorityUnknown(params.databaseIdentity, sessionKey);
@@ -374,6 +394,7 @@ export function retainSessionEntryWorkerPublication(params: {
               known,
               {
                 preserveMatchingEntry: true,
+                fullEntry: replacement?.fullEntries?.get(sessionKey),
               },
             );
           }
@@ -438,6 +459,7 @@ export function retainSessionEntryWorkerPublication(params: {
               read,
               entry,
               known && !replacement?.unavailableParticipantKeys?.includes(sessionKey),
+              { fullEntry: replacement?.fullEntries?.get(sessionKey) },
             );
           }
           recordAcquiringSessionEntry(
@@ -472,7 +494,12 @@ export function retainSessionEntryWorkerPublication(params: {
             return undefined;
           }
           if (replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)) {
-            return { kind: "removed" };
+            return {
+              kind: "removed",
+              ...(replacement.transcriptInventoryUnchanged
+                ? { transcriptInventoryUnchanged: true }
+                : {}),
+            };
           }
           const currentEntry = readCurrent(sessionKey);
           return currentEntry?.projection

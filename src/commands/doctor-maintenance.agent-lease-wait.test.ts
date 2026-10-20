@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
   acquireGatewayStateOwner,
   resolveGatewayStateOwnerPath,
@@ -179,6 +180,7 @@ it("shares one deadline with the state wait, so a long first wait shortens the l
     databasePath: lease.databasePath,
     payload: {
       pid: process.ppid,
+      processNamespace: readGatewayLockProcessNamespace(),
       role: "agent-embedded",
       createdAt: new Date().toISOString(),
       configPath: path.join(stateDir, "openclaw.json"),
@@ -219,6 +221,7 @@ it.each([
         databasePath: holder.databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           role: "gateway",
           createdAt: new Date().toISOString(),
           configPath: path.join(path.dirname(path.dirname(holder.databasePath)), "openclaw.json"),

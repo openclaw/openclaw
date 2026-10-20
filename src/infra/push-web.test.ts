@@ -776,6 +776,30 @@ describe("sending", () => {
     );
   });
 
+  it.each([false, true])(
+    "keeps the notice when its optional icon exceeds the push budget: %s",
+    async (oversized) => {
+      const selected = await registerSubscription("https://push.example.com/avatar");
+      const send = await prepareWebPushNotificationSender(tmpDir);
+      const payload = {
+        title: "Agent finished",
+        body: oversized ? "🌱".repeat(800) : "Your agent finished.",
+        icon: `data:image/png;base64,${"A".repeat(1_000)}`,
+        url: "/chat/research",
+      };
+      await send({ subscriptions: [selected], payload });
+      const encoded = vi.mocked(webPush.sendNotification).mock.calls[0]?.[1] as string;
+      const delivered = JSON.parse(encoded);
+      expect(delivered).toMatchObject({
+        title: payload.title,
+        body: payload.body,
+        url: payload.url,
+      });
+      expect(delivered.icon).toBe(oversized ? undefined : payload.icon);
+      expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(3_993);
+    },
+  );
+
   it.each([404, 410, 401, 403, 413, 429, 503, undefined])(
     "keeps successful sends alongside a failed delivery (status=%s)",
     async (statusCode) => {

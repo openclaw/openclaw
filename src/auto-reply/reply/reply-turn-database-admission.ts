@@ -1,18 +1,18 @@
 import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
 import {
   lifecycleAdmissionByOperation,
   type ReplyOperationAdmission,
-} from "./reply-run-registry.state.js";
+} from "../../sessions/session-controller.state.js";
 
 /** Bind the original database borrow to the operation and join lifecycle handoffs on release. */
 export function bindReplyOperationDatabaseAdmission(
   readerOperation: ReplyOperation,
   params: { sessionKey: string; workSignal?: AbortSignal },
-  lease: SessionWorkAdmissionLease | undefined,
+  lease: SessionEffectRef | undefined,
   databaseClaim: SessionAdmissionDatabaseClaim | undefined,
 ) {
   let handoff: Promise<void> | undefined;

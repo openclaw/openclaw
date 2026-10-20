@@ -1,93 +1,22 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { stubScreenshotMedia } from "./browser-panel-controller-test-support.ts";
 import {
-  createBrowserClient,
-  createBrowserPanelTestMetrics,
-  createBrowserPanelTestTab,
-  flushBrowserResponses,
-  setupBrowserPanelTestCleanup,
-  stubScreenshotMedia,
-  TestBrowserPanelHost,
-  type BrowserRequestEnvelope,
-} from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanel } from "./browser-panel-owner.ts";
-import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
+  deferImages,
+  flush,
+  minted,
+  ready,
+  StartupSocket,
+  streamFixture,
+} from "./browser-panel-stream.test-support.ts";
+import { screencastFrame } from "./browser-screencast-test-support.ts";
 
-const PAGE_URL = "https://example.test/page";
-const minted = {
-  token: "startup",
-  wsPath: "/browser/screencast?token=startup",
-  targetId: "raw-a",
-  url: PAGE_URL,
-};
-const ready = JSON.stringify({ type: "ready", targetId: "raw-a", url: PAGE_URL, title: "Page" });
-const controllers: BrowserPanel[] = [];
-let sockets: StartupSocket[];
-
-class StartupSocket extends TestScreencastSocket {
-  readyState = 0;
-
-  open() {
-    this.readyState = 1;
-    this.dispatchEvent(new Event("open"));
-  }
-}
-
-setupBrowserPanelTestCleanup();
-beforeEach(() => {
-  vi.useFakeTimers();
-  stubScreenshotMedia();
-  sockets = [];
-  vi.stubGlobal(
-    "WebSocket",
-    class extends StartupSocket {
-      constructor(url: string) {
-        super(url);
-        sockets.push(this);
-      }
-    },
-  );
-  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:startup-frame");
-  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-});
-afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.suspendView();
-  }
-});
-
-async function flush() {
-  await flushBrowserResponses();
-  await flushBrowserResponses();
-  await flushBrowserResponses();
-}
-
-function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
-  const gateway = createBrowserClient(
-    async (request) => {
-      switch (request.path) {
-        case "/tabs":
-          return { running: true, tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")] };
-        case "/screencast":
-          return await mint;
-        case "/screenshot":
-          return { path: "/fresh.png", targetId: "raw-a", url: PAGE_URL };
-        case "/act":
-          return createBrowserPanelTestMetrics(PAGE_URL);
-        default:
-          return { ok: true };
-      }
-    },
-    { screencast: true },
-  );
-  const controller = new TestBrowserPanelHost(gateway.client).createPanel();
-  controller.synchronizeClient();
-  controllers.push(controller);
-  const calls = (path: string) =>
-    gateway.request.mock.calls.filter(
-      ([, params]) => (params as BrowserRequestEnvelope).path === path,
-    );
-  return { controller, calls };
+const { setup: setupStream, sockets } = streamFixture(StartupSocket, true);
+async function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
+  const state = setupStream(async (request) => (request.path === "/screencast" ? mint : undefined));
+  const pending = state.controller.refreshAll();
+  await flush();
+  return { ...state, pending };
 }
 
 describe("Browser panel stream startup lifetime", () => {
@@ -95,9 +24,9 @@ describe("Browser panel stream startup lifetime", () => {
     "waits through slow %s, then retires it before one bounded fallback",
     async (phase) => {
       const mint = createDeferred<unknown>();
-      const { controller, calls } = setup(phase === "connecting" ? undefined : mint.promise);
-      const pending = controller.refreshAll();
-      await flush();
+      const { controller, calls, pending } = await setup(
+        phase === "connecting" ? undefined : mint.promise,
+      );
       const socket = sockets[0];
       await vi.advanceTimersByTimeAsync(1501);
       expect(calls("/screenshot")).toHaveLength(0);
@@ -143,9 +72,7 @@ describe("Browser panel stream startup lifetime", () => {
 
   it("retires a mint immediately when its panel disconnects and ignores its late response", async () => {
     const mint = createDeferred<unknown>();
-    const { controller, calls } = setup(mint.promise);
-    const pending = controller.refreshAll();
-    await flush();
+    const { controller, calls, pending } = await setup(mint.promise);
     const signal = calls("/screencast")[0]?.[2]?.signal;
     controller.suspendView();
     await pending;
@@ -159,20 +86,8 @@ describe("Browser panel stream startup lifetime", () => {
   });
 
   it("retires a first frame whose decode stalls without publishing it over fallback", async () => {
-    const { controller, calls } = setup();
-    const pending = controller.refreshAll();
-    await flush();
-    const images: EventTarget[] = [];
-    vi.stubGlobal(
-      "Image",
-      class extends EventTarget {
-        constructor() {
-          super();
-          images.push(this);
-        }
-        src = "";
-      },
-    );
+    const { controller, calls, pending } = await setup();
+    const images = deferImages();
     sockets[0]!.receive(screencastFrame());
     await vi.advanceTimersByTimeAsync(29_999);
     expect(calls("/screenshot")).toHaveLength(0);
@@ -190,9 +105,7 @@ describe("Browser panel stream startup lifetime", () => {
   });
 
   it("keeps a usable static frame without a recurring frame watchdog", async () => {
-    const { controller, calls } = setup();
-    const pending = controller.refreshAll();
-    await flush();
+    const { controller, calls, pending } = await setup();
     sockets[0]!.open();
     sockets[0]!.receive(ready);
     sockets[0]!.receive(screencastFrame());

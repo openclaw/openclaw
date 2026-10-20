@@ -1,3 +1,4 @@
+import "./external-auth.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -6,7 +7,6 @@ import {
   createExternalAuthRuntime,
   syncPersistedExternalCliAuthProfiles,
 } from "./external-auth.js";
-import { testing } from "./external-auth.test-support.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import {
@@ -19,6 +19,8 @@ import { runAuthProfileWriteTransaction } from "./sqlite.js";
 import { withAgentDirEnv } from "./sqlite.test-support.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
+
+const { testing } = await import("./external-auth.test-support.js");
 
 const readOptions = { allowKeychainPrompt: false, readOnly: true, syncExternalCli: false };
 const minimaxId = "minimax-portal:minimax-cli";
@@ -74,7 +76,10 @@ it.each(["expired", "matching-refresh", "matching-access"])(
     expect(isExternal(syncedCredential)).toBe(kind !== "matching-access");
     expect(isExternal(credential({ authFlow: "external-cli" }), "openai:default")).toBe(false);
     expect(readMiniMax).toHaveBeenCalledOnce();
-    const overlaid = createExternalAuthRuntime(() => []).overlayExternalAuthProfiles(store);
+    const overlaid = createExternalAuthRuntime(
+      () => [],
+      async (_params, run) => run(),
+    ).overlayExternalAuthProfiles(store);
     expect(overlaid.profiles[minimaxId]).toEqual(synced.profiles[minimaxId]);
     if (kind === "expired") {
       await withAgentDirEnv("external-cli-authority-", async (agentDir) => {
@@ -123,7 +128,7 @@ it("keeps plugin ownership over retired CLI slots and forwards active config", (
   };
   const pluginCredential = credential();
   const resolver = vi.fn(() => [{ profileId: "openai:default", credential: pluginCredential }]);
-  const runtime = createExternalAuthRuntime(resolver);
+  const runtime = createExternalAuthRuntime(resolver, async (_params, run) => run());
   const options = { config, externalCliProviderIds: ["openai"] };
   const first = runtime.overlayExternalAuthProfiles({ version: 1, profiles: {} }, options);
   const next = runtime.overlayExternalAuthProfiles(first, options);

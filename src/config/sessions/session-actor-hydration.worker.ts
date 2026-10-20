@@ -37,7 +37,7 @@ import { projectTranscriptNavigationSql } from "./session-model-context-projecti
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 // SQL JSON projections retain their declared shape but cross the driver as TEXT.
 function decodeJsonProjection<T>(value: T | string): T {
@@ -291,8 +291,8 @@ export function hydrateSessionActorState(
             .selectFrom("transcript_events")
             .select([
               "seq",
-              "navigation_type",
-              "navigation_valid",
+              transcriptPredicateSql(database.db, "navigation_type").as("navigation_type"),
+              transcriptPredicateSql(database.db, "navigation_valid").as("navigation_valid"),
               projectTranscriptNavigationSql(
                 database.db,
                 transcriptEventNavigationSql(database.db),

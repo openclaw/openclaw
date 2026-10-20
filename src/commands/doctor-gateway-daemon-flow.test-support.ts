@@ -49,6 +49,21 @@ export function setPlatform(platform: NodeJS.Platform) {
   });
 }
 
+export function mockGatewayInstall(
+  service: Pick<GatewayService, "isLoaded" | "readRuntime">,
+  programArguments: string[] = [],
+  environment: Record<string, string> = {},
+) {
+  vi.mocked(service.isLoaded).mockResolvedValue(false);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
+  vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({ warnings: [] });
+  vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+    runtime: "bun",
+    programArguments,
+    environment,
+  });
+}
+
 export function registerRunningBunFallbackTest({
   runDoctor,
   service,
@@ -70,14 +85,7 @@ export function registerRunningBunFallbackTest({
       nodeSharedSqlite: false,
     });
     setPlatform("linux");
-    vi.mocked(service.isLoaded).mockResolvedValue(false);
-    vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
-    vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({ warnings: [] });
-    vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
-      runtime: "bun",
-      programArguments: [],
-      environment: {},
-    });
+    mockGatewayInstall(service);
     // Service-install consent is separate from Doctor's --fix --non-interactive runtime selection.
     const prompter = createPrompter(() => true);
     prompter.select.mockImplementation(
@@ -89,10 +97,12 @@ export function registerRunningBunFallbackTest({
     try {
       await runDoctor({ prompter });
       const selection = vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0];
-      expect(selection?.runtime).toBe("bun");
-      expect(selection?.runtimeExplicit).toBe(true);
-      expect(selection?.runtimePath).toBe(process.execPath);
-      expect(selection?.pinnedRuntimePath).toBeUndefined();
+      expect(selection).toMatchObject({
+        runtime: "bun",
+        runtimeExplicit: true,
+        runtimePath: process.execPath,
+        pinnedRuntimePath: undefined,
+      });
       expect(prompter.select).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ initialValue: "bun" }),
         "bun",

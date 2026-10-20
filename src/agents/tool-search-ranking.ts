@@ -1,4 +1,3 @@
-// Lexical ranking for the OpenClaw Tool Search runtime.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Collects property names and descriptions from a JSON-Schema-shaped value. */

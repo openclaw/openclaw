@@ -3,29 +3,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const withResolvedActionClientMock = vi.fn();
 const withStartedActionClientMock = vi.fn();
-const loadConfigMock = vi.fn(() => ({
-  channels: {
-    matrix: {},
-  },
-}));
-
-vi.mock("../../runtime.js", () => ({
-  getMatrixRuntime: () => ({
-    config: {
-      current: loadConfigMock,
-    },
-  }),
-}));
-
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
-    "openclaw/plugin-sdk/plugin-config-runtime",
-  );
-  return {
-    ...actual,
-    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfigMock()),
-  };
-});
 
 vi.mock("./client.js", () => ({
   withResolvedActionClient: (...args: unknown[]) => withResolvedActionClientMock(...args),
@@ -45,7 +22,6 @@ function expectResolvedActionClientReadinessNone(): void {
   expect(withResolvedActionClientMock.mock.calls[0]).toEqual([
     expect.objectContaining({ readiness: "none" }),
     expect.any(Function),
-    "persist",
   ]);
 }
 
@@ -65,11 +41,6 @@ describe("matrix verification actions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    loadConfigMock.mockReturnValue({
-      channels: {
-        matrix: {},
-      },
-    });
   });
 
   function createVerificationStages() {
@@ -144,7 +115,7 @@ describe("matrix verification actions", () => {
   }
 
   it("uses the resolved default Matrix account when accountId is omitted", async () => {
-    loadConfigMock.mockReturnValue({
+    const cfg = {
       channels: {
         matrix: {
           defaultAccount: "ops",
@@ -155,12 +126,12 @@ describe("matrix verification actions", () => {
           },
         },
       },
-    });
+    };
     withStartedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({ crypto: null });
     });
 
-    await expect(listMatrixVerifications({ cfg: loadConfigMock() })).rejects.toThrow(
+    await expect(listMatrixVerifications({ cfg })).rejects.toThrow(
       "Matrix encryption is not available (enable channels.matrix.accounts.ops.encryption=true)",
     );
   });

@@ -12,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import { SessionManager } from "./session-manager.js";
 
 it("publishes durable metadata without host SQLite and preserves it after its worker crashes", async () => {
@@ -51,14 +52,21 @@ it("publishes durable metadata without host SQLite and preserves it after its wo
     ];
     try {
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
-      const model = await manager.appendModelChange("synthetic", "synthetic-model");
+      const thinking = await manager[sessionManagerAppendInitialMetadata](
+        "synthetic",
+        "synthetic-model",
+        "off",
+      );
+      const model = manager.getEntries()[0]?.id;
+      expect(manager.getEntries()).toMatchObject([
+        { id: model, type: "model_change", parentId: null },
+        { id: thinking, type: "thinking_level_change", parentId: model },
+      ]);
       expect(publications.at(-1)).toMatchObject({
         sessionKey: target.sessionKey,
         sessionId: target.sessionId,
-        leafEventId: model,
+        leafEventId: thinking,
       });
-      const thinking = await manager.appendThinkingLevelChange("off");
-      expect(publications.at(-1)?.leafEventId).toBe(thinking);
       const custom = await manager.appendCustomEntryAsync("synthetic-metadata", { retained: true });
       expect(publications.at(-1)?.leafEventId).toBe(custom);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
@@ -79,7 +87,7 @@ it("publishes durable metadata without host SQLite and preserves it after its wo
       const reopened = await SessionManager.openAsync(target, state.workspaceDir);
       const expected = [
         { id: model, type: "model_change", provider: "synthetic", modelId: "synthetic-model" },
-        { id: thinking, type: "thinking_level_change", thinkingLevel: "off" },
+        { id: thinking, parentId: model, type: "thinking_level_change", thinkingLevel: "off" },
         { id: custom, type: "custom", customType: "synthetic-metadata", data: { retained: true } },
       ];
       expect(reopened.getEntries()).toMatchObject(expected);

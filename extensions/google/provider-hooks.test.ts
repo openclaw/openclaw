@@ -4,79 +4,22 @@ import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 
 describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
   it.each([
-    {
-      label: "direct Gemma",
-      api: "google-generative-ai",
-      provider: "google",
-      modelId: "gemma-4-26b-a4b-it",
-      thinkingLevel: "high",
-      expected: { thinkingLevel: "HIGH" },
-    },
-    {
-      label: "provider-qualified Gemma",
-      api: "google-generative-ai",
-      provider: "google",
-      modelId: "google/gemma-4-26b-a4b-it",
-      thinkingLevel: "high",
-      expected: { thinkingLevel: "HIGH" },
-    },
-    {
-      label: "resource-qualified Gemma",
-      api: "google-generative-ai",
-      provider: "google",
-      modelId: "models/gemma-4-26b-a4b-it",
-      thinkingLevel: "high",
-      expected: { thinkingLevel: "HIGH" },
-    },
-    {
-      label: "Vertex Gemma",
-      api: "google-vertex",
-      provider: "google-vertex",
-      modelId: "gemma-4-26b-a4b-it",
-      thinkingLevel: "low",
-      expected: { thinkingLevel: "MINIMAL" },
-    },
-    {
-      label: "disabled Vertex Gemma",
-      api: "google-vertex",
-      provider: "google-vertex",
-      modelId: "gemma-4-26b-a4b-it",
-      thinkingLevel: "off",
-      expected: undefined,
-    },
-    {
-      label: "adaptive Vertex Gemini 2.5",
-      api: "google-vertex",
-      provider: "google-vertex",
-      modelId: "gemini-2.5-flash",
-      thinkingLevel: "adaptive",
-      expected: { thinkingBudget: -1 },
-    },
-    {
-      label: "adaptive Vertex Gemini 3",
-      api: "google-vertex",
-      provider: "google-vertex",
-      modelId: "gemini-3-flash-preview",
-      thinkingLevel: "adaptive",
-      expected: undefined,
-    },
-    {
-      label: "Gemini CLI native Google transport",
-      api: "google-generative-ai",
-      provider: "google-gemini-cli",
-      modelId: "gemini-3-pro-preview",
-      thinkingLevel: "high",
-      expected: { thinkingLevel: "HIGH" },
-    },
-    {
-      label: "unrelated transport",
-      api: "openai-completions",
-      provider: "other",
-      modelId: "gemma-4-26b-a4b-it",
-      thinkingLevel: "high",
-      expected: { thinkingBudget: -1 },
-    },
-  ] as const)("normalizes $label", ({ api, provider, modelId, thinkingLevel, expected }) => {
+    ["google", "gemma-4-26b-a4b-it", "high", { thinkingLevel: "HIGH" }],
+    ["google", "google/gemma-4-26b-a4b-it", "high", { thinkingLevel: "HIGH" }],
+    ["google", "models/gemma-4-26b-a4b-it", "high", { thinkingLevel: "HIGH" }],
+    ["google-vertex", "gemma-4-26b-a4b-it", "low", { thinkingLevel: "MINIMAL" }],
+    ["google-vertex", "gemma-4-26b-a4b-it", "off", undefined],
+    ["google-vertex", "gemini-2.5-flash", "adaptive", { thinkingBudget: -1 }],
+    ["google-vertex", "gemini-3-flash-preview", "adaptive", undefined],
+    ["google-gemini-cli", "gemini-3-pro-preview", "high", { thinkingLevel: "HIGH" }],
+    ["other", "gemma-4-26b-a4b-it", "high", { thinkingBudget: -1 }],
+  ] as const)("normalizes %s %s at %s", (provider, modelId, thinkingLevel, expected) => {
+    const api =
+      provider === "other"
+        ? "openai-completions"
+        : provider === "google-vertex"
+          ? "google-vertex"
+          : "google-generative-ai";
     const capture = createCapturedThinkingConfigStream();
     const wrapped = GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn({
       provider,
@@ -99,23 +42,10 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason", () => {
     { provider: "google", code: "UNAVAILABLE", expected: "overloaded" },
     { provider: "google-vertex", code: "DEADLINE_EXCEEDED", expected: "timeout" },
     { provider: "google-antigravity", code: "INTERNAL", expected: "server_error" },
+    { provider: "google-vertex", code: "INSUFFICIENT_QUOTA", expected: undefined },
   ] as const)("classifies $provider $code as $expected", ({ provider, code, expected }) => {
     expect(
-      GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason({
-        provider,
-        errorMessage: "",
-        code,
-      }),
+      GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason({ provider, errorMessage: "", code }),
     ).toBe(expected);
-  });
-
-  it("leaves unknown codes for generic classification", () => {
-    expect(
-      GOOGLE_GEMINI_PROVIDER_HOOKS.classifyFailoverReason({
-        provider: "google-vertex",
-        errorMessage: "",
-        code: "INSUFFICIENT_QUOTA",
-      }),
-    ).toBeUndefined();
   });
 });

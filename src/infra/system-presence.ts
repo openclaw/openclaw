@@ -27,6 +27,8 @@ type StoredPresence = {
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
 const entries = new Map<string | symbol, StoredPresence>();
+const presenceKeys = new WeakMap<SystemPresence, string>();
+let nextWireKey = 0;
 const TTL_MS = 5 * 60 * 1000;
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
@@ -36,7 +38,20 @@ function setPresence(
   presence: SystemPresence,
   pending = entries.get(key)?.pending ?? false,
 ) {
+  // Keys repeat in every delta's order. Keep them short and never reuse an expired row's ID.
+  const existing = entries.get(key)?.presence;
+  const wireKey = (existing && presenceKeys.get(existing)) ?? (++nextWireKey).toString(36);
+  presenceKeys.set(presence, wireKey);
   entries.set(key, { presence, pending });
+}
+
+/** Stable owner key without adding fields to legacy presence rows. */
+export function getSystemPresenceKey(presence: SystemPresence): string {
+  const key = presenceKeys.get(presence);
+  if (key === undefined) {
+    throw new Error("presence row has no owner key");
+  }
+  return key;
 }
 
 function initSelfPresence() {
@@ -140,6 +155,17 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
   return merged.length > 0 ? merged : undefined;
 }
 
+function operatorPresenceIdentity(presence: SystemPresence): string | undefined {
+  if (!presence.roles?.includes("operator") || presence.roles.includes("node")) {
+    return undefined;
+  }
+  return (
+    normalizeOptionalLowercaseString(presence.deviceId) ??
+    normalizeOptionalLowercaseString(presence.instanceId) ??
+    normalizeOptionalLowercaseString(presence.connectionId)
+  );
+}
+
 export function updateSystemPresence(payload: SystemPresencePayload) {
   const parsed = parsePresence(payload.text);
   const key =
@@ -205,6 +231,27 @@ export function upsertPresence(
         presence.mode ?? existing.mode ?? "unknown"
       }`,
   };
+  if (presence.reason === "connect" || presence.reason === "disconnect") {
+    const identity = operatorPresenceIdentity(merged);
+    if (identity) {
+      let hasLivePeer = false;
+      // Keep each live tab's facts, but only the last disconnect's offline metadata.
+      for (const [peerKey, { presence: peer }] of entries) {
+        if (peerKey === normalizedKey || operatorPresenceIdentity(peer) !== identity) {
+          continue;
+        }
+        if (peer.reason === "disconnect") {
+          entries.delete(peerKey);
+        } else {
+          hasLivePeer = true;
+        }
+      }
+      if (presence.reason === "disconnect" && hasLivePeer) {
+        entries.delete(normalizedKey);
+        return;
+      }
+    }
+  }
   setPresence(normalizedKey, merged, options?.pending);
 }
 

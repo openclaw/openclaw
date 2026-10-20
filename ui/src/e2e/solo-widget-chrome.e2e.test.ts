@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -125,7 +124,7 @@ suite.define(() => {
         const original = await frame.elementHandle();
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-expanded.png") });
+
         await showHeaderMenu(page);
         await page.keyboard.press("Escape");
         const menu = await showHeaderMenu(page, "keyboard");
@@ -140,7 +139,7 @@ suite.define(() => {
           ),
         );
         expect([...new Set(itemFonts)]).toEqual([expect.any(String)]);
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-header-menu.png") });
+
         const resized = { ...board, revision: 2 };
         await gateway.setMethodResponse("board.update", resized);
         await menu.locator('[value="board-widget:resize:xl"]').click();
@@ -169,7 +168,7 @@ suite.define(() => {
         const splitMenu = await showHeaderMenu(page);
         await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
         await page.keyboard.press("Escape");
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-split.png") });
+
         await selectChatLayoutAction(page, "Focus");
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         const multiple = {
@@ -264,12 +263,6 @@ suite.define(() => {
             readOnly ? 0 : 1,
           );
           expect(await gateway.getRequests("board.update")).toHaveLength(0);
-          await page.screenshot({
-            path: path.join(
-              suite.artifactDir,
-              readOnly ? "candidate-touch-readonly.png" : "candidate-touch-menu.png",
-            ),
-          });
         },
       );
     },

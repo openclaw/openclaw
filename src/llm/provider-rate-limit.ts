@@ -1,4 +1,5 @@
-import { createHash, randomInt } from "node:crypto";
+import { randomInt } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { FailoverError } from "../agents/failover/error.js";
 import {
   hasOrganizationTpmRateLimitEvidence,
@@ -128,10 +129,6 @@ function merge(gate: Gate, other: Gate) {
   gate.queue.sort((a, b) => a.order - b.order);
 }
 
-function hash(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function requestIdentity(
   model: Pick<Model, "provider" | "baseUrl" | "headers">,
   options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
@@ -141,14 +138,14 @@ function requestIdentity(
       ([name, value]) => [name.toLowerCase(), value] as const,
     ),
   );
-  const scope = hash(JSON.stringify([model.provider, model.baseUrl]));
+  const scope = sha256Hex(JSON.stringify([model.provider, model.baseUrl]));
   const organization = headers.get("openai-organization");
   const credential = headers.get("authorization") ?? options?.apiKey;
   // Explicit organization selection can put the same credential in different buckets.
   const key = organization
-    ? `${scope}:org:${hash(organization)}`
+    ? `${scope}:org:${sha256Hex(organization)}`
     : credential
-      ? `${scope}:credential:${hash(credential.replace(/^Bearer\s+/i, ""))}`
+      ? `${scope}:credential:${sha256Hex(credential.replace(/^Bearer\s+/i, ""))}`
       : undefined;
   return { scope, key };
 }
@@ -219,7 +216,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       const org = message.errorMessage?.match(
         /\bin organization\s+(\S+)\s+on tokens per min/i,
       )?.[1];
-      const orgKey = org ? `${scope}:org:${hash(org)}` : undefined;
+      const orgKey = org ? `${scope}:org:${sha256Hex(org)}` : undefined;
       const gate = gates.get(key) ?? {
         keys: new Set([key]),
         retryAt: 0,

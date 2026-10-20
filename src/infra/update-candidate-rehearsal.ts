@@ -168,6 +168,7 @@ export async function prepareUpdateCandidateRehearsal(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  fullIntegrityCheck?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;

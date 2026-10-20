@@ -9,7 +9,6 @@ import * as credentialsReadModule from "./credentials-read.js";
 
 const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
 const saveBackfilledMatrixDeviceIdMock = vi.hoisted(() => vi.fn(async () => "saved"));
-const touchMatrixCredentialsMock = vi.hoisted(() => vi.fn());
 const repairCurrentTokenStorageMetaDeviceIdMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredSecretInputStringMock = vi.hoisted(() => vi.fn());
 
@@ -18,10 +17,10 @@ vi.mock("./credentials-read.js", () => ({
   credentialsMatchConfig: vi.fn(() => false),
 }));
 
-vi.mock("./credentials.js", () => ({
+vi.mock("./credentials.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./credentials.js")>()),
   saveBackfilledMatrixDeviceId: saveBackfilledMatrixDeviceIdMock,
   saveMatrixCredentials: saveMatrixCredentialsMock,
-  touchMatrixCredentials: touchMatrixCredentialsMock,
 }));
 
 vi.mock("./client/storage.js", async () => {
@@ -161,7 +160,6 @@ describe("resolveMatrixAuth", () => {
     vi.mocked(credentialsReadModule.credentialsMatchConfig).mockReturnValue(false);
     saveMatrixCredentialsMock.mockReset();
     saveBackfilledMatrixDeviceIdMock.mockReset().mockResolvedValue("saved");
-    touchMatrixCredentialsMock.mockReset();
     repairCurrentTokenStorageMetaDeviceIdMock.mockReset().mockReturnValue(true);
     resolveConfiguredSecretInputStringMock.mockReset().mockResolvedValue({});
     matrixDoRequestMock.mockReset();

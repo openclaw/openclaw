@@ -12,7 +12,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   createReactiveDraftHarness,
   getComposerTextarea,
@@ -179,7 +179,7 @@ describe("chat composer suggestion accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
-  it("keeps a stable composer name when attachments change its placeholder", () => {
+  it("keeps a stable composer name when attachments change its placeholder", async () => {
     const harness = createReactiveDraftHarness();
     const textarea = getComposerTextarea(harness.container);
     const initialPlaceholder = textarea.placeholder;
@@ -188,7 +188,9 @@ describe("chat composer suggestion accessibility", () => {
     harness.renderCurrent({
       attachments: [{ id: "image", mimeType: "image/png", previewUrl: "blob:sample-image" }],
     });
-    expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
+    );
     expect(textarea.placeholder).not.toBe(initialPlaceholder);
     expectComposerName(textarea);
 

@@ -18,11 +18,6 @@ import {
 } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -67,6 +62,11 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
@@ -122,14 +122,16 @@ import {
   hashCliSessionText,
 } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
 import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
-import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
+import {
+  beginForegroundSessionMaintenance,
+  waitForSessionMaintenance,
+} from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
@@ -142,6 +144,7 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -188,7 +191,8 @@ vi.mock("../../config/config.js", async () => ({
   resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   ensureSandboxWorkspaceForSession: ensureSandboxWorkspaceForSessionMock,
 }));
 
@@ -313,16 +317,6 @@ function createArgBackendConfig(
   output: "text" | "json" = "text",
 ): CliBackendPlugin["config"] {
   return { command, args, output, input: "arg", sessionMode: "existing" };
-}
-
-function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
-  return {
-    command,
-    args: ["--print"],
-    output: "jsonl",
-    input: "stdin",
-    sessionMode: "existing",
-  };
 }
 
 type CliContextBudgetTestCase = {
@@ -1757,7 +1751,7 @@ describe("prepareCliRunContext", () => {
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toMatch(
-        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nFor the current source conversation,/,
+        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nThis turn has no current conversation\./,
       );
       expect(context.params.prompt).toMatch(
         /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
@@ -1837,7 +1831,7 @@ describe("prepareCliRunContext", () => {
       .finally(preparedRunAdmission.close);
 
     expect(context.params.prompt).toMatch(
-      /^authorized memory context\n\nlatest ask\n\nFor the current source conversation,/,
+      /^authorized memory context\n\nlatest ask\n\nThis turn has no current conversation\./,
     );
     expect(context.params.transcriptPrompt).toBe("latest ask");
     expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
@@ -2071,7 +2065,7 @@ describe("prepareCliRunContext", () => {
         await maintenanceStarted.promise;
         expect(custody.read()).toBe(42);
         maintenanceGate.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         if (lease) {
           await custody.retirement;
         }
@@ -2081,7 +2075,7 @@ describe("prepareCliRunContext", () => {
       } finally {
         releaseForeground();
         maintenanceGate.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         await lease?.dispose();
         if (lease) {
           await custody.retirement;
@@ -2155,9 +2149,7 @@ describe("prepareCliRunContext", () => {
       if (scenario === "lookup-failed") {
         lookup.reject(new Error("optional media lookup failed"));
         expect(await outcome).toEqual({
-          prompt: expect.stringMatching(
-            /^latest ask\n\nNo source-conversation reply can be sent from this turn\./,
-          ),
+          prompt: expect.stringMatching(/^latest ask\n\nThis turn has no current conversation\./),
           transcriptPrompt: "latest ask",
         });
         expect(factory).toHaveBeenCalledOnce();
@@ -2446,9 +2438,8 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
     expect(second.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2513,7 +2504,7 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.params.prompt).toBe("latest ask");
     expect(second.promptContext).toEqual({
-      appendContext: expect.stringMatching(/^For the current source conversation,/),
+      appendContext: expect.stringMatching(/^This turn has no current conversation\./),
     });
     expect(
       second.promptContext?.appendContext?.endsWith(`\n\n${labelRuntimeContextText(carrier)}`),
@@ -2673,9 +2664,8 @@ describe("prepareCliRunContext", () => {
       hashCliSessionText(JSON.stringify(["fake_web_tool", "memory_search"])),
     );
     expect(context.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2878,6 +2868,8 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       modelProvider: "policy-provider",
       model: "policy-model",
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       clientCaps: ["original-client"],
       toolsAllow: originalToolsAllow,
@@ -2889,6 +2881,8 @@ describe("prepareCliRunContext", () => {
     const questionAuthority = bindQuestionAuthority(() => {});
     originalToolsAllow.push("exec");
     const caller = {
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       disableTools: false,
       clientCaps: ["original-client"],
@@ -2993,7 +2987,8 @@ describe("prepareCliRunContext", () => {
       modelProvider: "question-policy",
       model: "creator-model",
       config,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       senderIsOwner: false,
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
@@ -3003,7 +2998,8 @@ describe("prepareCliRunContext", () => {
     const caller = {
       senderIsOwner: false,
       disableTools: false,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
       traceAuthorized: mode === "reply-owned",
@@ -3092,7 +3088,7 @@ describe("prepareCliRunContext", () => {
               }),
             );
             await answeringPlaceholder.bindToolAuthorityRouteAsync(nextRoute);
-            expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
+            expect(getSessionControllerOperation(original.sessionKey)).toBe(answeringPlaceholder);
           }
           const answer = () =>
             claimPendingAgentQuestionAnswerFromCaller({
@@ -3407,6 +3403,10 @@ describe("prepareCliRunContext", () => {
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
         mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackPolicyTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
         resolveMcpLoopbackScopedTools: vi.fn(() => ({
           agentId: "main",
           tools: projectedToolNames.map((name) => ({ name })),
@@ -3444,7 +3444,7 @@ describe("prepareCliRunContext", () => {
       });
       expect(context.params.prompt).toContain("message-tool-available:false");
       expect(context.params.prompt).toContain(
-        "For the current source conversation, reply normally in your final assistant message",
+        "This turn has no current conversation. Reply normally in your final assistant message",
       );
       expect(context.params.prompt).not.toContain("message(action=send)");
       expect(context.params.prompt).not.toContain("target required this turn");
@@ -3960,7 +3960,7 @@ describe("prepareCliRunContext", () => {
         "Recovered history may be stale; verify current and time-sensitive facts before acting.",
       );
       expect(context.openClawHistoryPrompt).toMatch(
-        /<next_user_message>\nlatest ask\n\nFor the current source conversation,[\s\S]*\n<\/next_user_message>$/,
+        /<next_user_message>\nlatest ask\n\nThis turn has no current conversation\.[\s\S]*\n<\/next_user_message>$/,
       );
       expect(context.params.transcriptPrompt).toBe("latest ask");
     });
@@ -4468,13 +4468,12 @@ describe("prepareCliRunContext", () => {
         const runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentImpl);
         const runId = `memory-cli-${scenario}`;
         const maintenance = await import("../embedded-agent-runner/context-engine-maintenance.js");
+        const coordinator = await import("../session-maintenance/coordinator.js");
         const releaseMaintenance = createDeferred();
         const maintenanceStarted = createDeferred();
         const borrowedWait = createDeferred();
         let maintenanceJoined: Promise<void> | undefined;
-        let waitSpy:
-          | MockInstance<typeof maintenance.waitForDeferredTurnMaintenanceForSession>
-          | undefined;
+        let waitSpy: MockInstance<typeof coordinator.waitForSessionMaintenance> | undefined;
         if (scenario === "foreign-maintenance") {
           await maintenance.runContextEngineMaintenance({
             contextEngine: {
@@ -4503,13 +4502,11 @@ describe("prepareCliRunContext", () => {
             },
           });
           await maintenanceStarted.promise;
-          const wait = maintenance.waitForDeferredTurnMaintenanceForSession;
-          waitSpy = vi
-            .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-            .mockImplementation((key) => {
-              borrowedWait.resolve();
-              return wait(key);
-            });
+          const wait = coordinator.waitForSessionMaintenance;
+          waitSpy = vi.spyOn(coordinator, "waitForSessionMaintenance").mockImplementation((key) => {
+            borrowedWait.resolve();
+            return wait(key);
+          });
         }
         let run: ReturnType<typeof runEmbeddedAgent> | undefined;
         try {

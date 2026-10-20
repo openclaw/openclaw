@@ -1,4 +1,3 @@
-/** Shared UI-hint groups for channel config schemas. */
 import type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 
 type HintMap = Record<string, ChannelConfigUiHint>;
@@ -207,7 +206,6 @@ function createChannelRetryUiHints(channelLabel: string): HintMap {
   };
 }
 
-// Builds reusable channel config UI-hint groups from one channel descriptor.
 export function createChannelConfigUiHints(params: {
   channelLabel: string;
   dmPolicy?: {

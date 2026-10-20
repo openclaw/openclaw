@@ -1,11 +1,13 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import {
@@ -31,6 +33,11 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
+export const mention = (profileId: string, start = 0, end = 5): HumanMention => ({
+  profileId,
+  start,
+  end,
+});
 const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export async function resetMentionComposerFixture() {
@@ -60,6 +67,10 @@ export function composerFixture(
   const context = composerContext({
     client,
     phase: "connected",
+    hello: gatewayHelloForMethods(
+      ["sessions.create", "users.mentionable"],
+      ["operator.sessions.write"],
+    ),
     selfUser: { id: "sender-one", identity: { type: "profile", id: "sender-one" } },
   });
   const attachmentDraft = new NewSessionAttachmentDraft(
@@ -129,7 +140,6 @@ export function composerFixture(
         requiresModifier: false,
         onChange: renderCurrent,
         submitting: false,
-        composerTextarea,
         onInput: (next, selected) => {
           onInput(next, selected);
           renderCurrent();
@@ -139,7 +149,7 @@ export function composerFixture(
       if (native) {
         native.rerender();
       } else {
-        native = mountNewSessionComposer(() => nativeOptions, container);
+        native = mountNewSessionComposer(() => nativeOptions, composerTextarea, container);
       }
     }
   };
@@ -179,12 +189,28 @@ export function composerFixture(
   return {
     container,
     request,
+    defer: () => {
+      const response = createDeferred<UsersMentionableResult>();
+      request.mockReturnValueOnce(response.promise);
+      return async (result = people) => {
+        response.resolve(result);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+    },
     edit,
+    query: container.querySelector.bind(container),
+    options: () => container.querySelectorAll('[role="option"]'),
+    search: async (text: string, options?: Parameters<typeof edit>[1]) => {
+      edit(text, options);
+      await vi.advanceTimersByTimeAsync(150);
+    },
     key: pressKey,
     send,
     abort,
     slashCommand,
     value: () => ({ draft, mentions }),
+    expectValue: (expectedDraft: string, expectedMentions: readonly HumanMention[] = []) =>
+      expect({ draft, mentions }).toEqual({ draft: expectedDraft, mentions: expectedMentions }),
     replaceOwner: () => {
       ownerKey = "sender-two";
       renderCurrent();

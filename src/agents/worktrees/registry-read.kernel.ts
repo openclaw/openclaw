@@ -3,7 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import type {
@@ -197,6 +198,19 @@ function listLiveRegistryWorktreeIdsInDatabase(db: EngineConnection): string[] {
   return executeSqliteQuerySync(db, query).rows.map((row) => row.id);
 }
 
+function listExistingLiveWorktreePathsInDatabase(db: EngineConnection): string[] {
+  // Backups run before Doctor: older stores can lack worktrees or newer record columns.
+  if (!tableExists(db, "worktrees")) {
+    return [];
+  }
+  const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "worktrees">>(db)
+    .selectFrom("worktrees")
+    .select("path")
+    .where("removed_at", "is", null)
+    .orderBy("path");
+  return executeSqliteQuerySync(db, query).rows.map((row) => row.path);
+}
+
 function isProvisionedFileState(entry: unknown): entry is ProvisionedFileState {
   return (
     isRecord(entry) &&
@@ -255,7 +269,7 @@ function getRegistryWorktreeProvisionedStateInDatabase(
     : undefined;
 }
 
-export function getRegistryWorktreeProvisionedChunkInDatabase(
+function getRegistryWorktreeProvisionedChunkInDatabase(
   db: EngineConnection,
   params: { worktreeId: string; path: string; chunkIndex: number },
 ): Uint8Array | undefined {
@@ -287,7 +301,7 @@ export const worktreeReadOperations = {
     db,
   ) => ({
     type: "worktrees.sessionBinding" as const,
-    value: runSqliteDeferredTransactionSync(db, () => {
+    value: runSqliteReadSnapshotSync(db, () => {
       const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
       return bound && bound.removedAt === undefined
         ? bound
@@ -305,6 +319,10 @@ export const worktreeReadOperations = {
   "worktrees.liveIds": (_input: undefined, db) => ({
     type: "worktrees.liveIds" as const,
     value: listLiveRegistryWorktreeIdsInDatabase(db),
+  }),
+  "worktrees.livePaths": (_input: undefined, db) => ({
+    type: "worktrees.livePaths" as const,
+    value: listExistingLiveWorktreePathsInDatabase(db),
   }),
   "worktrees.provisionedPaths": ({ id }: { id: string }, db) => ({
     type: "worktrees.provisionedPaths" as const,

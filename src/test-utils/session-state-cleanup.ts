@@ -10,6 +10,11 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { drainSessionStoreWriterQueuesForTest } from "../config/sessions/store-writer-state.test-support.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
+import { resolveDatabasePathKey } from "../infra/sqlite-worker-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -50,6 +55,13 @@ export async function cleanupSessionStateForTest(
   await closeOpenClawStateDatabaseByPathAsync(
     resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: options.stateDir }),
   );
+  // Physical admissions outlive native handles; retire them before fixture removal.
+  const admittedRoot = resolveDatabasePathKey(rootPath);
+  for (const { location } of captureSqliteDatabaseAdmissions()) {
+    if (isPathInside(admittedRoot, location)) {
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
+  }
 }
 
 /**

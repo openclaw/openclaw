@@ -4,6 +4,8 @@ import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.
 import type { Message } from "../../llm/types.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
+// Persistence-only metadata is absent from provider messages; content is hashed separately.
+const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
@@ -48,7 +50,7 @@ function fingerprintText(value: string): string {
     : `escaped:${sha256Hex(stableStringify(value))}`;
 }
 
-function fingerprintRecord(record: object, omit?: string): RecordFingerprint {
+function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFingerprint {
   const previous = recordFingerprints.get(record);
   if (previous && isOwnedTranscriptPayload(record)) {
     return previous;
@@ -56,7 +58,7 @@ function fingerprintRecord(record: object, omit?: string): RecordFingerprint {
   let fields = previous ? undefined : new Map<string, string>();
   const primitives = previous?.primitives ?? new Map<string, unknown>();
   for (const [key, value] of Object.entries(record)) {
-    if (key === omit) {
+    if (omit?.has(key)) {
       continue;
     }
     const primitive = value === null || typeof value !== "object";
@@ -120,7 +122,7 @@ export function fingerprintMessage(
     fingerprints = content.map((block) => fingerprintRecord(block));
     blocks = fingerprints.map(({ digest }) => digest);
   }
-  const envelope = fingerprintRecord(message, "content");
+  const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
   if (
     previous?.envelopeDigest === envelope.digest &&
     previous.contentKind === (typeof content === "string" ? "string" : "blocks") &&

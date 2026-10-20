@@ -66,6 +66,8 @@ describe("createDiscordVoiceCommand", () => {
     const serialized = command.serialize();
     const firstOption = serialized.options?.[0];
 
+    expect(serialized.options?.map((option) => option.name)).toEqual(["join", "leave", "status"]);
+
     expect(firstOption).toEqual({
       name: "join",
       type: 1,

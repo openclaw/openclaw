@@ -6,6 +6,7 @@ import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepar
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
+import * as sessionDiff from "../sessions/session-diff.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -17,6 +18,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
 import * as fileAssets from "./server-methods/sessions-file-assets.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import { fetchSessionFileDownload } from "./server-methods/sessions-files.test-support.js";
@@ -31,6 +33,7 @@ const profileState = { scenario: "minimal", prepareProfileCatalog: true } as con
 afterEach(() => vi.restoreAllMocks());
 
 const methods = [
+  "sessions.diff",
   "sessions.files.list",
   "sessions.files.get",
   "sessions.files.assets",
@@ -61,11 +64,17 @@ function dispatchRead(
       },
     },
     isWebchatConnect: () => false,
-    extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
+    extraHandlers: { ...sessionsDiffHandlers, ...sessionsFilesHandlers, ...sessionRewindHandlers },
   });
 }
 
 function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promise<void>) {
+  if (method === "sessions.diff") {
+    return vi.spyOn(sessionDiff, "loadCheckoutDiff").mockImplementation(async () => {
+      await beforeReturn();
+      return { sessionKey: key, files: [], additions: 0, deletions: 0 };
+    });
+  }
   if (method === "sessions.files.assets") {
     return vi.spyOn(fileAssets, "getSessionWorkspaceAssets").mockImplementation(async () => {
       await beforeReturn();
@@ -531,13 +540,15 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(methods)("%s retains shared VIEW and hides foreign drafts before I/O", async (method) => {
+  it.each(
+    methods.flatMap((method) => (["none", "view"] as const).map((role) => ({ method, role }))),
+  )("$method enforces $role read access", async ({ method, role }) => {
     await withOpenClawTestState(profileState, async () => {
-      const reader = roleClient("view", "scoped-reader");
+      const reader = roleClient(role, "scoped-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const owner = roleClient("view", "scoped-owner");
       const cfg = rolePolicyConfig();
-      cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
+      cfg.gateway!.roles!.definitions[role]!.scopes.push("operator.admin");
       setRuntimeConfigSnapshot(cfg);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(reader);
@@ -568,8 +579,9 @@ describe("narrow session read owners", () => {
         );
         io.mockClear();
         const response = await request();
-        expect(response.mock.calls[0]?.[0]).toBe(visibility === "shared");
-        expect(io).toHaveBeenCalledTimes(visibility === "shared" ? 1 : 0);
+        const visible = visibility === "shared" && role === "view";
+        expect(response.mock.calls[0]?.[0], JSON.stringify(response.mock.calls)).toBe(visible);
+        expect(io).toHaveBeenCalledTimes(visible ? 1 : 0);
       }
       // Broad nonadmin readers use the same visibility owner; adding narrow write cannot bypass it.
       await sessions.upsertSessionEntryCore(

@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -11,6 +12,7 @@ import { appendAssistantMessageToSessionTranscript } from "../../config/sessions
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import { readRestartRecoveryRequesterSource } from "../requester-run-recovery-source.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
@@ -47,13 +49,38 @@ export async function prepareRequesterRestartRecovery(params: {
     lifecycleRevision: entry.lifecycleRevision,
     storePath: params.storePath,
     gatewayRuntime: params.gatewayRuntime,
-    requesterOperatorSourceMissing: !entry.restartRecoveryOperatorSource || undefined,
+    requesterOperatorSourceMissing:
+      (!entry.restartRecoveryOperatorSource && !readRestartRecoveryRequesterSource(params)) ||
+      undefined,
   });
   params.assertCurrent();
   if (recovered?.status === "ready") {
     return { outcome: "ready", source: recovered.source };
   }
-  const reason = recovered?.reason ?? "the original completion cohort is no longer available";
+  return await settleInterruptedRestartRecovery({
+    ...params,
+    reason: recovered?.reason ?? "the original completion cohort is no longer available",
+  });
+}
+
+/** Publish one local interruption notice and retire the exact input without replay or delivery. */
+async function settleInterruptedRestartRecovery(params: {
+  agentId: string;
+  entry: SessionEntry;
+  observation: MainSessionRecoveryObservation;
+  sessionKey: string;
+  storePath: string;
+  assertCurrent: () => void;
+  reason: string;
+  cronOwned?: boolean;
+}): Promise<{ outcome: "settled" | "changed" | "failed" }> {
+  const { entry, reason } = params;
+  // Legacy interrupted inputs can lack both run IDs. The recovery cycle still
+  // identifies their settlement; this receipt never authorizes execution.
+  const terminalRunId =
+    entry.restartRecoveryDeliveryRunId ??
+    entry.restartRecoveryDeliverySourceRunId ??
+    `main-session-restart-recovery:${params.observation.cycleId}:interrupted`;
   const endedAt = Date.now();
   const capturedReply =
     entry.pendingFinalDelivery?.kind === "replayable"
@@ -70,21 +97,23 @@ export async function prepareRequesterRestartRecovery(params: {
       pendingFinalDelivery: entry.pendingFinalDelivery ?? null,
     },
     assertCurrent: params.assertCurrent,
-    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId}:interrupted`,
+    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:interrupted`,
     text:
-      `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
-      "Your session and transcript are preserved. Send a new authenticated message to continue." +
+      (params.cronOwned
+        ? "The scheduled turn was interrupted by a Gateway restart. Cron owns its continuation; check the job history for its retry or interruption outcome. Your session and transcript are preserved."
+        : `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
+          "Your session and transcript are preserved. Send a new authenticated message to continue.") +
       (capturedReply ? `\n\nSaved reply (delivery unconfirmed):\n${capturedReply}` : ""),
     sessionLifecyclePatch: {
       ...buildMainSessionRecoverySettlementPatch({
         entry,
         recordTerminalSource: true,
-        terminalRunId: entry.restartRecoveryDeliveryRunId,
+        terminalRunId,
       }),
       status: "interrupted",
       pendingFinalDelivery: undefined,
       lifecycleRunId: undefined,
-      lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
+      lastRunId: resolveRestartRecoveryTerminalClientRunId(entry) ?? terminalRunId,
       lastRunError: reason,
       endedAt,
       runtimeMs: Math.max(0, endedAt - (entry.startedAt ?? endedAt)),
@@ -98,9 +127,43 @@ export async function prepareRequesterRestartRecovery(params: {
     return { outcome: "changed" };
   }
   mainSessionRecoveryLog.warn(
-    `failed to settle interrupted requester recovery ${params.sessionKey}: ${result.reason}`,
+    `failed to settle interrupted recovery ${params.sessionKey}: ${result.reason}`,
   );
   return { outcome: "failed" };
+}
+
+/** Sender loss retires one input only when no other execution or delivery custody remains. */
+export async function finishDelegatedRestartRecovery(
+  params: Parameters<typeof tombstoneMainRestartRecoveryWithNotice>[0] & {
+    assertCurrent: () => void;
+    cronOwned?: boolean;
+  },
+): Promise<"notice_failed" | "skipped" | "tombstoned" | "settled"> {
+  const { entry } = params;
+  const unfinishedRuns = (entry.restartRecoveryRuns ?? []).filter(
+    (run) => !hasRestartRecoveryTerminalRun(entry, run.runId),
+  );
+  // Cron can leave an older delivery-source claim beside its single interrupted
+  // turn. Retire that residue so the scheduler can re-admit the conversation.
+  // Multiple unfinished turns or pending delivery still retain their custody.
+  if (
+    entry.pendingFinalDelivery ||
+    entry.restartRecoveryHarnessCompletion ||
+    (!(params.cronOwned && unfinishedRuns.length <= 1) &&
+      unfinishedRuns.some(
+        (run) =>
+          run.runId !== entry.restartRecoveryDeliveryRunId &&
+          run.runId !== entry.restartRecoveryDeliverySourceRunId,
+      ))
+  ) {
+    return await tombstoneMainRestartRecoveryWithNotice(params);
+  }
+  const result = await settleInterruptedRestartRecovery(params);
+  return result.outcome === "failed"
+    ? "notice_failed"
+    : result.outcome === "changed"
+      ? "skipped"
+      : "settled";
 }
 
 function buildTombstonedSessionNotice(reason: string): string {

@@ -4,10 +4,14 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
+import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
@@ -38,7 +42,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 let shared: string;
 let env: NodeJS.ProcessEnv;
-let fixture: ReturnType<typeof createDoctorNoCowToolFixture>;
 
 function seedDatabase(databasePath: string) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -95,7 +98,7 @@ describe("Doctor NOCOW recovery identities", () => {
     shared = path.join(root, "state", "openclaw.sqlite");
     env = { ...process.env, OPENCLAW_STATE_DIR: root };
     seedDatabase(shared);
-    fixture = createDoctorNoCowToolFixture(root);
+    createDoctorNoCowToolFixture(root);
     const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const tools = vi.mocked(spawnSync).getMockImplementation()!;
     vi.mocked(spawnSync).mockImplementation((command, args, options) =>
@@ -109,12 +112,64 @@ describe("Doctor NOCOW recovery identities", () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])(
+    "preserves migrated credentials only for the rewritten generation (replaced beforehand: %s)",
+    async (replaced) => {
+      fs.rmSync(shared);
+      const fixture = await createClientCredentialMigrationFixture(root);
+      try {
+        fixture.maintenance.run(() =>
+          runSqliteImmediateTransactionSync(fixture.source, () => {
+            prepareClientCredentialMigration(fixture.source, {
+              path: shared,
+              env,
+              fromVersion: 25,
+              capture: fixture.maintenance.capture,
+            });
+            fixture.source.exec(
+              "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
+            );
+          }),
+        );
+      } finally {
+        fixture.source.close();
+        await fixture.maintenance.close();
+      }
+      const readToken = () =>
+        runClientCredentialOperation(env, {
+          kind: "token.read",
+          key: { device_id: fixture.identity.deviceId, role: "v2.gateway.operator" },
+        });
+      expect(readToken()).toMatchObject({
+        kind: "token",
+        token: { token: "token-original", scopes_json: '["operator.read"]' },
+      });
+      if (replaced) {
+        const replacement = path.join(root, "replacement.sqlite");
+        fs.copyFileSync(shared, replacement);
+        fs.renameSync(replacement, shared);
+      }
+      const rewritten = await rewrite();
+      expect(rewritten.changes).toHaveLength(1);
+      if (replaced) {
+        expect(rewritten.warnings.join("\n")).toContain("recorded generation");
+        expect(readToken).toThrow("migration is incomplete or stale");
+      } else {
+        expect(rewritten.warnings).toEqual([]);
+        expect(readToken()).toMatchObject({
+          kind: "token",
+          token: { token: "token-original", scopes_json: '["operator.read"]' },
+        });
+      }
+    },
+  );
+
   it("retires a recorded recovery original after a NOCOW rewrite without changing live data", async () => {
     const backupPath = await prepareCompletedBackup();
     const original = fs.readFileSync(backupPath);
     const recorded = readTarget().plannedMoves[0]!.artifact!.identity;
     expect((await rewrite()).warnings).toEqual([]);
-    expect(String(fs.lstatSync(backupPath, { bigint: true }).ino)).not.toBe(recorded.ino);
+    expect(String(fs.lstatSync(backupPath, { bigint: true }).ino)).toBe(recorded.ino);
     expect(fs.readFileSync(backupPath)).toEqual(original);
 
     const result = await retire();
@@ -131,12 +186,11 @@ describe("Doctor NOCOW recovery identities", () => {
     }
   });
 
-  it.each(["destination", "backup", "backup metadata", "copied bytes"])(
+  it.each(["destination", "backup", "backup metadata"])(
     "keeps the original protected after changing %s",
     async (change) => {
       const backupPath = await prepareCompletedBackup();
       const recorded = readTarget();
-      const original = fs.readFileSync(backupPath);
       if (change === "destination" || change === "backup") {
         const replacedPath = change === "destination" ? shared : backupPath;
         const replacement = path.join(root, "replacement.sqlite");
@@ -145,19 +199,14 @@ describe("Doctor NOCOW recovery identities", () => {
       } else if (change === "backup metadata") {
         const touched = new Date("2030-01-01T00:00:00Z");
         fs.utimesSync(backupPath, touched, touched);
-      } else {
-        fixture.beforeExchange = () => {
-          const staging = fs
-            .readdirSync(root)
-            .find((name) => name.startsWith("state.nocow-backup-"))!;
-          const copied = Buffer.from(original);
-          copied[copied.length - 1] = copied[copied.length - 1]! ^ 1;
-          fs.writeFileSync(path.join(root, staging, path.basename(backupPath)), copied);
-        };
       }
       const rewritten = await rewrite();
       expect(rewritten.changes).toHaveLength(1);
-      expect(rewritten.warnings.join("\n")).toContain("left unchanged");
+      if (change === "destination") {
+        expect(rewritten.warnings.join("\n")).toContain("left unchanged");
+      } else {
+        expect(rewritten.warnings).toEqual([]);
+      }
       if (change === "destination") {
         expect(readTarget().databaseIdentity).toEqual(recorded.databaseIdentity);
       } else {

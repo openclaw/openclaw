@@ -59,7 +59,10 @@ const providerRegistry = Object.freeze(
 const providerHooks = Object.freeze(createProviderHookRuntime(providerRegistry));
 const externalProfiles = Object.freeze(createProviderExternalAuthResolver(providerHooks));
 const externalAuth = Object.freeze(
-  createExternalAuthRuntime(externalProfiles.resolveExternalAuthProfilesWithPlugins),
+  createExternalAuthRuntime(
+    externalProfiles.resolveExternalAuthProfilesWithPlugins,
+    externalProfiles.withPreparedExternalAuthProfiles,
+  ),
 );
 const authStore = Object.freeze(createAuthProfileStoreRuntime(externalAuth));
 const authAvailability = Object.freeze(
@@ -70,28 +73,26 @@ let modelConfig: NativePluginLoadBindings["modelConfig"] | undefined;
 let capabilityCatalogContext: NativePluginLoadBindings["capabilityCatalogContext"] | undefined;
 // Imports of store/hook facades must not construct unrelated policy surfaces.
 // Consumers share immutable defaults and retain their own mutable method views.
-const loaderBindings: NativePluginLoadBindings = Object.freeze({
+const loaderBindings: NativePluginLoadBindings = {
   get modelAuth() {
-    return (modelAuth ??= Object.freeze(
-      createRuntimeModelAuth({
-        ensureAuthProfileStore: authStore.ensureAuthProfileStore,
-        ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
-        isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
-        isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
-      }),
-    ));
+    return (modelAuth ??= createRuntimeModelAuth({
+      ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+      ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
+      isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+      isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
+    }));
   },
   get modelConfig() {
-    return (modelConfig ??= Object.freeze({
+    return (modelConfig ??= {
       resolveDefaultModelForAgent,
       resolveAllowedModelRef: resolveAllowedModelRefCore,
       resolveModelRuntimePolicy,
-    }));
+    });
   },
   get capabilityCatalogContext() {
     return (capabilityCatalogContext ??= createPluginCapabilityCatalogContext(authAvailability));
   },
-});
+};
 
 export const nativePluginBindings = Object.freeze({
   providerRegistry,

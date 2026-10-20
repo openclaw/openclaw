@@ -1,17 +1,10 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { BrowserContext, Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import type { SkillsWorkshopReadResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  captureControlUiE2eFailureDiagnostics,
-  installMockGateway,
-  type MockGatewayControls,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
+import { createSkill } from "../pages/skills/view.test-support.ts";
+import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -20,19 +13,34 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("operator-admin");
-  }
-});
 const viewport = { height: 960, width: 1440 };
 
 const agentRoster = [
   { id: "main", identity: { name: "Main" }, name: "Main" },
   { id: "reviewer", identity: { name: "Reviewer" }, name: "Reviewer" },
 ];
+const agentsResponse = { agents: agentRoster, defaultId: "main", mainKey: "main", scope: "agent" };
+const approvalDefaults = {
+  security: "deny",
+  ask: "on-miss",
+  askFallback: "deny",
+  autoAllowSkills: false,
+};
+const emptyRequirements = { anyBins: [], env: [], config: [], os: [] };
+const bootMethods = ["agents.list", "chat.metadata", "chat.startup", "config.get"];
+const workshopMethods = [
+  "skills.workshop.archive",
+  "skills.workshop.changes",
+  "skills.workshop.list",
+  "skills.workshop.read",
+  "skills.workshop.restore",
+];
+const approvalSnapshot = {
+  path: "/tmp/openclaw-e2e/exec-approvals.json",
+  exists: true,
+  hash: "approval-hash-1",
+  file: { defaults: approvalDefaults, agents: {} },
+};
 
 const operatorConfig = {
   agents: {
@@ -50,7 +58,7 @@ function skillStatus(eligible: boolean) {
     workspaceDir: "/tmp/openclaw-e2e/workspace",
     managedSkillsDir: "/tmp/openclaw-e2e/skills",
     skills: [
-      {
+      createSkill({
         name: "Deploy Helper",
         description: "Prepare reviewed deployments.",
         source: "openclaw-bundled",
@@ -58,30 +66,19 @@ function skillStatus(eligible: boolean) {
         filePath: "/tmp/openclaw-e2e/skills/deploy-helper/SKILL.md",
         baseDir: "/tmp/openclaw-e2e/skills/deploy-helper",
         skillKey: "deploy-helper",
-        always: false,
-        disabled: false,
-        blockedByAllowlist: false,
-        blockedByAgentFilter: false,
         eligible,
-        platformIncompatible: false,
         modelVisible: eligible,
-        userInvocable: true,
         commandVisible: eligible,
+        primaryEnv: undefined,
+        homepage: undefined,
         requirements: {
+          ...emptyRequirements,
           bins: ["deploy-helper"],
-          anyBins: [],
-          env: [],
-          config: [],
-          os: [],
         },
         missing: {
+          ...emptyRequirements,
           bins: eligible ? [] : ["deploy-helper"],
-          anyBins: [],
-          env: [],
-          config: [],
-          os: [],
         },
-        configChecks: [],
         install: [
           {
             id: "node-deploy-helper",
@@ -90,53 +87,34 @@ function skillStatus(eligible: boolean) {
             bins: ["deploy-helper"],
           },
         ],
-      },
+      }),
     ],
   };
 }
 
 function configResponse(config: Record<string, unknown> = operatorConfig) {
-  const raw = JSON.stringify(config);
-  return {
-    config,
-    sourceConfig: config,
-    hash: "config-hash-1",
-    issues: [],
-    raw,
-    valid: true,
-  };
+  return { ...configSnapshot(config, "config-hash-1"), sourceConfig: config };
 }
 
-function requestParams(request: MockGatewayRequest): Record<string, unknown> {
-  if (!request.params || typeof request.params !== "object" || Array.isArray(request.params)) {
-    return {};
-  }
-  return request.params as Record<string, unknown>;
-}
-
-async function waitForRequest(
-  gateway: MockGatewayControls,
-  method: string,
-  predicate: (params: Record<string, unknown>) => boolean,
+function reviewerApprovals(
+  hash: string,
+  reviewer: typeof approvalDefaults & { allowlist: Array<{ pattern: string }> },
 ) {
-  await expect
-    .poll(async () =>
-      (await gateway.getRequests(method)).some((request) => predicate(requestParams(request))),
-    )
-    .toBe(true);
+  return { ...approvalSnapshot, hash, file: { defaults: approvalDefaults, agents: { reviewer } } };
 }
 
-async function createContext(): Promise<BrowserContext> {
-  return suite.browser.newContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-    ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
-  });
+function withPage(run: (page: Page) => Promise<void>) {
+  return suite.withPage(
+    {
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport,
+    },
+    ({ page }) => run(page),
+  );
 }
 
-async function selectAgentOnAgentsPage(page: Page, name: string) {
-  const select = page.locator(".settings-sidebar__agent openclaw-agent-select");
+async function selectAgent(select: Locator, name: string) {
   await select.locator(".agent-select__trigger").click();
   await select
     .locator(".agent-select__option[data-agent-option]")
@@ -147,91 +125,68 @@ async function selectAgentOnAgentsPage(page: Page, name: string) {
     .toBe(name);
 }
 
-async function screenshot(
-  page: Page,
-  name: string,
-  content: Locator,
-  surface = page.locator(".shell"),
-) {
-  if (!captureUiProof) {
-    return;
-  }
-  await writeFile(
-    path.join(proofDir, name),
-    await takeControlUiViewportScreenshot(page, surface, [content]),
-  );
+const expectVisible = (control: Locator) => expect.poll(() => control.isVisible()).toBe(true);
+
+async function expectDenied(control: Locator, gateway: MockGatewayControls, method: string) {
+  await expect.poll(() => control.isDisabled()).toBe(true);
+  await control.click({ force: true });
+  expect(await gateway.getRequests(method)).toHaveLength(0);
+}
+
+async function expectAgentCreationDenied(page: Page, gateway: MockGatewayControls) {
+  const createAgent = page.getByRole("button", { name: "New agent", exact: true });
+  await expect.poll(() => createAgent.isDisabled()).toBe(true);
+  expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
+  expect(await createAgent.getAttribute("title")).toContain("operator.admin");
+  const url = page.url();
+  await createAgent.click({ force: true });
+  expect(page.url()).toBe(url);
+  expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
 }
 
 suite.define(() => {
   it("administers agent-scoped Skills and inspects the connected Nodes inventory", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "agents.list",
-        "chat.metadata",
-        "chat.startup",
-        "config.get",
-        "device.pair.list",
-        "exec.approvals.get",
-        "node.list",
-        "skills.install",
-        "skills.status",
-        "skills.update",
-        "skills.workshop.archive",
-        "skills.workshop.changes",
-        "skills.workshop.list",
-        "skills.workshop.read",
-        "skills.workshop.restore",
-      ],
-      methodResponses: {
-        "agents.list": {
-          agents: agentRoster,
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "config.get": configResponse(),
-        "device.pair.list": { paired: [], pending: [] },
-        "exec.approvals.get": {
-          path: "/tmp/openclaw-e2e/exec-approvals.json",
-          exists: true,
-          hash: "approval-hash-1",
-          file: {
-            defaults: {
-              security: "deny",
-              ask: "on-miss",
-              askFallback: "deny",
-              autoAllowSkills: false,
-            },
-            agents: {},
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...bootMethods,
+          "device.pair.list",
+          "exec.approvals.get",
+          "node.list",
+          "skills.install",
+          "skills.status",
+          "skills.update",
+          ...workshopMethods,
+        ],
+        methodResponses: {
+          "agents.list": agentsResponse,
+          "config.get": configResponse(),
+          "device.pair.list": { paired: [], pending: [] },
+          "exec.approvals.get": approvalSnapshot,
+          "node.list": {
+            nodes: [
+              {
+                nodeId: "build-node",
+                displayName: "Build Node",
+                platform: "linux",
+                version: "2026.8.3",
+                caps: ["browser", "filesystem"],
+                commands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
+                connected: true,
+                paired: true,
+              },
+            ],
+          },
+          "skills.install": { message: "Installed Deploy Helper" },
+          "skills.status": {
+            cases: [
+              { match: { agentId: "reviewer" }, response: skillStatus(false) },
+              { response: skillStatus(true) },
+            ],
           },
         },
-        "node.list": {
-          nodes: [
-            {
-              nodeId: "build-node",
-              displayName: "Build Node",
-              platform: "linux",
-              version: "2026.8.3",
-              caps: ["browser", "filesystem"],
-              commands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
-              connected: true,
-              paired: true,
-            },
-          ],
-        },
-        "skills.install": { message: "Installed Deploy Helper" },
-        "skills.status": {
-          cases: [
-            { match: { agentId: "reviewer" }, response: skillStatus(false) },
-            { response: skillStatus(true) },
-          ],
-        },
-      },
-    });
+      });
 
-    try {
       const response = await page.goto(`${suite.server.baseUrl}skills`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("skills.status");
@@ -239,18 +194,16 @@ suite.define(() => {
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
-      await expect.poll(() => skillCard.getByRole("img", { name: "Ready" }).isVisible()).toBe(true);
+      await expectVisible(skillCard.getByRole("img", { name: "Ready" }));
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "Reviewer" })
         .click();
-      await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");
+      await gateway.waitForRequest("skills.status", { match: { agentId: "reviewer" } });
       expect(new URL(page.url()).pathname).toBe("/skills");
-      await expect
-        .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
-        .toBe(true);
+      await expectVisible(skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }));
 
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
@@ -261,9 +214,7 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const dialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
-      await expect
-        .poll(() => dialog.getByRole("button", { name: "Install Deploy Helper" }).isVisible())
-        .toBe(true);
+      await expectVisible(dialog.getByRole("button", { name: "Install Deploy Helper" }));
       await gateway.setMethodResponse("skills.status", skillStatus(true));
       await dialog.getByRole("button", { name: "Install Deploy Helper" }).click();
       const installRequest = await gateway.waitForRequest("skills.install");
@@ -273,13 +224,7 @@ suite.define(() => {
         installId: "node-deploy-helper",
         dangerouslyForceUnsafeInstall: false,
       });
-      await expect.poll(() => dialog.getByText("Installed Deploy Helper").isVisible()).toBe(true);
-      await screenshot(
-        page,
-        "01-reviewer-skill-installed.png",
-        dialog.getByText("Installed Deploy Helper"),
-        dialog.locator("dialog"),
-      );
+      await expectVisible(dialog.getByText("Installed Deploy Helper"));
 
       await page.goto(`${suite.server.baseUrl}nodes`);
       await Promise.all([
@@ -287,170 +232,121 @@ suite.define(() => {
         gateway.waitForRequest("device.pair.list"),
         gateway.waitForRequest("exec.approvals.get"),
       ]);
-      await expect.poll(() => page.getByText("Build Node", { exact: true }).isVisible()).toBe(true);
-      // The connected node row carries a status pill and capability chips; an
-      // unknown capability keeps its raw name as a generic chip.
+      await expectVisible(page.getByText("Build Node", { exact: true }));
       await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(1);
       const chips = page.locator(".device-capability");
       await expect.poll(() => chips.filter({ hasText: "Browser" }).count()).toBe(1);
       await expect.poll(() => chips.filter({ hasText: "filesystem" }).count()).toBe(1);
       await page.getByText("Details", { exact: true }).click();
-      await expect
-        .poll(() =>
-          page
-            .locator(".device-entry__facts dd")
-            .filter({ hasText: "system.run, system.execApprovals.get, system.execApprovals.set" })
-            .isVisible(),
-        )
-        .toBe(true);
-      await screenshot(
-        page,
-        "02-connected-node-inventory.png",
-        page.locator(".device-entry__facts"),
+      await expectVisible(
+        page.locator(".device-entry__facts dd").filter({
+          hasText: "system.run, system.execApprovals.get, system.execApprovals.set",
+        }),
       );
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps read-only administration pages visible without dispatching mutations", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const learnedAtMs = Date.parse("2026-08-04T08:00:00.000Z");
-    const readOnlyConfig = {
-      ...operatorConfig,
-      skills: { workshop: { autonomous: { mode: "auto" } } },
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "agents.files.get",
-        "agents.files.list",
-        "agents.files.set",
-        "agents.list",
-        "agents.update",
-        "chat.metadata",
-        "chat.startup",
-        "config.get",
-        "config.patch",
-        "config.set",
-        "skills.install",
-        "sessions.create",
-        "skills.status",
-        "skills.update",
-        "skills.workshop.archive",
-        "skills.workshop.changes",
-        "skills.workshop.list",
-        "skills.workshop.read",
-        "skills.workshop.restore",
-      ],
-      operatorScopes: ["operator.read"],
-      methodResponses: {
-        "agents.list": {
-          agents: agentRoster,
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "agents.files.get": {
-          agentId: "main",
-          workspace: "/tmp/openclaw-e2e/workspace",
-          file: {
-            name: "AGENTS.md",
-            path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
-            content: "# Main agent\n",
-            missing: false,
+    await withPage(async (page) => {
+      const learnedAtMs = Date.parse("2026-08-04T08:00:00.000Z");
+      const workspace = "/tmp/openclaw-e2e/workspace";
+      const agentFile = { name: "AGENTS.md", path: `${workspace}/AGENTS.md`, missing: false };
+      const filesResponse = { agentId: "main", workspace };
+      const readOnlyConfig = {
+        ...operatorConfig,
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          "agents.files.get",
+          "agents.files.list",
+          "agents.files.set",
+          ...bootMethods,
+          "agents.update",
+          "config.patch",
+          "config.set",
+          "skills.install",
+          "sessions.create",
+          "skills.status",
+          "skills.update",
+          ...workshopMethods,
+        ],
+        operatorScopes: ["operator.read"],
+        methodResponses: {
+          "agents.list": agentsResponse,
+          "agents.files.get": {
+            ...filesResponse,
+            file: { ...agentFile, content: "# Main agent\n" },
           },
+          "agents.files.list": {
+            ...filesResponse,
+            files: [agentFile],
+          },
+          "config.get": configResponse(readOnlyConfig),
+          "skills.workshop.list": {
+            agentId: "main",
+            mode: "auto",
+            root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
+            skills: [
+              {
+                name: "read-only-skill",
+                description: "Review without mutation access.",
+                updatedAtMs: learnedAtMs,
+                sizeBytes: 120,
+                files: ["SKILL.md"],
+              },
+            ],
+            archived: [
+              {
+                name: "read-only-skill",
+                live: true,
+                versions: [
+                  { id: "20260804T080000000Z-patch", action: "patch", createdAtMs: learnedAtMs },
+                ],
+              },
+            ],
+          },
+          "skills.workshop.read": {
+            name: "read-only-skill",
+            filePath: "SKILL.md",
+            content: "# Read-only skill\n\nReview without mutation access.\n",
+            files: ["SKILL.md"],
+          } satisfies SkillsWorkshopReadResult,
+          "skills.workshop.changes": {
+            changes: [
+              {
+                id: "change-read-only",
+                agentId: "main",
+                skillName: "read-only-skill",
+                action: "patch",
+                actor: "review",
+                summary: "tightened the review step",
+                versionId: "20260804T080000000Z-patch",
+                createdAtMs: learnedAtMs,
+              },
+            ],
+          },
+          "skills.status": skillStatus(false),
         },
-        "agents.files.list": {
-          agentId: "main",
-          files: [
-            {
-              name: "AGENTS.md",
-              path: "/tmp/openclaw-e2e/workspace/AGENTS.md",
-              missing: false,
-            },
-          ],
-          workspace: "/tmp/openclaw-e2e/workspace",
-        },
-        "config.get": configResponse(readOnlyConfig),
-        "skills.workshop.list": {
-          agentId: "main",
-          mode: "auto",
-          root: "/tmp/openclaw-e2e/agents/main/workshop-skills",
-          skills: [
-            {
-              name: "read-only-skill",
-              description: "Review without mutation access.",
-              updatedAtMs: learnedAtMs,
-              sizeBytes: 120,
-              files: ["SKILL.md"],
-            },
-          ],
-          archived: [
-            {
-              name: "read-only-skill",
-              live: true,
-              versions: [
-                { id: "20260804T080000000Z-patch", action: "patch", createdAtMs: learnedAtMs },
-              ],
-            },
-          ],
-        },
-        "skills.workshop.read": {
-          name: "read-only-skill",
-          filePath: "SKILL.md",
-          content: "# Read-only skill\n\nReview without mutation access.\n",
-          files: ["SKILL.md"],
-        } satisfies SkillsWorkshopReadResult,
-        "skills.workshop.changes": {
-          changes: [
-            {
-              id: "change-read-only",
-              agentId: "main",
-              skillName: "read-only-skill",
-              action: "patch",
-              actor: "review",
-              summary: "tightened the review step",
-              versionId: "20260804T080000000Z-patch",
-              createdAtMs: learnedAtMs,
-            },
-          ],
-        },
-        "skills.status": skillStatus(false),
-      },
-    });
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
-      await selectAgentOnAgentsPage(page, "Reviewer");
+      await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       await page.locator("#agents-tab-overview").click();
       const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      const createAgent = page.getByRole("button", { name: "New agent", exact: true });
-      await expect.poll(() => createAgent.isDisabled()).toBe(true);
-      expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
-      expect(await createAgent.getAttribute("title")).toContain("operator.admin");
-      const agentSettingsUrl = page.url();
-      await createAgent.click({ force: true });
-      expect(page.url()).toBe(agentSettingsUrl);
-      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await expectAgentCreationDenied(page, gateway);
 
-      const identitySave = page
-        .locator(".agent-identity-editor__actions")
-        .getByRole("button", { name: "Save", exact: true });
-      await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
-      await expect.poll(() => identitySave.isDisabled()).toBe(true);
+      const identityName = page.locator(".agent-identity-editor__fields input").first();
+      await expect.poll(() => identityName.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
-      await screenshot(page, "05-read-only-agents.png", setDefault);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
-      await waitForRequest(
-        gateway,
-        "agents.files.get",
-        (params) => params.agentId === "main" && params.name === "AGENTS.md",
-      );
+      await gateway.waitForRequest("agents.files.get", {
+        match: { agentId: "main", name: "AGENTS.md" },
+      });
       const fileEditor = page.locator(".agent-file-textarea");
       await expect.poll(() => fileEditor.inputValue()).toBe("# Main agent\n");
       await expect.poll(() => fileEditor.isDisabled()).toBe(true);
@@ -477,35 +373,26 @@ suite.define(() => {
       expect(await gateway.getRequests("agents.files.set")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
-      await waitForRequest(gateway, "skills.status", (params) => params.agentId === "main");
+      await gateway.waitForRequest("skills.status", { match: { agentId: "main" } });
       const agentSkillsActions = page.locator(".settings-section", { hasText: "Skills" });
       const disableAll = agentSkillsActions.getByRole("button", { name: "Disable All" });
-      await expect.poll(() => disableAll.isDisabled()).toBe(true);
-      await disableAll.click({ force: true });
-      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+      await expectDenied(disableAll, gateway, "config.set");
 
       await page.goto(`${suite.server.baseUrl}skills`);
       await gateway.waitForRequest("skills.status");
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
-      await expect
-        .poll(() => skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }).isVisible())
-        .toBe(true);
+      await expectVisible(skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }));
       expect(await page.locator(".skill-discovery").getByRole("switch").count()).toBe(0);
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
       await page.getByRole("button", { name: "Open Deploy Helper details" }).click();
       const skillDialog = page.locator("openclaw-modal-dialog", { hasText: "Deploy Helper" });
       const globalSkillToggle = skillDialog.getByRole("switch");
-      await expect.poll(() => globalSkillToggle.isDisabled()).toBe(true);
-      await globalSkillToggle.click({ force: true });
-      expect(await gateway.getRequests("skills.update")).toHaveLength(0);
+      await expectDenied(globalSkillToggle, gateway, "skills.update");
       const install = skillDialog.getByRole("button", { name: "Install Deploy Helper" });
-      await expect.poll(() => install.isDisabled()).toBe(true);
-      await install.click({ force: true });
-      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      await screenshot(page, "06-read-only-skills.png", install, skillDialog.locator("dialog"));
+      await expectDenied(install, gateway, "skills.install");
 
       await page.goto(`${suite.server.baseUrl}skills/workshop`);
       await gateway.waitForRequest("skills.workshop.list");
@@ -518,9 +405,7 @@ suite.define(() => {
         .toContain("Review without mutation access.");
       expect(await page.getByRole("button", { name: "Archive", exact: true }).count()).toBe(0);
       const learningOff = page.getByRole("button", { name: "Off", exact: true });
-      await expect.poll(() => learningOff.isDisabled()).toBe(true);
-      await learningOff.click({ force: true });
-      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await expectDenied(learningOff, gateway, "config.patch");
       expect(await gateway.getRequests("skills.workshop.restore")).toHaveLength(0);
       expect(await gateway.getRequests("skills.workshop.archive")).toHaveLength(0);
       const learn = page.getByRole("button", { name: "Learn from history" });
@@ -528,50 +413,27 @@ suite.define(() => {
       const creates = (await gateway.getRequests("sessions.create")).length;
       await learn.click({ force: true });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(creates);
-      await screenshot(page, "07-read-only-workshop.png", learn);
-    } catch (error) {
-      await captureControlUiE2eFailureDiagnostics(page, {
-        error: error instanceof Error ? error : new Error(String(error)),
-        label: "read-only-operator-administration",
-      });
-      throw error;
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("disables admin mutations when the Gateway omits required method metadata", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      omitFeatureMethods: true,
-      methodResponses: {
-        "agents.list": {
-          agents: agentRoster,
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        omitFeatureMethods: true,
+        methodResponses: {
+          "agents.list": agentsResponse,
+          "config.get": configResponse(),
+          "skills.install": { message: "Installed Deploy Helper" },
+          "skills.status": skillStatus(false),
         },
-        "config.get": configResponse(),
-        "skills.install": { message: "Installed Deploy Helper" },
-        "skills.status": skillStatus(false),
-      },
-    });
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
-      await selectAgentOnAgentsPage(page, "Reviewer");
+      await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      const createAgent = page.getByRole("button", { name: "New agent", exact: true });
-      await expect.poll(() => createAgent.isDisabled()).toBe(true);
-      expect(await createAgent.getAttribute("title")).toContain("openclaw.chat");
-      expect(await createAgent.getAttribute("title")).toContain("operator.admin");
-      const agentSettingsUrl = page.url();
-      await createAgent.click({ force: true });
-      expect(page.url()).toBe(agentSettingsUrl);
-      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await expectAgentCreationDenied(page, gateway);
 
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
@@ -582,89 +444,47 @@ suite.define(() => {
       const install = page
         .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
         .getByRole("button", { name: "Install Deploy Helper" });
-      await expect.poll(() => install.isDisabled()).toBe(true);
-      await install.click({ force: true });
-      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+      await expectDenied(install, gateway, "skills.install");
+    });
   });
 
   it("edits, saves, and reapplies reviewer-scoped exec approvals", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const initialApprovals = {
-      path: "/tmp/openclaw-e2e/exec-approvals.json",
-      exists: true,
-      hash: "approval-hash-1",
-      file: {
-        defaults: {
-          security: "deny",
-          ask: "on-miss",
-          askFallback: "deny",
-          autoAllowSkills: false,
+    await withPage(async (page) => {
+      const initialApprovals = reviewerApprovals("approval-hash-1", {
+        ...approvalDefaults,
+        security: "allowlist",
+        allowlist: [{ pattern: "/usr/bin/git" }],
+      });
+      const appliedApprovals = reviewerApprovals("approval-hash-2", {
+        security: "full",
+        ask: "always",
+        askFallback: "allowlist",
+        autoAllowSkills: true,
+        allowlist: [{ pattern: "/usr/bin/gh" }],
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...bootMethods,
+          "device.pair.list",
+          "exec.approvals.get",
+          "exec.approvals.set",
+          "node.list",
+        ],
+        methodResponses: {
+          "config.get": configResponse(),
+          "device.pair.list": { paired: [], pending: [] },
+          "exec.approvals.get": initialApprovals,
+          "exec.approvals.set": { ok: true },
+          "node.list": { nodes: [] },
         },
-        agents: {
-          reviewer: {
-            security: "allowlist",
-            ask: "on-miss",
-            askFallback: "deny",
-            autoAllowSkills: false,
-            allowlist: [{ pattern: "/usr/bin/git" }],
-          },
-        },
-      },
-    };
-    const appliedApprovals = {
-      ...initialApprovals,
-      hash: "approval-hash-2",
-      file: {
-        ...initialApprovals.file,
-        agents: {
-          reviewer: {
-            security: "full",
-            ask: "always",
-            askFallback: "allowlist",
-            autoAllowSkills: true,
-            allowlist: [{ pattern: "/usr/bin/gh" }],
-          },
-        },
-      },
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "agents.list",
-        "chat.metadata",
-        "chat.startup",
-        "config.get",
-        "device.pair.list",
-        "exec.approvals.get",
-        "exec.approvals.set",
-        "node.list",
-      ],
-      methodResponses: {
-        "config.get": configResponse(),
-        "device.pair.list": { paired: [], pending: [] },
-        "exec.approvals.get": initialApprovals,
-        "exec.approvals.set": { ok: true },
-        "node.list": { nodes: [] },
-      },
-    });
+      });
 
-    try {
       const response = await page.goto(`${suite.server.baseUrl}nodes`);
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("exec.approvals.get");
 
       const scopeSelect = page.locator("openclaw-agent-select.agent-select--settings");
-      await scopeSelect.locator(".agent-select__trigger").click();
-      await scopeSelect
-        .locator(".agent-select__option[data-agent-option]")
-        .filter({ hasText: "Reviewer (reviewer)" })
-        .click();
-      await expect
-        .poll(async () => (await scopeSelect.locator(".agent-select__label").textContent())?.trim())
-        .toBe("Reviewer (reviewer)");
+      await selectAgent(scopeSelect, "Reviewer (reviewer)");
 
       const modeSelects = page.getByRole("combobox", { name: "Mode" });
       await modeSelects.nth(0).selectOption("full");
@@ -675,11 +495,6 @@ suite.define(() => {
         .getByRole("switch");
       await autoAllowSwitch.click();
       await page.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/gh");
-      await screenshot(
-        page,
-        "03-reviewer-approval-edits.png",
-        page.getByRole("textbox", { name: "Pattern" }),
-      );
 
       await gateway.setMethodResponse("exec.approvals.get", appliedApprovals);
       const getRequestsBeforeSave = (await gateway.getRequests("exec.approvals.get")).length;
@@ -706,9 +521,6 @@ suite.define(() => {
         .toBe("/usr/bin/gh");
       await expect.poll(() => saveButton.isDisabled()).toBe(true);
       expect(await page.getByRole("alert").count()).toBe(0);
-      await screenshot(page, "04-reviewer-approval-applied.png", saveButton);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

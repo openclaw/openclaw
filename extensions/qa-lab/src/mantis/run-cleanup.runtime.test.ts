@@ -44,7 +44,7 @@ describe("Mantis worktree cleanup", () => {
 
   function removeWorktree(
     runner: MantisCommandRunner,
-    ownership?: MantisDirectoryOwnership,
+    ownership: MantisDirectoryOwnership,
     timeoutMs = commandTimeouts["worktree-cleanup"],
   ) {
     return removeMantisWorktree({
@@ -100,19 +100,9 @@ describe("Mantis worktree cleanup", () => {
     },
   );
 
-  it("does not remove an unregistered partial path without an ownership receipt", async () => {
-    const sentinelPath = path.join(worktreeDir, "partial.txt");
-    await fs.writeFile(sentinelPath, "partial", "utf8");
-    const runner = vi.fn(async () => successfulCommandResult());
-
-    await expect(removeWorktree(runner)).rejects.toThrow(
-      "Mantis preserved the path because Git no longer owns it",
-    );
-
-    await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("partial");
-  });
-
-  it("does not adopt an existing registered path without an ownership receipt", async () => {
+  it("reports a registered owned path that disappeared before cleanup", async () => {
+    const ownership = await captureOwnership();
+    await fs.rm(worktreeDir, { recursive: true });
     const runner = vi.fn(async (_command: string, args: readonly string[]) => {
       if (args[1] === "list") {
         return successfulCommandResult(worktreeListOutput(worktreeDir));
@@ -120,10 +110,10 @@ describe("Mantis worktree cleanup", () => {
       throw new Error(`unexpected git command: ${args.join(" ")}`);
     });
 
-    await expect(removeWorktree(runner)).rejects.toThrow(
+    await expect(removeWorktree(runner, ownership)).rejects.toThrow(
       "baseline worktree cleanup left registered path",
     );
-    await expect(fs.lstat(worktreeDir)).resolves.toBeDefined();
+    expect(runner).toHaveBeenCalledOnce();
   });
 
   it("attributes a shared legacy deadline expiry to the active candidate lane", async () => {

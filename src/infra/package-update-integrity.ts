@@ -3,8 +3,10 @@ import { constants, lstatSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import { repairPackagePermissions } from "./package-update-activation-paths.js";
 import * as fileHashing from "./package-update-integrity-hasher.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
@@ -26,10 +28,70 @@ export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identi
 type EntryObservation = { fields: Map<string, string>; retained: string; reusable: boolean };
 // Observations live only as long as their in-process fingerprint; journals stay compact.
 const observations = new WeakMap<PackageIntegrityFingerprint, Map<string, EntryObservation>>();
+const fullModeDigests = new WeakMap<PackageIntegrityFingerprint, string>();
+const permissionRepairs = new WeakMap<
+  PackageIntegrityFingerprint,
+  Array<{ file: string; stat: BigIntStats }>
+>();
 const settlementObservations = new WeakMap<
   PackageIntegrityFingerprint,
   Array<{ file: string; stat: BigIntStats }>
 >();
+
+/** Old receipts may have sealed npm's public modes; keep their exact digest valid. */
+export function packageIntegrityMatches(
+  expected: PackageIntegrityFingerprint,
+  actual: PackageIntegrityFingerprint,
+): boolean {
+  return (
+    expected.identity === actual.identity &&
+    expected.version === actual.version &&
+    (expected.digest === actual.digest || expected.digest === fullModeDigests.get(actual))
+  );
+}
+
+export function repairPackageIntegrityPermissions(
+  fingerprint: PackageIntegrityFingerprint,
+  assertCurrent: () => void,
+  onWarning: (message: string) => void,
+): void {
+  // Windows stat permission bits do not represent POSIX group/other access.
+  if (process.platform === "win32") {
+    return;
+  }
+  const entries = permissionRepairs.get(fingerprint) ?? [];
+  let repaired = 0;
+  const failures: string[] = [];
+  for (const { file, stat } of entries) {
+    assertCurrent();
+    try {
+      repairPackagePermissions(file, stat, Number(stat.mode & 0o7700n));
+      repaired++;
+    } catch (error) {
+      if (!["EACCES", "EPERM", "EROFS"].some((code) => hasErrnoCode(error, code))) {
+        throw error;
+      }
+      failures.push(file);
+    }
+  }
+  permissionRepairs.delete(fingerprint);
+  if (entries.length) {
+    const paths = entries
+      .slice(0, 3)
+      .map(({ file }) => JSON.stringify(file))
+      .join(", ");
+    onWarning(
+      `Repaired permissions on ${repaired} retained package objects: ${paths}. Group/other permissions and POSIX ACL access masks were cleared.${
+        failures.length
+          ? ` Could not tighten ${failures.length} objects (${failures
+              .slice(0, 3)
+              .map((file) => JSON.stringify(file))
+              .join(", ")}); package contents still verified.`
+          : ""
+      }`,
+    );
+  }
+}
 
 /** Revalidate the remount proof at the synchronous durable-settlement boundary. */
 export function assertPackageIntegritySettlementUnchanged(
@@ -102,12 +164,12 @@ export function packageLauncherDifferences(
   options?: { checkMode?: boolean },
 ): string[] {
   const symlink = expected.type === "symlink" && actual.type === "symlink";
-  // A copied launcher must restore the same bytes or link target; npm may
-  // recreate its metadata. Exact-object mutation authority is checked separately.
+  // Symlink modes vary with umask. Exact-object mutation authority is checked separately.
   return (["type", "mode", "contents"] as const)
     .filter(
       (field) =>
-        (field !== "mode" || options?.checkMode === true) && expected[field] !== actual[field],
+        (field !== "mode" || (!symlink && options?.checkMode === true)) &&
+        expected[field] !== actual[field],
     )
     .map((field) =>
       field === "contents" && symlink
@@ -301,7 +363,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     };
     const prior = reuse ? observations.get(reuse) : undefined;
     const digest = createHash("sha256");
+    const fullModeDigest = createHash("sha256");
     const observed: Array<{ file: string; stat: BigIntStats }> = [];
+    // One chmod covers every alias; a second repair would use a pre-chmod stat.
+    const permissive = new Map<string, { file: string; stat: BigIntStats }>();
     const entriesObserved = new Map<string, EntryObservation>();
     let bytes = 0;
     let remainingEntries = MAX_TREE_ENTRIES - 1;
@@ -327,6 +392,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       const retainedEntry = JSON.stringify([relative, retained]);
       if (!legacy) {
         digest.update(retainedEntry);
+        fullModeDigest.update(
+          JSON.stringify([relative, [retained[0], fields.get("mode"), ...retained.slice(2)]]),
+        );
       }
       entriesObserved.set(relative, { fields, retained: retainedEntry, reusable });
     };
@@ -386,6 +454,9 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         rootIdentity = identity(stat);
       }
       observed.push({ file, stat });
+      if ((stat.isFile() || stat.isDirectory()) && (stat.mode & 0o077n) !== 0n) {
+        permissive.set(identity(stat), { file, stat });
+      }
       // npm's disposable hidden lockfile is a cache, not package content:
       // https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#hidden-lockfiles
       // Keep the observation so a mid-scan substitution still refuses recovery.
@@ -399,9 +470,11 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       const info = metadata(stat);
       const fields = new Map(Object.entries(info));
       // npm bin repair chmods files; external hardlink removal changes nlink/ctime.
-      // Keep inode, permissions and hashes strict; directory clocks/size also
+      // Keep inode, owner permissions and hashes strict; directory clocks/size also
       // change when npm replaces its hidden cache. Within-read checks stay strict.
-      const retained = [digestIdentity(stat), info.mode, info.uid, info.gid];
+      // Symlink mode bits are not access grants and cannot be portably chmodded.
+      const mode = stat.isSymbolicLink() ? stat.mode : stat.mode & ~0o077n;
+      const retained = [digestIdentity(stat), String(mode), info.uid, info.gid];
       if (!stat.isDirectory()) {
         retained.push(info.size, info.mtimeNs);
       }
@@ -544,6 +617,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       }
       const fingerprint = { digest: digest.digest("hex"), identity: rootIdentity, version };
       observations.set(fingerprint, entriesObserved);
+      if (!legacy) {
+        fullModeDigests.set(fingerprint, fullModeDigest.digest("hex"));
+        permissionRepairs.set(fingerprint, [...permissive.values()]);
+      }
       if (historicalDevices) {
         settlementObservations.set(fingerprint, observed);
       }
@@ -626,10 +703,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       await read(() => fs.lstat(file));
       return true;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return false;
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? false;
     }
   }
 

@@ -9,8 +9,9 @@ import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { chatPanesWithin } from "./chat-pane-elements.ts";
+import type { ChatPaneElement } from "./chat-pane-elements.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
 import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
 import { findPane, visiblePanesOf } from "./split-layout.ts";
 
@@ -20,7 +21,6 @@ const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 
 type RetentionBindings = {
-  invalidate: () => void;
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
   routeHref: () => string;
@@ -31,6 +31,7 @@ type RetentionBindings = {
 };
 
 export class ChatPageRetainedSessions {
+  private render?: () => void;
   private readonly sessionsByPane = new Map<string, Map<string, number>>();
   private readonly unbound = new Set<string>();
   private pendingAtFocus = new WeakSet<AbortController>();
@@ -43,6 +44,13 @@ export class ChatPageRetainedSessions {
     private readonly host: HTMLElement,
     private readonly bindings: RetentionBindings,
   ) {}
+
+  subscribe(listener: () => void): () => void {
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
+  }
 
   get unboundPaneIds(): ReadonlySet<string> {
     return this.unbound;
@@ -105,9 +113,11 @@ export class ChatPageRetainedSessions {
     this.cancelPreview();
   }
 
-  private readonly refreshRetention = () => {
-    this.bindings.invalidate();
-  };
+  private publish(): void {
+    this.render?.();
+  }
+
+  private readonly refreshRetention = () => this.publish();
 
   suspend(): void {
     this.cancelPreview();
@@ -197,7 +207,7 @@ export class ChatPageRetainedSessions {
   discardPane(paneId: string): void {
     // Retire every mounted presentation before clearing its handoff so a delayed
     // disconnect cannot restage attachments under a later reused logical pane id.
-    for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+    for (const pane of chatPanesWithin(this.host)) {
       if (pane.paneId === paneId) {
         pane.discardStagedAttachments?.();
       }
@@ -219,7 +229,7 @@ export class ChatPageRetainedSessions {
   ): void => {
     const context = this.bindings.context();
     if (context && readDeletedSessionStartup(context, sessionKey)) {
-      this.bindings.invalidate();
+      this.publish();
       return;
     }
     const deletedPane = this.findPane(paneId, sessionKey);
@@ -245,12 +255,12 @@ export class ChatPageRetainedSessions {
     if (selectedSessionKey && areUiSessionKeysEquivalent(selectedSessionKey, sessionKey)) {
       this.bindings.selectReplacement(paneId, sessionKey, replacementSessionKey);
     } else {
-      this.bindings.invalidate();
+      this.publish();
     }
   };
 
   findPane(paneId: string, sessionKey: string): ChatPaneElement | undefined {
-    return [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+    return chatPanesWithin(this.host).find(
       (pane) =>
         pane.paneId === paneId && areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey),
     );
@@ -333,7 +343,7 @@ export class ChatPageRetainedSessions {
     const visible = visiblePanesOf(this.bindings.layout(), this.bindings.narrow()).some(
       (pane) => pane.id === paneId,
     );
-    for (const pane of this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
+    for (const pane of chatPanesWithin(this.host)) {
       if (pane.paneId !== paneId) {
         continue;
       }

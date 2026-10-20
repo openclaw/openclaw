@@ -12,17 +12,29 @@ export type SqliteReadOnlyWorkerScope = {
 };
 export const readOnlyWorkerScope = new AsyncLocalStorage<SqliteReadOnlyWorkerScope>();
 
+export class SqliteReadOnlyWorkerScopeClosedError extends Error {
+  readonly code = "SQLITE_READONLY_WORKER_SCOPE_CLOSED";
+
+  constructor() {
+    super("SQLite read-only worker scope closed");
+  }
+}
+
 /** Carry the owning readers into callbacks without retaining startup or request authority. */
 export function captureSqliteReadOnlyWorkerScope(): <T>(operation: () => T) => T {
   const scope = readOnlyWorkerScope.getStore();
   return (operation) => {
     if (!scope) {
-      return readOnlyWorkerScope.exit(operation);
+      return readOnlyWorkerScope.getStore() === undefined
+        ? operation()
+        : readOnlyWorkerScope.exit(operation);
     }
     if (!scope.active) {
-      throw new Error("SQLite read-only worker scope closed");
+      throw new SqliteReadOnlyWorkerScopeClosedError();
     }
     scope.controller.signal.throwIfAborted();
-    return readOnlyWorkerScope.run(scope, operation);
+    return readOnlyWorkerScope.getStore() === scope
+      ? operation()
+      : readOnlyWorkerScope.run(scope, operation);
   };
 }

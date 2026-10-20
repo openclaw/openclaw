@@ -9,6 +9,7 @@ import { resolveFaceTimeConfig, validateFaceTimeConfig, type FaceTimeConfig } fr
 import { installFaceTimeDriver } from "./driver-setup.js";
 import { resolveFaceTimeHelperEndpoint } from "./helper-endpoint.js";
 import {
+  DIAL_BUNDLES,
   FaceTimeHelperAmbiguousError,
   FaceTimeHelperUnavailableError,
   readHelperResults,
@@ -33,7 +34,6 @@ import { terminateExactCarrierProcesses } from "./runtime-carrier-process.js";
 import {
   reconcilePendingFaceTimeCarrier,
   hasDialHelperConfirmation,
-  OUTBOUND_DIAL_HELPER_BUNDLES,
   OUTBOUND_RECONCILE_ATTEMPTS,
   OUTBOUND_RECONCILE_INTERVAL_MS,
   retainOutboundDialHelperPeers,
@@ -272,7 +272,7 @@ export async function createFaceTimeRuntime(params: {
       }
       const outboundIdentity = normalizeFaceTimeOutboundIdentityEvent(message);
       if (outboundIdentity && outboundCallPending?.dialID === outboundIdentity.data.dial_id) {
-        if (OUTBOUND_DIAL_HELPER_BUNDLES.has(peer.bundleIdentifier)) {
+        if (DIAL_BUNDLES.has(peer.bundleIdentifier)) {
           outboundCarrierPeers.set(peer.processId, peer);
         }
         retainFaceTimeDialCallUUID(outboundCallPending, outboundIdentity.data.call_uuid);

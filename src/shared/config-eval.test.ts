@@ -16,6 +16,50 @@ afterEach(() => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const truthy = (config: unknown, key: string) => isConfigPathTruthyWithDefaults(config, key, {});
+const prepared = async (bin = "fixture-tool") =>
+  (await prepareBinaryAvailability([bin])).hasBinary(bin);
+function install(executable: string) {
+  fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(executable, 0o755);
+}
+
+describe.each([
+  { name: "synchronous", probe: hasBinary },
+  {
+    name: "prepared",
+    probe: async (bin: string) => (await prepareBinaryAvailability([bin])).hasBinary(bin),
+  },
+])("$name binary file requirements", ({ probe }) => {
+  it("rejects directories and continues to an executable in a later PATH entry", async () => {
+    const root = tempDirs.make("openclaw-binary-file-");
+    const directoryBin = path.join(root, "first");
+    const executableBin = path.join(root, "second");
+    fs.mkdirSync(path.join(directoryBin, "fixture-tool"), { recursive: true });
+    fs.mkdirSync(executableBin);
+    vi.stubEnv("PATH", [directoryBin, executableBin].join(path.delimiter));
+    vi.stubEnv("PATHEXT", ".CMD");
+
+    expect(await probe("fixture-tool")).toBe(false);
+
+    const suffix = process.platform === "win32" ? ".CMD" : "";
+    const executable = path.join(executableBin, `fixture-tool${suffix}`);
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    expect(await probe("fixture-tool")).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("accepts symlinks to executable files", async () => {
+    const root = tempDirs.make("openclaw-binary-symlink-");
+    const binDir = path.join(root, "bin");
+    fs.mkdirSync(binDir);
+    const executable = path.join(root, "installed-tool");
+    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    fs.symlinkSync(executable, path.join(binDir, "fixture-tool"));
+    vi.stubEnv("PATH", binDir);
+
+    expect(await probe("fixture-tool")).toBe(true);
+  });
+});
 
 describe("config-eval helpers", () => {
   it("normalizes truthy values across primitive types", () => {
@@ -30,37 +74,24 @@ describe("config-eval helpers", () => {
       [" ok ", true],
       [{}, true],
     ] as const) {
-      expect(isConfigPathTruthyWithDefaults({ value }, "value", {})).toBe(expected);
+      expect(truthy({ value }, "value")).toBe(expected);
     }
   });
 
   it("resolves nested config paths and missing branches safely", () => {
-    const config = {
-      browser: {
-        enabled: true,
-        nested: {
-          count: 1,
-        },
-      },
-    };
-
-    expect(isConfigPathTruthyWithDefaults(config, "browser.enabled", {})).toBe(true);
-    expect(isConfigPathTruthyWithDefaults(config, ".browser..nested.count.", {})).toBe(true);
-    expect(isConfigPathTruthyWithDefaults(config, "browser.missing.value", {})).toBe(false);
-    expect(isConfigPathTruthyWithDefaults("not-an-object", "browser.enabled", {})).toBe(false);
+    const config = { browser: { enabled: true, nested: { count: 1 } } };
+    expect(truthy(config, "browser.enabled")).toBe(true);
+    expect(truthy(config, ".browser..nested.count.")).toBe(true);
+    expect(truthy(config, "browser.missing.value")).toBe(false);
+    expect(truthy("not-an-object", "browser.enabled")).toBe(false);
   });
 
   it("blocks prototype keys while resolving config paths", () => {
-    const config = {
-      safe: {
-        enabled: true,
-      },
-    };
-
-    expect(isConfigPathTruthyWithDefaults(config, "safe.enabled", {})).toBe(true);
-    expect(isConfigPathTruthyWithDefaults(config, "__proto__", {})).toBe(false);
-    expect(isConfigPathTruthyWithDefaults(config, "constructor.name", {})).toBe(false);
-    expect(isConfigPathTruthyWithDefaults(config, "prototype.polluted", {})).toBe(false);
+    const config = { safe: { enabled: true } };
+    expect(truthy(config, "safe.enabled")).toBe(true);
+    expect(truthy(config, "__proto__")).toBe(false);
+    expect(truthy(config, "constructor.name")).toBe(false);
+    expect(truthy(config, "prototype.polluted")).toBe(false);
   });
 
   it("does not use inherited defaults for blocked config paths", () => {
@@ -141,19 +172,12 @@ describe("prepared binary availability", () => {
     const binDir = tempDirs.make("openclaw-prepared-binary-");
     vi.stubEnv("PATH", binDir);
     const executable = path.join(binDir, "fixture-tool");
-    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
-      false,
-    );
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
+    expect(await prepared()).toBe(false);
+    install(executable);
     expect(hasBinary("fixture-tool")).toBe(true);
-    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
-      true,
-    );
+    expect(await prepared()).toBe(true);
     fs.unlinkSync(executable);
-    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
-      false,
-    );
+    expect(await prepared()).toBe(false);
     expect(hasBinary("fixture-tool")).toBe(true);
     vi.stubEnv("PATH", path.join(binDir, "other"));
     expect(hasBinary("fixture-tool")).toBe(false);
@@ -163,11 +187,10 @@ describe("prepared binary availability", () => {
     const binDir = tempDirs.make("openclaw-prepared-nested-");
     fs.mkdirSync(path.join(binDir, "nested"));
     const executable = path.join(binDir, "nested", "fixture-tool");
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
-    fs.chmodSync(executable, 0o755);
+    install(executable);
     vi.stubEnv("PATH", binDir);
     const bin = path.join("nested", "fixture-tool");
-    expect((await prepareBinaryAvailability([bin])).hasBinary(bin)).toBe(true);
+    expect(await prepared(bin)).toBe(true);
     expect(hasBinary(bin)).toBe(true);
   });
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
+import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
@@ -17,6 +18,7 @@ import {
   selectSessionWorkspacePreview,
   getSessionWorkspace,
   loadSessionWorkspace,
+  sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
@@ -32,7 +34,6 @@ function host(): SessionWorkspaceHost {
     hello: null,
     sidebarContent: null,
     handleOpenSidebar: vi.fn(),
-    requestUpdate: vi.fn(),
   };
 }
 
@@ -70,10 +71,10 @@ function mountPanel() {
 
 // Arm after synchronous open/close notifications and before settling a controlled read.
 function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
-  const updated = new Promise<void>((resolve) => {
-    vi.mocked(state.requestUpdate!).mockImplementationOnce(() => resolve());
-  });
-  return vi.waitFor(() => updated);
+  const updated = createDeferred();
+  const stop = sessionWorkspaceForHost(state).subscribe(() => updated.resolve());
+  onTestFinished(stop);
+  return updated.promise.finally(stop);
 }
 
 afterEach(() => document.body.replaceChildren());
@@ -156,9 +157,11 @@ describe("workspace file tabs", () => {
         closeSessionWorkspacePreview(state, preview.id);
       }
       const workspace = getSessionWorkspace(state);
-      const updated = nextWorkspaceUpdate(state);
       read.resolve({ ...initial, file: { ...initial.file, content: "STALE" } });
-      await updated;
+      // Cross a browser task so all continuations of the retired read have settled.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(preview.content).toBe(content);
       expect(workspace.previews).toEqual([]);
     },
@@ -489,9 +492,13 @@ describe("workspace file tabs", () => {
   });
 
   it("projects the shared hosted-tab contract and keeps inactive preview elements mounted", async () => {
+    const warning = vi.spyOn(console, "warn");
+    onTestFinished(() => {
+      warning.mockRestore();
+    });
     const state = host();
     const a = openSessionWorkspacePreview(state, "a", "a.md", { kind: "markdown", content: "A" });
-    openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
+    const b = openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
     const Draft = () => Object.assign(document.createElement("textarea"), { textContent: "draft" });
     const panel = document.createElement("openclaw-chat-files-panel");
     Object.assign(panel, {
@@ -521,8 +528,25 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     expect(panel.querySelector(".tabstrip")).toBeNull();
     expect(panel.querySelector("textarea")).toBe(textarea);
+    panel.previews = [
+      { ...b, label: "renamed-b.txt" },
+      { ...a, label: "renamed-a.md" },
+    ];
+    await panel.updateComplete;
+    expect(readPanelHostedTabs(panel)?.hostedTabs.map((tab) => tab.label)).toEqual([
+      "renamed-b.txt",
+      "renamed-a.md",
+    ]);
+    expect([...panel.querySelectorAll("textarea")]).toContain(textarea);
+    expect(textarea.value).toBe("unsaved");
     await hosted.closeHostedTab("a");
     expect(getSessionWorkspace(state).previews).not.toContain(a);
+    panel.previews = getSessionWorkspace(state).previews;
+    await panel.updateComplete;
+    expect(textarea.isConnected).toBe(false);
+    panel.remove();
+    flush();
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
   });
 
   it.each(["close", "reopen", "disconnect"])(
@@ -541,6 +565,7 @@ describe("workspace file tabs", () => {
         headersAtRestart.push(panel.querySelector(".rail-header") !== null),
       );
       Object.assign(app, { teardown, restartAfterTeardown: restart });
+      onTestFinished(registerMcpAppUnmountTarget(app));
       const editor = document.createElement("textarea");
       const previews: SessionWorkspacePreview[] = [
         {

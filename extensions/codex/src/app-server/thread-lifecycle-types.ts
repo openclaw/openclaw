@@ -73,6 +73,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
+  /** Refresh requester lookups immediately before native thread writes. */
+  assertCurrentAsync?: () => Promise<void>;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;
@@ -98,7 +100,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   /** Selected quoted history, injected before turn/start on the admitted idle thread. */
-  historyBootstrapItems?: JsonValue[];
+  historyBootstrapItems?: JsonValue[] | ((assertCurrent: () => void) => Promise<JsonValue[]>);
   /** Acknowledged selection suffix for reuse; fresh threads always receive the full bootstrap. */
   historyDeltaItems?: JsonValue[];
   signal?: AbortSignal;

@@ -21,7 +21,7 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
-import { readChatHistoryCursor } from "./session-message-cache.ts";
+import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
@@ -47,7 +47,6 @@ export async function loadChatHistory(
   if (!state.client || !state.connected) {
     setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
     state.chatLoading = true;
-    state.requestUpdate?.();
     return undefined;
   }
   const method = startup ? "chat.startup" : "chat.history";
@@ -70,7 +69,7 @@ export async function loadChatHistory(
     CHAT_HISTORY_REQUEST_LIMIT,
     inputRunIds,
   ]);
-  const requestKey = `${requestKeyPrefix}${requestModeKey}`;
+  const requestKey = `${requestKeyPrefix}${requestModeKey}${JSON.stringify(readChatHistoryState(state, deltaCursor)?.stateRevision ?? null)}`;
   const inFlight = requests.historyLoad;
   // Retire stale publication immediately, but let its raw read settle before
   // issuing one fresh snapshot for all changes observed while it was pending.
@@ -96,7 +95,7 @@ export async function loadChatHistory(
       deferBranches: opts.deferBranches === true,
       promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
     };
-    refresh.promise = inFlight.promise.then(() => {
+    refresh.promise = inFlight.request.then(() => {
       if (
         requests.historyVersion !== version ||
         !connectionIsCurrent() ||
@@ -118,12 +117,11 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
-    deltaCursor,
     inputRunIds,
     requestKeyPrefix,
   ).then((result) => {
     const current = requests.historyLoad;
-    if (current.phase === "in-flight" && current.promise === promise) {
+    if (current.phase === "in-flight" && current.request === promise) {
       if (result) {
         // Appends can invalidate branch tips while this coalesced history read is pending.
         // Check freshness on settlement so that invalidation is not lost to its early return.
@@ -164,22 +162,26 @@ export async function loadChatHistory(
         setChatHistoryLoad(state, { phase: "idle" });
         state.chatLoading = false;
       }
-      state.requestUpdate?.();
     }
     return result;
   });
-  setChatHistoryLoad(state, {
+  const load: Extract<ReturnType<typeof getChatHistoryLoadState>, { phase: "in-flight" }> = {
     phase: "in-flight",
     sessions,
     client,
     connectionEpoch,
     key: requestKey,
+    request: promise,
     promise,
     sessionKey,
     requestAgentId,
     startup,
-  });
-  return promise;
+  };
+  // Consumers await the current snapshot, including replacements admitted while
+  // this read is pending. Refresh scheduling waits only for the raw request.
+  load.promise = promise.then((result) => load.refresh?.promise ?? result);
+  setChatHistoryLoad(state, load);
+  return load.promise;
 }
 
 export function resumePendingChatHistoryLoad(
@@ -232,5 +234,6 @@ export type ChatEventPayload = {
   errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];
   errorDetail?: ChatErrorDetail;
   stopReason?: string;
+  localModelMayStillBeFinishing?: boolean;
   yielded?: true;
 };

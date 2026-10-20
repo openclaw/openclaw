@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { sha256Hex as hashToken } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -35,7 +36,7 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
 type CreateArtifactParams = Pick<
-  DiffArtifactMeta,
+  DiffViewerArtifactMetadata,
   "title" | "inputKind" | "fileCount" | "context"
 > & {
   html: string;
@@ -124,7 +125,6 @@ export class DiffArtifactStore {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
     return {
-      artifact: viewerEntryToMeta(entry, token, entry.metadata),
       html,
     };
   }
@@ -155,7 +155,6 @@ export class DiffArtifactStore {
       id,
       filePath: path.join(artifactDir, `preview.${format}`),
       expiresAt: resolveEntryExpiresAt(entry),
-      ...(params.context ? { context: params.context } : {}),
     };
   }
 
@@ -310,14 +309,11 @@ function viewerEntryToMeta(
 ): DiffArtifactMeta {
   return {
     id: entry.key,
-    token,
-    createdAt: timestampMsToIsoString(entry.createdAt) ?? "1970-01-01T00:00:00.000Z",
     expiresAt: resolveEntryExpiresAt(entry),
     title: metadata.title,
     inputKind: metadata.inputKind,
     fileCount: metadata.fileCount,
     viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
-    ...(metadata.context ? { context: metadata.context } : {}),
   };
 }
 
@@ -327,10 +323,6 @@ function resolveEntryExpiresAt(entry: { expiresAt?: number }): string {
     timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
     "1970-01-01T00:00:00.000Z"
   );
-}
-
-function hashToken(token: string): string {
-  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 function normalizeTtlMs(value?: number): number {

@@ -24,10 +24,10 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
 import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 
 // Exercise the existing managed producer without enabling RUN resource disposal.
 vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
@@ -285,7 +285,7 @@ it.for([
           const maintenanceResult = await racePromiseWithAbortSignal(
             Promise.race([
               entered.promise.then(() => "started"),
-              waitForDeferredTurnMaintenanceForSession(target.sessionKey).then(() => "settled"),
+              waitForSessionMaintenance(target.sessionKey).then(() => "settled"),
             ]),
             signal,
           );
@@ -378,7 +378,7 @@ it.for([
         stopFactory.resolve();
         forceDisposal.resolve();
         await Promise.allSettled([...(pending ? [pending] : []), ...work]);
-        await waitForDeferredTurnMaintenanceForSession(target.sessionKey);
+        await waitForSessionMaintenance(target.sessionKey);
         await parent?.drain();
         await closePreparedModelRuntimeSnapshots();
         await source.release();

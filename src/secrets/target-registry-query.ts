@@ -547,10 +547,4 @@ export function discoverAuthProfileSecretTargets(
   return discoverSecretTargetsFromEntries(store, discoveryEntries);
 }
 
-export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {
-  return getCoreSecretTargetRegistry().filter(
-    (entry) => entry.configFile === "auth-profile-store" && entry.includeInAudit,
-  );
-}
-
 export type { DiscoveredConfigSecretTarget, ResolvedPlanTarget } from "./target-registry-types.js";

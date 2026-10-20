@@ -4,15 +4,15 @@ import {
   resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Value } from "typebox/value";
-import {
-  SessionNarrationEventSchema,
-  SessionObserverDigestSchema,
-  type SessionObserverDigest,
-} from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
+import {
+  isSessionNarrationEvent,
+  isSessionObserverDigest,
+} from "../lib/protocol-validators.generated/activity.js";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -92,13 +92,9 @@ function eventAgentMatches(targetAgentId: string, payloadAgentId: unknown): bool
 
 /** Owns the bounded session subscriptions and per-row activity throttles. */
 export function createSidebarNarration() {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let stopVisibility: (() => void) | undefined;
-  function notify() {
-    for (const listener of listeners) {
-      listener();
-    }
-  }
+  const notify = listeners.publish;
   let currentSource: NarrationSource | null = null;
   let currentInput: SidebarNarrationSyncInput | null = null;
   let visibilityDocument: Document | null = null;
@@ -405,7 +401,7 @@ export function createSidebarNarration() {
   }
 
   function handleNarrationEvent(payload: unknown): void {
-    if (!Value.Check(SessionNarrationEventSchema, payload)) {
+    if (!isSessionNarrationEvent(payload)) {
       return;
     }
     const key = matchingDesiredKey(payload.sessionKey, payload.agentId);
@@ -530,7 +526,7 @@ export function createSidebarNarration() {
       return;
     }
     const digest = { ...record, runId };
-    if (!Value.Check(SessionObserverDigestSchema, digest)) {
+    if (!isSessionObserverDigest(digest)) {
       return;
     }
     observeRun(key, runId);
@@ -658,11 +654,8 @@ export function createSidebarNarration() {
     }
   }
   return {
-    read: () => ({ lines, observerDigests, tools }),
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    read: () => ({ lines, observerDigests, tools, runIds }),
+    subscribe: listeners.subscribe,
     sync,
     handleEvent,
     disconnect,

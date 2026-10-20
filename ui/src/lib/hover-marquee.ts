@@ -114,7 +114,8 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     }
     const active =
       host.matches(":hover, :focus-visible") ||
-      Boolean(host.querySelector(":focus-visible")) ||
+      (host.contains(label.ownerDocument.activeElement) &&
+        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
       // Touch menus keep revealing their trigger while focus moves into the portal.
       (options.loop && host.getAttribute("aria-expanded") === "true");
     if (!active || !visible || motion?.matches) {

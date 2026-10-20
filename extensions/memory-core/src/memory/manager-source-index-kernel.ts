@@ -30,26 +30,18 @@ export type MemorySourceIndexReplacement = {
   model: string;
   now: number;
   vectorReady: boolean;
-} & (
-  | { source: "memory" }
-  | {
-      source: "sessions";
-      agentId: string;
-      sessionId: string;
-      /** Retained chunks whose recall metadata or provenance changed. */
-      retained?: IndexedMemoryChunk[];
-      /** Present for a delta; computed with retained rows in the owner's planning read. */
-      removedIds?: string[];
-    }
-);
+  /** Retained chunks whose recall metadata or provenance changed. */
+  retained?: IndexedMemoryChunk[];
+  /** Present for a delta; computed with retained rows in the owner's planning read. */
+  removedIds?: string[];
+} & ({ source: "memory" } | { source: "sessions"; agentId: string; sessionId: string });
 
 export type MemorySourceIndexHeader = Omit<
   MemorySourceIndexReplacement,
   "chunks" | "embeddings" | "retained" | "removedIds"
-> &
-  (
+> & { delta?: boolean } & (
     | { source: "memory" }
-    | { source: "sessions"; agentId: string; sessionId: string; delta?: boolean }
+    | { source: "sessions"; agentId: string; sessionId: string }
   );
 /** A retained row refreshes metadata without replacing indexed text or embeddings. */
 export type MemorySourceIndexRow =
@@ -213,7 +205,7 @@ export class MemorySourceIndexKernel {
     const { entry, source, model, now, vectorReady } = params;
     const context = { path: entry.path, source, model, now };
     const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
-    const delta = params.source === "sessions" && params.delta;
+    const { delta } = params;
     // Re-read mutable rebuild debt in this transaction; table presence is an
     // admitted fact. Only a clean index relates stored embeddings to vectors.
     const reuse =
@@ -379,20 +371,24 @@ export class MemorySourceIndexKernel {
       markMemoryVectorRebuildRequired(this.database);
       return;
     }
+    // Planning-read failures belong to the outer transaction, not best-effort cleanup.
+    const sparse =
+      ids ??
+      executeSqliteQuerySync(
+        this.database,
+        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+          .selectFrom("memory_index_chunks")
+          .select("id")
+          .where("path", "=", pathname)
+          .where("source", "=", source)
+          .limit(MAX_VECTOR_POINT_DELETES + 1),
+      ).rows.map((row) => row.id);
+    if (sparse.length === 0) {
+      return;
+    }
     try {
       // Keep cleanup atomic before recording rebuild debt on a caught failure.
       runSqliteImmediateTransactionSync(this.database, () => {
-        const sparse =
-          ids ??
-          executeSqliteQuerySync(
-            this.database,
-            getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-              .selectFrom("memory_index_chunks")
-              .select("id")
-              .where("path", "=", pathname)
-              .where("source", "=", source)
-              .limit(MAX_VECTOR_POINT_DELETES + 1),
-          ).rows.map((row) => row.id);
         if (
           (ids === undefined || cleanup === "complete-replacement") &&
           sparse.length > MAX_VECTOR_POINT_DELETES

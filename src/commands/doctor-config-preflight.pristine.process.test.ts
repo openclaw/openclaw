@@ -1,4 +1,3 @@
-// Process regressions for current-config readiness and deferred config observation.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,31 +14,49 @@ import {
 import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+function createRuntime(root: string, entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) {
+  const prepared = resolveRuntimeWorkerUrl(entry);
+  const compiled = prepared.pathname.endsWith(".js");
+  const runtimeRoot = compiled
+    ? createBuiltRuntime(root, fileURLToPath(new URL("../", prepared)))
+    : createSourceRuntime(root);
+  const sourceUrl = (relative: string) =>
+    pathToFileURL(path.join(runtimeRoot, "src", relative)).href;
+  const runtimeUrl = (target: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+    resolveRuntimeWorkerUrl({
+      ...target,
+      ...(compiled
+        ? { root: runtimeRoot }
+        : { currentModuleUrl: sourceUrl("commands/doctor-config-runtime.test-support.ts") }),
+    }).href;
+  const processEntrypointsUrl = compiled
+    ? pathToFileURL(
+        path.join(runtimeRoot, "dist/legacy-finalizer/src/infra/runtime-process-entrypoints.js"),
+      ).href
+    : null;
+  return { runtimeRoot, sourceUrl, runtimeUrl, processEntrypointsUrl };
+}
+function childEnv(values: NodeJS.ProcessEnv, omitted: string[] = []) {
+  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", ...values };
+  for (const key of ["NODE_ENV", "VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID", ...omitted]) {
+    delete env[key];
+  }
+  return env;
+}
+async function run(runtimeRoot: string, env: NodeJS.ProcessEnv, script: string) {
+  const result = await runIsolatedModuleScript(env, script, { runtimeRoot, timeoutMs: 60_000 });
+  const lines = result.stdout.split("\n").filter((line) => line.startsWith("__RESULT__"));
+  expect(lines, `${result.stderr}\n${result.stdout}`).toHaveLength(1);
+  return JSON.parse(lines[0]!.slice("__RESULT__".length));
+}
 
-describe("configless CLI readiness", () => {
-  it("leaves config and state absent on repeated readiness checks", async () => {
-    const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
-    const preparedPreflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup);
-    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
-    const runtimeRoot = compiled
-      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
-      : createSourceRuntime(root);
-    // Both observers share the prepared graph; package discovery still belongs to this fixture.
-    const runtimeUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
-      resolveRuntimeWorkerUrl({
-        ...entry,
-        ...(compiled
-          ? { root: runtimeRoot }
-          : {
-              currentModuleUrl: pathToFileURL(
-                path.join(runtimeRoot, "src", "commands", "doctor-config-runtime.test-support.ts"),
-              ).href,
-            }),
-      }).href;
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(root, "openclaw.json");
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+it("leaves config and state absent on repeated readiness checks", async () => {
+  const root = await fs.promises.realpath(tempDirs.make("openclaw-configless-checkpoint-"));
+  const { runtimeRoot, runtimeUrl } = createRuntime(root, doctorConfigRuntimeEntrypoints.startup);
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "openclaw.json");
+  const env = childEnv(
+    {
       HOME: root,
       USERPROFILE: root,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
@@ -47,17 +64,13 @@ describe("configless CLI readiness", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_TEST_FAST: "1",
-      NO_COLOR: "1",
-    };
-    delete env.NODE_ENV;
-    delete env.OPENCLAW_HOME;
-    delete env.VITEST;
-    delete env.VITEST_POOL_ID;
-    delete env.VITEST_WORKER_ID;
+    },
+    ["OPENCLAW_HOME"],
+  );
 
-    const preflightUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.startup);
-    const checkpointUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.checkpoint);
-    const script = `
+  const preflightUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.startup);
+  const checkpointUrl = runtimeUrl(doctorConfigRuntimeEntrypoints.checkpoint);
+  const script = `
       const { runStartupConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
       const { hasActiveStartupMigrationLease } = await import(${JSON.stringify(checkpointUrl)});
       const result = await runStartupConfigPreflight({
@@ -69,110 +82,63 @@ describe("configless CLI readiness", () => {
         configExists: result.snapshot.exists,
       }));
     `;
-    const run = () =>
-      runIsolatedModuleScript(env, script, {
-        runtimeRoot,
-        timeoutMs: 60_000,
-      });
-    const readResult = (result: Awaited<ReturnType<typeof runIsolatedModuleScript>>) => {
-      const resultLine = result.stdout.split("\n").find((line) => line.startsWith("__RESULT__"));
-      expect(resultLine, `${result.stderr}\n${result.stdout}`).toBeDefined();
-      return JSON.parse(resultLine!.slice("__RESULT__".length)) as {
-        activeLease: boolean;
-        configExists: boolean;
-      };
-    };
+  const first = await run(runtimeRoot, env, script);
+  const second = await run(runtimeRoot, env, script);
 
-    const first = readResult(await run());
-    const second = readResult(await run());
-
-    expect(first).toEqual({ activeLease: false, configExists: false });
-    expect(second).toEqual({ activeLease: false, configExists: false });
-    expect(fs.existsSync(configPath)).toBe(false);
-    expect(fs.existsSync(stateDir)).toBe(false);
-  }, 150_000);
-});
-
+  expect(first).toEqual({ activeLease: false, configExists: false });
+  expect(second).toEqual({ activeLease: false, configExists: false });
+  expect(fs.existsSync(configPath)).toBe(false);
+  expect(fs.existsSync(stateDir)).toBe(false);
+}, 150_000);
 describe("CLI readiness after early config observation", () => {
-  let runtimeRoot: string;
+  let runtime: ReturnType<typeof createRuntime>;
   let runtimeTempDir: string;
-  let processEntrypointsUrl: string | null = null;
 
   beforeAll(() => {
-    // Source CLI hooks and prepared child workers share this fixture's private package assets.
     const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-runtime-"));
-    const preparedPreflightUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight);
-    const compiled = preparedPreflightUrl.pathname.endsWith(".js");
-    runtimeRoot = compiled
-      ? createBuiltRuntime(root, fileURLToPath(new URL("../", preparedPreflightUrl)))
-      : createSourceRuntime(root);
-    processEntrypointsUrl = compiled
-      ? pathToFileURL(
-          path.join(
-            runtimeRoot,
-            "dist",
-            "legacy-finalizer",
-            "src",
-            "infra",
-            "runtime-process-entrypoints.js",
-          ),
-        ).href
-      : null;
+    runtime = createRuntime(root, doctorConfigRuntimeEntrypoints.preflight);
     runtimeTempDir = path.join(root, "tmp");
     fs.mkdirSync(runtimeTempDir);
   });
 
-  it.each([
-    { name: "explicit Gateway target", explicit: true, existingState: false },
-    { name: "existing shared state", explicit: true, existingState: true },
-  ])(
-    "preserves current config and its observed health for $name",
-    async ({ explicit, existingState }) => {
+  it.each([false, true])(
+    "preserves current config and observed health (state already exists: %s)",
+    async (existingState) => {
+      const { runtimeRoot, sourceUrl, processEntrypointsUrl } = runtime;
       const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-observation-"));
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const timelinePath = path.join(root, "timeline.jsonl");
-      const config = {
+      const configRaw = JSON.stringify({
         gateway: { mode: "local", port: 19876, auth: { mode: "token", token: "test-token" } },
         agents: { defaults: { workspace: path.join(root, "workspace") } },
         logging: { file: path.join(root, "openclaw.log") },
-        // Inherited plugin selectors must not add unrelated convergence work to this fixture.
         plugins: { enabled: false },
-      } satisfies OpenClawConfig;
-      const configRaw = JSON.stringify(config);
+      } satisfies OpenClawConfig);
       fs.writeFileSync(configPath, configRaw);
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DIAGNOSTICS: "1",
-        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
-        OPENCLAW_HIDE_BANNER: "1",
-        XDG_CONFIG_HOME: path.join(root, "xdg-config"),
-        XDG_DATA_HOME: path.join(root, "xdg-data"),
-        XDG_STATE_HOME: path.join(root, "xdg-state"),
-        XDG_CACHE_HOME: path.join(root, "cache"),
-        TMPDIR: runtimeTempDir,
-        TMP: runtimeTempDir,
-        TEMP: runtimeTempDir,
-        NO_COLOR: "1",
-      };
-      delete env.NODE_ENV;
-      delete env.VITEST;
-      delete env.VITEST_POOL_ID;
-      delete env.VITEST_WORKER_ID;
-      delete env.OPENCLAW_PROFILE;
-      delete env.OPENCLAW_CONTAINER;
-      delete env.OPENCLAW_GATEWAY_URL;
-      delete env.OPENCLAW_GATEWAY_TOKEN;
-      delete env.OPENCLAW_GATEWAY_PASSWORD;
-      const sourceUrl = (relative: string) =>
-        pathToFileURL(path.join(runtimeRoot, "src", relative)).href;
-      const args = [
-        "attach",
-        "movies-a1166b81",
-        ...(explicit ? ["--url", "ws://127.0.0.1:19877", "--token", "test-token"] : []),
-      ];
+      const env = childEnv(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DIAGNOSTICS: "1",
+          OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+          OPENCLAW_HIDE_BANNER: "1",
+          XDG_CONFIG_HOME: path.join(root, "xdg-config"),
+          XDG_DATA_HOME: path.join(root, "xdg-data"),
+          XDG_STATE_HOME: path.join(root, "xdg-state"),
+          XDG_CACHE_HOME: path.join(root, "cache"),
+          TMPDIR: runtimeTempDir,
+          TMP: runtimeTempDir,
+          TEMP: runtimeTempDir,
+        },
+        [
+          "OPENCLAW_PROFILE",
+          "OPENCLAW_CONTAINER",
+          "OPENCLAW_GATEWAY_URL",
+          "OPENCLAW_GATEWAY_TOKEN",
+          "OPENCLAW_GATEWAY_PASSWORD",
+        ],
+      );
       const rpcSource = `
       export * from ${JSON.stringify(sourceUrl("gateway/call.ts"))};
       export async function callGateway(options) {
@@ -220,10 +186,10 @@ describe("CLI readiness after early config observation", () => {
       const databasePath = path.join(process.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
       const databaseExistedBefore = fs.existsSync(databasePath);
       const { runCli } = await import(${JSON.stringify(sourceUrl("cli/run-main.ts"))});
-      process.argv = [process.execPath, "openclaw", ...${JSON.stringify(args)}];
-      let message;
-      try { await runCli(process.argv); }
-      catch (error) { message = error instanceof Error ? error.message : String(error); }
+      process.argv = [process.execPath, "openclaw", "attach", "movies-a1166b81",
+        "--url", "ws://127.0.0.1:19877", "--token", "test-token"];
+      const message = await runCli(process.argv).catch(error =>
+        error instanceof Error ? error.message : String(error));
       const { flushDiagnosticsTimeline } =
         await import(${JSON.stringify(sourceUrl("infra/diagnostics-timeline.ts"))});
       flushDiagnosticsTimeline();
@@ -241,11 +207,7 @@ describe("CLI readiness after early config observation", () => {
         observedConfigMode: health ? JSON.parse(health.last_known_good_json).gatewayMode : null,
       }) + "\\n");
     `;
-      const result = await runIsolatedModuleScript(env, script, { runtimeRoot, timeoutMs: 60_000 });
-      const output = `${result.stderr}\n${result.stdout}`;
-      const resultLines = result.stdout.split("\n").filter((line) => line.startsWith("__RESULT__"));
-      expect(resultLines, output).toHaveLength(1);
-      const observed = JSON.parse(resultLines[0]!.slice("__RESULT__".length));
+      const observed = await run(runtimeRoot, env, script);
       expect(observed.message).toContain("Session reference is ambiguous:");
       expect(observed.message).toContain("first");
       expect(observed.message).toContain("second");
@@ -253,7 +215,7 @@ describe("CLI readiness after early config observation", () => {
         {
           method: "sessions.resolve",
           params: { shortId: "a1166b81", slugHint: "movies" },
-          url: explicit ? "ws://127.0.0.1:19877" : null,
+          url: "ws://127.0.0.1:19877",
           configMode: "local",
           configPort: 19876,
         },

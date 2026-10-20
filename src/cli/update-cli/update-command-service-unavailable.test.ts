@@ -8,6 +8,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import * as gatewayNamespace from "../../infra/gateway-lock-payload.js";
 import * as processes from "../../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageFilesystem from "../../infra/package-update-filesystem.js";
@@ -16,6 +17,7 @@ import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { isPublicUpdateFailureCode } from "../../infra/update-failure-public-codes.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import * as processIdentity from "../../shared/pid-alive.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mockProcessPlatform, withMockedPlatform } from "../../test-utils/vitest-spies.js";
@@ -27,7 +29,32 @@ import * as packageUpdate from "./update-command-package.js";
 import { updateCommand } from "./update-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const hostPlatform = process.platform;
+const hostNamespace = gatewayNamespace.readGatewayLockProcessNamespace();
+function withHostPlatform<T>(run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: hostPlatform });
+  try {
+    return run();
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+  }
+}
 beforeEach(() => {
+  // Service platform mocks do not change the local test process's namespace.
+  vi.spyOn(gatewayNamespace, "readGatewayLockProcessNamespace").mockReturnValue(hostNamespace);
+  const classifyNamespace = gatewayNamespace.classifyGatewayLockProcessNamespace;
+  vi.spyOn(gatewayNamespace, "classifyGatewayLockProcessNamespace").mockImplementation((...args) =>
+    withHostPlatform(() => classifyNamespace(...args)),
+  );
+  const isAlive = processIdentity.isPidAlive;
+  const isDead = processIdentity.isPidDefinitelyDead;
+  vi.spyOn(processIdentity, "isPidAlive").mockImplementation((pid) =>
+    withHostPlatform(() => isAlive(pid)),
+  );
+  vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) =>
+    withHostPlatform(() => isDead(pid)),
+  );
   for (const key of [
     "OPENCLAW_UPDATE_RUN_HANDOFF",
     "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
@@ -69,6 +96,7 @@ function gatewayOwner(pid = process.pid) {
     databasePath: resolveOpenClawStateSqlitePath(),
     payload: {
       pid,
+      processNamespace: gatewayNamespace.readGatewayLockProcessNamespace(),
       createdAt: new Date().toISOString(),
       configPath: process.env.OPENCLAW_CONFIG_PATH!,
       role: "gateway",
@@ -84,10 +112,12 @@ it.each([
   { platform: "win32", owner: "absent", refused: false },
   { platform: "win32", owner: "unreadable", refused: true },
   { platform: "win32", owner: "other", refused: false },
-  { platform: "win32", owner: "foreign", refused: false },
+  { platform: "win32", owner: "foreign", refused: true },
   { platform: "win32", owner: "dead", refused: false },
   { platform: "linux", owner: "same", refused: true },
   { platform: "linux", owner: "relative", refused: true },
+  { platform: "linux", owner: "retitled", refused: true },
+  { platform: "linux", owner: "unreadable", refused: true },
   { platform: "linux", owner: "other", refused: false },
   { platform: "linux", owner: "absent", refused: false },
 ] as const)(
@@ -106,14 +136,17 @@ it.each([
     }
     vi.stubEnv("HOME", home);
     serviceHome(home);
-    const hostPlatform = process.platform;
     mockProcessPlatform(platform);
     const native = unavailableService("service-manager-unavailable");
     const ownerRoot = owner === "other" || owner === "foreign" ? other : root;
     const launcher =
       owner === "relative" ? "./dist/index.js" : path.join(ownerRoot, "dist", "index.js");
     vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(
-      owner === "unreadable" ? null : [process.execPath, launcher, "gateway"],
+      owner === "unreadable"
+        ? null
+        : owner === "retitled"
+          ? ["openclaw-gateway"]
+          : [process.execPath, launcher, "gateway"],
     );
     const readlink = fs.readlinkSync;
     vi.spyOn(fs, "readlinkSync").mockImplementation((pathname, options) =>
@@ -136,9 +169,12 @@ it.each([
         expect(failure).toMatchObject({
           reason: "gateway-stop-unverified",
           message: expect.stringMatching(
-            /Task Scheduler.*terminal.*openclaw gateway stop.*openclaw update/,
+            /service manager.*terminal.*openclaw gateway stop.*openclaw update/,
           ),
-          failureFacts: [expect.objectContaining({ code: "gateway-stop-unverified" })],
+          failureFacts: [
+            expect.objectContaining({ code: "gateway-stop-unverified" }),
+            expect.objectContaining({ code: "service-manager-unavailable" }),
+          ],
         });
         expect(isPublicUpdateFailureCode("gateway-stop-unverified")).toBe(true);
       } else {
@@ -163,36 +199,43 @@ it.each([
 
 describe("package update entry point", () => {
   const { fixture } = installFreshUpdateFixture();
-  it("refuses Windows package replacement before backup with an uninspectable live Gateway", async () => {
-    vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockRestore();
-    serviceHome(process.env.HOME!);
-    openOpenClawStateDatabase();
-    const candidate = path.join(process.env.HOME!, "candidate");
-    await writePackageRoot(candidate, "2026.9.2");
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue({
-      root: candidate,
-      run: vi.fn(),
-      close: vi.fn().mockResolvedValue(undefined),
-    });
-    const inspect = databaseContext.inspectUpdateDatabaseContexts;
-    // Keep native file admission on the host; only service admission observes Windows.
-    vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation((params) =>
-      withMockedPlatform("win32", () => inspect(params)),
-    );
-    const native = unavailableService("windows-task-inspection-failed");
-    const live = withMockedPlatform("win32", () => gatewayOwner());
-    vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(null);
-    const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
-    try {
-      await expect(updateCommand({ json: true, yes: true })).rejects.toBeInstanceOf(ExitError);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "error", reason: "gateway-stop-unverified" }),
+  it.each(["win32", "linux"] as const)(
+    "refuses %s package replacement before backup with an uninspectable live Gateway",
+    async (platform) => {
+      vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockRestore();
+      serviceHome(process.env.HOME!);
+      openOpenClawStateDatabase();
+      const candidate = path.join(process.env.HOME!, "candidate");
+      await writePackageRoot(candidate, "2026.9.2");
+      vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue({
+        root: candidate,
+        run: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+      const inspect = databaseContext.inspectUpdateDatabaseContexts;
+      // Keep native file admission on the host; only service admission observes the selected platform.
+      vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation((params) =>
+        withMockedPlatform(platform, () => inspect(params)),
       );
-      expect(backup).not.toHaveBeenCalled();
-      expect(native.stop).not.toHaveBeenCalled();
-      expect(readPackage(fixture.root)).toMatchObject({ version: "2026.9.3" });
-    } finally {
-      live.release();
-    }
-  });
+      const native = unavailableService(
+        platform === "win32" ? "windows-task-inspection-failed" : "service-manager-unavailable",
+      );
+      const live = withMockedPlatform(platform, () => gatewayOwner());
+      vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(
+        platform === "win32" ? null : ["openclaw-gateway"],
+      );
+      const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
+      try {
+        await expect(updateCommand({ json: true, yes: true })).rejects.toBeInstanceOf(ExitError);
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({ status: "error", reason: "gateway-stop-unverified" }),
+        );
+        expect(backup).not.toHaveBeenCalled();
+        expect(native.stop).not.toHaveBeenCalled();
+        expect(readPackage(fixture.root)).toMatchObject({ version: "2026.9.3" });
+      } finally {
+        live.release();
+      }
+    },
+  );
 });

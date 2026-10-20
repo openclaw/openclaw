@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { createComponent, createSignal, getOwner, merge } from "solid-js";
+import { createComponent, createMemo, merge } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -31,6 +31,7 @@ import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
@@ -65,7 +66,7 @@ function historyPane(request = vi.fn(async () => historyPage())) {
 }
 
 function olderRequest(sessionKey: string, offset = 2) {
-  return { sessionKey, limit: 1000, maxBytes: 1024 * 1024, toolResultMaxChars: 2_000, offset };
+  return { sessionKey, limit: 1000, maxBytes: 3 * 1024 * 1024, toolResultMaxChars: 2_000, offset };
 }
 
 function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPagination {
@@ -110,12 +111,40 @@ function installHistoryObserver(intersect = true) {
   return { observe, disconnect, construct, rootMargin: () => rootMargin };
 }
 
-function appendSentinel(thread: HTMLElement) {
+function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
   const sentinel = document.createElement("div");
   sentinel.className = "chat-history-sentinel";
   thread.append(sentinel);
+  pane.historySentinel = sentinel;
   return sentinel;
 }
+
+it("updates the earlier-history control directly from pane loading state", () => {
+  const { pane, state, context } = createRefreshChatPane();
+  state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+  const view = mountSolid(
+    () => {
+      const history = createMemo(() => {
+        pane.render();
+        return pane.chatProps!.historyPagination!;
+      });
+      return createComponent(ChatHistoryBoundary, merge(history));
+    },
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  const button = view.container.querySelector("button")!;
+  expect(button.disabled).toBe(false);
+
+  pane.history.loadingOlder = true;
+  flush();
+  expect(button.disabled).toBe(true);
+  expect(button.getAttribute("aria-busy")).toBe("true");
+
+  pane.history.loadingOlder = false;
+  flush();
+  expect(button.disabled).toBe(false);
+  expect(button.getAttribute("aria-busy")).toBe("false");
+});
 
 it("passes only a proven profile viewer identity to transcript rendering", () => {
   const { pane, context } = createRefreshChatPane();
@@ -157,23 +186,17 @@ it.each(["pending", "resolved"] as const)(
     document.body.append(container);
     let view: ReturnType<typeof mountSolid> | undefined;
     try {
-      pane.render();
-      const [current, update] = createSignal({ ...pane.chatProps!, renderRevision: {} });
-      const renderCurrent = () => {
-        pane.render();
-        update({ ...pane.chatProps!, renderRevision: {} });
-        if (!getOwner()) {
-          flush();
-        }
-      };
-      state.requestUpdate = renderCurrent;
-      view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
-        container,
-        wrapper: createSolidApplicationContextProvider(context).wrapper,
-      });
-      if (!getOwner()) {
-        flush();
-      }
+      view = mountSolid(
+        () => {
+          const current = createMemo(() => {
+            pane.render();
+            return pane.chatProps!;
+          });
+          return createComponent(ChatComposer, merge(current));
+        },
+        { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
+      );
+      flush();
       const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       for (const character of "@Bo") {
         const input = { bubbles: true, inputType: "insertText", data: character };
@@ -209,10 +232,10 @@ it.each(["pending", "resolved"] as const)(
         ],
         1,
       );
-      renderCurrent();
       response.resolve(people);
       await vi.advanceTimersByTimeAsync(0);
       expect(selectedName()).toBe("Bob");
+      expect(container.querySelector("textarea")).toBe(textarea);
       textarea.dispatchEvent(
         new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
       );
@@ -390,9 +413,11 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
   }));
   const { pane, state } = testPane(request);
   const key = "catalog:claude:gateway%3Alocal:thread-1";
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   state.sessionKey = key;
   pane.sessionKey = key;
-  pane.catalogCursor = "final-page";
+  pane.history.catalogCursor = "final-page";
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   appendChatThread(pane);
   vi.spyOn(pane, "updateComplete", "get").mockReturnValue(Promise.resolve(true));
   const scrollToOffset = vi.spyOn(pane.transcript, "scrollToOffset");
@@ -403,8 +428,8 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
     "sessions.catalog.read",
     expect.objectContaining({ cursor: "final-page" }),
   );
-  expect(pane.catalogMessages).toHaveLength(1);
-  expect(pane.catalogCursor).toBeUndefined();
+  expect(pane.history.catalogMessages).toHaveLength(1);
+  expect(pane.history.catalogCursor).toBeUndefined();
   expect(scrollToOffset).not.toHaveBeenCalled();
 });
 
@@ -453,7 +478,7 @@ it("fills a visible history tail once the viewport can fit it", async () => {
   Object.defineProperty(thread, "scrollHeight", { value: 400 });
   let clientHeight = 0;
   Object.defineProperty(thread, "clientHeight", { get: () => clientHeight });
-  const sentinel = appendSentinel(thread);
+  const sentinel = appendSentinel(thread, pane);
   pane.append(thread);
   vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   const { observe } = installHistoryObserver();
@@ -491,7 +516,7 @@ it("prefetches older history from upward intent well before the top edge", async
   const { pane, state, request } = historyPane();
   state.handleChatScroll = vi.fn();
   const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
-  appendSentinel(thread);
+  appendSentinel(thread, pane);
   const observer = installHistoryObserver();
   pane.transcriptScrollTop = 900;
   thread.scrollTop = 800;
@@ -577,7 +602,7 @@ it("reuses an armed history observer and ignores its queued callback after reset
   state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
   pane.historyObserverArmed = true;
   const thread = appendChatThread(pane, { scrollHeight: 400, clientHeight: 200 });
-  const sentinel = appendSentinel(thread);
+  const sentinel = appendSentinel(thread, pane);
   const { observe, disconnect, construct } = installHistoryObserver(false);
   pane.syncHistoryObserver();
   pane.syncHistoryObserver();
@@ -599,7 +624,7 @@ it("deduplicates projected catalog transcript records by catalog message id", ()
   if (!current || !overlapping) {
     throw new Error("expected catalog transcript projections");
   }
-  pane.catalogMessages = [current];
+  pane.history.catalogMessages = [current];
 
   expect(pane.prependUniqueCatalogMessages([overlapping])).toEqual([current]);
 });

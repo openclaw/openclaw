@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
@@ -59,13 +60,12 @@ export function parseAssistantTextSignature(
   } else {
     try {
       const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+      const phase = normalizeAssistantPhase(parsed.phase);
       result =
         parsed.v === 1
           ? {
               ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-              ...(normalizeAssistantPhase(parsed.phase)
-                ? { phase: normalizeAssistantPhase(parsed.phase) }
-                : {}),
+              ...(phase ? { phase } : {}),
             }
           : null;
     } catch {
@@ -280,7 +280,7 @@ export function prepareAssistantTranscriptText(
   }
   return record.display !== true &&
     !readTerminalSourceReplyDeliveryMirror(message) &&
-    text?.startsWith("NO_REPLY\n")
-    ? text.slice("NO_REPLY\n".length)
+    text !== undefined
+    ? (stripMixedSilentReplyTokens(text) ?? text)
     : text;
 }

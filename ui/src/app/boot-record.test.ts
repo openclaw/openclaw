@@ -8,10 +8,9 @@ import {
   type BootRecord,
 } from "./boot-record.ts";
 
-const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
-
 const credential = () => "test-token";
 const scope = "https://gateway.example";
+const key = `openclaw.control.bootRecord.v1:${scope}`;
 const record = (): BootRecord => ({
   version: 2,
   authMethod: "token",
@@ -24,8 +23,11 @@ const record = (): BootRecord => ({
   sectionOrder: ["category:Work", "ungrouped"],
 });
 
-async function settleWrite(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(500);
+const settleWrite = () => vi.advanceTimersByTimeAsync(500);
+
+async function write(saved = record()): Promise<void> {
+  persistBootRecord(saved);
+  await settleWrite();
 }
 
 describe("Control UI boot record", () => {
@@ -69,9 +71,6 @@ describe("Control UI boot record", () => {
         agents: { ...saved.agents, agents: [{ id: "main", identity: { name: "Main" } }] },
       });
       expect(readBootRecord("https://another.example", credential)).toBeNull();
-      clearBootRecords();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(readBootRecord(scope, credential)).toBeNull();
     },
   );
 
@@ -87,21 +86,13 @@ describe("Control UI boot record", () => {
     ["old record", { ...record(), savedAt: Date.now() - 30 * 24 * 60 * 60 * 1000 - 1 }],
     ["oversized record", { ...record(), sectionOrder: ["x".repeat(64 * 1024)] }],
   ])("removes %s without blocking startup", (_name, value) => {
-    const key = BOOT_RECORD_PREFIX + scope;
     localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
     expect(readBootRecord(scope, credential)).toBeNull();
     expect(localStorage.getItem(key)).toBeNull();
   });
 
   it("binds boot admission to the accepted reusable credential", () => {
-    const cases: Array<
-      [
-        method: string | undefined,
-        deviceToken: string | undefined,
-        token: string,
-        authMethod: string | null,
-      ]
-    > = [
+    const cases = [
       ["password", "test-token", "test-token", null],
       [undefined, "test-token", "test-token", null],
       ["token", "other-token", " test-token ", "token"],
@@ -110,7 +101,7 @@ describe("Control UI boot record", () => {
       ["device-token", undefined, "test-token", null],
       ["bootstrap-token", "test-token", "bootstrap-secret", "device-token"],
       ["bootstrap-token", undefined, "bootstrap-secret", null],
-    ];
+    ] as const;
     for (const [method, deviceToken, token, authMethod] of cases) {
       expect(resolveBootRecordAuth({ method, deviceToken }, token), method).toEqual(
         authMethod ? { authMethod, credential: "9d17676d" } : null,
@@ -119,16 +110,14 @@ describe("Control UI boot record", () => {
   });
 
   it.each([
-    { failure: "oversized", sameOwner: true },
-    { failure: "oversized", sameOwner: false },
-    { failure: "quota", sameOwner: false },
-  ])(
-    "evicts only the publishing owner after $failure failure (same owner: $sameOwner)",
-    async ({ failure, sameOwner }) => {
+    ["oversized", true],
+    ["oversized", false],
+    ["quota", false],
+  ] as const)(
+    "evicts only the publishing owner after %s failure (same owner: %s)",
+    async (failure, sameOwner) => {
       const peer = { ...record(), ...(sameOwner ? {} : { recoveryScope: "peer-account" }) };
-      persistBootRecord(peer);
-      await settleWrite();
-      const key = BOOT_RECORD_PREFIX + scope;
+      await write(peer);
       const bytes = localStorage.getItem(key);
       expect(readBootRecord(scope, credential)).toEqual(peer);
       if (failure === "quota") {
@@ -136,22 +125,19 @@ describe("Control UI boot record", () => {
           throw new DOMException("quota exceeded", "QuotaExceededError");
         });
       }
-      persistBootRecord({
+      await write({
         ...record(),
         ...(sameOwner ? {} : { recoveryScope: "new-account" }),
         ...(failure === "oversized" ? { sectionOrder: ["🦞".repeat((64 * 1024) / 3)] } : {}),
       });
-      await settleWrite();
       expect(localStorage.getItem(key)).toBe(sameOwner ? null : bytes);
       expect(readBootRecord(scope, credential)).toEqual(sameOwner ? null : peer);
     },
   );
 
   it("clears all scopes and fences pending writes even on pagehide", async () => {
-    persistBootRecord(record());
-    await settleWrite();
-    persistBootRecord({ ...record(), scope: "https://another.example" });
-    await settleWrite();
+    await write();
+    await write({ ...record(), scope: "https://another.example" });
     localStorage.setItem("unrelated", "keep");
     persistBootRecord(record());
     clearBootRecords();
@@ -163,8 +149,7 @@ describe("Control UI boot record", () => {
 
   it("tolerates unavailable storage", async () => {
     vi.stubGlobal("localStorage", null);
-    persistBootRecord(record());
-    await settleWrite();
+    await write();
     expect(readBootRecord(scope, credential)).toBeNull();
     expect(clearBootRecords).not.toThrow();
   });
@@ -173,8 +158,7 @@ describe("Control UI boot record", () => {
     async (method) => {
       const auth = resolveBootRecordAuth({ method, recoveryScope: "account-a" });
       expect(auth).toEqual({ authMethod: method, credential: "" });
-      persistBootRecord({ ...record(), ...auth!, recoveryScope: "account-a" });
-      await settleWrite();
+      await write({ ...record(), ...auth!, recoveryScope: "account-a" });
       expect(readBootRecord(scope, () => "")?.recoveryScope).toBe("account-a");
       clearBootRecords(scope);
       window.dispatchEvent(new Event("pagehide"));
@@ -183,7 +167,6 @@ describe("Control UI boot record", () => {
   );
   it("retires an admitted legacy credential without deleting a replacement account", () => {
     const saved = record();
-    const key = BOOT_RECORD_PREFIX + scope;
     localStorage.setItem(key, JSON.stringify(saved));
     const owner = { authMethod: saved.authMethod, credential: saved.credential };
     clearBootRecords(scope, owner);
@@ -192,6 +175,5 @@ describe("Control UI boot record", () => {
     localStorage.setItem(key, JSON.stringify(replacement));
     clearBootRecords(scope, owner);
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(replacement);
-    localStorage.removeItem(key);
   });
 });

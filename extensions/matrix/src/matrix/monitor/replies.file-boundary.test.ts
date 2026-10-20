@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { deliverMatrixReplies } from "./replies.js";
+import { createMatrixTestReplyDispatcher } from "./reply-dispatcher.test-support.js";
 
 const runtimeStub = {
   config: { current: () => ({}) },
@@ -27,7 +27,7 @@ const runtimeStub = {
 
 const runtimeEnv = {} as RuntimeEnv;
 
-describe("deliverMatrixReplies file boundary", () => {
+describe("Matrix reply dispatcher file boundary", () => {
   let tempDir = "";
 
   beforeEach(() => {
@@ -51,15 +51,18 @@ describe("deliverMatrixReplies file boundary", () => {
       getUserId: vi.fn(async () => "@bot:example.org"),
     } as unknown as MatrixClient;
 
-    const result = await deliverMatrixReplies({
+    const dispatcher = await createMatrixTestReplyDispatcher({
       cfg: { channels: { matrix: {} } },
-      replies: [{ text: "caption", mediaUrl: mediaPath, mediaUrls: ["   "] }],
       roomId: "!room:example.org",
       client,
       runtime: runtimeEnv,
       replyToMode: "off",
       mediaLocalRoots: [tempDir],
     });
+    const result = await dispatcher.deliverReply(
+      { text: "caption", mediaUrl: mediaPath, mediaUrls: ["   "] },
+      { kind: "final" },
+    );
 
     expect(uploadContent).toHaveBeenCalledWith(
       Buffer.from("matrix-file-boundary-proof"),

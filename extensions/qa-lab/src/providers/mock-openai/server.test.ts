@@ -1284,7 +1284,9 @@ describe("qa mock openai server", () => {
     ] as const) {
       const payload = await expectOpenAiNonStreamingResponsesJson(server, {
         input: [
-          makeDeveloperInput(`Runtime: ${identity}channel=whatsapp | capabilities=messageactions`),
+          makeDeveloperInput(
+            `Runtime: ${identity}channel=whatsapp | channel_capabilities=messageactions`,
+          ),
           makeUserInput(WHATSAPP_BROADCAST_PROMPT),
         ],
       });

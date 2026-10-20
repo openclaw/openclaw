@@ -1,3 +1,4 @@
+import { createEffect, createMemo, untrack } from "@solidjs/signals";
 import {
   readSessionProgressCard,
   type SessionProgressCardStore,
@@ -10,9 +11,11 @@ export type ProgressCardProjectionSource = {
   options?: Parameters<SessionProgressCardStore["watch"]>[2];
 };
 
-export function projectProgressCard(source: ProgressCardProjectionSource) {
-  let currentSource = source;
-  const projection = projectSource(source, {
+export function projectProgressCard(source: () => ProgressCardProjectionSource) {
+  const binding = createMemo(source);
+  let currentSource = untrack(binding);
+  let disposed = false;
+  const projection = projectSource(currentSource, {
     read: ({ store, target }) => readSessionProgressCard(store, target),
     subscribe: ({ store, target, options }, notify) => {
       if (!store) {
@@ -32,20 +35,28 @@ export function projectProgressCard(source: ProgressCardProjectionSource) {
       previous.error === next.error &&
       previous.refreshState === next.refreshState,
   });
+  createEffect(binding, (next) => {
+    if (disposed || next === currentSource) {
+      return;
+    }
+    // A same-store handoff must not trigger idle teardown and discard cached cards.
+    const release = next.store?.subscribe(() => {});
+    try {
+      projection.replaceSource(next);
+      currentSource = next;
+    } finally {
+      release?.();
+    }
+  });
+  const { replaceSource: _replaceSource, ...owned } = projection;
   return {
-    ...projection,
-    replaceSource(next: ProgressCardProjectionSource) {
-      if (next === currentSource) {
+    ...owned,
+    dispose() {
+      if (disposed) {
         return;
       }
-      // A same-store handoff must not trigger idle teardown and discard cached cards.
-      const release = next.store?.subscribe(() => {});
-      try {
-        projection.replaceSource(next);
-        currentSource = next;
-      } finally {
-        release?.();
-      }
+      disposed = true;
+      projection.dispose();
     },
   };
 }

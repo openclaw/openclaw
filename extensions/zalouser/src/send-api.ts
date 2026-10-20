@@ -1,5 +1,6 @@
 import path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ChannelMessageSendResult } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -7,7 +8,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchMediaWithZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sliceTextStyles } from "./text-styles-ranges.js";
-import type { ZaloSendOptions, ZaloSendResult } from "./types.js";
+import type { ZaloSendOptions } from "./types.js";
 import type { API } from "./zca-client.js";
 import { ThreadType } from "./zca-constants.js";
 
@@ -84,8 +85,8 @@ export async function sendZaloTextWithApi(
   trimmedThreadId: string,
   text: string,
   options: ZaloSendOptions,
-  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void,
-): Promise<ZaloSendResult> {
+  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void,
+): Promise<ChannelMessageSendResult> {
   const type = options.isGroup ? ThreadType.Group : ThreadType.User;
   let textMessageId: string | undefined;
 
@@ -125,7 +126,6 @@ export async function sendZaloTextWithApi(
         );
         textMessageId = extractSendMessageId(textResponse);
         await onDeliveryResult?.({
-          ok: true,
           messageId: textMessageId,
           receipt: createZalouserSendReceipt({
             messageId: textMessageId,
@@ -144,7 +144,6 @@ export async function sendZaloTextWithApi(
       const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
       const voiceMessageId = extractSendMessageId(response);
       return {
-        ok: true,
         messageId: voiceMessageId ?? textMessageId,
         receipt: createZalouserSendReceipt({
           platformMessageIds: [textMessageId, voiceMessageId],
@@ -165,7 +164,6 @@ export async function sendZaloTextWithApi(
     );
     const messageId = extractSendMessageId(response);
     return {
-      ok: true,
       messageId,
       receipt: createZalouserSendReceipt({
         messageId,
@@ -174,14 +172,6 @@ export async function sendZaloTextWithApi(
       }),
     };
   } catch (error) {
-    return {
-      ok: false,
-      error: formatErrorMessage(error),
-      receipt: createZalouserSendReceipt({
-        messageId: textMessageId,
-        threadId: trimmedThreadId,
-        kind: textMessageId ? "text" : "unknown",
-      }),
-    };
+    throw toStringifiedError(formatErrorMessage(error) || "Failed to send Zalouser message");
   }
 }

@@ -148,6 +148,12 @@ describe("checkGatewayHealth", () => {
       expect.stringContaining("CLI and live Gateway use different"),
       "Gateway state directory mismatch",
     );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "the running Gateway still uses the paths it started with. A full restart is required: `openclaw gateway restart` (not a reload). Then rerun `openclaw doctor`.",
+      ),
+      "Gateway state directory mismatch",
+    );
     expect(readServiceCommand).not.toHaveBeenCalled();
   });
 
@@ -240,7 +246,7 @@ describe("checkGatewayHealth", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
     expect(note).toHaveBeenCalledWith(
-      `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+      `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
       "Gateway runtime",
     );
   });
@@ -714,6 +720,32 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("keeps a reachable Gateway healthy when device-less auth lacks read scope", async () => {
+    const error = new GatewayClientRequestError({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
+    retainGatewayResponsePayload(error, undefined);
+    callGateway.mockRejectedValueOnce(error);
+    probeGatewayStatus.mockResolvedValueOnce({ ok: false, gatewayReached: true });
+
+    await expect(
+      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(probeGatewayStatus).toHaveBeenCalledOnce();
+    expect(sharedRuntime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+  });
+
   it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {
     const error = new Error("gateway.auth.password unavailable");
     callGateway.mockRejectedValueOnce(error);
@@ -771,6 +803,7 @@ describe("probeGatewayMemoryStatus", () => {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs: 1234,
+      sharedStateMode: "read-only",
       config: cfg,
     });
   });

@@ -1,6 +1,5 @@
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import { isClawAddStateCommand } from "../claws/add-state-worker-contract.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
@@ -42,7 +41,6 @@ import {
 } from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerBackend,
-  OpenClawStateWorkerOpenPreparation,
   OpenClawStateWorkerOperations,
 } from "./openclaw-state-worker-contract.js";
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
@@ -58,13 +56,10 @@ const commandRegistry = createWorkerOperationRegistry<
       OpenClawStateWorkerOperations,
       | "worktrees.reserveCapacity"
       | "worktrees.recoverPending"
-      | Extract<keyof OpenClawStateWorkerOperations, `deviceAuth.${string}`>
       | Extract<keyof OpenClawStateWorkerOperations, `restartLifecycle.${string}`>
     >,
   WorkerWriteOperationContext
 >({
-  deviceAuth: async () =>
-    (await import("../infra/device-auth-store.worker.js")).deviceAuthWorkerOperations,
   restartLifecycle: () =>
     import("../infra/restart-lifecycle.worker.js").then(
       (loaded) => loaded.restartLifecycleOperations,
@@ -104,15 +99,8 @@ function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
 
 export function createSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string; preparation?: OpenClawStateWorkerOpenPreparation },
+  context: { databasePath: string },
 ): OpenClawStateWorkerBackend {
-  if (context.preparation?.type === "deviceIdentity") {
-    loadOrCreateDeviceIdentity({
-      path: context.databasePath,
-      env: stateDatabaseInitializationEnvironment(),
-      identityKey: context.preparation.identityKey,
-    });
-  }
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: stateDatabaseInitializationEnvironment(),
@@ -275,13 +263,17 @@ function createSharedStateWorkerBackend(
     [SQLITE_WORKER_OPERATION_CLEANUP]() {
       publicationSourceReader?.close();
     },
-    async prepare(command) {
+    prepare(command) {
       if (command.type === "pluginState.executeOperation") {
-        if (!pluginState) {
-          pluginState = await import("../plugin-state/plugin-state.worker.js");
+        if (pluginState) {
+          return pluginState.preparePluginStateOperation(command.input);
         }
-        await pluginState.preparePluginStateOperation(command.input);
+        return import("../plugin-state/plugin-state.worker.js").then((loaded) => {
+          pluginState = loaded;
+          return pluginState.preparePluginStateOperation(command.input);
+        });
       }
+      return undefined;
     },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
       if (commandType.startsWith("cron.")) {
@@ -313,19 +305,21 @@ function createSharedStateWorkerBackend(
         commandType === "githubPublication.sourceFacts" ||
         commandType.startsWith("githubPublications.")
       ) {
-        return Promise.all([
-          publicationSource
-            ? undefined
-            : import("./github-publication-source.worker.js").then((loaded) => {
-                publicationSource = loaded;
-              }),
+        const sourcePreparation = publicationSource
+          ? undefined
+          : import("./github-publication-source.worker.js").then((loaded) => {
+              publicationSource = loaded;
+            });
+        const commandPreparation =
           commandType === "githubPublication.sourceFacts"
             ? undefined
-            : stateWorkerRegistry.prepare(commandType),
-        ]).then(() => undefined);
+            : stateWorkerRegistry.prepare(commandType);
+        // A Promise marks newly loaded modules for the transport's compile-cache flush.
+        return sourcePreparation || commandPreparation
+          ? Promise.all([sourcePreparation, commandPreparation]).then(() => undefined)
+          : undefined;
       }
       if (
-        commandType.startsWith("deviceAuth.") ||
         commandType.startsWith("restartLifecycle.") ||
         commandType.startsWith("worktrees.templates.") ||
         commandType === "worktrees.reserveCapacity" ||
@@ -361,7 +355,6 @@ function createSharedStateWorkerBackend(
         commandType === "database.walMaintenance" ||
         commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
-        commandType === "deviceIdentity.load" ||
         commandType === "stateLease.verify" ||
         commandType === "stateLease.renew" ||
         commandType === "stateLease.release"
@@ -378,7 +371,7 @@ function createSharedStateWorkerBackend(
         if (!clawAddState) {
           throw new Error("Claw Add state runtime is not prepared");
         }
-        return clawAddState.executeClawAddStateCommand(command, open());
+        return clawAddState.executeClawAddStateCommand(command, operationContext);
       }
       if (command.type === "githubPublication.sourceFacts") {
         if (!publicationSourceReader) {
@@ -407,17 +400,6 @@ function createSharedStateWorkerBackend(
           throw new Error("Capture worker command runtime is not prepared");
         }
         return capture.executeCaptureCommand(command, open());
-      }
-      if (command.type === "deviceIdentity.load") {
-        try {
-          return loadOrCreateDeviceIdentity({
-            path: context.databasePath,
-            identityKey: command.input.identityKey,
-            env: stateDatabaseInitializationEnvironment(),
-          });
-        } finally {
-          retainCachedDatabase();
-        }
       }
       if (command.type === "agentDatabases.releaseExitedLease") {
         if (!agentCleanup) {

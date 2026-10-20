@@ -5,7 +5,7 @@ import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.l
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 
 export function updateMessage(
@@ -90,11 +90,10 @@ export function createMessageUpdateContext(
       },
     ),
   } as unknown as EmbeddedAgentSubscribeContext;
-  ctx.state = {
-    ...createEmbeddedAgentSubscribeState(ctx.params),
+  ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
     ...params.state,
-  };
+  });
   return ctx;
 }
 
@@ -129,11 +128,10 @@ export function createMessageEndContext(
     builtinToolNames: params.builtinToolNames,
     blockChunker: new EmbeddedBlockChunker(),
   } as unknown as EmbeddedAgentSubscribeContext;
-  ctx.state = {
-    ...createEmbeddedAgentSubscribeState(ctx.params),
+  ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     blockReplyBreak: "message_end",
     ...params.state,
-  };
+  });
   ctx.blockChunker.append(params.bufferedText ?? "");
   const delivery = createReplyDelivery(ctx);
   ctx.emitAssistantStreamData = delivery.emitAssistantStreamData;

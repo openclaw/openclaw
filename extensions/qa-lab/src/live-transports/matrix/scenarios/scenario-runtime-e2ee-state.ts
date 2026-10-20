@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type {
   OpenKeyedStoreOptions,
@@ -35,45 +35,21 @@ async function findMatrixQaCliAccountRoot(params: {
     rootDir: params.runtime.stateDir,
     maxDepth: 10,
   });
-  const legacyMetadataPaths = await findFilesByName({
-    filename: "storage-meta.json",
-    rootDir: params.runtime.stateDir,
-    maxDepth: 10,
-  });
-  // Current account metadata lives in account-local SQLite. Keep legacy JSON
-  // discovery for older tagged fixtures without making it the canonical path.
-  const accountRoots = new Set(
-    sqlitePaths
-      .filter((sqlitePath) => path.basename(path.dirname(sqlitePath)) === "state")
-      .map((sqlitePath) => path.dirname(path.dirname(sqlitePath))),
-  );
-  for (const metadataPath of legacyMetadataPaths) {
-    accountRoots.add(path.dirname(metadataPath));
-  }
-  for (const accountRoot of [...accountRoots].toSorted()) {
-    let metadata: { deviceId?: unknown; userId?: unknown } | null = null;
+  for (const sqlitePath of sqlitePaths) {
+    if (path.basename(path.dirname(sqlitePath)) !== "state") {
+      continue;
+    }
+    const accountRoot = path.dirname(path.dirname(sqlitePath));
+    let metadata: { deviceId?: unknown; userId?: unknown } | null;
     try {
-      await access(path.join(accountRoot, "state", "openclaw.sqlite"));
       metadata = withMatrixQaStateStore(
         storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
         (store) => storageMetadataRuntime.normalizeMatrixStorageMetadata(store.lookup("current")),
       );
     } catch {
-      // Fall through to the legacy sidecar for pre-SQLite fixtures.
+      continue;
     }
-    if (!metadata) {
-      try {
-        metadata = JSON.parse(
-          await readFile(path.join(accountRoot, "storage-meta.json"), "utf8"),
-        ) as {
-          deviceId?: unknown;
-          userId?: unknown;
-        };
-      } catch {
-        continue;
-      }
-    }
-    if (metadata.userId === params.userId && metadata.deviceId === params.deviceId) {
+    if (metadata?.userId === params.userId && metadata.deviceId === params.deviceId) {
       return accountRoot;
     }
   }
@@ -141,7 +117,6 @@ export async function deleteMatrixQaServerRoomKeyBackup(params: {
     accessToken: params.accessToken,
     baseUrl: params.baseUrl,
     endpoint: `/_matrix/client/v3/room_keys/version/${encodeURIComponent(params.version)}`,
-    fetchImpl: fetch,
     method: "DELETE",
     okStatuses: [200, 404],
   });

@@ -1,12 +1,7 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
-import {
-  evaluateSchemaWalk,
-  walkSchemaArray,
-  walkSchemaValue,
-  type SchemaWalk,
-} from "./schema-walk.js";
+import { walkSchemaValue } from "./schema-walk.js";
 import {
   MAX_TOOL_SCHEMA_DEPTH,
   inheritToolSchemaTruncation,
@@ -205,22 +200,21 @@ function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string,
   return schema;
 }
 
-function* cleanSchemaForGeminiWithDefs(
+function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
   refStack: Set<string> | undefined,
-  ancestors: Set<object>,
   budget: { truncated: boolean },
   depth = 0,
-): SchemaWalk {
+): unknown {
   if (depth > MAX_TOOL_SCHEMA_DEPTH) {
     budget.truncated = true;
     return {};
   }
-  return yield walkSchemaValue(schema, ancestors, function* (obj) {
+  return walkSchemaValue(schema, (obj) => {
     const nextDefs = extendSchemaDefs(defs, obj);
     const visit = (value: unknown) =>
-      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, ancestors, budget, depth + 1);
+      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, budget, depth + 1);
 
     const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
     if (refValue) {
@@ -233,12 +227,10 @@ function* cleanSchemaForGeminiWithDefs(
         const nextRefStack = new Set(refStack);
         nextRefStack.add(refValue);
 
-        // Reference strings own expansion cycles; raw descent starts a new segment.
-        const cleaned = yield cleanSchemaForGeminiWithDefs(
+        const cleaned = cleanSchemaForGeminiWithDefs(
           resolved,
           nextDefs,
           nextRefStack,
-          new Set<object>(),
           budget,
           depth + 1,
         );
@@ -256,9 +248,7 @@ function* cleanSchemaForGeminiWithDefs(
     for (const key of ["anyOf", "oneOf"] as const) {
       const variants = obj[key];
       if (Array.isArray(variants)) {
-        const cleaned: unknown[] = [];
-        yield walkSchemaArray(variants, visit, cleaned);
-        unions[key] = cleaned;
+        unions[key] = variants.map(visit);
       }
     }
     for (const key of ["anyOf", "oneOf"] as const) {
@@ -295,11 +285,7 @@ function* cleanSchemaForGeminiWithDefs(
       if (key === "type" && (unions.anyOf || unions.oneOf)) {
         continue;
       }
-      if (
-        key === "type" &&
-        Array.isArray(value) &&
-        value.every((entry) => typeof entry === "string")
-      ) {
+      if (key === "type" && isStringArray(value)) {
         const types = value.filter((entry) => entry !== "null");
         cleaned.type = types.length === 1 ? types[0] : types;
         continue;
@@ -309,7 +295,7 @@ function* cleanSchemaForGeminiWithDefs(
         if (value && typeof value === "object" && !Array.isArray(value)) {
           const entries = Object.entries(value as Record<string, unknown>);
           for (const entry of entries) {
-            entry[1] = yield visit(entry[1]);
+            entry[1] = visit(entry[1]);
           }
           cleaned[key] = Object.fromEntries(entries);
         } else {
@@ -317,9 +303,9 @@ function* cleanSchemaForGeminiWithDefs(
           cleaned[key] = {};
         }
       } else if ((key === "items" || key === "allOf") && Array.isArray(value)) {
-        cleaned[key] = yield walkSchemaArray(value, visit);
+        cleaned[key] = value.map(visit);
       } else if (key === "items" && value && typeof value === "object") {
-        cleaned[key] = yield visit(value);
+        cleaned[key] = visit(value);
       } else if ((key === "anyOf" || key === "oneOf") && Array.isArray(value)) {
         cleaned[key] = unions[key];
       } else {
@@ -366,8 +352,11 @@ function flattenUnionFallback(
 export function cleanSchemaForGemini(schema: unknown, toolName?: string): TSchema {
   const budget = { truncated: false };
   const boundedSchema = truncateToolSchemaDepth(schema, toolName);
-  const normalized = evaluateSchemaWalk(
-    cleanSchemaForGeminiWithDefs(boundedSchema, undefined, undefined, new Set<object>(), budget),
+  const normalized = cleanSchemaForGeminiWithDefs(
+    boundedSchema,
+    undefined,
+    undefined,
+    budget,
   ) as TSchema;
   if (budget.truncated) {
     reportToolSchemaTruncation(schema, toolName);

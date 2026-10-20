@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import fs, { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,6 +9,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import * as clawhubStore from "./clawhub-store.js";
 import { untrackClawHubSkill } from "./clawhub-store.js";
 import { applyClawHubSkillUninstall, planClawHubSkillUninstall } from "./clawhub-uninstall.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
@@ -29,34 +30,21 @@ async function fixture() {
   await mkdir(join(workspaceDir, ".clawhub"), { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), content);
   const fileTreeSha256 = await digestClawHubSkillTree(skillDir);
+  const entry = {
+    version: "1.0.0",
+    registry,
+    installedAt,
+    ownerHandle,
+    skillFile: { path: "SKILL.md", sha256 },
+    fileTreeSha256,
+  };
   await writeFile(
     join(skillDir, ".clawhub", "origin.json"),
-    JSON.stringify({
-      version: 1,
-      registry,
-      slug,
-      installedVersion: "1.0.0",
-      installedAt,
-      ownerHandle,
-      skillFile: { path: "SKILL.md", sha256 },
-      fileTreeSha256,
-    }),
+    JSON.stringify({ ...entry, version: 1, slug, installedVersion: entry.version }),
   );
   await writeFile(
     join(workspaceDir, ".clawhub", "lock.json"),
-    JSON.stringify({
-      version: 1,
-      skills: {
-        [slug]: {
-          version: "1.0.0",
-          registry,
-          installedAt,
-          ownerHandle,
-          skillFile: { path: "SKILL.md", sha256 },
-          fileTreeSha256,
-        },
-      },
-    }),
+    JSON.stringify({ version: 1, skills: { [slug]: entry } }),
   );
   return {
     workspaceDir,
@@ -64,7 +52,24 @@ async function fixture() {
     skillDir,
     originPath: join(skillDir, ".clawhub", "origin.json"),
     lockPath: join(workspaceDir, ".clawhub", "lock.json"),
+    readSkill: () => readFile(join(skillDir, "SKILL.md"), "utf8"),
+    readLock: () => readFile(join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
   };
+}
+
+async function plan(current: Awaited<ReturnType<typeof fixture>>, slug = current.slug) {
+  return planClawHubSkillUninstall({
+    workspaceDir: current.workspaceDir,
+    slug,
+    expectedVersion: "1.0.0",
+  });
+}
+async function requirePlan(current: Awaited<ReturnType<typeof fixture>>, slug = current.slug) {
+  const planned = await plan(current, slug);
+  if (!planned.ok) {
+    throw new Error(planned.error);
+  }
+  return planned.plan;
 }
 
 async function replaceTrackedOwner(
@@ -77,7 +82,7 @@ async function replaceTrackedOwner(
   origin.ownerHandle = ownerHandle;
   await writeFile(current.originPath, JSON.stringify(origin));
 
-  const lock = JSON.parse(await readFile(current.lockPath, "utf8")) as {
+  const lock = JSON.parse(await current.readLock()) as {
     skills: Record<string, { ownerHandle: string }>;
   };
   lock.skills[current.slug]!.ownerHandle = ownerHandle;
@@ -93,7 +98,7 @@ describe("ClawHub skill uninstall lifecycle", () => {
     "rechecks tracking after $checkpoint authorization (retracked=$retracked)",
     async ({ checkpoint, retracked }) => {
       const current = await fixture();
-      const before = await readFile(current.lockPath, "utf8");
+      const before = await current.readLock();
       const tracking = JSON.parse(before);
       const restore = await untrackClawHubSkill(
         current.workspaceDir,
@@ -105,7 +110,7 @@ describe("ClawHub skill uninstall lifecycle", () => {
             if (retracked) {
               await writeFile(current.lockPath, before);
             } else {
-              const lock = JSON.parse(await readFile(current.lockPath, "utf8"));
+              const lock = JSON.parse(await current.readLock());
               lock.skills.sibling = tracking.skills[current.slug];
               await writeFile(current.lockPath, JSON.stringify(lock));
             }
@@ -114,12 +119,12 @@ describe("ClawHub skill uninstall lifecycle", () => {
       );
       if (retracked) {
         await expect(restore()).rejects.toThrow("was retracked during rollback");
-        expect(await readFile(current.lockPath, "utf8")).toBe(before);
+        expect(await current.readLock()).toBe(before);
       } else {
         if (checkpoint === "rollback") {
           await restore();
         }
-        expect(JSON.parse(await readFile(current.lockPath, "utf8")).skills.sibling).toEqual(
+        expect(JSON.parse(await current.readLock()).skills.sibling).toEqual(
           tracking.skills[current.slug],
         );
       }
@@ -142,7 +147,7 @@ describe("ClawHub skill uninstall lifecycle", () => {
         phase === "rollback"
           ? await untrackClawHubSkill(current.workspaceDir, current.slug, guard)
           : undefined;
-      const before = await readFile(current.lockPath, "utf8");
+      const before = await current.readLock();
       const pending = restore
         ? restore()
         : untrackClawHubSkill(
@@ -160,7 +165,7 @@ describe("ClawHub skill uninstall lifecycle", () => {
         owned = false;
       }
       await expect(pending).rejects.toThrow(message);
-      await expect(readFile(current.lockPath, "utf8")).resolves.toBe(before);
+      await expect(current.readLock()).resolves.toBe(before);
     },
   );
 
@@ -190,27 +195,15 @@ describe("ClawHub skill uninstall lifecycle", () => {
             createMockPluginRegistry([{ hookName: "skill_changed", handler }]),
           );
         }
-        const planned = await planClawHubSkillUninstall({
-          workspaceDir: current.workspaceDir,
-          slug: requestedRef,
-          expectedVersion: "1.0.0",
-        });
-        expect(planned).toMatchObject({
+        const removal = await requirePlan(current, requestedRef);
+        expect(removal).toMatchObject({ requestedRef, slug: "triage", version: "1.0.0" });
+        await expect(applyClawHubSkillUninstall(removal, { onCommittedChange })).resolves.toEqual({
           ok: true,
-          plan: { requestedRef, slug: "triage", version: "1.0.0" },
         });
-        if (!planned.ok) {
-          throw new Error(planned.error);
-        }
-        await expect(
-          applyClawHubSkillUninstall(planned.plan, { onCommittedChange }),
-        ).resolves.toEqual({ ok: true });
-        await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).rejects.toMatchObject({
+        await expect(current.readSkill()).rejects.toMatchObject({
           code: "ENOENT",
         });
-        const lock = JSON.parse(
-          await readFile(join(current.workspaceDir, ".clawhub", "lock.json"), "utf8"),
-        );
+        const lock = JSON.parse(await current.readLock());
         expect(lock.skills).toEqual({});
         const delivered = onCommittedChange ?? handler;
         expect(delivered).toHaveBeenCalledTimes(1);
@@ -240,60 +233,43 @@ describe("ClawHub skill uninstall lifecycle", () => {
     "rejects a changed publisher when %s removal",
     async (phase) => {
       const current = await fixture();
-      const params = {
-        workspaceDir: current.workspaceDir,
-        slug: "@owner/triage",
-        expectedVersion: "1.0.0",
-      };
       if (phase === "planning") {
-        await expect(
-          planClawHubSkillUninstall({ ...params, slug: "@other/triage" }),
-        ).resolves.toEqual({
+        await expect(plan(current, "@other/triage")).resolves.toEqual({
           ok: false,
           code: "ambiguous",
           error: 'Skill "triage" is tracked as @owner/triage, not @other/triage.',
         });
-        expect(JSON.parse(await readFile(current.lockPath, "utf8")).skills.triage).toBeDefined();
+        expect(JSON.parse(await current.readLock()).skills.triage).toBeDefined();
       } else {
-        const planned = await planClawHubSkillUninstall(params);
-        if (!planned.ok) {
-          throw new Error(planned.error);
-        }
+        const removal = await requirePlan(current, "@owner/triage");
         await replaceTrackedOwner(current, "other");
-        await expect(applyClawHubSkillUninstall(planned.plan)).resolves.toEqual({
+        await expect(applyClawHubSkillUninstall(removal)).resolves.toEqual({
           ok: false,
           error: 'Skill "triage" is tracked as @other/triage, not @owner/triage.',
         });
       }
-      await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-        "name: triage",
-      );
+      await expect(current.readSkill()).resolves.toContain("name: triage");
     },
   );
 
   it.each(["SKILL.md", "script.js"])("retains a skill with local changes to %s", async (file) => {
     const current = await fixture();
     await writeFile(join(current.skillDir, file), "operator edit\n");
-    await expect(
-      planClawHubSkillUninstall({ ...current, expectedVersion: "1.0.0" }),
-    ).resolves.toMatchObject({ ok: false, code: "modified" });
+    await expect(plan(current)).resolves.toMatchObject({ ok: false, code: "modified" });
   });
 
   it.each(["parent deletion", "untracking", "remote authorization"])(
     "restores files and tracking when %s fails during removal",
     async (failure) => {
       const current = await fixture();
-      const before = await readFile(current.lockPath, "utf8");
+      const before = await current.readLock();
       const handler = vi.fn();
       if (failure === "untracking") {
         initializeGlobalHookRunner(
           createMockPluginRegistry([{ hookName: "skill_changed", handler }]),
         );
       }
-      const planned = await planClawHubSkillUninstall({ ...current, expectedVersion: "1.0.0" });
-      if (!planned.ok) {
-        throw new Error(planned.error);
-      }
+      const removal = await requirePlan(current);
       let active = true;
       const phases: string[] = [];
       const message =
@@ -302,8 +278,21 @@ describe("ClawHub skill uninstall lifecycle", () => {
           : failure === "untracking"
             ? "lockfile write failed"
             : "parent canceled";
+      const renameSpy =
+        failure === "parent deletion"
+          ? vi
+              .spyOn(fs, "rename")
+              .mockImplementation(async (...args: Parameters<typeof rename>) => {
+                await rename(...args);
+                active = false;
+              })
+          : undefined;
+      const untrackSpy =
+        failure === "untracking"
+          ? vi.spyOn(clawhubStore, "untrackClawHubSkill").mockRejectedValueOnce(new Error(message))
+          : undefined;
       const result = await applyClawHubSkillUninstall(
-        planned.plan,
+        removal,
         failure === "parent deletion"
           ? {
               beforePersistentApply: () => {
@@ -311,17 +300,9 @@ describe("ClawHub skill uninstall lifecycle", () => {
                   throw new Error(message);
                 }
               },
-              rename: async (...args: Parameters<typeof rename>) => {
-                await rename(...args);
-                active = false;
-              },
             }
           : failure === "untracking"
-            ? {
-                untrack: async () => {
-                  throw new Error(message);
-                },
-              }
+            ? {}
             : {
                 authorizeMutation: async (phase) => {
                   phases.push(phase);
@@ -334,17 +315,17 @@ describe("ClawHub skill uninstall lifecycle", () => {
                   }
                 },
               },
-      );
+      ).finally(() => {
+        renameSpy?.mockRestore();
+        untrackSpy?.mockRestore();
+      });
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining(message) });
-      const lock = await readFile(current.lockPath, "utf8");
+      const lock = await current.readLock();
       expect(JSON.parse(lock)).toEqual(JSON.parse(before));
       expect(JSON.parse(lock).skills.triage).toBeDefined();
-      await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-        "name: triage",
-      );
-      await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).resolves.toContain(
-        "Triage incidents",
-      );
+      const restored = await current.readSkill();
+      expect(restored).toContain("name: triage");
+      expect(restored).toContain("Triage incidents");
       expect(handler).not.toHaveBeenCalled();
       if (failure === "parent deletion") {
         expect(lock).toBe(before);
@@ -358,33 +339,26 @@ describe("ClawHub skill uninstall lifecycle", () => {
     "does not restore over a changed %s owner",
     async (changed) => {
       const current = await fixture();
-      const planned = await planClawHubSkillUninstall({
-        workspaceDir: current.workspaceDir,
-        slug: current.slug,
-        expectedVersion: "1.0.0",
-      });
-      if (!planned.ok) {
-        throw new Error(planned.error);
-      }
+      const removal = await requirePlan(current);
       let active = true;
       let replacement = "";
-      const result = await applyClawHubSkillUninstall(planned.plan, {
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        active = false;
+        replacement = changed === "staging" ? String(to) : current.skillDir;
+        if (changed === "staging") {
+          await rename(to, `${String(to)}.original`);
+        }
+        await mkdir(replacement);
+        await writeFile(join(replacement, "SKILL.md"), "successor skill");
+      });
+      const result = await applyClawHubSkillUninstall(removal, {
         beforePersistentApply: () => {
           if (!active) {
             throw new Error("Parent deletion ended.");
           }
         },
-        rename: async (from, to) => {
-          await rename(from, to);
-          active = false;
-          replacement = changed === "staging" ? String(to) : current.skillDir;
-          if (changed === "staging") {
-            await rename(to, `${String(to)}.original`);
-          }
-          await mkdir(replacement);
-          await writeFile(join(replacement, "SKILL.md"), "successor skill");
-        },
-      });
+      }).finally(() => renameSpy.mockRestore());
       expect(result).toMatchObject({
         ok: false,
         error: expect.stringContaining("staging or destination changed"),

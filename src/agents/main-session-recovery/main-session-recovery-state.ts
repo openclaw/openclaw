@@ -14,6 +14,7 @@ import {
 import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import {
   buildMainSessionRecoveryClearPatch,
+  interruptOwedMainSessionRecovery,
   buildMainSessionRecoverySettlementPatch,
   removeMainSessionRecoveryForegroundClaim,
 } from "./main-session-recovery-clear.js";
@@ -27,6 +28,7 @@ import type {
 } from "./main-session-recovery-types.js";
 import {
   MAX_RECOVERY_RETRIES,
+  readInterruptedRunId,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
@@ -303,7 +305,7 @@ export function transitionMainSessionRecovery(
       // Queued announcements add fences too. Retain the executing turn before
       // releasing its lifecycle identity so retries can join this recovery.
       entry.restartRecoveryDeliverySourceRunId ??=
-        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId;
+        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId ?? readInterruptedRunId(entry);
       const state = entry.mainRestartRecovery;
       if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);
@@ -556,6 +558,8 @@ export function transitionMainSessionRecovery(
         !state ||
         state.cycleId !== command.cycleId ||
         state.chargedAttempts !== command.attempt ||
+        (command.unstartedOnly && state.startedAttempt === command.attempt) ||
+        hasRestartRecoveryTerminalRun(entry, command.runId) ||
         state.reservation ||
         state.foregroundClaims ||
         !entry.restartRecoveryRuns?.some(
@@ -723,6 +727,9 @@ export function transitionMainSessionRecovery(
       entry.abortedLastRun = false;
       entry.updatedAt = command.now;
       return { kind: "doctor_repaired" };
+    }
+    case "interrupt_owed": {
+      return interruptOwedMainSessionRecovery(entry, command.now);
     }
     case "clear": {
       const patch = buildMainSessionRecoveryClearPatch(entry);

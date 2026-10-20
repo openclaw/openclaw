@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { MessagingToolSourceReplyPayload } from "../../agents/embedded-agent-messaging.types.js";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { prepareEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-preparation.js";
 import { resolveEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "../../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
@@ -14,8 +16,10 @@ import {
 } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
+import { persistInternalSourceReply } from "../../gateway/internal-source-reply-persistence.js";
 import { createChatSendReplyDispatch } from "../../gateway/server-methods/chat-send-reply-dispatch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
@@ -31,7 +35,6 @@ import {
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { applyPreparedReplyMedia } from "./reply-media-paths.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
@@ -284,6 +287,122 @@ it("does not create an ordinary final for a committed message-tool source mirror
   expect(fixture.context.execution.result.payloads).toBeUndefined();
   expect(await finalizeReplyAgentRun(fixture.context)).toBeUndefined();
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+});
+
+async function prepareCommittedSourceReplies(media: boolean) {
+  const fixture = await createFixture();
+  const { context, sessionId } = fixture;
+  const sessionKey = context.sessionKey!;
+  const workspaceDir = context.followupRun.run.workspaceDir;
+  context.cfg.agents = { entries: { main: { workspace: workspaceDir } } };
+  const mediaPath = path.join(workspaceDir, "result.png");
+  if (media) {
+    fs.writeFileSync(
+      mediaPath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+  }
+  const replies = [
+    {
+      text: "Working on the requested change.",
+      sourceReplyFinal: false,
+      idempotencyKey: `${context.runId}:message-tool:progress`,
+      transcriptOwner: true,
+    },
+    {
+      text: "The requested change is complete.",
+      sourceReplyFinal: true,
+      idempotencyKey: `${context.runId}:message-tool:final`,
+      transcriptOwner: true,
+      ...(media ? { mediaUrl: mediaPath } : {}),
+    },
+  ] satisfies MessagingToolSourceReplyPayload[];
+  for (const reply of replies) {
+    await persistInternalSourceReply({
+      cfg: context.cfg,
+      agentId: "main",
+      sessionKey,
+      expectedSessionId: sessionId,
+      payload: reply,
+      idempotencyKey: reply.idempotencyKey,
+      runId: context.runId,
+      // Automatic-mode source sends need not carry channel recovery authority.
+      sourceReplyFinal: reply.sourceReplyFinal ? undefined : false,
+    });
+  }
+  context.sessionCtx = { Provider: "webchat", Surface: "webchat" };
+  context.execution.result.payloads = buildEmbeddedRunPayloads({
+    assistantTexts: [],
+    lastAssistant: undefined,
+    isCronTrigger: false,
+    sessionKey,
+    agentId: "main",
+    runId: context.runId,
+    verboseLevel: "off",
+    reasoningLevel: "off",
+    toolResultFormat: "markdown",
+    sourceReplyDeliveryState: "delivered",
+    messagingToolSourceReplyPayloads: replies,
+  });
+  context.execution.result.sourceReplyDeliveryState = "delivered";
+  const scope = { agentId: "main", storePath, sessionKey, sessionId };
+  const transcript = await sessionAccessor.loadTranscriptEvents(scope);
+
+  return { fixture, scope, transcript };
+}
+
+it.each([false, true])(
+  "does not leave restart delivery custody for committed source replies (media: %s)",
+  async (media) => {
+    const { fixture, scope, transcript } = await prepareCommittedSourceReplies(media);
+    const result = await finalizeReplyAgentRun(fixture.context);
+
+    expect(result).toHaveLength(2);
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+    await drainSessionStoreWriterQueuesForTest();
+    await disposeOpenClawAgentDatabaseByPath(storePath);
+    openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+    expect(await sessionAccessor.loadTranscriptEvents(scope)).toEqual(transcript);
+  },
+);
+
+it("retains custody for an MCP Connect presentation added after the source reply was committed", async () => {
+  const { fixture, scope, transcript } = await prepareCommittedSourceReplies(false);
+  fixture.context.execution.result.latestMcpConnectAction = {
+    serverName: "calendar",
+    authorizationUrl: "https://auth.example/authorize?state=synthetic",
+  };
+
+  const result = await finalizeReplyAgentRun(fixture.context);
+
+  expect(result).toHaveLength(2);
+  const final = Array.isArray(result) ? result[1] : undefined;
+  expect(final?.presentation?.blocks).toEqual([
+    {
+      type: "buttons",
+      buttons: [
+        {
+          label: "Connect calendar",
+          action: { type: "url", url: "https://auth.example/authorize?state=synthetic" },
+        },
+      ],
+    },
+  ]);
+  expect(
+    final && getReplyPayloadMetadata(final)?.sourceReplyTranscriptMirror?.transcriptOwner,
+  ).toBe(true);
+  const pending = fixture.read()?.pendingFinalDelivery;
+  expect(pending).toMatchObject({ kind: "transport-only", deliveries: [{ state: "prepared" }] });
+  expect(pending?.deliveries).toHaveLength(1);
+  await drainSessionStoreWriterQueuesForTest();
+  await disposeOpenClawAgentDatabaseByPath(storePath);
+  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  expect(fixture.read()?.pendingFinalDelivery).toEqual(pending);
+  expect(await sessionAccessor.loadTranscriptEvents(scope)).toEqual(transcript);
 });
 
 it.each([

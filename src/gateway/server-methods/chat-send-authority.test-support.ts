@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
-import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 
 type ProjectedDispatchOptions = Parameters<

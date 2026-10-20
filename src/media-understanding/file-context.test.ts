@@ -193,7 +193,7 @@ describe("renderInboundDocumentContext", () => {
     expect(extract).not.toHaveBeenCalled();
   });
 
-  it.each(["", "application/octet-stream"])(
+  it.each(["", " Application/Octet-Stream; charset=binary "])(
     "retains inferred legacy encoding through prepared content type %j",
     async (mime) => {
       const workspaceDir = tempDirs.make("openclaw-prepared-document-");

@@ -5,6 +5,144 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
 
+const storageStateDir = path.resolve("synthetic-worker-state");
+const storagePath = path.join(storageStateDir, "agents", "main", "agent.sqlite");
+const fileIdentity = { key: "file:synthetic" as const, canonicalPath: storagePath };
+const storageEnv = new Proxy(
+  { OPENCLAW_STATE_DIR: storageStateDir, SYNTHETIC_VALUE: "worker-env-sentinel" },
+  {},
+);
+type Readers = ReturnType<typeof createSessionHistoryWorkerReaders>;
+const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> = [
+  [
+    "archive reclamation",
+    (readers) =>
+      readers.readArchivePruning({
+        env: storageEnv,
+        expectedIdentity: { physicalIdentity: "synthetic", nativeLocation: storagePath },
+      }),
+  ],
+  ["pending archives", (readers) => readers.readPendingArchives({ env: storageEnv })],
+  ["cold metadata", (readers) => readers.readColdMetadata({ env: storageEnv, sessionId: "one" })],
+  ["cold inventory", (readers) => readers.readColdStorageInventory({ env: storageEnv })],
+  [
+    "historical eviction",
+    (readers) =>
+      readers.readHistoricalEvictionCandidates({
+        env: storageEnv,
+        admissionIdentities: [],
+      }),
+  ],
+  [
+    "archived eviction",
+    (readers) =>
+      readers.readArchivedEvictionCandidates({
+        env: storageEnv,
+        archived: { liveSessionKeys: [] },
+      }),
+  ],
+  [
+    "voice sessions",
+    (readers) =>
+      readers.readVoiceSessions({
+        env: storageEnv,
+        request: { kind: "legacy", agentId: "main", sessionKey: "one" },
+      }),
+  ],
+  ["prewarm", (readers) => readers.prewarm({ env: storageEnv, history: false })],
+  [
+    "retirement",
+    (readers) =>
+      readers.readRetirement({
+        env: storageEnv,
+        expectedIdentity: fileIdentity,
+        request: { operation: "keys" },
+      }),
+  ],
+  [
+    "stats batch",
+    (readers) => readers.readTranscriptStatsBatch({ env: storageEnv, sessionIds: [] }),
+  ],
+  [
+    "store projection",
+    (readers) =>
+      readers.readStoreProjection({
+        env: storageEnv,
+        expectedIdentity: fileIdentity,
+      }),
+  ],
+  [
+    "store summary",
+    (readers) =>
+      readers.readStoreSummary({
+        env: storageEnv,
+        agentIds: ["main"],
+        recentLimit: 1,
+      }),
+  ],
+  [
+    "identity evidence",
+    (readers) => readers.readIdentityEvidence({ env: storageEnv, identities: [] }),
+  ],
+  [
+    "projection status",
+    (readers) => readers.readProjectionStatus({ env: storageEnv, sessionId: "one" }),
+  ],
+  ["progress card", (readers) => readers.readProgressCard({ env: storageEnv, sessionKey: "one" })],
+  ["members", (readers) => readers.readMembers({ env: storageEnv, sessionKey: "one" })],
+  ["membership facts", (readers) => readers.readMembershipFacts({ env: storageEnv })],
+  [
+    "reactions",
+    (readers) =>
+      readers.readReactions({
+        env: storageEnv,
+        sessionKey: "one",
+        sessionId: "one",
+      }),
+  ],
+  [
+    "archive presence",
+    (readers) =>
+      readers.readArchivePresence({
+        env: storageEnv,
+        logicalAgentId: "main",
+        sessionKey: "one",
+        expectedIdentity: fileIdentity,
+      }),
+  ],
+];
+
+it.each(storageRequests)("serializes Proxy environments for %s requests", async (_name, read) => {
+  const serialized = new Error("Stopped after serializing the worker request");
+  const readers = createSessionHistoryWorkerReaders(async (prepare) => {
+    // Exercise the actual producer without starting a Worker or opening a database.
+    const request = structuredClone(prepare());
+    expect(request).toMatchObject({ env: { ...storageEnv } });
+    throw serialized;
+  });
+  await expect(read(readers)).rejects.toBe(serialized);
+});
+
+it.each(["activity summary", "trajectory", "title fields"] as const)(
+  "serializes the nested Proxy environment for %s reads",
+  async (kind) => {
+    const serialized = new Error("Stopped after serializing the worker request");
+    const readers = createSessionHistoryWorkerReaders(async (prepare) => {
+      const request = structuredClone(prepare());
+      expect(request).toMatchObject({ scope: { env: { ...storageEnv } } });
+      throw serialized;
+    });
+    const scope = { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv };
+    await expect(
+      kind === "trajectory"
+        ? readers.readTrajectoryEvents({ scope })
+        : kind === "title fields"
+          ? readers.readTitleFields({ scope })
+          : readers.readActivitySummarySource({ scope }),
+    ).rejects.toBe(serialized);
+  },
+);
+
 const transcriptInput = {
   target: { sessionId: "synthetic-session" },
   resolvedScope: { agentId: "main", sessionId: "synthetic-session" },

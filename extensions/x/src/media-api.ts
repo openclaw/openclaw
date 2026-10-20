@@ -1,5 +1,6 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { asNonNegativeFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { XAssertActive } from "./fetch.js";
@@ -110,11 +111,7 @@ export async function uploadXMedia(
     if (processing?.state !== "pending" && processing?.state !== "in_progress") {
       throw mediaError("X media upload returned an invalid processing state; no Post was created");
     }
-    const seconds = processing.check_after_secs;
-    const delay =
-      typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
-        ? Math.max(1, seconds) * 1000
-        : 1000;
+    const delay = Math.max(1, asNonNegativeFiniteNumber(processing.check_after_secs) ?? 1) * 1000;
     // Never poll earlier than X requests. Stop rather than shortening a server
     // delay that exceeds our bounded processing wait.
     if (Date.now() + delay >= deadline) {

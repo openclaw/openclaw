@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import * as memoryFoundation from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import * as memorySessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -28,9 +28,7 @@ import {
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
 import {
   SessionStartupCatchupHarness as Harness,
-  emitSessionTranscriptUpdate,
   startupHarnessDatabases,
-  resetTranscriptUpdateListener,
 } from "./manager-sync-ops.startup-catchup.test-support.js";
 
 describe("session startup catch-up", () => {
@@ -44,13 +42,11 @@ describe("session startup catch-up", () => {
     });
     await captureRuntimeConfigAsyncReader()();
     stateDir = testState.stateDir;
-    resetTranscriptUpdateListener();
   });
 
   afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    resetTranscriptUpdateListener();
     for (const database of startupHarnessDatabases) {
       await database.closeShadow();
     }
@@ -67,7 +63,7 @@ describe("session startup catch-up", () => {
     content = "startup catchup",
     timestamp?: string,
   ): Promise<{ filePath: string; size: number; mtimeMs: number }> {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const sessionsDir = memoryFoundation.resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
     const filePath = path.join(sessionsDir, name);
     await fs.writeFile(
@@ -167,7 +163,7 @@ describe("session startup catch-up", () => {
       },
     });
     const harness = await Harness.create([], true);
-    const parse = vi.spyOn(memorySessions, "buildSessionEntry");
+    const parse = vi.spyOn(memorySessions, "buildSessionEntries");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
       await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([]);
@@ -181,6 +177,8 @@ describe("session startup catch-up", () => {
       expect(harness.indexedPaths).toEqual([]);
 
       await append(session, "Remember my favorite fruit is mango.");
+      await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([session.sessionKey]);
+      parse.mockClear();
       await harness.catchUp();
       expect(parse).not.toHaveBeenCalled();
       await flushSessionSync(harness);
@@ -266,7 +264,7 @@ describe("session startup catch-up", () => {
       updatedAtMs: 10,
       sessionKind: "interactive",
     });
-    const harness = await Harness.create([sourceRow(entry, 20)], true, false);
+    const harness = await Harness.create([sourceRow(entry, 20)], true);
 
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const observed = observeHostDataSql();
@@ -318,7 +316,7 @@ describe("session startup catch-up", () => {
     });
     const forgotten = await writeSqliteSession({ storePath, sessionId: "forgotten-thread" });
     await writeSqliteSession({ storePath, sessionId: "unrelated-thread" });
-    const harness = await Harness.create([], true, false, {
+    const harness = await Harness.create([], true, {
       session: { store: storePath },
     });
     harness.addPendingSessionTarget({
@@ -362,6 +360,60 @@ describe("session startup catch-up", () => {
     }
   });
 
+  const recallRun = {
+    sessionId: "active-memory-mabc123-1a2b3c4d",
+    sessionKey: "agent:main:explicit:chat-1:active-memory:0123456789ab",
+  };
+
+  it("excludes Active Memory recall runs from targeted indexing", async () => {
+    const session = await writeSqliteSession({
+      ...recallRun,
+      content: "Recall prompt that must stay out.",
+    });
+    const harness = await Harness.create([]);
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "main", sessionId: session.sessionId, sessionKey: session.sessionKey }],
+    });
+
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.indexedContents).toEqual([]);
+  });
+
+  it("excludes Active Memory recall transcripts that have no session store entry", async () => {
+    const suffix = ".jsonl.deleted.2026-08-09T00-00-00.000Z";
+    await writeSessionFile(`thread${suffix}`, "ordinary archived conversation");
+    await writeSessionFile(`${recallRun.sessionId}${suffix}`, "Recall prompt that must stay out.");
+    const harness = await Harness.create([], true);
+
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    await harness.catchUp();
+    await flushSessionSync(harness);
+
+    expect(harness.indexedPaths).toEqual([`sessions/main/thread${suffix}`]);
+  });
+
+  it("prunes Active Memory recall runs indexed by earlier versions", async () => {
+    const session = await writeSqliteSession({
+      ...recallRun,
+      content: "Recall prompt indexed by an older version.",
+    });
+    const harness = await Harness.create(
+      [{ path: session.corpusPath, hash: "old-hash", mtime: 10, size: 10 }],
+      true,
+    );
+
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    await harness.catchUp();
+    await flushSessionSync(harness);
+
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.deletedSources).toEqual([
+      { path: session.corpusPath, source: "sessions", expectedHash: "old-hash" },
+    ]);
+  });
+
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {
     const session = await writeSqliteSession({
       storePath: path.join(stateDir, "custom-sessions", "sessions.json"),
@@ -376,7 +428,7 @@ describe("session startup catch-up", () => {
       content: "replacement store target",
     });
     await configureTestSessionStore(session.storePath);
-    const harness = await Harness.create([], false, false, {
+    const harness = await Harness.create([], false, {
       session: { store: session.storePath },
     });
     harness.afterNextCorpusListForTest(async () => {
@@ -397,7 +449,7 @@ describe("session startup catch-up", () => {
   it("indexes a persisted SQLite append through the real transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession();
-    const harness = await Harness.create([], true, true);
+    const harness = await Harness.create([], true);
     const turnContext = new AsyncLocalStorage<string>();
     const pendingInputContext = new AsyncLocalStorage<string>();
     turnContext.run("opening turn", () => harness.startTranscriptListener());
@@ -432,6 +484,28 @@ describe("session startup catch-up", () => {
       expect(harness.indexedContents).toEqual([
         "User: startup catchup\nAssistant: persisted listener update",
       ]);
+
+      const sibling = await Harness.create([], true);
+      const restarted = harness.restartForStartup();
+      sibling.startTranscriptListener();
+      restarted.startTranscriptListener();
+      try {
+        // Retiring one subscriber must leave both independent native listeners attached.
+        harness.stopTranscriptListener();
+        await append(session, "after restart", "assistant");
+        await publishSessionTranscriptUpdateByIdentity(session);
+        await vi.advanceTimersByTimeAsync(31_000);
+        await Promise.all([sibling.waitForSessionSync(), restarted.waitForSessionSync()]);
+        expect(harness.syncCalls).toHaveLength(1);
+        const contents = [
+          "User: startup catchup\nAssistant: persisted listener update\nAssistant: after restart",
+        ];
+        expect(sibling.indexedContents).toEqual(contents);
+        expect(restarted.indexedContents).toEqual(contents);
+      } finally {
+        sibling.stopTranscriptListener();
+        restarted.stopTranscriptListener();
+      }
     } finally {
       harness.stopTranscriptListener();
       timerObserver.mockRestore();
@@ -441,7 +515,7 @@ describe("session startup catch-up", () => {
   it("indexes a real SQLite delete archive through the transcript listener", async () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession({ content: "lifecycle archive memory" });
-    const harness = await Harness.create([], true, true);
+    const harness = await Harness.create([], true);
     harness.startTranscriptListener();
 
     try {
@@ -475,10 +549,19 @@ describe("session startup catch-up", () => {
       vi.useFakeTimers();
       const session = await writeSessionFile(fileName);
       const harness = await Harness.create([], true);
-      harness.startTranscriptListener();
+      const subscribe = memoryFoundation.onInternalSessionTranscriptUpdate;
+      let listener: Parameters<typeof subscribe>[0] | undefined;
+      const subscription = vi
+        .spyOn(memoryFoundation, "onInternalSessionTranscriptUpdate")
+        .mockImplementation((receive) => {
+          listener = receive;
+          return subscribe(receive);
+        });
 
       try {
-        emitSessionTranscriptUpdate({ sessionFile: session.filePath });
+        harness.startTranscriptListener();
+        assert.isDefined(listener);
+        listener({ sessionFile: session.filePath });
         await harness.waitForCorpusList();
         await flushSessionSync(harness, 31_000);
 
@@ -489,6 +572,7 @@ describe("session startup catch-up", () => {
         expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
       } finally {
         harness.stopTranscriptListener();
+        subscription.mockRestore();
       }
     },
   );

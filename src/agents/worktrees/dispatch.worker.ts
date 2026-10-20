@@ -4,10 +4,8 @@ import type {
   WorkerWriteOperationContext,
 } from "../../state/worker-operation-registry.js";
 import {
-  readPendingWorktreesInDatabase,
   reservePendingWorktreeInDatabase,
   releasePendingWorktreeInDatabase,
-  readWorktreeSlotCountInDatabase,
 } from "./pending-slots.worker.js";
 import { writeProvisionedSnapshotInDatabase } from "./provisioned-snapshot.worker.js";
 import { withWorktreeRegistryWorkerReceipt } from "./registry-publication.js";
@@ -39,10 +37,6 @@ export const worktreeOperations = {
     { open },
   ) => assertWorktreeRegistryPredicates(open().db, predicates),
   "worktrees.delete": worktreeRunEndMutation("worktrees.delete", deleteRegistryWorktreeInDatabase),
-  "worktrees.slotCount": (_input: undefined, { open }) =>
-    readWorktreeSlotCountInDatabase(open().db),
-  "worktrees.pendingSlots": (_input: undefined, { open }) =>
-    readPendingWorktreesInDatabase(open().db),
   "worktrees.reservePending": worktreeRunEndMutation(
     "worktrees.reservePending",
     reservePendingWorktreeInDatabase,

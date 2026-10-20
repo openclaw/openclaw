@@ -178,7 +178,6 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
           matchText: expectedRecallMarker,
           observedMessages: [],
           observationScenarioId: "slack-mpim-app-mention-dedupe",
-          observationScenarioTitle: "Slack MPIM app mention dispatches once with thread context",
           sentTs: sent.ts,
           sutIdentity: context.sutIdentity,
           threadTs: context.sentTs,

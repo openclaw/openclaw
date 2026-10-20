@@ -1,10 +1,13 @@
 import { homedir } from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { applyMessageQueueDefaults } from "../config/defaults.js";
+import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -16,7 +19,6 @@ import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
@@ -56,19 +58,6 @@ import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-m
 import { planProviderRenames } from "./doctor/shared/provider-rename.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
 
-async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
-  for (const request of [
-    { method: "secrets.reload", params: {} },
-    { method: "models.authStatus", params: { refresh: true } },
-  ]) {
-    try {
-      await callGateway({ ...request, timeoutMs: 3000 });
-    } catch {
-      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
-    }
-  }
-}
-
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   retiredStateAdmitted?: boolean;
@@ -90,6 +79,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       runDoctorConfigPreflight({
         retiredStateAdmitted: params.retiredStateAdmitted,
         stateSchemaPreparation: params.stateSchemaPreparation,
+        integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
@@ -321,6 +311,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   );
   applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
 
+  const queueDefaults = applyMessageQueueDefaults(state.candidate);
+  applyConfigMutation(
+    {
+      config: queueDefaults,
+      changes:
+        queueDefaults === state.candidate
+          ? []
+          : ["Set messages.queue.allowCollaborativeSteering to false (default)."],
+    },
+    `Run "${doctorFixCommand}" to persist the collaborative steering default.`,
+  );
+
   const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(
     runWithCurrentPluginMetadata(state.candidate, () =>
@@ -485,6 +487,30 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     { emitWarnings: false },
   );
 
+  const { repairSystemAgentWorkspacePin } =
+    await import("./doctor/shared/system-agent-workspace-repair.js");
+  // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
+  // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
+  const parsedAgents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
+  const parsedDefaults = isRecord(parsedAgents) ? parsedAgents.defaults : undefined;
+  const authoredDefaultWorkspace =
+    snapshot.authoredConfig?.agents?.defaults?.workspace ??
+    (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
+  const systemAgentWorkspaceOptions = {
+    includeOwnsRoster,
+    authoredDefaultWorkspace:
+      typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
+  };
+  const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
+    ...systemAgentWorkspaceOptions,
+    applyFiles: shouldRepair,
+  });
+  explicitSetPaths.push(...(systemAgentWorkspace.explicitSetPaths ?? []));
+  applyConfigMutation(
+    systemAgentWorkspace,
+    `Run "${doctorFixCommand}" to pin the system agent's workspace.`,
+  );
+
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
@@ -522,6 +548,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
     if (repairSequence.authProfilesRepaired) {
+      const { refreshGatewayAuthStateAfterAuthProfileRepair } =
+        await import("./doctor/auth-profile-repair.js");
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
     // Committed side-effect repairs (SQLite/filesystem) already happened; report now.
@@ -569,6 +597,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     state,
     shouldRepair,
     doctorFixCommand,
+    preservedPaths: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig)?.flatMap(
+      (pending) => (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
   });
   state = unknownStep.state;
   if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
@@ -593,8 +624,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     confirm: params.confirm,
     note,
   });
-  const cfg = finalized.cfg;
   const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
+  // An accepted preview copies the system agent's files before its workspace pin joins the write.
+  const confirmedWorkspace =
+    !shouldRepair && shouldWriteConfig && systemAgentWorkspace.restorePending
+      ? await repairSystemAgentWorkspacePin(finalized.cfg, process.env, {
+          ...systemAgentWorkspaceOptions,
+          applyFiles: true,
+        })
+      : undefined;
+  if (confirmedWorkspace) {
+    explicitSetPaths.push(...(confirmedWorkspace.explicitSetPaths ?? []));
+    if (confirmedWorkspace.warnings?.length) {
+      emitDoctorNotes({ note, warningNotes: confirmedWorkspace.warnings });
+      configRepairWarnings.push(...confirmedWorkspace.warnings);
+    }
+  }
+  const cfg = confirmedWorkspace?.config ?? finalized.cfg;
   const includeBoundaryWrite =
     shouldWriteConfig &&
     canWriteDoctorInclude(
@@ -638,7 +684,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Queued repair panels describe candidate mutations; the write runner prints
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
-  const pendingChangePanels = changesPanelSink.drain();
+  // The accepted preview already printed; its applied lines print once the write commits.
+  const pendingChangePanels = [
+    ...changesPanelSink.drain(),
+    ...(confirmedWorkspace?.changes.length ? [confirmedWorkspace.changes.join("\n")] : []),
+  ];
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
   await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.
@@ -647,6 +697,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   return {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
+    cfg,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
           confirmedConfigSource: {

@@ -120,6 +120,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
 ): Promise<void> {
   using _ = input.promptStateLease;
+  const clearTranscriptRunCallbacks = input.sessionManager?.clearTranscriptRunCallbacks;
   const { attempt } = input;
   const initialState = projectAgentRunAttemptTerminal(input.state.terminal);
   if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
@@ -167,7 +168,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   let cleanupError: unknown;
   try {
     clearToolSearchCatalog({ catalogRef: input.toolSearchCatalogRef });
-    await input.transcriptLifecycle.beginCleanup();
+    await input.transcriptLifecycle.beginCleanup(clearTranscriptRunCallbacks);
     // Cancellation can arrive during trajectory flushing or the transcript drain.
     // Read it only after both waits before deciding whether to wait for idle.
     const cleanupState = projectAgentRunAttemptTerminal(input.state.terminal);

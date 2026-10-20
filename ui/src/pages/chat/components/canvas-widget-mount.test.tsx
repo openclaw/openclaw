@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 import { createSignal, Show } from "solid-js";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
 
@@ -16,14 +16,14 @@ const properties = {
   connectionGeneration: 1,
 };
 
-afterEach(cleanupSolid);
+const widget = (host: ParentNode) => host.querySelector("openclaw-canvas-widget-view");
 
 it("updates a mounted widget and replaces it when its session or document changes", () => {
   const [current, setCurrent] = createSignal(properties);
   const root = mountSolid(() => <CanvasWidgetMount {...current()} />);
   flush();
   const host = root.container;
-  const element = host.querySelector("openclaw-canvas-widget-view");
+  const element = widget(host);
   expect(element).toMatchObject(properties);
 
   const updated = {
@@ -36,22 +36,22 @@ it("updates a mounted widget and replaces it when its session or document change
   };
   setCurrent(updated);
   flush();
-  expect(host.querySelector("openclaw-canvas-widget-view")).toBe(element);
+  expect(widget(host)).toBe(element);
   expect(element).toMatchObject(updated);
 
   for (const changed of [
     { ...updated, sessionKey: "agent:main:other" },
     { ...updated, docId: "cv_other" },
   ]) {
-    const previous = host.querySelector("openclaw-canvas-widget-view");
+    const previous = widget(host);
     setCurrent(changed);
     flush();
     expect(previous?.isConnected).toBe(false);
-    expect(host.querySelector("openclaw-canvas-widget-view")).not.toBe(previous);
-    expect(host.querySelector("openclaw-canvas-widget-view")).toMatchObject(changed);
+    expect(widget(host)).not.toBe(previous);
+    expect(widget(host)).toMatchObject(changed);
   }
   root.unmount();
-  expect(host.querySelector("openclaw-canvas-widget-view")).toBeNull();
+  expect(widget(host)).toBeNull();
 });
 
 it("remounts across transcript rows when atomic moves are unavailable", () => {
@@ -59,21 +59,17 @@ it("remounts across transcript rows when atomic moves are unavailable", () => {
   const [row, setRow] = createSignal("live-tool-output");
   const root = mountSolid(() => (
     <Show when={row()} keyed>
-      {(_key) => (
-        <section>
-          <CanvasWidgetMount {...properties} />
-        </section>
-      )}
+      {(_key) => <CanvasWidgetMount {...properties} />}
     </Show>
   ));
   flush();
-  const original = root.container.querySelector("openclaw-canvas-widget-view");
+  const original = widget(root.container);
   expect(original?.isConnected).toBe(true);
   setRow("final-reply");
   flush();
   expect(original?.isConnected).toBe(false);
   expect(root.container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
-  expect(root.container.querySelector("openclaw-canvas-widget-view")).not.toBe(original);
+  expect(widget(root.container)).not.toBe(original);
 });
 
 it("pauses a retained widget while its transcript is hidden and resumes the same element", () => {
@@ -85,25 +81,20 @@ it("pauses a retained widget while its transcript is hidden and resumes the same
     </ContentPresentation>
   ));
   flush();
-  const element = root.container.querySelector("openclaw-canvas-widget-view");
+  const element = widget(root.container);
   expect(element).toMatchObject({ ...properties, presentationActive: true });
 
-  setPresented(false);
-  flush();
-  expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(element);
-  expect(element?.isConnected).toBe(true);
-  expect(element).toMatchObject({ presentationActive: false });
-
-  setCurrent({ ...properties, allowScripts: false, connectionGeneration: 2 });
-  flush();
-  expect(element).toMatchObject({
-    allowScripts: false,
-    connectionGeneration: 2,
-    presentationActive: false,
-  });
-
-  setPresented(true);
-  flush();
-  expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(element);
-  expect(element).toMatchObject({ presentationActive: true, allowScripts: false });
+  const updated = { allowScripts: false, connectionGeneration: 2 };
+  const phases = [
+    [false, {}],
+    [false, updated],
+    [true, updated],
+  ] as const;
+  for (const [active, overrides] of phases) {
+    setPresented(active);
+    setCurrent({ ...properties, ...overrides });
+    flush();
+    expect(widget(root.container)).toBe(element);
+    expect(element).toMatchObject({ ...overrides, presentationActive: active, isConnected: true });
+  }
 });

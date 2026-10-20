@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { walkRootDirectory } from "openclaw/plugin-sdk/root-walk";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -125,16 +126,10 @@ function assertApprovalCheckpointJson(params: {
   if (typeof candidate.text !== "string") {
     throw new Error(`${params.label} message evidence is missing text in ${params.filePath}`);
   }
-  if (
-    !Array.isArray(candidate.blockText) ||
-    !candidate.blockText.every((entry) => typeof entry === "string")
-  ) {
+  if (!isStringArray(candidate.blockText)) {
     throw new Error(`${params.label} message evidence is missing blockText in ${params.filePath}`);
   }
-  if (
-    !Array.isArray(candidate.actionLabels) ||
-    !candidate.actionLabels.every((entry) => typeof entry === "string")
-  ) {
+  if (!isStringArray(candidate.actionLabels)) {
     throw new Error(
       `${params.label} message evidence is missing actionLabels in ${params.filePath}`,
     );

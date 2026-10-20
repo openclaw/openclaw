@@ -16,12 +16,12 @@ vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.write
 vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
-const { registerBrowserNavigationCommands } = await import("./register.navigation.js");
+const { registerBrowserActionInputCommands } = await import("./register.js");
 
 function createNavigationProgram(): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.option("--timeout <ms>", "Timeout in ms", "30000");
-  registerBrowserNavigationCommands(browser, parentOpts);
+  registerBrowserActionInputCommands(browser, parentOpts);
   return program;
 }
 

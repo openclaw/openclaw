@@ -148,12 +148,11 @@ describe("WorkboardView", () => {
   });
 
   it.each([
-    { label: "id", failedId: "a", completedId: "z", failedSequence: 1, completedSequence: 1 },
+    { label: "id", failedId: "a", completedId: "z", completedSequence: 1 },
     {
       label: "legacy entry",
       failedId: "z",
       completedId: "a",
-      failedSequence: 1,
       completedSequence: undefined,
     },
   ])(
@@ -659,16 +658,11 @@ describe("WorkboardView", () => {
     }
   });
 
-  it.each([
-    {
-      scenario: "the authoritative top-level session",
-      sessionKey: "agent:main:top-level-linked-session",
-      topLevelSessionKey: "agent:main:top-level-linked-session",
-    },
-  ])("preserves $scenario when editing a Workboard card", async (testCase) => {
+  it("preserves the authoritative top-level session when editing a Workboard card", async () => {
+    const sessionKey = "agent:main:top-level-linked-session";
     const card = createWorkboardCard({
       title: "Keep my linked session",
-      ...(testCase.topLevelSessionKey ? { sessionKey: testCase.topLevelSessionKey } : {}),
+      sessionKey,
       execution: createWorkboardExecution({ sessionKey: "agent:main:execution-linked-session" }),
     });
     const request = vi.fn(async () => ({
@@ -679,7 +673,7 @@ describe("WorkboardView", () => {
       onRequestUpdate: () => undefined,
       sessions: [
         {
-          key: testCase.sessionKey,
+          key: sessionKey,
           kind: "direct",
           displayName: "Active linked session",
           updatedAt: 1,
@@ -694,8 +688,8 @@ describe("WorkboardView", () => {
     expect(editButton).not.toBeNull();
     editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
-    expect(state.draftSessionKey).toBe(testCase.sessionKey);
-    expect(sessionPicker(container).value).toBe(testCase.sessionKey);
+    expect(state.draftSessionKey).toBe(sessionKey);
+    expect(sessionPicker(container).value).toBe(sessionKey);
     const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
     expect(title).not.toBeNull();
     title!.value = "Renamed without unlinking";

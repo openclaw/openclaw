@@ -1,6 +1,5 @@
-// Post-selection model/auth sanity checks shown during onboarding and agent setup.
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -26,14 +25,13 @@ type DefaultModelAuthStatus = {
   provider: string;
   model: string;
 } & (
-  | { status: "ready"; hasAuth: true }
+  | { status: "ready" }
   | {
       status: "missing";
-      hasAuth: false;
       authRequirement?: ProviderModelRouteAuthRequirement;
     }
-  | { status: "indeterminate"; hasAuth: false }
-  | { status: "incompatible"; hasAuth: false; code: string; message: string }
+  | { status: "indeterminate" }
+  | { status: "incompatible"; message: string }
 );
 
 /**
@@ -42,15 +40,15 @@ type DefaultModelAuthStatus = {
  * indeterminate when provider facts cannot choose one route. Shared by the
  * onboarding model check and the finalize hatch gating.
  */
-export function resolveDefaultModelAuthStatus(
+export async function resolveDefaultModelAuthStatus(
   config: OpenClawConfig,
   options?: DefaultModelAuthOptions,
-): DefaultModelAuthStatus {
+): Promise<DefaultModelAuthStatus> {
   const ref = resolveDefaultModelForAgent({
     cfg: config,
     agentId: options?.agentId,
   });
-  const store = ensureAuthProfileStore(options?.agentDir, {
+  const store = await ensureAuthProfileStoreAsync(options?.agentDir, {
     allowKeychainPrompt: false,
     config,
     ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
@@ -80,15 +78,13 @@ export function resolveDefaultModelAuthStatus(
       provider: ref.provider,
       model: ref.model,
       status: "incompatible",
-      hasAuth: false,
-      code: evaluation.routeResolution.code,
       message: evaluation.routeResolution.message,
     };
   }
   const availability = evaluation.availability;
   const authRequirement = evaluation.selectedRoute?.authRequirement;
   if (availability === true) {
-    return { provider: ref.provider, model: ref.model, status: "ready", hasAuth: true };
+    return { provider: ref.provider, model: ref.model, status: "ready" };
   }
   if (
     availability === undefined &&
@@ -96,13 +92,12 @@ export function resolveDefaultModelAuthStatus(
       evaluation.routeResolution !== null ||
       evaluation.evidence !== undefined)
   ) {
-    return { provider: ref.provider, model: ref.model, status: "indeterminate", hasAuth: false };
+    return { provider: ref.provider, model: ref.model, status: "indeterminate" };
   }
   return {
     provider: ref.provider,
     model: ref.model,
     status: "missing",
-    hasAuth: false,
     ...(authRequirement ? { authRequirement } : {}),
   };
 }
@@ -149,7 +144,7 @@ export async function warnIfModelConfigLooksOff(
   options?: DefaultModelAuthOptions,
 ) {
   let warning: string | undefined;
-  const authStatus = resolveDefaultModelAuthStatus(config, options);
+  const authStatus = await resolveDefaultModelAuthStatus(config, options);
   if (authStatus.status === "missing") {
     warning = `No auth configured for provider "${authStatus.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
       {

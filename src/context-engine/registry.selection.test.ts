@@ -19,6 +19,8 @@ import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-sup
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const engineId = "synthetic-engine";
 const ownerId = "synthetic-owner";
+const selectedConfig = { plugins: { slots: { contextEngine: engineId } } };
+const legacySelection = { id: "legacy", owner: undefined, failure: undefined };
 
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("context-engine-selection-"));
@@ -46,26 +48,18 @@ function fixture(owner = engineId, registered = true) {
 }
 
 async function resolve(path: "standalone" | "logical-turn", config: OpenClawConfig) {
-  if (path === "standalone") {
-    const engine = await resolveContextEngine(config);
-    const result = {
-      id: engine.info.id,
-      owner: resolveContextEngineOwnerPluginId(engine),
-      failure: undefined,
-    };
-    await engine.dispose?.();
-    return result;
-  }
-  const result = await resolveLogicalTurnContextEngines(config);
-  await result.configured.engine.dispose?.();
-  if (result.configured !== result.fallback) {
-    await result.fallback.engine.dispose?.();
-  }
-  return {
-    id: result.configuredId,
-    owner: result.configured.ownerPluginId,
-    failure: result.configuredFailure,
+  const turn = path === "logical-turn" ? await resolveLogicalTurnContextEngines(config) : undefined;
+  const engine = turn?.configured.engine ?? (await resolveContextEngine(config));
+  const result = {
+    id: turn?.configuredId ?? engine.info.id,
+    owner: turn ? turn.configured.ownerPluginId : resolveContextEngineOwnerPluginId(engine),
+    failure: turn?.configuredFailure,
   };
+  await engine.dispose?.();
+  if (turn && turn.configured !== turn.fallback) {
+    await turn.fallback.engine.dispose?.();
+  }
+  return result;
 }
 
 it("uses the default slot while plugins are disabled", async () => {
@@ -75,7 +69,7 @@ it("uses the default slot while plugins are disabled", async () => {
       await resolve("standalone", {
         plugins: { enabled: false, slots: { contextEngine: "legacy" } },
       }),
-    ).toEqual({ id: "legacy", owner: undefined, failure: undefined });
+    ).toEqual(legacySelection);
     expect(await listContextEngineQuarantines()).toEqual([]);
   });
   expect(factory).not.toHaveBeenCalled();
@@ -155,8 +149,7 @@ it.each([
   });
   vi.spyOn(console, "error").mockImplementation(() => {});
   await withPluginRuntimeRegistryScope(registry, async () => {
-    const config = { plugins: { slots: { contextEngine: engineId } } };
-    const result = await resolve(path, config);
+    const result = await resolve(path, selectedConfig);
     if (path === "logical-turn") {
       expect(result.failure).toContain(
         failure === "missing" ? "not registered" : "Async work scope is closed",
@@ -170,7 +163,7 @@ it.each([
         }),
       ]);
       if (failure === "factory") {
-        expect((await resolve(path, config)).id).toBe("legacy");
+        expect((await resolve(path, selectedConfig)).id).toBe("legacy");
         expect(factory).toHaveBeenCalledOnce();
       }
     }
@@ -181,14 +174,9 @@ it.each(["standalone", "logical-turn"] as const)(
   "%s disables then re-enables the owner without clearing its engine slot or registering again",
   async (path) => {
     const { registry, factory } = fixture(ownerId);
-    const initial = { plugins: { slots: { contextEngine: engineId } } };
-    const disabled = setPluginEnabledInConfig(initial, ownerId, false);
+    const disabled = setPluginEnabledInConfig(selectedConfig, ownerId, false);
     await withPluginRuntimeRegistryScope(registry, async () => {
-      expect(await resolve(path, disabled)).toEqual({
-        id: "legacy",
-        owner: undefined,
-        failure: undefined,
-      });
+      expect(await resolve(path, disabled)).toEqual(legacySelection);
       expect(factory).not.toHaveBeenCalled();
       expect(await resolve(path, setPluginEnabledInConfig(disabled, ownerId, true))).toEqual({
         id: engineId,
@@ -204,11 +192,7 @@ it.each(["standalone", "logical-turn"] as const)(
 
 it("plugin disable produces ordinary logical turns without registration or degradation warnings", async () => {
   const { registry, factory } = fixture(engineId, false);
-  const config = setPluginEnabledInConfig(
-    { plugins: { slots: { contextEngine: engineId } } },
-    engineId,
-    false,
-  );
+  const config = setPluginEnabledInConfig(selectedConfig, engineId, false);
   const warn = vi.fn();
   await withPluginRuntimeRegistryScope(registry, async () => {
     for (const runId of ["first", "second"]) {

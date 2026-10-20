@@ -6,7 +6,10 @@ import {
 } from "../../agents/internal-runtime-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
+import {
+  classifyHeartbeatPendingFinalDelivery,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery-state.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -55,6 +58,16 @@ describe("resolvePendingFinalDeliveryCompletion", () => {
     });
   });
 });
+
+it.each(["no_r", "NO_R", "NO_REPLY"])(
+  "keeps pending ordinary reply %s during heartbeat admission",
+  (text) => {
+    expect(classifyHeartbeatPendingFinalDelivery(text, 300)).toEqual({
+      shouldClear: false,
+      replayText: text,
+    });
+  },
+);
 
 describe("sanitizePendingFinalDeliveryText", () => {
   it("preserves indented code in pending final text", () => {

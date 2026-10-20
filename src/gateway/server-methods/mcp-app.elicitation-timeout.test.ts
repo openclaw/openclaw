@@ -1,6 +1,5 @@
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server, type ElicitRequestParams, type ServerContext } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -57,6 +56,13 @@ let questionAnswer: ReturnType<typeof createDeferred<typeof answer>>;
 let toolStarted: ReturnType<typeof createDeferred<void>>;
 let toolCalls: number;
 
+function elicit(ctx: ServerContext, params: ElicitRequestParams) {
+  return ctx.mcpReq.send({ method: "elicitation/create", params }, resultSchema, {
+    timeout: 600_000,
+    signal: ctx.mcpReq.signal,
+  });
+}
+
 beforeEach(async () => {
   vi.useFakeTimers();
   questionStarted = createDeferred();
@@ -74,36 +80,21 @@ beforeEach(async () => {
     return {};
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  server = new Server(
-    { name: "demo", version: "1" },
-    {
-      capabilities: {
-        tools: {},
-        experimental: { "openai/settings": { readTool: "read", updateTool: "update" } },
-      },
-    },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server = new Server({ name: "demo", version: "1" }, { capabilities: { tools: {} } });
+  server.setRequestHandler("tools/list", async () => ({
     tools: [{ name: "pick", inputSchema: { type: "object" } }],
   }));
-  server.setRequestHandler(CallToolRequestSchema, async () => {
+  server.setRequestHandler("tools/call", async (_request, ctx) => {
     toolCalls += 1;
     toolStarted.resolve();
-    const result = await server.request(
-      {
-        method: "elicitation/create",
-        params: {
-          message: "Choose a color",
-          requestedSchema: {
-            type: "object",
-            properties: { choice: { type: "string", enum: ["Blue", "Red"] } },
-            required: ["choice"],
-          },
-        },
+    const result = await elicit(ctx, {
+      message: "Choose a color",
+      requestedSchema: {
+        type: "object",
+        properties: { choice: { type: "string", enum: ["Blue", "Red"] } },
+        required: ["choice"],
       },
-      resultSchema,
-      { timeout: 600_000 },
-    );
+    });
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
   await server.connect(serverTransport);
@@ -163,6 +154,13 @@ function invoke() {
   return { respond, pending };
 }
 
+function expectTimeout(respond: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, {
+    code: "UNAVAILABLE",
+    message: "Request timed out",
+  });
+}
+
 describe("MCP tool human-input timeouts", () => {
   it("dispatches the registered app call after approval and keeps its human question alive", async () => {
     const approvalStarted = createDeferred();
@@ -193,34 +191,24 @@ describe("MCP tool human-input timeouts", () => {
   });
 
   it("keeps ordinary tools on their configured deadline", async () => {
-    server.setRequestHandler(CallToolRequestSchema, async (_request, extra) => {
+    server.setRequestHandler("tools/call", async (_request, ctx) => {
       toolStarted.resolve();
-      return await racePromiseWithAbortSignal(new Promise<never>(() => {}), extra.signal);
+      return await racePromiseWithAbortSignal(new Promise<never>(() => {}), ctx.mcpReq.signal);
     });
     const call = invoke();
     await toolStarted.promise;
     await vi.advanceTimersByTimeAsync(requestTimeoutMs);
     await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("-32001: Request timed out"),
-      }),
-    );
+    expectTimeout(call.respond);
   });
 
   it("bounds repeated human questions by one allowance for the whole tool call", async () => {
-    server.setRequestHandler(CallToolRequestSchema, async (_request, extra) => {
+    server.setRequestHandler("tools/call", async (_request, ctx) => {
       for (let index = 0; index < 2; index += 1) {
-        await server.request(
-          {
-            method: "elicitation/create",
-            params: { message: "Confirm", requestedSchema: { type: "object", properties: {} } },
-          },
-          resultSchema,
-          { timeout: 600_000, signal: extra.signal },
-        );
+        await elicit(ctx, {
+          message: "Confirm",
+          requestedSchema: { type: "object", properties: {} },
+        });
       }
       return { content: [] };
     });
@@ -236,12 +224,6 @@ describe("MCP tool human-input timeouts", () => {
     expect(call.respond).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("-32001: Request timed out"),
-      }),
-    );
+    expectTimeout(call.respond);
   });
 });

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createChangeListeners } from "../../../../../src/shared/listeners.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
@@ -14,6 +15,31 @@ import type {
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
 import type { SidebarSelection } from "./chat-sidebar-content-types.ts";
+
+type SessionWorkspaceOwner = {
+  readonly state: SessionWorkspaceState | undefined;
+  subscribe(listener: () => void): () => void;
+  publish(): void;
+};
+
+const workspaceOwners = new WeakMap<SessionWorkspaceHost, SessionWorkspaceOwner>();
+
+/** Publishes workspace mutations without replacing the raw preview and editor identities. */
+export function sessionWorkspaceForHost(host: SessionWorkspaceHost): SessionWorkspaceOwner {
+  let owner = workspaceOwners.get(host);
+  if (!owner) {
+    const listeners = createChangeListeners();
+    owner = {
+      get state() {
+        return host.sessionWorkspaceState;
+      },
+      subscribe: listeners.subscribe,
+      publish: listeners.publish,
+    };
+    workspaceOwners.set(host, owner);
+  }
+  return owner;
+}
 
 function resolvePaneAgent(state: SessionScopeHostWithKey): string {
   if (normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "global") {
@@ -133,6 +159,7 @@ export function loadSessionWorkspace(
   const browserPath = workspace.browserPath;
   const browserSearch = workspace.browserSearch;
   // Session ownership survives folder/search changes; this response belongs to its query.
+  sessionWorkspaceForHost(state).publish();
   const isCurrentListing = () =>
     isCurrentSessionWorkspace(state, workspace) &&
     workspace.browserPath === browserPath &&
@@ -170,8 +197,8 @@ export function loadSessionWorkspace(
     } finally {
       if (isCurrentSessionWorkspace(state, workspace)) {
         workspace.loading = false;
+        sessionWorkspaceForHost(state).publish();
       }
-      state.requestUpdate?.();
     }
   })();
 }
@@ -205,10 +232,10 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   clearSessionCheckoutSidebar(state);
   clearWorkspaceTimer(current);
   state.sessionWorkspaceState = createSessionWorkspaceState(state);
-  state.requestUpdate?.();
+  sessionWorkspaceForHost(state).publish();
 }
 
-/** File tabs are transient workspace presentation, scoped by this controller's lifecycle. */
+/** File tabs are transient presentation scoped to this workspace. */
 export function openSessionWorkspacePreview(
   state: SessionWorkspaceHost,
   id: string,
@@ -224,7 +251,7 @@ export function openSessionWorkspacePreview(
     workspace.previews = [...workspace.previews, preview];
   }
   workspace.activePreviewId = preview.id;
-  state.requestUpdate?.();
+  sessionWorkspaceForHost(state).publish();
   return preview;
 }
 
@@ -232,7 +259,7 @@ export function selectSessionWorkspacePreview(state: SessionWorkspaceHost, id: s
   const workspace = getSessionWorkspace(state);
   if (id === null || workspace.previews.some((entry) => entry.id === id)) {
     workspace.activePreviewId = id;
-    state.requestUpdate?.();
+    sessionWorkspaceForHost(state).publish();
   }
 }
 
@@ -247,7 +274,7 @@ export function closeSessionWorkspacePreview(state: SessionWorkspaceHost, id: st
     workspace.activePreviewId =
       workspace.previews[Math.min(index, workspace.previews.length - 1)]?.id ?? null;
   }
-  state.requestUpdate?.();
+  sessionWorkspaceForHost(state).publish();
 }
 
 export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
@@ -255,6 +282,6 @@ export function clearSessionWorkspacePreviews(state: SessionWorkspaceHost) {
   if (workspace) {
     workspace.previews = [];
     workspace.activePreviewId = null;
-    state.requestUpdate?.();
+    sessionWorkspaceForHost(state).publish();
   }
 }

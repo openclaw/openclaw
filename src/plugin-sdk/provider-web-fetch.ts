@@ -1,5 +1,3 @@
-// Public web-fetch registration helpers for provider plugins.
-
 export type { WebFetchProviderToolDefinition } from "../plugins/types.js";
 export {
   withSelfHostedWebToolsEndpoint,

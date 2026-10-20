@@ -210,6 +210,12 @@ availability. They never gain new app IDs or a broader destructive,
 open-world, or approval ceiling. Tools added later within an already captured
 app may run only when both the stored ceiling and current policy allow them.
 
+A finite `toolsAllow` list must match the creator's captured tool surface. If a
+native app tool name cannot be carried, the automation tool rejects creation or
+the tool-cap edit and identifies the unavailable entry. It does not silently save
+only the remaining tools. This error does not grant app access or broaden the cap;
+remove the entry only if the job can perform its work without that tool.
+
 Scheduled app calls are unattended. Only actions explicitly allowed both when
 the job was created and when it runs can proceed without a prompt. An action
 that still requires approval or elicitation is declined. A changed account,

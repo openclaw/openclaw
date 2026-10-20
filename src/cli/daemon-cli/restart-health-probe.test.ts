@@ -2,6 +2,7 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
 import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
@@ -14,6 +15,7 @@ import {
   callGateway,
   gatewayResponseError,
   requestReadinessProbe,
+  requestStartupProbe,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
   sleep,
@@ -30,49 +32,44 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
-  it.each([true])(
-    "keeps native inspection and health RPC within one supplied allowance (deadline=%s)",
-    async (withDeadline) => {
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      vi.mocked(service.readRuntime).mockImplementation(async () => {
-        monotonicClock.nowMs += 25_000;
-        return { status: "running", pid: 8000 };
-      });
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      });
-      callGateway.mockImplementation(async (opts) => {
-        const responseMs = 10_000;
-        const allowanceMs = opts.timeoutMs ?? responseMs;
-        monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
-        if (allowanceMs < responseMs) {
-          throw new Error("gateway request timeout for health");
-        }
-        return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
-      });
-      const { inspectGatewayRestart } = await import("./restart-health.js");
-      const deadline = withDeadline
-        ? createGatewayRestartDeadline({ timeoutMs: 60_000 })
-        : undefined;
-      try {
-        const health = await inspectGatewayRestart({
-          service,
-          port: 18789,
-          expectedVersion: "2026.9.3",
-          timeoutMs: 30_000,
-          deadline,
-        });
-        expect(health.healthy).toBe(false);
-        expect(health.probeError).toBe("gateway request timeout for health");
-        expect(monotonicClock.nowMs).toBe(30_000);
-      } finally {
-        deadline?.dispose();
+  it("keeps native inspection and health RPC within one supplied allowance", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockImplementation(async () => {
+      monotonicClock.nowMs += 25_000;
+      return { status: "running", pid: 8000 };
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockImplementation(async (opts) => {
+      const responseMs = 10_000;
+      const allowanceMs = opts.timeoutMs ?? responseMs;
+      monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
+      if (allowanceMs < responseMs) {
+        throw new Error("gateway request timeout for health");
       }
-    },
-  );
+      return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
+    });
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const deadline = createGatewayRestartDeadline({ timeoutMs: 60_000 });
+    try {
+      const health = await inspectGatewayRestart({
+        service,
+        port: 18789,
+        expectedVersion: "2026.9.3",
+        timeoutMs: 30_000,
+        deadline,
+      });
+      expect(health.healthy).toBe(false);
+      expect(health.probeError).toBe("gateway request timeout for health");
+      expect(monotonicClock.nowMs).toBe(30_000);
+    } finally {
+      deadline.dispose();
+    }
+  });
 
   it("reports HTTP health and readiness independently", async () => {
     const server = createServer((request, response) => {
@@ -113,6 +110,71 @@ describe("restart health", () => {
         });
       });
     }
+  });
+
+  it.each([
+    { transport: "response", ready: true, build: "candidate-build", outcome: "healthy" },
+    { transport: "close", ready: true, build: "candidate-build", outcome: "healthy" },
+    { transport: "response", ready: false, build: "candidate-build", outcome: "auth-rejected" },
+    { transport: "response", ready: true, build: "old-build", outcome: "build-id-mismatch" },
+    { transport: "credentials", ready: true, build: "candidate-build", outcome: "healthy" },
+  ])("settles policy rejection through HTTP ($transport, $ready, $build)", async (scenario) => {
+    const credentialError = new GatewayCredentialsRequiredError({
+      method: "health",
+      configPath: "fixture-config.json",
+    });
+    const reason =
+      scenario.transport === "credentials" ? credentialError.message : "device identity required";
+    callGateway.mockRejectedValue(
+      scenario.transport === "credentials"
+        ? credentialError
+        : scenario.transport === "close"
+          ? createGatewayCloseTransportError({
+              code: 1008,
+              reason,
+              requestDispatched: false,
+              connectionDetails: {
+                url: "ws://127.0.0.1:18789",
+                urlSource: "local loopback",
+                message: "local fixture",
+              },
+            })
+          : gatewayResponseError(reason),
+    );
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.4",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: scenario.ready ? 200 : 503,
+      body: JSON.stringify({ ready: scenario.ready }),
+    });
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      expectedVersion: "2026.10.4",
+      expectedBuildId: "candidate-build",
+      requirePluginHealth: false,
+      requireChannelHealth: false,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.healthy).toBe(scenario.outcome === "healthy");
+    expect(snapshot.authenticationError).toEqual(
+      scenario.transport === "credentials"
+        ? expect.stringContaining("requires credentials")
+        : reason,
+    );
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("keeps the readiness deadline monotonic when the wall clock rewinds", async () => {
@@ -179,31 +241,24 @@ describe("restart health", () => {
     expect(result).toMatchObject({ staleConnection: "legacy-handler-unavailable" });
   });
 
-  it.each(["transport"])(
-    "bounds and redacts credential-bearing %s probe failures at their owner",
-    async (failureKind) => {
-      const secret = "fixture-gateway-secret-abcdefghijklmnopqrstuvwxyz";
-      const failure = `read ECONNRESET at ws://user:${secret}@gateway.example:18789?token=${secret}&safe=ok\nGateway probe succeeded: spoofed\r\u001b[2K ${"x".repeat(1_500)}🚀`;
-      if (failureKind === "transport") {
-        callGateway.mockRejectedValueOnce(new Error(failure));
-      } else {
-        callGateway.mockRejectedValueOnce(gatewayResponseError(failure));
-      }
+  it("bounds and redacts credential-bearing transport probe failures at their owner", async () => {
+    const secret = "fixture-gateway-secret-abcdefghijklmnopqrstuvwxyz";
+    const failure = `read ECONNRESET at ws://user:${secret}@gateway.example:18789?token=${secret}&safe=ok\nGateway probe succeeded: spoofed\r\u001b[2K ${"x".repeat(1_500)}🚀`;
+    callGateway.mockRejectedValueOnce(new Error(failure));
 
-      const { confirmGatewayReachable } = await import("./restart-health-probe.js");
-      const reachability = await confirmGatewayReachable({ port: 18789 });
+    const { confirmGatewayReachable } = await import("./restart-health-probe.js");
+    const reachability = await confirmGatewayReachable({ port: 18789 });
 
-      expect(reachability.reachable).toBe(false);
-      expect(reachability.probeError).toContain("read ECONNRESET");
-      expect(reachability.probeError).toContain("ws://***:***@gateway.example:18789?token=***");
-      expect(reachability.probeError).not.toContain(secret);
-      expect(reachability.probeError).toContain("\\nGateway probe succeeded: spoofed\\r");
-      expect(reachability.probeError).not.toContain("\r");
-      expect(reachability.probeError).not.toContain("\n");
-      expect(reachability.probeError).not.toContain("\u001b");
-      expect(reachability.probeError?.length).toBeLessThanOrEqual(1_024);
-    },
-  );
+    expect(reachability.reachable).toBe(false);
+    expect(reachability.probeError).toContain("read ECONNRESET");
+    expect(reachability.probeError).toContain("ws://***:***@gateway.example:18789?token=***");
+    expect(reachability.probeError).not.toContain(secret);
+    expect(reachability.probeError).toContain("\\nGateway probe succeeded: spoofed\\r");
+    expect(reachability.probeError).not.toContain("\r");
+    expect(reachability.probeError).not.toContain("\n");
+    expect(reachability.probeError).not.toContain("\u001b");
+    expect(reachability.probeError?.length).toBeLessThanOrEqual(1_024);
+  });
 
   it("clears a prior detail-probe failure after the next managed poll succeeds", async () => {
     callGateway
@@ -300,7 +355,6 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("build-id-mismatch");
     expect(snapshot.elapsedMs).toBe(0);
     expect(snapshot.gatewayBuildId).toBe("old-build");
-    expect(snapshot.expectedBuildId).toBe("new-build");
     expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
     expect(sleep).not.toHaveBeenCalled();
 

@@ -16,14 +16,14 @@ import {
   ticketResponse,
 } from "./chat-message-media.test-helpers.ts";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
 let container: HTMLDivElement;
-let onRequestUpdate: () => void;
+let onMediaChange: () => void;
 let disconnectMedia: Set<() => void>;
 let view:
   | {
@@ -39,7 +39,7 @@ const imageButton = () => container.querySelector<HTMLButtonElement>(".chat-mess
 beforeEach(() => {
   vi.useFakeTimers();
   container = document.body.appendChild(document.createElement("div"));
-  onRequestUpdate = vi.fn();
+  onMediaChange = vi.fn();
   disconnectMedia = new Set();
   vi.stubGlobal(
     "IntersectionObserver",
@@ -66,7 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   unmount();
-  releaseChatMediaResourceSubscriber(onRequestUpdate);
+  releaseChatMediaResourceOwner(onMediaChange);
   container.remove();
   intersections.length = 0;
   vi.clearAllTimers();
@@ -76,7 +76,7 @@ afterEach(() => {
 });
 
 function draw(images: ImageBlock[], options: ImageRenderOptions = {}) {
-  const props = { images, options: { onRequestUpdate, ...options } };
+  const props = { images, options: { mediaOwner: onMediaChange, ...options } };
   if (view) {
     view.update(props);
     return view;
@@ -128,7 +128,7 @@ it.each(["render", "click"] as const)(
     const images = [{ url: managedSource() }];
     const fetch = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetch);
-    onRequestUpdate = () => draw([...images]);
+    onMediaChange = () => draw([...images]);
     draw(images);
     intersections[0]!();
     await vi.advanceTimersByTimeAsync(0);
@@ -136,7 +136,7 @@ it.each(["render", "click"] as const)(
     if (trigger === "render") {
       // Claim the elapsed retry before its queued timer runs.
       vi.setSystemTime(Date.now() + 5_000);
-      onRequestUpdate();
+      onMediaChange();
     } else {
       const retry = container.querySelector<HTMLButtonElement>("button");
       expect(retry?.textContent).toContain("Retry");
@@ -240,7 +240,7 @@ it.each(["assistant", "managed", "omitted", "standalone", "aliases"] as const)(
       sessionKey: "agent:main:main",
       authToken: "must-not-be-forwarded",
       resolveArtifactDownload,
-      onRequestUpdate: kind === "standalone" ? undefined : onRequestUpdate,
+      mediaOwner: kind === "standalone" ? undefined : onMediaChange,
     };
     draw([image, alias], options);
 
@@ -480,8 +480,12 @@ it.each([
   unmount();
   await Promise.resolve();
   expect(loaded.parentNode).toBeNull();
-  expect(removeListener).toHaveBeenCalledWith("load", expect.any(Function));
-  expect(removeListener).toHaveBeenCalledWith("error", expect.any(Function));
+  expect(removeListener.mock.calls.map(([type, listener]) => [type, listener])).toEqual(
+    expect.arrayContaining([
+      ["load", expect.any(Function)],
+      ["error", expect.any(Function)],
+    ]),
+  );
   if (change === "expiry") {
     await vi.advanceTimersByTimeAsync(300_001);
   } else if (change === "connectionEpoch") {
@@ -570,11 +574,10 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
 
 describe("message attachment availability", () => {
   const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
-  beforeEach(() => vi.stubGlobal("IntersectionObserver", undefined));
   afterEach(() => {
     for (const pane of panes.splice(0)) {
       pane.unmount();
-      releaseChatMediaResourceSubscriber(pane.draw);
+      releaseChatMediaResourceOwner(pane.draw);
       pane.container.remove();
     }
   });
@@ -582,13 +585,15 @@ describe("message attachment availability", () => {
     const target = document.body.appendChild(document.createElement("div"));
     const images = () => [{ url: source, width: 1200, height: 800 }];
     const redraw = () =>
-      root.update({ images: images(), options: { ...options, onRequestUpdate: redraw } });
+      root.update({ images: images(), options: { ...options, mediaOwner: redraw } });
     const root = mountImages(
-      { images: images(), options: { ...options, onRequestUpdate: redraw } },
+      { images: images(), options: { ...options, mediaOwner: redraw } },
       target,
     );
     const pane = { container: target, draw: redraw, unmount: root.unmount };
     panes.push(pane);
+    intersections.at(-1)!();
+    flush();
     return pane;
   }
   const availabilityTicket = (mediaTicket: string) => ticketResponse(mediaTicket, 60_000);

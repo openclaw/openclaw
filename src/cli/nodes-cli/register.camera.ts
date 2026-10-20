@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -76,10 +77,13 @@ export function registerNodesCameraCommands(nodes: Command) {
 
           const { heading, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
+          // Device fields come from the node; keep its control bytes off the operator's terminal.
+          const text = (value: unknown, fallback: string) =>
+            typeof value === "string" ? sanitizeTerminalText(value) : fallback;
           const rows = devices.map((device) => ({
-            Name: typeof device.name === "string" ? device.name : "Unknown Camera",
-            Position: typeof device.position === "string" ? device.position : muted("unspecified"),
-            ID: typeof device.id === "string" ? device.id : "",
+            Name: text(device.name, "Unknown Camera"),
+            Position: text(device.position, muted("unspecified")),
+            ID: text(device.id, ""),
           }));
           defaultRuntime.log(heading("Cameras"));
           defaultRuntime.log(

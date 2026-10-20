@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import {
   buildDailyCsv,
   buildQuerySuggestions,
@@ -44,14 +45,19 @@ it("limits suggestions before matching while preserving raw option spelling", ()
   const options = buildUsageFilterOptions(sessions);
   expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
   for (const key of ["agent", "channel", "provider", "model"]) {
-    expect(buildQuerySuggestions(`${key}:OPEN`, options).map((entry) => entry.value)).toEqual([
-      `${key}:OpenAI`,
-      `${key}:openai`,
-    ]);
-    expect(buildQuerySuggestions(`${key}:seventh`, options)).toEqual([]);
+    expect(
+      buildQuerySuggestions(`${key}:OPEN`, extractQueryTerms(`${key}:OPEN`), options).map(
+        (entry) => entry.value,
+      ),
+    ).toEqual([`${key}:OpenAI`, `${key}:openai`]);
+    expect(
+      buildQuerySuggestions(`${key}:seventh`, extractQueryTerms(`${key}:seventh`), options),
+    ).toEqual([]);
   }
-  expect(buildQuerySuggestions("constructor:", options)).toEqual([]);
-  expect(buildQuerySuggestions("has:err", options)).toEqual([
+  expect(buildQuerySuggestions("constructor:", extractQueryTerms("constructor:"), options)).toEqual(
+    [],
+  );
+  expect(buildQuerySuggestions("has:err", extractQueryTerms("has:err"), options)).toEqual([
     { label: "has:errors", value: "has:errors" },
   ]);
 });

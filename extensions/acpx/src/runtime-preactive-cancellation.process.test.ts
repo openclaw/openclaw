@@ -1,4 +1,4 @@
-/** Real dispatcher -> manager -> ACPX -> stdio ACP peer cancellation proof. */
+/** Real `/acp cancel` -> controller Stop -> dispatcher -> manager -> ACPX -> stdio ACP peer proof. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ import {
   tryDispatchAcpReplyHook,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcher, getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { AcpxRuntime } from "./runtime.js";
@@ -61,7 +61,22 @@ it.each(["queued", "setup"] as const)(
       };
       let actor: Promise<unknown> | undefined;
       let dispatch: ReturnType<typeof tryDispatchAcpReplyHook> | undefined;
-      let cancel: Promise<void> | undefined;
+      let cancel: ReturnType<typeof getReplyFromConfig> | undefined;
+      const inbound = (text: string, messageSid: string) => ({
+        Body: text,
+        BodyForAgent: text,
+        BodyForCommands: text,
+        RawBody: text,
+        From: "operator",
+        To: "main",
+        SessionKey: sessionKey,
+        AgentId: "main",
+        Provider: "webchat",
+        Surface: "webchat",
+        ChatType: "direct",
+        CommandAuthorized: true,
+        MessageSid: messageSid,
+      });
       try {
         await manager.initializeSession({ ...target, agent: "cancel-fixture", mode: "persistent" });
         // Retain the real ACP record but make runTurn reacquire its provider handle.
@@ -89,21 +104,7 @@ it.each(["queued", "setup"] as const)(
         }
         dispatch = tryDispatchAcpReplyHook(
           {
-            ctx: {
-              Body: "cancel before submission",
-              BodyForAgent: "cancel before submission",
-              BodyForCommands: "cancel before submission",
-              RawBody: "cancel before submission",
-              From: "operator",
-              To: "main",
-              SessionKey: sessionKey,
-              AgentId: "main",
-              Provider: "webchat",
-              Surface: "webchat",
-              ChatType: "direct",
-              CommandAuthorized: true,
-              MessageSid: `cancel-${phase}`,
-            },
+            ctx: inbound("cancel before submission", `cancel-${phase}`),
             runId: `dispatch-${phase}`,
             sessionKey,
             inboundAudio: false,
@@ -145,11 +146,17 @@ it.each(["queued", "setup"] as const)(
             }),
           ]);
         }
-        cancel = manager.cancelSession({ ...target, reason: "preactive-process-proof" });
-        void cancel.catch(() => {});
+        // `/acp cancel` is a client-session Stop; it completes while the turn is still pre-active.
+        cancel = getReplyFromConfig({
+          ...inbound("/acp cancel", `acp-cancel-${phase}`),
+          GatewayClientScopes: ["operator.admin"],
+        });
+        expect(await cancel).toMatchObject({
+          text: expect.stringContaining(`Cancel requested for ACP session ${sessionKey}`),
+        });
         release.resolve();
         await actor;
-        const [result] = await Promise.all([dispatch, cancel]);
+        const result = await dispatch;
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
         expect(result).toMatchObject({ handled: true });

@@ -16,7 +16,6 @@ export type WhatsAppQaRuntimeEnv = {
 
 export type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
-type WhatsAppQaScenarioPosture = "direct-gateway" | "native-approval" | "user-path";
 
 type WhatsAppQaMessageSendMode =
   | {
@@ -53,10 +52,8 @@ export type WhatsAppQaMessageScenarioContext = {
   gateway: WhatsAppQaGatewayRuntime;
   gatewayTarget: string;
   gatewayWorkspaceDir: string;
-  recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
   scenarioId: string;
-  scenarioTitle: string;
   sent: { messageId?: string };
   sutAccountId: string;
   sutPhoneE164: string;
@@ -174,19 +171,10 @@ export type WhatsAppQaConfigOverrides = {
 export type WhatsAppQaScenarioImplementation = {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
-  posture: WhatsAppQaScenarioPosture;
   requiresGroupJid?: boolean;
 };
 
 export type WhatsAppQaScenarioMetadata = {
   id: string;
   timeoutMs: number;
-  title: string;
 };
-
-export interface WhatsAppObservedMessage extends WhatsAppQaDriverObservedMessage {
-  approvalState?: "pending" | "resolved";
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
-}

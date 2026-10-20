@@ -4,6 +4,7 @@ import type { SessionEntry } from "./types.js";
 export type SessionEntryCurrentFacts = {
   sessionId: string;
   createdVia?: unknown;
+  createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
   modelSelectionLocked?: SessionEntry["modelSelectionLocked"];
   pluginOwnerId?: SessionEntry["pluginOwnerId"];
@@ -39,6 +40,8 @@ export type SessionEntryCurrentFacts = {
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
   delegatedToolPolicy?: unknown;
+  skillLibrarySelections?: unknown;
+  executionPolicy?: unknown;
   subagentRecovery?: {
     lastRunId?: unknown;
     sessionLifecycleRunId?: unknown;

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -11,7 +12,15 @@ import {
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { mintReplyMessageActionTurnCapability } from "../../auto-reply/reply/agent-runner-utils.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  createQueueTestRun,
+  createQueueSettings,
+} from "../../auto-reply/reply/queue.test-helpers.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+} from "../../auto-reply/reply/queue/lifecycle.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -30,13 +39,24 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  bindSessionControllerSource,
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceQueued,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { registerChatAbortController } from "../chat-abort.js";
 import {
   resolveMessageActionTurnAuthorization,
   revokeMessageActionTurnCapability,
@@ -54,8 +74,6 @@ type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProj
 
 function createBindingContext() {
   return {
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     dedupe: new Map(),
     agentRunSeq: new Map(),
@@ -107,9 +125,31 @@ function createBindingClient(options: {
   };
 }
 
+async function prepareBindingRequest(
+  params: { sessionKey: string; message: string; idempotencyKey: string },
+  client: GatewayClient,
+  context: GatewayRequestContext,
+) {
+  const authorization = await resolveSessionMutationAuthorizationAsync({
+    client,
+    context,
+    method: "chat.send",
+    requestParams: params,
+  });
+  expect(authorization.error).toBeNull();
+  return {
+    params,
+    client,
+    context,
+    respond: vi.fn(),
+    req: { type: "req" as const, id: params.idempotencyKey, method: "chat.send", params },
+    sessionMutationAuthorization: authorization.authorization,
+    isWebchatConnect: () => false,
+  };
+}
+
 const admissionScenarios = [
   "removed",
-  "replaced",
   "aborted",
   "released",
   "terminal",
@@ -201,36 +241,23 @@ it.each(admissionScenarios)(
       const context = createBindingContext();
       let owned: Parameters<typeof chatDispatch.startChatDispatch>[0] | undefined;
       let reply: ReturnType<typeof createReplyOperation> | undefined;
-      let successor: ReturnType<typeof registerChatAbortController> | undefined;
       let options: DispatchOptions | undefined;
       let releaseAuthorization: (() => void) | undefined;
+      let queuedRun: ReturnType<typeof createQueueTestRun> | undefined;
       try {
-        const respond = vi.fn();
         const params = {
           // Exercise the ordinary dashboard alias without an explicit agentId.
           sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
         };
-        const authorization = await resolveSessionMutationAuthorizationAsync({
-          client,
-          context,
-          method: "chat.send",
-          requestParams: params,
-        });
-        releaseAuthorization = authorization.authorization?.release;
-        expect(authorization.error).toBeNull();
-        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         const request = {
-          params,
-          req: { type: "req" as const, id: runId, method: "chat.send", params },
-          respond,
-          context,
-          client,
+          ...(await prepareBindingRequest(params, client, context)),
           hasCurrentClientAuthority,
-          sessionMutationAuthorization: authorization.authorization,
-          isWebchatConnect: () => false,
         };
+        releaseAuthorization = request.sessionMutationAuthorization?.release;
+        const { respond } = request;
+        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         if (scenario === "narrow-first-send") {
           await handleGatewayRequest({
             ...request,
@@ -257,9 +284,7 @@ it.each(admissionScenarios)(
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
         const capability = options.replyOptions?.skillLibraryAuthoring;
-        if (!owned || !prepared || !runStarted || !capability) {
-          throw new Error("chat.send did not hand off its prepared-session callback");
-        }
+        assert(owned && prepared && runStarted && capability);
         // Initial resolution needs detached entries; later admission must not clone unrelated rows.
         expect.soft(unrelatedCloneCount()).toBeLessThanOrEqual(1);
         const admittedContext = await namespaceRun.admit("embedded");
@@ -273,7 +298,7 @@ it.each(admissionScenarios)(
           withGatewayToolCallerIdentity(caller, () => capability.invoke({ action: "list" }));
         const { admission, userTurn } = owned;
         const original = admission.activeRunAbort.entry;
-        expect(original?.sessionId).toBe(initialSessionId);
+        expect(original && getRpcSourceIdentity(original).sessionId).toBe(initialSessionId);
         const preparedEntry = {
           sessionId: dashboard ? initialSessionId : "committed-session",
           updatedAt: Date.now(),
@@ -285,9 +310,7 @@ it.each(admissionScenarios)(
           const snapshot = await loadReplySessionInitializationSnapshot(creationScope);
           const bindCreation = options.replyOptions?.bindSessionCreation;
           const onCreated = options.replyOptions?.onSessionCreated;
-          if (!bindCreation || !onCreated) {
-            throw new Error("chat.send did not hand off its session creation owner");
-          }
+          assert(bindCreation && onCreated);
           const result = await commitReplySessionInitialization({
             ...creationScope,
             activeSessionKey: sessionKey,
@@ -302,9 +325,7 @@ it.each(admissionScenarios)(
           await upsertSessionEntryCore(scope, preparedEntry);
         }
         const committed = loadExactSessionEntryReadOnly(scope);
-        if (!committed) {
-          throw new Error("session writer did not commit");
-        }
+        assert(committed, "session writer did not commit");
         const binding = {
           sessionKey,
           sessionId: committed.entry.sessionId,
@@ -341,40 +362,57 @@ it.each(admissionScenarios)(
         }
 
         if (closure === "queued") {
-          expect(original?.sessionId).toBe(binding.sessionId);
+          expect(original && getRpcSourceIdentity(original).sessionId).toBe(binding.sessionId);
           expect(admission.admittedSessionId).toBe(runId);
-          expect(options.replyOptions?.turnAdoptionLifecycle?.onDeferred?.()).toBe(true);
-          expect(context.chatQueuedTurns.get(runId)?.sessionId).toBe(binding.sessionId);
+          if (!original) {
+            throw new Error("Expected accepted source");
+          }
+          queuedRun = createQueueTestRun({ prompt: params.message });
+          queuedRun.turnAdoptionLifecycle = options.replyOptions?.turnAdoptionLifecycle;
+          bindSessionControllerSource(original.input, queuedRun);
+          expect(
+            enqueueFollowupRun(
+              sessionKey,
+              queuedRun,
+              createQueueSettings(),
+              "none",
+              undefined,
+              false,
+            ),
+          ).toBe(true);
+          const source = rpcSourceTesting.get(runId);
+          expect(source && getRpcSourceIdentity(source).sessionId).toBe(binding.sessionId);
           await userTurn.persist();
           expect(await loadTranscriptEvents({ ...scope, ...binding })).toContainEqual(
             expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
           );
           admission.cleanupAdmittedRun();
-          expect(context.chatQueuedTurns.has(runId)).toBe(true);
-        } else if (closure === "removed" || closure === "replaced") {
+          expect(rpcSourceTesting.has(runId)).toBe(true);
+        } else if (closure === "removed") {
           admission.activeRunAbort.cleanup();
-          if (closure === "replaced") {
-            successor = registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
-              runId,
-              sessionKey,
-              sessionId: "successor-session",
-              timeoutMs: 60_000,
-            });
-          }
         } else if (closure === "aborted") {
           admission.activeRunAbort.controller.abort();
         } else if (closure === "released") {
           admission.gatewayWorkAdmission.release();
         } else if (closure === "terminal") {
-          reply = createReplyOperation({
-            sessionKey,
-            sessionId: binding.sessionId,
-            resetTriggered: false,
-            upstreamAbortSignal: admission.activeRunAbort.controller.signal,
+          if (!original) {
+            throw new Error("Expected accepted source");
+          }
+          await claimSessionControllerTask(original.input, (claim) => {
+            reply = createReplyOperation({
+              mailboxClaim: claim,
+              target: original.input.mailbox.owner.target,
+              sessionKey,
+              sessionId: binding.sessionId,
+              resetTriggered: false,
+              upstreamAbortSignal: admission.activeRunAbort.controller.signal,
+            });
+            reply.complete();
+            releaseSessionControllerClaim(claim);
           });
-          reply.complete();
           expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+          // The finished runtime still owns its source until the held dispatch settles.
+          expect(rpcSourceTesting.get(runId)).toBe(original);
         } else {
           rotateAgentEventLifecycleGeneration();
         }
@@ -383,10 +421,7 @@ it.each(admissionScenarios)(
         if (dashboardRead) {
           expect(dashboardRead.assertCurrent).toThrow();
         }
-        expect(original?.sessionId).toBe(binding.sessionId);
-        expect(successor?.entry?.sessionId).toBe(
-          closure === "replaced" ? "successor-session" : undefined,
-        );
+        expect(original && getRpcSourceIdentity(original).sessionId).toBe(binding.sessionId);
         if (closure === "queued") {
           await expect(readLibrary()).resolves.toMatchObject({ profileId: profile.id });
         } else if (closure === "released" || closure === "aborted" || closure === "rotated") {
@@ -415,12 +450,16 @@ it.each(admissionScenarios)(
         }
       } finally {
         namespaceRun.close();
-        options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
         reply?.complete();
-        successor?.cleanup();
         release.resolve();
+        if (queuedRun) {
+          completeFollowupRunLifecycle(queuedRun);
+          await queuedRun.controllerInput?.settlement.promise;
+        } else {
+          await options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+        }
         if (owned) {
-          await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
+          await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
           owned.admission.cleanupAdmittedRun();
           clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
         }
@@ -469,6 +508,8 @@ it.each(
         });
         client.connId = "reaction-source-client";
         const broadcast = vi.fn();
+        const reactionEvents = () =>
+          broadcast.mock.calls.filter(([event]) => event === "session.reaction");
         const context = createBindingContext();
         context.removeChatRun = (runId: string) => {
           sources.get(runId)?.finished.resolve();
@@ -489,9 +530,7 @@ it.each(
           .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
           .mockImplementation(async (options) => {
             const source = sources.get(options.ctx.MessageSid ?? "");
-            if (!source) {
-              throw new Error("Unexpected source dispatch");
-            }
+            assert(source, "Unexpected source dispatch");
             source.entered.resolve(options);
             await source.release.promise;
             return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
@@ -504,6 +543,7 @@ it.each(
           "authenticated-reaction-proof",
         );
         let token: string | undefined;
+        let queuedReaction: ReturnType<typeof createQueueTestRun> | undefined;
         let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
         async function sendPrompt(runId: string, message: string) {
           const source: Source = {
@@ -513,24 +553,10 @@ it.each(
           };
           sources.set(runId, source);
           const params = { sessionKey, message, idempotencyKey: runId };
-          const authorization = await resolveSessionMutationAuthorizationAsync({
-            client,
-            context,
-            method: "chat.send",
-            requestParams: params,
-          });
-          source.releaseAuthorization = authorization.authorization?.release;
-          expect(authorization.error).toBeNull();
-          const respond = vi.fn();
-          await handleDirectExternalChatSend({
-            params,
-            req: { type: "req", id: runId, method: "chat.send", params },
-            respond,
-            context,
-            client,
-            sessionMutationAuthorization: authorization.authorization,
-            isWebchatConnect: () => false,
-          });
+          const request = await prepareBindingRequest(params, client, context);
+          source.releaseAuthorization = request.sessionMutationAuthorization?.release;
+          const { respond } = request;
+          await handleDirectExternalChatSend(request);
           expect(respond).toHaveBeenCalledWith(
             true,
             expect.objectContaining({ runId, status: "started" }),
@@ -539,9 +565,7 @@ it.each(
           );
           const options = await source.entered.promise;
           const owned = observeDispatch.mock.calls.at(-1)?.[0];
-          if (!owned || !options.replyOptions?.dashboardReadAdmission) {
-            throw new Error("Direct authenticated chat did not capture its source");
-          }
+          assert(owned && options.replyOptions?.dashboardReadAdmission);
           source.owned = owned;
           source.options = options;
           options.replyOptions.onSessionPrepared?.({
@@ -555,43 +579,53 @@ it.each(
           promptSource?.assertCurrent();
           return { ...source, owned, options };
         }
+        const external = vi
+          .spyOn(messageActionRunner, "runMessageAction")
+          .mockRejectedValue(new Error("Unexpected external message action"));
         try {
           const initial = await sendPrompt("reaction-original-source", "Original prompt");
           const initialRecorder = initial.owned.userTurn.recorder;
           const lifecycle = initial.options.replyOptions?.turnAdoptionLifecycle;
           if (mode === "queued") {
-            expect(lifecycle?.onDeferred?.()).toBe(true);
-            await lifecycle?.onAdopted();
+            queuedReaction = createQueueTestRun({ prompt: "Original prompt" });
+            queuedReaction.run = {
+              ...queuedReaction.run,
+              ...scope,
+              sessionId,
+              config: {
+                ...getRuntimeConfig(),
+                session: { store: initial.owned.session.storePath },
+              },
+            };
+            queuedReaction.turnAdoptionLifecycle = lifecycle;
+            bindSessionControllerSource(initial.owned.admission.sourceRef.input, queuedReaction);
+            expect(
+              enqueueFollowupRun(sessionKey, queuedReaction, createQueueSettings(), "none"),
+            ).toBe(true);
+            await admitFollowupRunLifecycle(queuedReaction);
           }
           await initial.owned.userTurn.persist();
           const original = initialRecorder.getAdmissionReceipt();
-          if (!original) {
-            throw new Error("Original prompt did not commit");
-          }
+          assert(original, "Original prompt did not commit");
           if (mode === "queued") {
             initial.owned.admission.cleanupAdmittedRun();
-            expect(context.chatQueuedTurns.has("reaction-original-source")).toBe(true);
+            expect(isRpcSourceQueued(initial.owned.admission.sourceRef)).toBe(true);
           }
           const config = getRuntimeConfig();
+          const followupRun = createQueueTestRun({ prompt: "Original prompt" });
+          followupRun.userTurnTranscriptRecorder = initialRecorder;
+          followupRun.run = {
+            ...followupRun.run,
+            ...scope,
+            sessionFile: sessionKey,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            config,
+            messageProvider: "webchat",
+          };
           token = mintReplyMessageActionTurnCapability(
             {
-              followupRun: {
-                prompt: "Original prompt",
-                enqueuedAt: 0,
-                userTurnTranscriptRecorder: initialRecorder,
-                run: {
-                  ...scope,
-                  sessionFile: sessionKey,
-                  agentDir: state.agentDir(),
-                  workspaceDir: state.workspaceDir,
-                  config,
-                  provider: "openai",
-                  model: "test",
-                  messageProvider: "webchat",
-                  timeoutMs: 1000,
-                  blockReplyBreak: "message_end",
-                },
-              },
+              followupRun,
               sessionCtx: { Provider: "webchat" },
               // Deliberately offer the original read admission. It must not transfer to this run.
               opts: {
@@ -611,7 +645,6 @@ it.each(
             agentId: "main",
             sessionKey,
           });
-          const external = vi.fn();
           const tool = createMessageTool({
             config,
             preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
@@ -621,14 +654,6 @@ it.each(
             runId: executionRunId,
             currentChannelProvider: "webchat",
             messageActionTurnCapability: token,
-            runMessageAction: external,
-            getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-            resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-              resolvedConfig,
-              diagnostics: [],
-              targetStatesByPath: {},
-              hadUnresolvedTargets: false,
-            }),
           });
           const react = (args: Record<string, unknown> = {}) =>
             withGatewayToolCallerIdentity(caller, () =>
@@ -643,9 +668,7 @@ it.each(
               messageId: original.entryId,
             });
             const prepared = await prompt.resolveMessage();
-            if (!prepared) {
-              throw new Error("Steered prompt was not staged");
-            }
+            assert(prepared, "Steered prompt was not staged");
             const manager = guardSessionManager(
               await SessionManager.openAsync(
                 { ...scope, storePath: original.storePath },
@@ -663,9 +686,7 @@ it.each(
             expect(prompt.getAdmissionReceipt()?.entryId).not.toBe(original.entryId);
           }
           const messageId = prompt.getAdmissionReceipt()?.entryId;
-          if (!messageId) {
-            throw new Error("Consumed prompt did not commit");
-          }
+          assert(messageId, "Consumed prompt did not commit");
           // Existing human rows use the same durable store before any agent reaction.
           await setSessionReactionAsync(scope, {
             messageId,
@@ -715,7 +736,7 @@ it.each(
                 ]),
               },
             ]);
-            expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual([
+            expect(reactionEvents()).toEqual([
               [
                 "session.reaction",
                 expect.objectContaining({
@@ -738,9 +759,7 @@ it.each(
               expect(preparationRevoked).toBe(true);
             }
             expect(listSessionReactions(scope, { sessionId })).toEqual(before);
-            expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual(
-              [],
-            );
+            expect(reactionEvents()).toEqual([]);
           }
           probe.mockRestore();
           if (outcome === "allowed") {
@@ -753,13 +772,20 @@ it.each(
           revokeMessageActionTurnCapability(token);
           execution.close();
           for (const source of sources.values()) {
-            source.options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
             source.release.resolve();
           }
+          if (queuedReaction) {
+            completeFollowupRunLifecycle(queuedReaction);
+            await queuedReaction.controllerInput?.settlement.promise;
+          }
           await Promise.all(
-            [...sources.values()]
-              .filter((source) => source.owned)
-              .map((source) => source.finished.promise),
+            [...sources.values()].map(async (source) => {
+              const settled = source.options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+              await settled;
+              if (source.owned) {
+                await source.finished.promise;
+              }
+            }),
           );
           for (const [runId, source] of sources) {
             source.owned?.admission.cleanupAdmittedRun();
@@ -770,6 +796,7 @@ it.each(
           }
           holdDispatch.mockRestore();
           observeDispatch.mockRestore();
+          external.mockRestore();
         }
       },
     );

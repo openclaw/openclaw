@@ -27,6 +27,7 @@ import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
+import { i18n } from "./i18n/lib/translate.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsHomePage } from "./pages/agents-home/route.ts";
@@ -137,7 +138,12 @@ for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
   const loader = route.loader;
   appRoutes.push({
     ...route,
-    component: () => retryControlUiImport(route.component),
+    component: () =>
+      retryControlUiImport(async () => {
+        const module = await route.component();
+        await i18n.prepareLocale();
+        return module;
+      }),
     loader: loader
       ? (context, options) => retryControlUiImport(() => loader(context, options), options.signal)
       : undefined,

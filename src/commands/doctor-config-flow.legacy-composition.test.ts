@@ -6,6 +6,7 @@ import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.
 import { readConfigFileSnapshot } from "../config/io.runtime.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -129,6 +130,89 @@ it(
     }),
   getCliProcessTestTimeout(CLI_TIMEOUT, CLI_TIMEOUT, CLI_TIMEOUT, CLI_TIMEOUT),
 );
+
+it("repairs unowned keys after update migrations while preserving legacy settings", () =>
+  withCoreHome(async (home) => {
+    const configPath = await writeCoreConfig(home, {
+      meta: { lastTouchedAt: "2026-05-01T00:00:00.000Z" },
+      agents: {
+        entries: {
+          main: { memorySearch: { enabled: false } },
+          research: { memorySearch: { enabled: false } },
+          writer: { memorySearch: { enabled: false } },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: await getFreePort(),
+        tailscale: { mode: "off", resetOnExit: false },
+        nodes: { denyCommands: ["camera.snap"] },
+      },
+      commands: { ownerDisplay: "raw" },
+      tools: { media: { audio: { models: [{ provider: "openai", model: "whisper-1" }] } } },
+      obsoleteUpdateSetting: true,
+    });
+    const original = await read(configPath);
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+      async () => {
+        await repairConfig(configPath);
+        const saved = await readConfigFileSnapshot();
+        expect(saved.valid, JSON.stringify(saved.issues)).toBe(true);
+        expect(saved.sourceConfig).not.toHaveProperty("obsoleteUpdateSetting");
+        expect(saved.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
+        expect(saved.sourceConfig).not.toHaveProperty("commands.ownerDisplay");
+        expect(saved.sourceConfig).not.toHaveProperty("gateway.tailscale.resetOnExit");
+        expect(saved.sourceConfig.agents?.ownership).toBe("explicit");
+        expect(saved.sourceConfig.agents?.defaults?.systemAgent?.agentId).toBe("main");
+        for (const entry of Object.values(saved.sourceConfig.agents?.entries ?? {})) {
+          expect(entry).toHaveProperty("memory.search.enabled", false);
+          expect(entry).not.toHaveProperty("memorySearch");
+        }
+        expect(saved.sourceConfig.gateway?.nodes?.commands?.deny).toEqual(["camera.snap"]);
+        expect(saved.sourceConfig.tools?.media?.models).toEqual([
+          { provider: "openai", model: "whisper-1", capabilities: ["audio"] },
+        ]);
+        expect(await read(`${configPath}.bak`)).toBe(original);
+        const repaired = await read(configPath);
+        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
+        expect(await read(configPath)).toBe(repaired);
+      },
+    );
+  }));
+
+it("keeps deferred plugin input while repairing an unowned update key", () =>
+  withCoreHome(async (home) => {
+    const retainedInput = { source: "synthetic-plugin-data" };
+    const configPath = await writeCoreConfig(home, { retainedInput, obsoleteUpdateSetting: true });
+    await recordDeferredPluginMigrations({
+      env: process.env,
+      pending: [
+        {
+          pluginId: "pending-owner",
+          reason: "Plugin repair is deferred.",
+          command: "openclaw doctor --fix",
+          configPaths: [["retainedInput"]],
+          validationExcludedPaths: [["retainedInput"]],
+        },
+      ],
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+      async () => {
+        await repairConfig(configPath);
+        const saved = JSON.parse(await read(configPath));
+        expect(saved.retainedInput).toEqual(retainedInput);
+        expect(saved).not.toHaveProperty("obsoleteUpdateSetting");
+      },
+    );
+  }));
 
 it.each(["duplicate ids", "whole-entry include"])(
   "refuses ambiguous legacy roster persistence for %s",

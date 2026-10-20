@@ -184,7 +184,6 @@ function hasTimeoutHint(err: unknown): boolean {
   return Boolean(message && isTimeoutErrorMessage(message));
 }
 
-/** Return true when an unknown error shape represents a timeout. */
 export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;

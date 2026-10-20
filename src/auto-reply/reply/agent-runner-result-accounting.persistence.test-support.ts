@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
@@ -20,13 +21,9 @@ import type {
 import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
-import {
-  createReplyOperation,
-  retainReplyOperationUntilComplete,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -52,6 +49,67 @@ const diagnostic = {
 } satisfies NonNullable<SessionEntry["contextBudgetStatus"]>;
 
 export { diagnostic as agentAccountingPersistenceDiagnostic };
+
+export function withAccountingProvider<T>(run: () => T): T {
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "synthetic",
+    source: "test",
+    provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
+  });
+  return withPluginRuntimeRegistryScope(registry, run);
+}
+
+export function createTestFinalizationContext(
+  followupRun: FinalizeReplyAgentRunInput["followupRun"],
+  replyOperation: ReplyOperation,
+): FinalizeReplyAgentRunInput {
+  const { config: cfg, model, provider, sessionKey } = followupRun.run;
+  const reply = createReplyParams(followupRun, {
+    transcriptCommandBody: undefined,
+    queueKey: sessionKey ?? "test",
+    resolvedQueue: { mode: "followup" },
+  });
+  return {
+    ...reply,
+    activeIsNewSession: false,
+    activeSessionEntry: undefined,
+    activeSessionStore: {},
+    blockReplyPipeline: null,
+    cfg,
+    isHeartbeat: false,
+    pendingToolTasks: new Set(),
+    preflightCompactionApplied: false,
+    replyMediaContext: { normalizePayload: async (payload) => payload },
+    replyOperation,
+    replyRouteThreadId: undefined,
+    replyToChannel: undefined,
+    replyToMode: "off",
+    returnWithQueuedFollowupDrain: (value) => value,
+    runFollowupTurn: async () => {},
+    execution: {
+      kind: "settled",
+      status: "ok",
+      result: {
+        payloads: [{ text: "done" }],
+        meta: {
+          durationMs: 1,
+          requestShaping: { authMode: "api-key", fallbackEligible: false },
+        },
+      },
+      resolved: { provider, model },
+      fallback: { exhausted: false, attempts: [] },
+      autoCompactionCount: 0,
+    },
+    runId: "test-run",
+    runStartedAt: Date.now(),
+    typingSignals: createTypingSignaler({
+      typing: reply.typing,
+      mode: "never",
+      isHeartbeat: false,
+    }),
+  };
+}
 
 export async function createAgentAccountingPersistenceFixture({
   storePath,
@@ -122,60 +180,13 @@ export async function createAgentAccountingPersistenceFixture({
     resetTriggered: false,
   });
   replyOperation.setPhase("running");
-  retainReplyOperationUntilComplete(replyOperation);
   registerOperation(replyOperation);
   const context: FinalizeReplyAgentRunInput & { storePath: string } = {
-    activeIsNewSession: false,
+    ...createTestFinalizationContext(followupRun, replyOperation),
     activeSessionEntry: entry,
     activeSessionStore: sessionStore,
-    blockReplyPipeline: null,
-    blockStreamingEnabled: false,
-    cfg,
-    commandBody: followupRun.prompt,
-    defaultModel: diagnostic.model,
-    followupRun,
-    isHeartbeat: false,
-    pendingToolTasks: new Set(),
-    preflightCompactionApplied: false,
-    queueKey: sessionKey,
-    replyMediaContext: { normalizePayload: async (payload) => payload },
-    replyOperation,
-    replyRouteThreadId: undefined,
-    replyToChannel: undefined,
-    replyToMode: "off",
-    resolvedBlockStreamingBreak: "message_end",
-    resolvedQueue: { mode: "followup" },
-    resolvedVerboseLevel: "off",
-    returnWithQueuedFollowupDrain: (value) => value,
-    runFollowupTurn: async () => {},
-    execution: {
-      kind: "settled",
-      status: "ok",
-      result: {
-        payloads: [{ text: "done" }],
-        meta: {
-          durationMs: 1,
-          requestShaping: { authMode: "api-key", fallbackEligible: false },
-        },
-      },
-      resolved: {
-        provider: diagnostic.provider,
-        model: diagnostic.model,
-      },
-      fallback: { exhausted: false, attempts: [] },
-      autoCompactionCount: 0,
-    },
     runId,
-    runStartedAt: Date.now(),
-    sessionCtx: {},
-    sessionKey,
-    shouldInjectGroupIntro: false,
     storePath,
-    typingSignals: createTypingSignaler({
-      typing: createMockTypingController(),
-      mode: "never",
-      isHeartbeat: false,
-    }),
   };
   const handle = createReplySessionEntryHandle({
     sessionEntry: entry,
@@ -193,7 +204,6 @@ export async function createAgentAccountingPersistenceFixture({
       storePath,
       current: () => handle.getCurrent(),
       publish: (next) => next && handle.replaceCurrent(next),
-      adopt: (next) => handle.adoptCurrent(next),
     },
     sessionStore: handle.toCompatSessionStore(),
     sendPolicy: "allow",
@@ -217,6 +227,11 @@ export async function createAgentAccountingPersistenceFixture({
       },
       consume,
     );
+  const defaults = {
+    defaultModel: diagnostic.model,
+    typing: createMockTypingController(),
+    typingMode: "never" as const,
+  };
   const accountQueued = (
     outcome: AgentTurnExecutionResult["outcome"],
     completion?: AgentTurnCompletion,
@@ -224,11 +239,7 @@ export async function createAgentAccountingPersistenceFixture({
     accountFollowupTurn({
       turn,
       completion,
-      defaults: {
-        defaultModel: diagnostic.model,
-        typing: createMockTypingController(),
-        typingMode: "never",
-      },
+      defaults,
       execution: {
         commentaryPayloadsEnabled: false,
         execution: { runId: context.runId, outcome },
@@ -257,23 +268,22 @@ export async function createAgentAccountingPersistenceFixture({
     context.execution.compaction = compaction;
     return compaction;
   };
+  const setMeta = (meta: Partial<EmbeddedAgentMeta>) => {
+    context.execution.result.meta.agentMeta = {
+      sessionId: entry.sessionId,
+      provider: diagnostic.provider,
+      model: diagnostic.model,
+      ...meta,
+    };
+  };
   return {
     sessionId,
     context,
     turn,
     withCompletion,
+    setMeta,
     deliverQueued: async () => {
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "synthetic",
-        source: "test",
-        provider: {
-          id: diagnostic.provider,
-          label: "Synthetic provider",
-          auth: [],
-        },
-      });
-      return withPluginRuntimeRegistryScope(registry, async () => {
+      return withAccountingProvider(async () => {
         const delivered: ReplyPayload[] = [];
         const decision = await withCompletion(async (completion) => {
           const accounting = await accountQueued(context.execution, completion);
@@ -290,9 +300,7 @@ export async function createAgentAccountingPersistenceFixture({
           decision,
           turn,
           defaults: {
-            defaultModel: diagnostic.model,
-            typing: createMockTypingController(),
-            typingMode: "never",
+            ...defaults,
             opts: {
               onBlockReply: async (payload) => {
                 delivered.push(payload);
@@ -319,14 +327,7 @@ export async function createAgentAccountingPersistenceFixture({
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
     replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
     account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
-      context.execution.result.meta.agentMeta = {
-        sessionId: entry.sessionId,
-        provider: diagnostic.provider,
-        model: diagnostic.model,
-        contextTokens: 1_000,
-        contextBudgetStatus: diagnostic,
-        ...meta,
-      };
+      setMeta({ contextTokens: 1_000, contextBudgetStatus: diagnostic, ...meta });
       if (lane === "ordinary") {
         await withCompletion(async (completion) => {
           const current = { ...context, completion };
@@ -358,6 +359,7 @@ export async function createAgentAccountingPersistenceFixture({
 export function observeCompletionCommands(
   options: {
     hideCommittedReceipt?: boolean;
+    lostReplyError?: Error;
     beforeCommit?: () => void;
     afterRead?: () => void | Promise<void>;
   } = {},
@@ -381,6 +383,13 @@ export function observeCompletionCommands(
                 execute(command, commandOptions) {
                   commands.push(command.type);
                   const result = worker.execute(command, commandOptions);
+                  const lostReplyError = options.lostReplyError;
+                  if (lostReplyError && command.type !== "session.actor.read") {
+                    // Lose only the response after the real worker has completed its write.
+                    return result.then(() => {
+                      throw lostReplyError;
+                    });
+                  }
                   return command.type === "session.actor.read" && options.afterRead
                     ? result.then(async (value) => {
                         await options.afterRead?.();

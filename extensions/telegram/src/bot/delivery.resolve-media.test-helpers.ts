@@ -95,10 +95,7 @@ export function requireResolvedMedia(
   return result;
 }
 
-export function expectRecordFields(
-  record: Record<string, unknown>,
-  fields: Record<string, unknown>,
-) {
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
   }

@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import { defineTerminalPanelElement } from "./terminal-panel-registration.ts";
+import "./terminal-panel-registration.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 import type { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 
@@ -33,11 +33,8 @@ function createTerminalController() {
 
 const createTerminal = vi.fn(async () => createTerminalController());
 
-const TERMINAL_PANEL_ELEMENT_NAME = `test-terminal-panel-readiness-${crypto.randomUUID()}`;
-defineTerminalPanelElement(TERMINAL_PANEL_ELEMENT_NAME);
-
 function createReadinessPanel(): OpenClawTerminalPanel {
-  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+  const panel = document.createElement("openclaw-terminal-panel");
   panel.createTerminalController =
     createTerminal as unknown as typeof createIsolatedGhosttyTerminal;
   return panel;
@@ -108,7 +105,7 @@ describe("terminal panel readiness", () => {
           return (
             method === "terminal.open"
               ? { ...terminalOpenResult("catalog-terminal-1"), title: "claude --resume 1234…" }
-              : {}
+              : { ok: true }
           ) as T;
         },
         addEventListener: (nextListener) => {
@@ -131,31 +128,29 @@ describe("terminal panel readiness", () => {
       await vi.dynamicImportSettled();
 
       await vi.waitFor(() => {
-        expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(
-          false,
-        );
+        expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false);
         expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(1);
       });
       panel.agentId = "other";
-      panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+      panel.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
       await vi.waitFor(() => {
         expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
       });
       if (siblingReady === "before timeout") {
         siblingOpen.resolve(terminalOpenResult("sibling-terminal"));
-        await vi.waitFor(() => expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull());
+        await vi.waitFor(() => expect(panel.querySelector(".is-live")).not.toBeNull());
       }
       await vi.advanceTimersByTimeAsync(1_000);
       await panel.updateComplete;
-      expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+      expect(panel.querySelector(".tp-error")?.textContent).toContain(
         "Session did not connect within 30 seconds",
       );
       if (siblingReady === "after timeout") {
         siblingOpen.resolve(terminalOpenResult("sibling-terminal"));
-        await vi.waitFor(() => expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull());
+        await vi.waitFor(() => expect(panel.querySelector(".is-live")).not.toBeNull());
       }
       await vi.waitFor(() => {
-        expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+        expect(panel.querySelector(".tp-error")?.textContent).toContain(
           "Session did not connect within 30 seconds",
         );
       });
@@ -163,11 +158,11 @@ describe("terminal panel readiness", () => {
         method: "terminal.close",
         params: { sessionId: "catalog-terminal-1" },
       });
-      expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(1);
+      expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(1);
       expect(requests.filter((request) => request.method === "terminal.close")).toEqual([
         { method: "terminal.close", params: { sessionId: "catalog-terminal-1" } },
       ]);
-      const retry = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-error button");
+      const retry = panel.querySelector<HTMLButtonElement>(".tp-error button");
       expect(retry?.textContent?.trim()).toBe("Retry");
 
       if (siblingExit !== "none") {
@@ -185,21 +180,17 @@ describe("terminal panel readiness", () => {
           retry?.click();
         }
         await panel.updateComplete;
-        expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe(
-          "exited (1)",
-        );
+        expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited (1)");
         if (siblingExit === "error") {
-          expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(exitError);
-          expect(panel.renderRoot.querySelector(".tp-error button")).toBeNull();
+          expect(panel.querySelector(".tp-error")?.textContent).toContain(exitError);
+          expect(panel.querySelector(".tp-error button")).toBeNull();
           expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
           return;
         }
-        expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+        expect(panel.querySelector(".tp-error")?.textContent).toContain(
           "Session did not connect within 30 seconds",
         );
-        expect(panel.renderRoot.querySelector(".tp-error button")?.textContent?.trim()).toBe(
-          "Retry",
-        );
+        expect(panel.querySelector(".tp-error button")?.textContent?.trim()).toBe("Retry");
       }
 
       retry?.click();

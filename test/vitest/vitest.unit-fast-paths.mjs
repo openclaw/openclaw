@@ -101,6 +101,7 @@ export const forcedUnitFastTestFiles = [
   "src/mcp/openclaw-tools-serve.test.ts",
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
+  "src/node-host/invoke-system-run-plan.cwd.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
@@ -143,6 +144,8 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // Real heartbeat admission needs the infra runner's agent-database host owner.
+  "src/infra/heartbeat-runner.exact-session-busy.test.ts",
   // This family proof belongs to the PostgreSQL conformance owner.
   "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,

@@ -109,7 +109,7 @@ describe("AgentSession compaction boundary", () => {
     });
     const eventBus = createEventBus();
     try {
-      const resourceLoader = createResourceLoader();
+      const resourceLoader = await createResourceLoader();
       const extensions = resourceLoader.getExtensions();
       extensions.extensions.push(
         await loadExtensionFromFactory(

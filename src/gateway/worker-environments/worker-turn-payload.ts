@@ -39,6 +39,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "../../agents/harness/context-engine-lifecycle.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
@@ -146,6 +147,7 @@ export function captureWorkerTurnInputAuthority(params: {
 export async function prepareWorkerAgentRuntimeIdentity(
   params: PrepareWorkerAgentRuntimeIdentityParams,
 ) {
+  const requesterOrigin = captureRequesterOrigin(params.turn);
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.turn.runId,
     runtimeKind: "worker",
@@ -186,6 +188,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     operatorAuthority,
     assertPresenceSourceCurrent,
     params.promptCacheContext,
+    requesterOrigin,
   );
   capability.receiptAuthority();
   // Worker-local process keys isolate ephemeral state only. The signed caller
@@ -579,6 +582,8 @@ export async function finalizeWorkerTurnResult(
     },
   };
   assertResultCurrent();
+  // The terminal reply is committed; retained workspace cleanup still owns settlement.
+  turn.replyOperation?.freezeAbort();
   params.onReply(result);
   await settleWorkspace();
   return result;

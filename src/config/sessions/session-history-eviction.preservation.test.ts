@@ -1,33 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  registerAgentRunContext,
-  resetAgentRunRegistryForTest,
-} from "../../infra/agent-run-registry.js";
-import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import { loadTranscriptEventsSync, replaceSessionEntry } from "./session-accessor.js";
+import { installHistoryBudgetState } from "./session-history-budget-state.test-support.js";
 import { createSessionHistoryBudgetFixture } from "./session-history-budget.test-support.js";
 import {
-  enforceSqliteSessionHistoryDiskBudget,
-  inspectSqliteSessionHistoryDiskBudget,
+  enforceSqliteSessionHistoryDiskBudget as enforce,
+  inspectSqliteSessionHistoryDiskBudget as inspect,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 describe("SQLite historical session preservation", () => {
-  let testState: OpenClawTestState;
   let tempDir: string;
   let storePath: string;
   const {
@@ -38,28 +30,22 @@ describe("SQLite historical session preservation", () => {
     readArchiveNames,
   } = createSessionHistoryBudgetFixture(() => ({ storePath, tempDir }));
 
-  beforeEach(async () => {
-    testState = await createOpenClawTestState({
-      prefix: "openclaw-session-history-preservation-",
-      layout: "state-only",
-    });
-    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(testState.root);
-    tempDir = testState.sessionsDir();
-    fs.mkdirSync(tempDir, { recursive: true });
-    storePath = path.join(tempDir, "sessions.json");
+  installHistoryBudgetState("openclaw-session-history-preservation-", (_state, dir, store) => {
+    tempDir = dir;
+    storePath = store;
   });
-
-  afterEach(async () => {
-    resetAgentRunRegistryForTest();
-    vi.restoreAllMocks();
-    await enforceSqliteSessionHistoryDiskBudget({
-      storePath,
-      mode: "warn",
-      maintenance: { maxDiskBytes: null, highWaterBytes: null },
-    });
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await testState.cleanup();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const history = (
+    sessionId: string,
+    nextSessionId: string,
+    sessionKey: string,
+    updatedAt: number,
+    content = "history",
+  ) => createHistoricalTranscript({ sessionId, nextSessionId, sessionKey, updatedAt, content });
+  const input = (preserveRecentMs?: number, maxDiskBytes = 1, highWaterBytes = 1) => ({
+    storePath,
+    mode: "enforce" as const,
+    maintenance: { maxDiskBytes, highWaterBytes, preserveRecentMs },
   });
   it.each(["registry", "recent", "pinned", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
@@ -83,36 +69,23 @@ describe("SQLite historical session preservation", () => {
         try {
           const result = await operation();
           // Whole-store recent-history discovery belongs to the worker; keyed live checks remain.
-          expect.soft(reads.rowCounts.history).toBe(0);
-          expect.soft(reads.textBytes.history).toBe(0);
+          expect.soft([reads.rowCounts.history, reads.textBytes.history]).toEqual([0, 0]);
           return result;
         } finally {
           reads.restore();
         }
       }
       const now = Date.now();
-      const dayMs = 24 * 60 * 60 * 1000;
+      const staleAt = now - 8 * dayMs;
       const recentKey = "agent:main:recent-history";
       const staleKey = "agent:main:stale-history";
-      await createHistoricalTranscript({
-        content: "recent history " + "r".repeat(64 * 1024),
-        nextSessionId: "recent-middle",
-        sessionId: "recent-old",
-        sessionKey: recentKey,
-        updatedAt: now - 8 * dayMs,
-      });
-      await createHistoricalTranscript({
-        content: "middle history",
-        nextSessionId: "recent-live",
-        sessionId: "recent-middle",
-        sessionKey: recentKey,
-        updatedAt: now - 8 * dayMs + 1,
-      });
+      await history("recent-old", "recent-middle", recentKey, staleAt, "r".repeat(64 * 1024));
+      await history("recent-middle", "recent-live", recentKey, staleAt + 1);
       await replaceSessionEntry(
         { sessionKey: recentKey, storePath },
         {
           sessionId: "recent-live",
-          updatedAt: protection === "recent" ? now : now - 8 * dayMs,
+          updatedAt: protection === "recent" ? now : staleAt,
           ...(protection === "recent"
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
@@ -123,13 +96,7 @@ describe("SQLite historical session preservation", () => {
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
         },
       );
-      await createHistoricalTranscript({
-        content: "stale history " + "s".repeat(64 * 1024),
-        nextSessionId: "stale-live",
-        sessionId: "stale-old",
-        sessionKey: staleKey,
-        updatedAt: now - 8 * dayMs,
-      });
+      await history("stale-old", "stale-live", staleKey, staleAt, "s".repeat(64 * 1024));
       settlePhysicalUsage();
       if (protection === "registry") {
         registerAgentRunContext("history-live-run", {
@@ -139,44 +106,24 @@ describe("SQLite historical session preservation", () => {
         });
       }
       const before = await measureSessionPhysicalDiskUsage(storePath);
-
+      const preserveRecentMs = protection === "recent" ? 7 * dayMs : undefined;
       const result = await inspectHistoryReads(() =>
-        enforceSqliteSessionHistoryDiskBudget({
-          storePath,
-          mode: "enforce",
-          maintenance: {
-            maxDiskBytes: before.totalBytes - 1,
-            highWaterBytes: 0,
-            preserveRecentMs: protection === "recent" ? 7 * dayMs : undefined,
-          },
-        }),
+        enforce(input(preserveRecentMs, before.totalBytes - 1, 0)),
       );
 
       expect(result?.removedEntries).toBe(1);
-      expect(sessionExists("recent-old")).toBe(true);
-      expect(sessionExists("recent-middle")).toBe(true);
-      expect(sessionExists("recent-live")).toBe(true);
-      expect(sessionExists("stale-old")).toBe(false);
-      expect(sessionExists("stale-live")).toBe(true);
+      expect(
+        ["recent-old", "recent-middle", "recent-live", "stale-old", "stale-live"].map(
+          sessionExists,
+        ),
+      ).toEqual([true, true, true, false, true]);
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
-      const repeated = {
-        storePath,
-        mode: "enforce" as const,
-        maintenance: {
-          maxDiskBytes: 1,
-          highWaterBytes: 1,
-          preserveRecentMs: protection === "recent" ? 7 * dayMs : undefined,
-        },
-      };
-      expect(
-        await inspectHistoryReads(() => inspectSqliteSessionHistoryDiskBudget(repeated)),
-      ).toMatchObject({
+      const repeated = input(preserveRecentMs);
+      expect(await inspectHistoryReads(() => inspect(repeated))).toMatchObject({
         wouldMutate: false,
       });
-      expect(
-        await inspectHistoryReads(() => enforceSqliteSessionHistoryDiskBudget(repeated)),
-      ).toMatchObject({
+      expect(await inspectHistoryReads(() => enforce(repeated))).toMatchObject({
         removedEntries: 0,
       });
       for (const sessionId of ["recent-old", "recent-middle"]) {
@@ -203,13 +150,7 @@ describe("SQLite historical session preservation", () => {
       }
       const sessionKey = "agent:main:raw-identity-history";
       const now = Date.now();
-      await createHistoricalTranscript({
-        content: "retained history",
-        nextSessionId: "raw-live",
-        sessionId: "raw-old",
-        sessionKey,
-        updatedAt: now,
-      });
+      await history("raw-old", "raw-live", sessionKey, now);
       const owner = database();
       const encode = (value: string) => {
         const bytes = Buffer.from(value, "utf16le");
@@ -244,23 +185,10 @@ describe("SQLite historical session preservation", () => {
       };
       expect(readBytes()).toEqual(expectedBytes);
       settlePhysicalUsage();
-      const input = {
-        storePath,
-        mode: "enforce" as const,
-        maintenance: {
-          maxDiskBytes: 1,
-          highWaterBytes: 1,
-          preserveRecentMs: 7 * 24 * 60 * 60 * 1000,
-        },
-      };
-      expect(await inspectSqliteSessionHistoryDiskBudget(input)).toMatchObject({
-        wouldMutate: false,
-      });
-      expect(await enforceSqliteSessionHistoryDiskBudget(input)).toMatchObject({
-        removedEntries: 0,
-      });
-      expect(sessionExists("raw-old")).toBe(true);
-      expect(sessionExists("raw-live")).toBe(true);
+      const preserved = input(7 * dayMs);
+      expect(await inspect(preserved)).toMatchObject({ wouldMutate: false });
+      expect(await enforce(preserved)).toMatchObject({ removedEntries: 0 });
+      expect(["raw-old", "raw-live"].map(sessionExists)).toEqual([true, true]);
       expect(loadTranscriptEventsSync({ sessionId: "raw-old", sessionKey, storePath })).not.toEqual(
         [],
       );

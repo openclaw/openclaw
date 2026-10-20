@@ -1,4 +1,3 @@
-// Prunes superseded silent device pairings after a fresh silent auto-approval.
 import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,

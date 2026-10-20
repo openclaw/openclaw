@@ -1,5 +1,7 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import type { Compilable } from "kysely";
 import { vi } from "vitest";
 import * as pidAlive from "../shared/pid-alive.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
@@ -45,17 +47,19 @@ export function createManagedHandoffRecoveryFixture(root: string) {
     timeoutMs: null,
   };
   const repairFacts = vi.spyOn(cleanup, "readManagedHandoffRepairFacts").mockResolvedValue(facts);
-  const processCensus: { matchingPids: number[]; unverifiedPids: number[]; error?: string } = {
+  const processCensus: {
+    matchingPids: number[];
+    unverifiedPids: number[];
+    warnings?: string[];
+    error?: string;
+  } = {
     matchingPids: [],
     unverifiedPids: [],
   };
   const runCensus = new Map<string, typeof processCensus>();
-  function inspect(references: {
-    runId: string;
-    artifactPaths: readonly string[];
-  }): typeof processCensus;
+  function inspect(references: { runId: string }): typeof processCensus;
   function inspect(): { pids: number[] };
-  function inspect(references?: { runId: string; artifactPaths: readonly string[] }) {
+  function inspect(references?: { runId: string }) {
     return references
       ? (runCensus.get(references.runId) ?? processCensus)
       : { pids: processCensus.matchingPids };
@@ -64,12 +68,14 @@ export function createManagedHandoffRecoveryFixture(root: string) {
   const databasePath = path.join(control, "managed-update-handoffs.sqlite");
   const database = createManagedHandoffLeaseDatabase(databasePath);
   const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
-  const current = () => {
-    const found = store.read(root);
-    if (found.kind !== "current") {
-      throw new Error("Expected a retained handoff");
-    }
+  const current = (key = root) => {
+    const found = store.read(key);
+    assert(found.kind === "current", "Expected a retained handoff");
     return found.lease;
+  };
+  const mutate = (query: (tables: ReturnType<typeof leaseQueries>) => Compilable, key = root) => {
+    database(true, (db) => executeSqliteQuerySync(db, query(leaseQueries(db))));
+    return current(key);
   };
   return {
     root,
@@ -82,27 +88,30 @@ export function createManagedHandoffRecoveryFixture(root: string) {
     facts,
     diagnosticPath,
     current,
-    seed(options: { ageMs?: number; timeoutMs?: number } = {}): ManagedHandoffLease {
+    seed(
+      options: { ageMs?: number; timeoutMs?: number; legacy?: string } = {},
+    ): ManagedHandoffLease {
       const updatedAt = Date.now() - (options.ageMs ?? 45 * 60_000 + 1_000);
+      const key = options.legacy ? `${root}/.openclaw-update-child-${options.legacy}` : root;
       const payload = JSON.stringify({
         version: 2,
         executor,
         helper,
-        action: { kind: "triage", phase: "uncertain", lifetime: { kind: "foreground", boot } },
+        action: options.legacy
+          ? { kind: "update" }
+          : { kind: "triage", phase: "uncertain", lifetime: { kind: "foreground", boot } },
       });
       facts.timeoutMs = options.timeoutMs ?? null;
-      database(true, (db) =>
-        executeSqliteQuerySync(
-          db,
-          leaseQueries(db).insertInto("managed_update_handoffs").values({
-            install_root: root,
+      return mutate(
+        (tables) =>
+          tables.insertInto("managed_update_handoffs").values({
+            install_root: key,
             owner: "prior-owner",
             payload_json: payload,
             updated_at: updatedAt,
           }),
-        ),
+        key,
       );
-      return current();
     },
     readMetadata(lease: ManagedHandoffLease) {
       return database(true, (db) =>
@@ -112,16 +121,12 @@ export function createManagedHandoffRecoveryFixture(root: string) {
       );
     },
     replaceHeartbeat(lease: ManagedHandoffLease) {
-      database(true, (db) =>
-        executeSqliteQuerySync(
-          db,
-          leaseQueries(db)
-            .updateTable("managed_update_handoffs")
-            .set({ updated_at: lease.updatedAt + 1 })
-            .where("install_root", "=", root),
-        ),
+      return mutate((tables) =>
+        tables
+          .updateTable("managed_update_handoffs")
+          .set({ updated_at: lease.updatedAt + 1 })
+          .where("install_root", "=", root),
       );
-      return current();
     },
   };
 }

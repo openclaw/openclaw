@@ -36,7 +36,6 @@ const {
   }),
   commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
     ok: true,
-    messageId: "current-completion-message",
   }),
   hasUnsettledCronDescendantsMock: vi.fn().mockResolvedValue(false),
   listDescendantRunsForRequesterMock: vi.fn().mockResolvedValue([]),
@@ -240,7 +239,7 @@ function expectSessionDeleted() {
       expectedLifecycleRevision: "test-lifecycle-revision",
       expectedSessionUpdatedAt: 1_000,
     },
-    timeoutMs: 10_000,
+    timeoutMs: null,
   });
 }
 
@@ -287,7 +286,6 @@ describe("dispatchCronDelivery", () => {
     });
     commitBackgroundResultToSessionMock.mockResolvedValue({
       ok: true,
-      messageId: "current-completion-message",
     });
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",

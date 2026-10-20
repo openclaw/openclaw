@@ -1,8 +1,11 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { setRpcSourceProjectSessionActive } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.core.js";
 import {
@@ -16,7 +19,6 @@ import {
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
   projectChatDisplayMessageMock,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
 } from "./server-session-events.test-support.js";
@@ -25,7 +27,6 @@ describe("live failed-attempt presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectChatDisplayMessageMock.mockImplementation(projectChatDisplayMessage);
-    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -34,6 +35,66 @@ describe("live failed-attempt presentation", () => {
     readSessionMessageByIdAsyncMock.mockReset();
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
+  });
+
+  it("does not turn queued diagnostic errors into a history invalidation", async ({ signal }) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const visible = { role: "user", content: "visible" };
+    const error = {
+      role: "assistant",
+      stopReason: "error",
+      content: [],
+      __openclaw: { runId: "retry" },
+    };
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
+      sessionId: "sess-main",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+    });
+    readSessionMessageByIdAsyncMock
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { found: true, oversized: false, seq: 1, message: visible };
+      })
+      .mockResolvedValue({ found: true, oversized: false, seq: 2, message: error });
+    const { handler, broadcastToConnIds } = createHandler(false);
+    const target = {
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/recovery.sqlite",
+    };
+    const executing = handler({
+      target,
+      lifecycleRevision: "original",
+      messageId: "visible",
+      message: visible,
+    });
+    await withinTest(entered.promise, signal);
+    const first = handler({
+      target,
+      lifecycleRevision: "original",
+      messageId: "error-1",
+      message: error,
+    });
+    const second = handler({
+      target,
+      lifecycleRevision: "original",
+      messageId: "error-2",
+      message: error,
+    });
+    try {
+      expect(first).not.toBe(second);
+      release.resolve();
+      await withinTest(Promise.all([executing, first, second]), signal);
+      expect(readSessionMessageByIdAsyncMock).toHaveBeenCalledTimes(3);
+      expect(broadcastToConnIds.mock.calls.map(([event]) => event)).toEqual(["session.message"]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([executing, first, second]);
+    }
   });
 
   it.each(["missing", "rebuilding", "overloaded", "quoted reply"])(
@@ -134,13 +195,12 @@ describe("live failed-attempt presentation", () => {
         message,
       });
       const broadcastToConnIds = vi.fn();
-      const activeRun = createActiveRun(true);
-      const controllers = new Map([["recovering-run", activeRun]]);
+      const activeRun = createActiveRun(true, true, { storePath: "/tmp/recovery.sqlite" });
+      rpcSourceTesting.reset([["recovering-run", activeRun]]);
       const handler = createTranscriptUpdateBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["broad"]) },
         sessionMessageSubscribers: { get: () => new Set(["selected"]) },
-        chatAbortControllers: controllers,
       });
       const update = {
         target: {
@@ -158,7 +218,7 @@ describe("live failed-attempt presentation", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
 
       // Keeping the idempotency entry is not evidence that execution is still active.
-      activeRun.projectSessionActive = false;
+      setRpcSourceProjectSessionActive(activeRun, false);
       broadcastToConnIds.mockClear();
       await handler(update);
       expect(broadcastToConnIds).not.toHaveBeenCalled();

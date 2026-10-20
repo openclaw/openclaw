@@ -40,7 +40,13 @@ const prefix = `mempublic_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
 const keywordDatabase = `${prefix}_keyword`;
 const noTrigramDatabase = `${prefix}_no_trigram`;
 const noUnaccentDatabase = `${prefix}_no_unaccent`;
+const capabilityFixtures = [
+  [keywordDatabase, ["unaccent", "pg_trgm"]],
+  [noTrigramDatabase, ["unaccent", "vector"]],
+  [noUnaccentDatabase, ["pg_trgm", "vector"]],
+] as const;
 const providerId = "postgres-memory-fixture";
+const sapphireHit = [{ path: "memory/sapphire.md" }];
 let root: string;
 const capabilityRoots: string[] = [];
 let workspace: string;
@@ -73,9 +79,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       for (const { nspname } of schemas.rows) {
         await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
       }
-      await client.query(`DROP DATABASE IF EXISTS "${keywordDatabase}" WITH (FORCE)`);
-      await client.query(`DROP DATABASE IF EXISTS "${noTrigramDatabase}" WITH (FORCE)`);
-      await client.query(`DROP DATABASE IF EXISTS "${noUnaccentDatabase}" WITH (FORCE)`);
+      for (const [database] of capabilityFixtures) {
+        await client.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      }
     } finally {
       await client?.end();
       for (const anchor of stateAnchors) {
@@ -90,13 +96,23 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function config(): OpenClawConfig {
+function config(provider = providerId): OpenClawConfig {
   return {
+    database: {
+      engine: "postgres",
+      postgres: {
+        connection: { source: "env", provider: "default", id: "OPENCLAW_MEMORY_PUBLIC_POSTGRES" },
+        schemaPrefix: prefix,
+      },
+    },
     plugins: { enabled: false },
-    agents: { entries: { main: { workspace }, semantic: { workspace } } },
+    agents: {
+      ownership: "explicit",
+      entries: { main: { workspace }, semantic: { workspace } },
+    },
     memory: {
       search: {
-        provider: providerId,
+        provider,
         model: "synthetic-three-dimensions",
         fallback: "none",
         sources: ["memory", "sessions"],
@@ -120,9 +136,10 @@ async function managerFor(
   cfg: OpenClawConfig,
   purpose: "cli" | "status" = "cli",
   agentId = "main",
+  inspectSources = false,
 ) {
   setRuntimeConfigSnapshot(cfg);
-  const result = await runtime.getMemorySearchManager({ cfg, agentId, purpose });
+  const result = await runtime.getMemorySearchManager({ cfg, agentId, purpose, inspectSources });
   assert(result.manager, result.error ?? "Expected public PostgreSQL memory manager");
   return result.manager;
 }
@@ -144,27 +161,47 @@ function admitStateAnchor(stateRoot: string) {
   stateAnchors.push(anchor);
 }
 
+async function createStateRoot(stateRoot: string) {
+  // Raw Vitest workers need the anchor file before its native open.
+  await fs.mkdir(path.join(stateRoot, "state"));
+  await fs.writeFile(path.join(stateRoot, "state", "openclaw.sqlite"), "", { flag: "wx" });
+}
+
+function selectStateRoot(stateRoot: string) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateRoot, "openclaw.json"));
+}
+
+function selectEngine(url: string) {
+  installDatabaseEngineSelection({
+    effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+    postgres: { connection: url, schemaPrefix: prefix },
+  });
+}
+
+async function searchWithConfig(cfg: OpenClawConfig, agentId = "main") {
+  const manager = await managerFor(cfg, "cli", agentId);
+  return manager.search("sapphire");
+}
+
 async function selectCapabilityDatabase(name: string) {
   await runtime.closeAllMemorySearchManagers?.();
   await cleanupSessionStateForTest({ stateDir: capabilityRoots.at(-1) ?? root });
   const stateRoot = tempDirs.make("memory-public-capability-postgres-");
   capabilityRoots.push(stateRoot);
-  await fs.mkdir(path.join(stateRoot, "state"));
-  await fs.writeFile(path.join(stateRoot, "state", "openclaw.sqlite"), "", { flag: "wx" });
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateRoot, "openclaw.json"));
+  await createStateRoot(stateRoot);
+  selectStateRoot(stateRoot);
   const url = new URL(connection!);
   url.pathname = `/${name}`;
+  vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", url.href);
   resetDatabaseEngineSelectionForTest();
-  installDatabaseEngineSelection({
-    effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-    postgres: { connection: url.href, schemaPrefix: prefix },
-  });
+  selectEngine(url.href);
   admitStateAnchor(stateRoot);
 }
 
 describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", connection!);
     registerEmbeddingProvider({
       id: providerId,
       transport: "remote",
@@ -181,48 +218,31 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
 
   beforeAll(async () => {
     root = tempDirs.make("memory-public-postgres-");
-    // Raw Vitest workers cannot lend admission for files created by a later native open.
-    await fs.mkdir(path.join(root, "state"));
-    await fs.writeFile(path.join(root, "state", "openclaw.sqlite"), "", { flag: "wx" });
+    await createStateRoot(root);
     workspace = path.join(root, "workspace");
     await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspace, "memory", "sapphire.md"),
-      "Sapphire navigation records the northern harbor coordinates.\n",
-    );
-    await fs.writeFile(
-      path.join(workspace, "memory", "ruby.md"),
-      "Ruby gardening records the southern orchard harvest.\n",
-    );
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: prefix },
-    });
+    await fs.writeFile(path.join(workspace, "memory/sapphire.md"), "Sapphire northern harbor.\n");
+    await fs.writeFile(path.join(workspace, "memory/ruby.md"), "Ruby orchard.\n");
+    selectStateRoot(root);
+    selectEngine(connection!);
+    vi.stubEnv("OPENCLAW_MEMORY_PUBLIC_POSTGRES", connection!);
     client = new pg.Client({ connectionString: connection });
     await client.connect();
-    await client.query("CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public");
-    await client.query("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public");
-    await client.query("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public");
+    for (const extension of ["unaccent", "pg_trgm", "vector"]) {
+      await client.query(`CREATE EXTENSION IF NOT EXISTS ${extension} WITH SCHEMA public`);
+    }
     admitStateAnchor(root);
-    await client.query(`CREATE DATABASE "${keywordDatabase}" TEMPLATE template0`);
-    await client.query(`CREATE DATABASE "${noTrigramDatabase}" TEMPLATE template0`);
-    await client.query(`CREATE DATABASE "${noUnaccentDatabase}" TEMPLATE template0`);
-    for (const database of [keywordDatabase, noTrigramDatabase, noUnaccentDatabase]) {
+    for (const [database] of capabilityFixtures) {
+      await client.query(`CREATE DATABASE "${database}" TEMPLATE template0`);
+    }
+    for (const [database, extensions] of capabilityFixtures) {
       const url = new URL(connection!);
       url.pathname = `/${database}`;
       const capabilityClient = new pg.Client({ connectionString: url.href });
       await capabilityClient.connect();
       try {
-        if (database !== noUnaccentDatabase) {
-          await capabilityClient.query("CREATE EXTENSION unaccent WITH SCHEMA public");
-        }
-        if (database !== noTrigramDatabase) {
-          await capabilityClient.query("CREATE EXTENSION pg_trgm WITH SCHEMA public");
-        }
-        if (database !== keywordDatabase) {
-          await capabilityClient.query("CREATE EXTENSION vector WITH SCHEMA public");
+        for (const extension of extensions) {
+          await capabilityClient.query(`CREATE EXTENSION ${extension} WITH SCHEMA public`);
         }
       } finally {
         await capabilityClient.end();
@@ -237,8 +257,7 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
         createPluginStateKeyedStoreForTests<T>("memory-core", { ...options, env: process.env }),
     };
     runtime = createMemoryRuntime(host);
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    selectStateRoot(root);
     const cfg = config();
     await fs.writeFile(path.join(root, "openclaw.json"), JSON.stringify(cfg));
     setRuntimeConfigSnapshot(cfg);
@@ -264,35 +283,58 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
   });
 
   it("indexes, searches, forgets, resets, and re-admits through public entry points", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    selectStateRoot(root);
     const hybrid = await managerFor(config());
     assert(hybrid.sync);
     assert(hybrid.statusAsync);
     await hybrid.sync({ force: true, reason: "test" });
     const lexical = await hybrid.search("sapphire", { lexicalOnly: true, maxResults: 1 });
-    expect(lexical).toMatchObject([{ path: "memory/sapphire.md" }]);
-    expect(lexical[0]?.snippet).toContain("northern harbor");
-    const combined = await hybrid.search("sapphire", { maxResults: 1 });
-    expect(combined).toMatchObject([{ path: "memory/sapphire.md" }]);
-    expect(await hybrid.search("blue-coordinate", { lexicalOnly: true })).toEqual([]);
-    expect(await hybrid.search("blue-coordinate", { maxResults: 1 })).toMatchObject([
-      { path: "memory/sapphire.md" },
+    expect(lexical).toMatchObject([
+      { ...sapphireHit[0], snippet: expect.stringContaining("northern harbor") },
     ]);
+    expect(await hybrid.search("sapphire", { maxResults: 1 })).toMatchObject(sapphireHit);
+    expect(await hybrid.search("blue-coordinate", { lexicalOnly: true })).toEqual([]);
+    expect(await hybrid.search("blue-coordinate", { maxResults: 1 })).toMatchObject(sapphireHit);
     const indexed = await hybrid.statusAsync();
-    expect(indexed).toMatchObject({ files: 3, chunks: 3, fts: { available: true } });
-    expect(indexed.vector?.index?.state).toBe("complete");
-    await runtime.closeAllMemorySearchManagers?.();
-
-    const reopened = await managerFor(config(), "status");
-    assert(reopened.statusAsync);
-    expect(await reopened.statusAsync()).toMatchObject({
+    expect(indexed).toMatchObject({
       files: 3,
       chunks: 3,
       fts: { available: true },
       vector: { index: { state: "complete" } },
     });
     await runtime.closeAllMemorySearchManagers?.();
+
+    assert(indexed.dbPath);
+    let namespace: string;
+    {
+      using anchor = openNodeSqliteDatabase(indexed.dbPath, { readOnly: true });
+      const row = anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get();
+      assert(typeof row?.schema === "string");
+      namespace = row.schema;
+    }
+    const rows = async (sql: string) => (await client.query(sql)).rows;
+    const indexRows = async () => ({
+      sources: await rows(`SELECT * FROM "${namespace}".memory_index_sources ORDER BY id`),
+      chunks: await rows(`SELECT * FROM "${namespace}".memory_index_chunks ORDER BY id`),
+      metadata: await rows(`SELECT * FROM "${namespace}".memory_index_meta ORDER BY key`),
+      revision: await rows(`SELECT revision FROM "${namespace}".memory_index_state WHERE id = 1`),
+    });
+    const beforeDiagnostic = await indexRows();
+    const reopened = await managerFor(config(), "status", "main", true);
+    assert(reopened.statusAsync);
+    expect(await reopened.statusAsync()).toMatchObject({
+      files: 3,
+      chunks: 3,
+      dirty: false,
+      sourceCounts: [
+        { source: "memory", files: 2, chunks: 2, eligible: 2, issues: [] },
+        { source: "sessions", files: 1, chunks: 1, eligible: 1, issues: [] },
+      ],
+      fts: { available: true },
+      vector: { index: { state: "complete" } },
+    });
+    await runtime.closeAllMemorySearchManagers?.();
+    expect(await indexRows()).toEqual(beforeDiagnostic);
 
     await runMemoryCommand(["forget", "--agent", "main", "--session", "postgres-public-forget"]);
     const forgotten = await managerFor(config());
@@ -314,15 +356,11 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
 
   it("serves explicit keyword-only memory without pgvector and rejects semantic bootstrap by name", async () => {
     await selectCapabilityDatabase(keywordDatabase);
-    const keywordConfig = config();
-    keywordConfig.memory!.search!.provider = "none";
-    const keyword = await managerFor(keywordConfig);
+    const keyword = await managerFor(config("none"));
     assert(keyword.sync);
     assert(keyword.statusAsync);
     await keyword.sync({ force: true, reason: "test" });
-    expect(await keyword.search("sapphire", { maxResults: 1 })).toMatchObject([
-      { path: "memory/sapphire.md" },
-    ]);
+    expect(await keyword.search("sapphire", { maxResults: 1 })).toMatchObject(sapphireHit);
     expect(await keyword.statusAsync()).toMatchObject({
       provider: "none",
       files: 2,
@@ -341,27 +379,18 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
 
   it("refuses configured trigram search without pg_trgm and names the administrator action", async () => {
     await selectCapabilityDatabase(noTrigramDatabase);
-    const cfg = config();
+    const cfg = config("none");
     cfg.agents!.entries!.trigram = { workspace };
-    cfg.memory!.search!.provider = "none";
     cfg.memory!.search!.store = { fts: { tokenizer: "trigram" } };
-    await expect(
-      (async () => {
-        const manager = await managerFor(cfg, "cli", "trigram");
-        await manager.search("sapphire");
-      })(),
-    ).rejects.toThrow(/PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/);
+    await expect(searchWithConfig(cfg, "trigram")).rejects.toThrow(
+      /PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/,
+    );
   });
 
   it("refuses full-text admission without unaccent and names the administrator action", async () => {
     await selectCapabilityDatabase(noUnaccentDatabase);
-    const cfg = config();
-    cfg.memory!.search!.provider = "none";
-    await expect(
-      (async () => {
-        const manager = await managerFor(cfg);
-        await manager.search("sapphire");
-      })(),
-    ).rejects.toThrow(/PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/);
+    await expect(searchWithConfig(config("none"))).rejects.toThrow(
+      /PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/,
+    );
   });
 });

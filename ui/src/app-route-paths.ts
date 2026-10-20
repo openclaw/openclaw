@@ -350,15 +350,23 @@ export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string
 }
 
 export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {
-  const match = /^@openclaw\/([a-z0-9][a-z0-9._-]*)$/u.exec(packageName);
-  if (!match) {
-    throw new Error("Only official Claws can be opened from a route path.");
+  if (!isClawCatalogPackageName(packageName)) {
+    throw new Error("Invalid Claw package name for a route path.");
   }
-  return `${pathForRoute("claws", basePath)}/${match[1]}`;
+  return `${pathForRoute("claws", basePath)}/packages/${encodeURIComponent(packageName)}`;
+}
+
+function isClawCatalogPackageName(value: string): boolean {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value);
 }
 
 export function clawCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
   const slug = routePathSuffix(pathname, "claws", basePath);
+  if (slug?.startsWith("packages/")) {
+    const packageName = decodeRouteSegment(slug.slice("packages/".length));
+    return packageName && isClawCatalogPackageName(packageName) ? packageName : null;
+  }
+  // Preserve the original official-only detail links.
   return slug && /^[a-z0-9][a-z0-9._-]*$/u.test(slug) ? `@openclaw/${slug}` : null;
 }
 
@@ -448,10 +456,13 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   dashboard: INTERNAL_SESSION_PATH_PARAM,
 } as const;
 
-// These namespaces belong to app documents. /plugins also owns Gateway HTTP
-// routes, so offline admission there stays limited to its exact catalog root.
+// These namespaces belong to app documents. /plugins and /plugin also own Gateway
+// HTTP routes (plugin tabs use /<slug> or /plugin?…), so offline admission there
+// stays limited to the exact roots.
+const GATEWAY_SHARED_ROUTE_IDS: ReadonlySet<RouteId> = new Set(["plugins", "plugin"]);
 export const APP_ROUTE_OFFLINE_PREFIXES = APP_ROUTE_IDS.filter(
-  (routeId) => routeId !== "plugins" && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
+  (routeId) =>
+    !GATEWAY_SHARED_ROUTE_IDS.has(routeId) && Object.hasOwn(DYNAMIC_ROUTE_PATH_PARAMS, routeId),
 ).map((routeId) => `${pathForRoute(routeId)}/`);
 
 const DYNAMIC_ROUTE_MATCHERS = [

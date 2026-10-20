@@ -468,17 +468,11 @@ export function replaceClawHubSkillLockEntryExpected(params: {
       throw new Error(`Skill ${JSON.stringify(params.slug)} tracking changed during rollback.`);
     }
   };
-  beforeRename();
-  replaceFileAtomicSync({
-    filePath: path.join(params.workspaceDir, DOT_DIR, "lock.json"),
-    content: `${JSON.stringify(next, null, 2)}\n`,
-    mode: 0o600,
-    dirMode: 0o777 & ~process.umask(),
-    copyFallbackOnPermissionError: true,
-    syncTempFile: true,
-    syncParentDir: true,
+  writeGuardedClawHubTrackingJson(
+    path.join(params.workspaceDir, DOT_DIR, "lock.json"),
+    next,
     beforeRename,
-  });
+  );
 }
 
 export function resolveWorkspaceClawHubSkills(workspaceDir: string) {

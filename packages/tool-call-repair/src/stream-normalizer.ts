@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
@@ -97,8 +98,7 @@ type SuppressingPendingState = {
 type PendingState = CandidatePendingState | SuppressingPendingState;
 
 function eventContentIndex(event: Record<string, unknown>): number {
-  const index = event.contentIndex;
-  return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
+  return asNonNegativeInteger(event.contentIndex) ?? 0;
 }
 
 function isTextStreamEvent(event: Record<string, unknown>): boolean {
@@ -498,13 +498,8 @@ function orderByContentIndex(
 ): unknown[] {
   const contentLength = Array.isArray(message.content) ? message.content.length : 0;
   const order = (event: unknown) => {
-    const index = asOptionalObjectRecord(event)?.contentIndex;
-    return typeof index === "number" &&
-      Number.isInteger(index) &&
-      index >= 0 &&
-      index < contentLength
-      ? index
-      : contentLength;
+    const index = asNonNegativeInteger(asOptionalObjectRecord(event)?.contentIndex);
+    return index !== undefined && index < contentLength ? index : contentLength;
   };
   return events.toSorted((left, right) => order(left) - order(right));
 }

@@ -221,7 +221,16 @@ export async function runMemoryKeywordSearch(
     { ...target, kind: "keyword", query, includeIndexState },
     {
       signal,
-      inputBytes: 2 * (query.body.query.length + query.path.query.length),
+      inputBytes:
+        2 * (query.body.query.length + query.path.query.length) +
+        (query.body.sourceFilter.excludedSessionPaths?.reduce(
+          (bytes, path) => bytes + path.length * 2,
+          0,
+        ) ?? 0) +
+        (query.path.sourceFilter.excludedSessionPaths?.reduce(
+          (bytes, path) => bytes + path.length * 2,
+          0,
+        ) ?? 0),
     },
     "keyword",
   );
@@ -238,7 +247,11 @@ export async function runMemoryVectorFallback(
       signal,
       inputBytes:
         query.queryVec.length * 8 +
-        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0),
+        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0) +
+        (query.sourceFilter.excludedSessionPaths?.reduce(
+          (bytes, path) => bytes + path.length * 2,
+          0,
+        ) ?? 0),
     },
     "vector",
   );

@@ -1,4 +1,3 @@
-/** Doctor diagnostics for managed loopback and web_fetch proxy routing. */
 import tls from "node:tls";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";

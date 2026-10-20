@@ -15,7 +15,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../logger.js", () => ({
   log: { debug: mocks.logDebug, error: mocks.logError, warn: mocks.logWarn },
 }));
-vi.mock("../runs.js", () => ({ clearActiveEmbeddedRun: mocks.clearActiveEmbeddedRun }));
+// mock-isolation: Finalization fixtures observe detach without mutating the live native-run owner.
+vi.mock("../runs.js", () => ({ detachActiveEmbeddedRun: mocks.clearActiveEmbeddedRun }));
 vi.mock("./attempt-finalize.js", () => ({
   completeEmbeddedAttemptAfterTurn: mocks.completeAfterTurn,
 }));
