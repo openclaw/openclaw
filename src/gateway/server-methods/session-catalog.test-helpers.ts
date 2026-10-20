@@ -12,13 +12,9 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
-  sessionCatalogs: Array<{
-    pluginId?: string;
-    pluginName?: string;
-    provider: SessionCatalogProvider;
-    rootDir?: string;
-    source?: string;
-  }>;
+  sessionCatalogs: Array<
+    Partial<PluginRegistry["sessionCatalogs"][number]> & { provider: SessionCatalogProvider }
+  >;
 };
 
 const hoisted = vi.hoisted(() => ({
@@ -83,10 +79,7 @@ export function setSessionCatalogEntries(
   entries: Array<{ sessionKey: string; entry: Partial<SessionEntry> }>,
 ) {
   const next = Object.fromEntries(
-    entries.map(({ sessionKey, entry }) => [
-      sessionKey,
-      { sessionId: sessionKey, updatedAt: 1, ...entry },
-    ]),
+    entries.map(({ sessionKey: key, entry }) => [key, { sessionId: key, updatedAt: 1, ...entry }]),
   );
   for (const projection of projections) {
     for (const key of new Set([...Object.keys(sessionStore), ...Object.keys(next)])) {
