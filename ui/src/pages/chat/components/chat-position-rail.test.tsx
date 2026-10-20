@@ -24,7 +24,7 @@ import {
 
 function mountThread(container: HTMLElement, transcript: ChatTranscript) {
   const [props, setProps] = createSignal<ChatThreadProps | null>(null);
-  const view = mountSolid(
+  mountSolid(
     () => (
       <Show when={props()}>
         {(current) => <ChatThread props={current()} transcript={transcript} />}
@@ -33,7 +33,6 @@ function mountThread(container: HTMLElement, transcript: ChatTranscript) {
     { container },
   );
   return {
-    unmount: view.unmount,
     render(next: ChatThreadProps | null) {
       setProps(next ? { ...next } : null);
       flush();
@@ -51,10 +50,15 @@ function fixture(props?: ChatThreadProps) {
     view!.render(props!);
     transcript.update();
   };
-  function find<T extends Element = Element>(selector: string) {
+  function find<T extends Element = HTMLElement>(selector: string) {
     return container.querySelector<T>(selector);
   }
-  return { transcript, container, view, render, find };
+  const rail = (part: string) => find(`.chat-position-rail${part}`);
+  if (props) {
+    render();
+    transcript.start();
+  }
+  return { transcript, container, view, render, find, rail };
 }
 
 function observeBubbles() {
@@ -76,11 +80,19 @@ const settleFrames = () =>
   new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
-function sizeRail(marks: HTMLElement, height: number) {
-  Object.defineProperty(marks, "clientHeight", { configurable: true, value: height });
+function publishSize(element: HTMLElement, width: number, height: number) {
   for (const observer of resizeObservers) {
-    observer.emitTarget(marks, 44, height);
+    observer.emitTarget(element, width, height);
   }
+}
+function dimensions(element: HTMLElement, values: Record<string, number>) {
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(element, key, { configurable: true, value });
+  }
+}
+function sizeRail(marks: HTMLElement, height: number) {
+  dimensions(marks, { clientHeight: height });
+  publishSize(marks, 44, height);
 }
 
 type Positions = Parameters<typeof ChatPositionRail>[0]["positions"];
@@ -94,7 +106,6 @@ function positionsFor(count: number): Positions {
   return { markers, markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])) };
 }
 function mountRail(
-  key: string,
   positions: () => Positions,
   activeMessage?: () => string,
   bubbleId = "message-79",
@@ -102,7 +113,7 @@ function mountRail(
   const { transcript, container, find } = fixture();
   mountSolid(
     () =>
-      transcript.renderSession(key, (session) => {
+      transcript.renderSession("agent:main:rail", (session) => {
         if (activeMessage) {
           vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
         }
@@ -113,7 +124,7 @@ function mountRail(
               class="chat-bubble"
               data-entry-id={bubbleId}
             >
-              {bubbleId === "short" ? "A short question" : "Latest message"}
+              Latest message
             </div>
             <ChatPositionRail positions={positions()} transcript={session} />
           </div>
@@ -130,6 +141,14 @@ function mountRail(
 }
 const previewText = (container: ParentNode) =>
   container.querySelector(".chat-position-rail__preview-copy")?.textContent;
+const markersIn = (container: ParentNode) => [
+  ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
+];
+const tabInto = (marker: HTMLButtonElement) => {
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  marker.focus();
+  expect(marker.matches(":focus-visible")).toBe(true);
+};
 
 beforeEach(installTranscriptDomMocks);
 afterEach(() => {
@@ -147,11 +166,7 @@ it.each(["mounted", "off-window", "focused"] as const)(
     const publishVisibility = stubRailVisibility();
     const activeMessage = vi.fn(() => "message-79");
     const positions = positionsFor(80);
-    const { root, marks } = mountRail(
-      "agent:main:rail-publication",
-      () => positions,
-      activeMessage,
-    );
+    const { root, marks } = mountRail(() => positions, activeMessage);
     sizeRail(marks, 240);
     const marker = (id: string) =>
       marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
@@ -169,9 +184,7 @@ it.each(["mounted", "off-window", "focused"] as const)(
       marks.scrollTop = 40 * 12;
       marks.dispatchEvent(new Event("scroll"));
       flushFrame();
-      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-      marker("message-40")!.focus();
-      expect(marker("message-40")!.matches(":focus-visible")).toBe(true);
+      tabInto(marker("message-40")!);
     }
     const focused = document.activeElement;
     const offset = marks.scrollTop;
@@ -180,8 +193,7 @@ it.each(["mounted", "off-window", "focused"] as const)(
     activeMessage.mockReturnValue(nextId);
     publishVisibility(root.querySelector(".chat-bubble")!);
 
-    // Observer delivery must not expose a new aria-current with the old Tab entry.
-    // Assert before advancing any frame, rather than waiting out that mismatch.
+    // Check atomic current/Tab publication before advancing a frame.
     expect(current()).not.toBeNull();
     expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
     expect(document.activeElement).toBe(focused);
@@ -189,7 +201,7 @@ it.each(["mounted", "off-window", "focused"] as const)(
     expect(current()?.dataset.positionMarkerId).toBe(nextId);
     expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
     expect(document.activeElement).toBe(focused);
-    expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
+    expect(markersIn(marks).length).toBeLessThan(50);
     if (scenario === "focused") {
       expect(marks.scrollTop).toBe(offset);
       // Leaving exploration restores the retained, off-window reader entry immediately.
@@ -219,28 +231,10 @@ it.each(["mounted", "off-window", "focused"] as const)(
 it("reveals only overflowing transcripts and retires focus when they fit again", () => {
   const flushFrame = stubAnimationFrames();
   stubRailVisibility();
-  const positions = {
-    markers: [
-      {
-        id: "short",
-        anchorId: "short",
-        role: "user" as const,
-        message: message("short", "user", "A short question", 1),
-      },
-    ],
-    markerIdsByMessageId: new Map([["short", "short"]]),
-  };
-  const { root, marks } = mountRail(
-    "agent:main:rail-overflow",
-    () => positions,
-    undefined,
-    "short",
-  );
+  const positions = positionsFor(1);
+  const { root, marks } = mountRail(() => positions, undefined, "message-0");
   const rail = root.querySelector<HTMLElement>(".chat-position-rail")!;
-  Object.defineProperties(root, {
-    clientHeight: { configurable: true, value: 600 },
-    scrollHeight: { configurable: true, value: 600 },
-  });
+  dimensions(root, { clientHeight: 600, scrollHeight: 600 });
   sizeRail(marks, 12);
   flushFrame();
   expect(rail.hasAttribute("data-overflow")).toBe(false);
@@ -260,12 +254,14 @@ it("reveals only overflowing transcripts and retires focus when they fit again",
   expect(rail.hasAttribute("data-overflow")).toBe(false);
   expect(document.activeElement).toBe(root);
   expect(rail.querySelector(".chat-position-rail__preview")).toBeNull();
-  resize(600, 601);
-  expect(rail.hasAttribute("data-overflow")).toBe(false);
-  resize(600, 602);
-  expect(rail.hasAttribute("data-overflow")).toBe(true);
-  resize(0, 602);
-  expect(rail.hasAttribute("data-overflow")).toBe(false);
+  for (const [height, total, overflow] of [
+    [600, 601, false],
+    [600, 602, true],
+    [0, 602, false],
+  ] as const) {
+    resize(height, total);
+    expect(rail.hasAttribute("data-overflow")).toBe(overflow);
+  }
 });
 
 const railUpdateScenarios = [
@@ -284,18 +280,13 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
   const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
   const flushFrame = stubAnimationFrames();
   const publishVisibility = stubRailVisibility();
-  const count = 80;
   const startsAtTop = scenario === "resize-jump";
   const activeMessage = vi.fn((): string =>
     scenario === "resize-jump" ? "message-0" : "message-79",
   );
-  const positions = positionsFor(count);
+  const positions = positionsFor(80);
   const [currentPositions, setPositions] = createSignal(positions);
-  const { container, root, marks } = mountRail(
-    "agent:main:rail-scroll-policy",
-    () => currentPositions(),
-    activeMessage,
-  );
+  const { container, root, marks } = mountRail(currentPositions, activeMessage);
   const renderRail = () => {
     setPositions({ ...positions });
     flush();
@@ -316,7 +307,7 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
       configurable: true,
       get: () => railOffset,
       set: (value: number) => {
-        railOffset = Math.max(0, Math.min(value, count * 12 - marksHeight));
+        railOffset = Math.max(0, Math.min(value, 80 * 12 - marksHeight));
       },
     },
   });
@@ -330,30 +321,32 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
     flushFrame();
     flushFrame();
   };
+  const expectOffset = (offset = 677) => {
+    flushRailFrames();
+    expect(marks.scrollTop).toBe(offset);
+  };
+  const navigate = (index: number, offset: number) => {
+    root.scrollTop = offset;
+    activeMessage.mockReturnValue(`message-${index}`);
+  };
 
-  flushRailFrames();
-  expect(marks.scrollTop).toBe(startsAtTop ? 0 : 677);
-  expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
+  expectOffset(startsAtTop ? 0 : 677);
+  expect(markersIn(marks).length).toBeLessThan(50);
   if (scenario === "hidden") {
-    const mounted = [...marks.querySelectorAll(".chat-position-rail__marker")];
+    const mounted = markersIn(marks);
     marksHeight = 0;
     railOffset = 0;
-    for (const observer of resizeObservers) {
-      observer.emitTarget(marks, 44, 0);
-    }
+    publishSize(marks, 44, 0);
     flushFrame();
     renderRail();
     flushFrame();
-    expect([...marks.querySelectorAll(".chat-position-rail__marker")]).toEqual(mounted);
+    expect(markersIn(marks)).toEqual(mounted);
     expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("677px");
 
     // Reader navigation while hidden must be reflected once the rail returns.
-    root.scrollTop = 0;
-    activeMessage.mockReturnValue("message-0");
+    navigate(0, 0);
     marksHeight = 283;
-    for (const observer of resizeObservers) {
-      observer.emitTarget(marks, 44, 283);
-    }
+    publishSize(marks, 44, 283);
     flushFrame();
     expect(marker(0).getAttribute("aria-current")).toBe("true");
     expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("0px");
@@ -365,16 +358,13 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
     resizeTo(543, 229);
     flushRailFrames();
     expect(marker(79).hasAttribute("data-visible")).toBe(true);
-    const initialOffset = 731;
-    expect(marks.scrollTop).toBe(initialOffset);
+    expect(marks.scrollTop).toBe(731);
     resizeTo(512, 198);
-    flushRailFrames();
-    expect(marks.scrollTop).toBe(initialOffset);
+    expectOffset(731);
   } else if (scenario === "resize-jump") {
     // Initial end navigation can share the frame that reveals the composer.
     resizeTo(554, 240);
-    root.scrollTop = 8358;
-    activeMessage.mockReturnValue("message-79");
+    navigate(79, 8358);
     flushRailFrames();
     expect(marker(79).getAttribute("aria-current")).toBe("true");
     expect(Number.parseFloat(marker(79).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
@@ -393,8 +383,7 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
         readerOffset = Math.max(0, Math.min(value, scrollHeight - height));
       },
     });
-    flushRailFrames();
-    expect(marks.scrollTop).toBe(677);
+    expectOffset();
     container.classList.add("chat");
     const textarea = container.appendChild(document.createElement("textarea"));
     textarea.value = "/goal";
@@ -410,8 +399,7 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
       },
     });
     if (navigatesBeforeResize) {
-      root.scrollTop = 0;
-      activeMessage.mockReturnValue("message-0");
+      navigate(0, 0);
     }
     adjustTextareaHeight(textarea, { getTranscriptElement: () => root });
     expect(root.scrollTop).toBe(navigatesBeforeResize ? 0 : 8315);
@@ -428,37 +416,30 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
     }
     expect(marks.scrollTop).toBe(677);
     root.scrollTop = scrollHeight - height;
-    flushRailFrames();
-    expect(marks.scrollTop).toBe(677);
+    expectOffset();
   } else if (scenario === "resize") {
     resizeTo(554, 240);
     activeMessage.mockReturnValue("message-76");
-    flushRailFrames();
-    expect(marks.scrollTop).toBe(677);
+    expectOffset();
     root.scrollTop = 8319;
-    flushRailFrames();
-    expect(marks.scrollTop).toBe(677);
+    expectOffset();
     // A second resize retargets the same smooth compensation, including its last 6px.
     resizeTo(512, 198);
     flushRailFrames();
     for (const offset of [8323, 8394, 8400]) {
       root.scrollTop = offset;
-      flushRailFrames();
-      expect(marks.scrollTop).toBe(677);
+      expectOffset();
     }
     publishTranscriptScroll(root, {
       type: "input",
       event: new WheelEvent("wheel", { deltaY: -200 }),
       touching: false,
     });
-    root.scrollTop = 8000;
-    activeMessage.mockReturnValue("message-40");
+    navigate(40, 8000);
     flushRailFrames();
     expect(marks.scrollTop).toBeLessThan(677);
   } else if (scenario === "focus-resize") {
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    marker(79).focus();
-    expect(marker(79).matches(":focus-visible")).toBe(true);
+    tabInto(marker(79));
     resizeTo(554, 240);
     flushRailFrames();
     expect(document.activeElement).toBe(marker(79));
@@ -466,8 +447,7 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
   } else if (scenario === "reader-offset") {
     // Reading within the rendered rows re-renders nothing; the published
     // offset alone must move the current marker.
-    activeMessage.mockReturnValue("message-78");
-    root.scrollTop = 8200;
+    navigate(78, 8200);
     publishTranscriptScroll(root, {
       type: "offset",
       delta: -115,
@@ -475,9 +455,7 @@ it.each(railUpdateScenarios)("keeps the reader's rail position through %s update
       touching: false,
       programmatic: false,
     });
-    for (const observer of resizeObservers) {
-      observer.emitTarget(marks, 44, marksHeight);
-    }
+    publishSize(marks, 44, marksHeight);
     flushFrame();
     expect(marker(78).getAttribute("aria-current")).toBe("true");
   } else if (scenario === "pointer") {
@@ -505,8 +483,6 @@ it("keeps stream edits off target scans while reconciling registered bubble moun
   };
   const { transcript, find, render: rerender } = fixture(props);
 
-  rerender();
-  transcript.start();
   const root = find<HTMLElement>(".chat-thread");
   const marks = find<HTMLElement>(".chat-position-rail__marks");
   const original = find<HTMLElement>('.chat-bubble[data-entry-id="question"]');
@@ -543,21 +519,18 @@ it("keeps stream edits off target scans while reconciling registered bubble moun
   await expectObserved(original, false);
 
   const replacement = original.cloneNode(true) as HTMLElement;
-  root.append(replacement);
-  bubbleRef(replacement);
-  await expectObserved(replacement, true);
-  bubbleRef();
-  replacement.remove();
-  await expectObserved(replacement, false);
-
   const wrapper = document.createElement("section");
-  wrapper.append(replacement);
-  root.append(wrapper);
-  bubbleRef(replacement);
-  await expectObserved(replacement, true);
-  bubbleRef();
-  wrapper.remove();
-  await expectObserved(replacement, false);
+  for (const parent of [root, wrapper]) {
+    parent.append(replacement);
+    if (parent === wrapper) {
+      root.append(wrapper);
+    }
+    bubbleRef(replacement);
+    await expectObserved(replacement, true);
+    bubbleRef();
+    (parent === wrapper ? wrapper : replacement).remove();
+    await expectObserved(replacement, false);
+  }
 });
 
 it("resolves distant reader positions before scroll notification and counts the header once", async () => {
@@ -573,14 +546,9 @@ it("resolves distant reader positions before scroll notification and counts the 
   );
   transcripts.push(transcript);
 
-  Object.defineProperties(container, {
-    clientHeight: { configurable: true, value: 600 },
-    scrollHeight: { configurable: true, value: 4880 },
-  });
+  dimensions(container, { clientHeight: 600, scrollHeight: 4880 });
   container.style.paddingTop = "80px";
-  for (const observer of resizeObservers) {
-    observer.emitTarget(container, 800, 600);
-  }
+  publishSize(container, 800, 600);
   const ids = rows.map((row) => row.key);
   session.syncMessageRows(new Map(ids.map((id) => [id, id])), new Map(ids.map((id) => [id, id])));
   renderRows(rows);
@@ -589,7 +557,7 @@ it("resolves distant reader positions before scroll notification and counts the 
   expect(session.activeMessageId(ids)).toBe("row-2");
   container.scrollTop = 3000;
   expect(session.activeMessageId(ids)).toBe("row-26");
-  Object.defineProperty(container, "clientHeight", { configurable: true, value: 300 });
+  dimensions(container, { clientHeight: 300 });
   expect(session.activeMessageId(ids)).toBe("row-25");
   container.scrollTop = 4580;
   expect(session.activeMessageId(ids)).toBe("row-39");
@@ -603,39 +571,30 @@ it("keeps focused previews after pointer exit and resets interaction when the se
   const props = threadProps("rail-interaction", "agent:main:first", messages);
   const historyIntent = vi.fn();
   props.onHistoryIntent = historyIntent;
-  const { transcript, container, view, find, render: rerender } = fixture(props);
-  const markers = () => [
-    ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
-  ];
+  const { container, view, find, rail, render: rerender } = fixture(props);
+  const markers = () => markersIn(container);
   const preview = () => previewText(container);
 
-  rerender();
-  transcript.start();
   expect(markers()).toHaveLength(40);
   // Rail wheel input belongs to its scrollport, never transcript history.
   for (const type of ["wheel", "touchstart", "touchmove"]) {
-    container
-      .querySelector(".chat-position-rail__marks")!
-      .dispatchEvent(new Event(type, { bubbles: true }));
+    rail("__marks")!.dispatchEvent(new Event(type, { bubbles: true }));
   }
   for (const key of ["PageUp", "PageDown"]) {
     expect(markers()[0]!.dispatchEvent(keyEvent(key))).toBe(true);
   }
   expect(historyIntent).not.toHaveBeenCalled();
-  container
-    .querySelector(".chat-thread")!
-    .dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+  const thread = find(".chat-thread")!;
+  thread.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
   expect(historyIntent).toHaveBeenCalledOnce();
-  container
-    .querySelector(".chat-thread")!
-    .dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+  thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
   expect(historyIntent).toHaveBeenCalledTimes(2);
   expect(preview()).toBeUndefined();
   markers()[4]!.focus();
   expect(preview()).toContain("Checkpoint 4");
   markers()[2]!.dispatchEvent(new Event("pointerenter"));
   expect(preview()).toContain("Checkpoint 2");
-  find(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
+  rail("")!.dispatchEvent(new Event("pointerleave"));
   expect(preview()).toContain("Checkpoint 4");
   markers()[4]!.dispatchEvent(keyEvent("ArrowDown"));
   expect(document.activeElement).toBe(markers()[5]);
@@ -652,14 +611,10 @@ it("keeps focused previews after pointer exit and resets interaction when the se
   expect(preview()).toContain("Checkpoint 5");
   focused!.dispatchEvent(keyEvent("Escape"));
   expect(preview()).toBeUndefined();
-  const thread = find<HTMLElement>(".chat-thread")!;
   expect(document.activeElement).toBe(thread);
   markers()[2]!.dispatchEvent(new Event("pointerenter"));
   expect(preview()).toContain("Checkpoint 2");
-  const hoverEscape = new KeyboardEvent("keydown", {
-    key: "Escape",
-    cancelable: true,
-  });
+  const hoverEscape = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
   window.dispatchEvent(hoverEscape);
   expect(hoverEscape.defaultPrevented).toBe(true);
   expect(preview()).toBeUndefined();
@@ -668,11 +623,7 @@ it("keeps focused previews after pointer exit and resets interaction when the se
   expect(preview()).toBeDefined();
   view!.render(null);
   await Promise.resolve();
-  const escapeAfterRemoval = new KeyboardEvent("keydown", {
-    key: "Escape",
-    bubbles: true,
-    cancelable: true,
-  });
+  const escapeAfterRemoval = keyEvent("Escape");
   document.dispatchEvent(escapeAfterRemoval);
   expect(escapeAfterRemoval.defaultPrevented).toBe(false);
   rerender();
@@ -711,14 +662,11 @@ it.each([
     if (role === "assistant") {
       props.assistantAvatar = "🦞";
     }
-    const { transcript, container, find, render: rerender } = fixture(props);
-
-    rerender();
-    transcript.start();
-    find<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
-    const preview = find(".chat-position-rail__preview-copy")!;
-    expect(find(".chat-position-rail__preview-label")?.textContent).toBe(label);
-    const avatar = find(".chat-position-rail__preview .chat-author-avatar");
+    const { rail, render: rerender } = fixture(props);
+    rail("__marker")!.focus();
+    const preview = rail("__preview-copy")!;
+    expect(rail("__preview-label")?.textContent).toBe(label);
+    const avatar = rail("__preview .chat-author-avatar");
     expect(avatar?.getAttribute("aria-label") ?? null).toBe(
       role === "user" ? (senderName ?? null) : "Molty",
     );
@@ -726,20 +674,20 @@ it.each([
       expect(avatar?.querySelector(".identity-avatar__text")?.getAttribute("data-avatar")).toBe(
         "🦞",
       );
-      expect(find(".chat-position-rail__marker")?.getAttribute("aria-label")).toContain("Molty");
+      expect(rail("__marker")?.getAttribute("aria-label")).toContain("Molty");
       props.assistantName = "Roboclaw";
       rerender();
-      expect(find(".chat-position-rail__preview-label")?.textContent).toBe("Roboclaw");
-      expect(
-        container
-          .querySelector(".chat-position-rail__preview .chat-author-avatar")
-          ?.getAttribute("aria-label"),
-      ).toBe("Roboclaw");
+      expect(rail("__preview-label")?.textContent).toBe("Roboclaw");
+      expect(rail("__preview .chat-author-avatar")?.getAttribute("aria-label")).toBe("Roboclaw");
     }
-    expect(preview.querySelector("strong")?.textContent).toBe("Important");
-    expect(preview.querySelector("em")?.textContent).toBe("detail");
-    expect(preview.querySelector("code")?.textContent).toBe("code");
-    expect(preview.querySelector("li a")?.textContent).toBe("Guide");
+    for (const [selector, text] of [
+      ["strong", "Important"],
+      ["em", "detail"],
+      ["code", "code"],
+      ["li a", "Guide"],
+    ]) {
+      expect(preview.querySelector(selector)?.textContent).toBe(text);
+    }
     expect(preview.querySelector("script")).toBeNull();
     expect(preview.closest("[inert]")).not.toBeNull();
   },
@@ -769,11 +717,8 @@ it("indexes three assistant messages as one run when history starts mid-run", ()
     ...threadProps("rail-partial-run", "agent:main:main", messages),
     showToolCalls: true,
   };
-  const { transcript, container, render: renderCurrent } = fixture(props);
-
-  renderCurrent();
-  transcript.start();
-  const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
+  const { container } = fixture(props);
+  const markers = markersIn(container);
   expect(markers).toHaveLength(1);
   markers[0]!.focus();
   expect(previewText(container)).toContain("The launch card is ready");
@@ -791,12 +736,10 @@ it("keeps the focused run marker through streaming and retargets its persisted a
     stream: "<thinking>Private planning</thinking>",
     streamStartedAt: 2_000,
   });
-  const { transcript, container, find, render: rerender } = fixture(props);
+  const { container, find, render: rerender } = fixture(props);
   const marker = () => find<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
 
-  rerender();
-  transcript.start();
-  expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(1);
+  expect(markersIn(container)).toHaveLength(1);
   props.stream = "Draft response";
   rerender();
   const provisional = marker();
@@ -836,5 +779,5 @@ it("keeps the focused run marker through streaming and retargets its persisted a
   marker().click();
   await settleFrames();
   expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-  expect(container.querySelectorAll(".chat-position-rail__marker")).toHaveLength(2);
+  expect(markersIn(container)).toHaveLength(2);
 });

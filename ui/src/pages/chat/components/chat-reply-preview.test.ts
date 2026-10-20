@@ -42,22 +42,19 @@ it.each([
     [location, photoSource, "Mira", ""] as const,
   ]),
   ["fetched", { role: "user", content: [] }, "", undefined] as const,
-])(
-  "describes a textless source only with persisted content or identity (%s, %j, %s)",
-  (location, source, senderLabel, text) => {
-    const actual = preview(source, location, senderLabel);
-    if (text === undefined) {
-      expect(actual).toBeUndefined();
-    } else {
-      expect(actual).toMatchObject({
-        sourceMessageId: "source",
-        senderLabel,
-        text,
-        ...(source === photoSource ? { sender: { id: "mira", name: "Mira", identity } } : {}),
-      });
-    }
-  },
-);
+])("keeps textless persisted sources (%s, %j, %s)", (location, source, senderLabel, text) => {
+  const actual = preview(source, location, senderLabel);
+  if (text === undefined) {
+    expect(actual).toBeUndefined();
+  } else {
+    expect(actual).toMatchObject({
+      sourceMessageId: "source",
+      senderLabel,
+      text,
+      ...(source === photoSource ? { sender: { id: "mira", name: "Mira", identity } } : {}),
+    });
+  }
+});
 
 function agentSource(agentId?: string, metadata: Record<string, unknown> = {}) {
   return {
@@ -86,32 +83,28 @@ it.each([
 ] as const)(
   "preserves the source owner's identity and avatar (%s, %s, %s)",
   (location, agentId, kind, avatar, textAvatar) => {
-    const source = agentSource(agentId, kind === "profile" ? reviewer : {});
+    const profile = kind === "profile";
+    const image = kind === "image" || profile;
+    const source = agentSource(agentId, profile ? reviewer : {});
     const rosterAvatar = location === "fetched" ? "/avatars/research.png" : "/avatars/roster.png";
     const researchIdentity =
-      kind === "text" || kind === "profile" ? { emoji: "🌙" } : { avatarUrl: rosterAvatar };
-    const actual = preview(
-      source,
-      location,
-      kind === "profile" ? "Source author" : "Source agent",
-      {
-        assistantName: "Current agent",
-        currentAgentId: "main",
-        assistantAvatar: kind === "image" ? "/avatars/current.png" : "🦀",
-        assistantAvatarUrl: kind === "image" || kind === "profile" ? "/avatars/current.png" : null,
-        agents:
-          kind === "missing" || (!agentId && kind !== "profile")
-            ? []
-            : [
-                { id: "main", identity: {} },
-                { id: "research", identity: researchIdentity },
-              ],
-        senderAgentAvatars: new Map([
-          ["research", kind === "image" || kind === "profile" ? "/avatars/research.png" : null],
-        ]),
-      },
-    );
-    if (kind === "profile") {
+      kind === "text" || profile ? { emoji: "🌙" } : { avatarUrl: rosterAvatar };
+    const label = profile ? "Source author" : "Source agent";
+    const actual = preview(source, location, label, {
+      assistantName: "Current agent",
+      currentAgentId: "main",
+      assistantAvatar: kind === "image" ? "/avatars/current.png" : "🦀",
+      assistantAvatarUrl: image ? "/avatars/current.png" : null,
+      agents:
+        kind === "missing" || (!agentId && !profile)
+          ? []
+          : [
+              { id: "main", identity: {} },
+              { id: "research", identity: researchIdentity },
+            ],
+      senderAgentAvatars: new Map([["research", image ? "/avatars/research.png" : null]]),
+    });
+    if (profile) {
       expect(actual).toMatchObject({
         sender: { identity: reviewer.senderIdentity, name: "Source author" },
       });

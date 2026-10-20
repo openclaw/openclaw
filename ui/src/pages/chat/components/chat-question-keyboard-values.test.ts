@@ -1,14 +1,12 @@
 /* @vitest-environment jsdom */
 
-import assert from "node:assert/strict";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
-
-afterEach(() => document.body.replaceChildren());
 
 const options = [
   { label: "Compact", value: "compact-id" },
@@ -20,51 +18,30 @@ const options = [
 ];
 
 type Question = QuestionPanelProps["model"]["questions"][number];
-const keydown = (target: HTMLElement, key: string, modifiers: KeyboardEventInit = {}) => {
-  const event = new KeyboardEvent("keydown", {
-    key,
-    bubbles: true,
-    cancelable: true,
-    ...modifiers,
-  });
+const keydown = (target: HTMLElement, key: string, init: KeyboardEventInit = {}) => {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
   target.dispatchEvent(event);
   return event;
 };
 const badges = (container: HTMLElement) =>
   Array.from(container.querySelectorAll("kbd"), (badge) => badge.textContent?.trim());
-function required(container: HTMLElement, selector: string) {
-  const element = container.querySelector<HTMLElement>(selector);
-  assert(element);
-  return element;
-}
-const fileResource = {
-  viewId: "synthetic-form",
-  selection: "implicit",
-  userOptions: { kind: "file" },
-} satisfies Question["resource"];
+const required = (container: HTMLElement, selector: string) =>
+  expectDefined(container.querySelector<HTMLElement>(selector), selector);
 async function mountQuestion(question: Partial<Question>) {
-  const container = document.body.appendChild(document.createElement("div"));
   const onSubmit = vi.fn();
+  const prompt = { questionId: "format", header: "Format", question: "Format?", options: [] };
   const props: QuestionPanelProps = {
     model: {
       requestKey: "canonical-keyboard",
       title: "Choose a format",
-      questions: [
-        {
-          questionId: "format",
-          header: "Format",
-          question: "Which format?",
-          options: [],
-          ...question,
-        },
-      ],
+      questions: [{ ...prompt, ...question }],
       collapsed: false,
       disabled: false,
       drafts: new Map(),
     },
     onSubmit,
   };
-  mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
+  const { container } = mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }));
   const panel = await questionPanelIn(container);
   const group = required(container, ".chat-question-panel");
   const press = async (key: string, target = group) => {
@@ -83,22 +60,19 @@ it.each([
   { selector: '[role="checkbox"][aria-checked="true"]', modifier: "metaKey" },
   { selector: "textarea", modifier: "ctrlKey" },
   { selector: "textarea", modifier: "metaKey" },
-])(
-  "submits selected answers from $selector with $modifier+Enter",
-  async ({ selector, modifier }) => {
-    const { container, press, onSubmit } = await mountQuestion({
-      options: options.slice(0, 2),
-      multiSelect: selector.includes("checkbox"),
-      isOther: true,
-    });
-    await press("2");
-    const target = required(container, selector);
-    target.focus();
-    const event = keydown(target, "Enter", { [modifier]: true });
-    expect(event.defaultPrevented).toBe(true);
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["  detailed-id  "] });
-  },
-);
+])("submits from $selector with $modifier+Enter", async ({ selector, modifier }) => {
+  const { container, press, onSubmit } = await mountQuestion({
+    options: options.slice(0, 2),
+    multiSelect: selector.includes("checkbox"),
+    isOther: true,
+  });
+  await press("2");
+  const target = required(container, selector);
+  target.focus();
+  const event = keydown(target, "Enter", { [modifier]: true });
+  expect(event.defaultPrevented).toBe(true);
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["  detailed-id  "] });
+});
 
 it.each([
   { key: "2", value: "  detailed-id  " },
@@ -127,7 +101,7 @@ it("keeps native activation on links, file pickers, and action buttons", async (
   const { container, onSubmit } = await mountQuestion({
     allowEmpty: true,
     url: "https://example.test/confirm",
-    resource: fileResource,
+    resource: { viewId: "synthetic-form", selection: "implicit", userOptions: { kind: "file" } },
   });
   for (const selector of [
     "a",
@@ -138,8 +112,7 @@ it("keeps native activation on links, file pickers, and action buttons", async (
     const target = required(container, selector);
     target.focus();
     for (const keys of [{}, { ctrlKey: true }, { metaKey: true }]) {
-      const event = keydown(target, "Enter", keys);
-      expect(event.defaultPrevented, selector).toBe(false);
+      expect(keydown(target, "Enter", keys).defaultPrevented, selector).toBe(false);
       expect(onSubmit).not.toHaveBeenCalled();
     }
   }
@@ -151,7 +124,7 @@ it("numbers visible resources without restoring hidden options through shortcuts
     multiSelect: true,
     allowEmpty: true,
     defaultAnswers: ["kept"],
-    resource: fileResource,
+    resource: { viewId: "synthetic-form", selection: "implicit", userOptions: { kind: "file" } },
     options: [
       { label: "Hidden", value: "hidden", resourceUri: "parts://hidden" },
       { label: "Kept", value: "kept", resourceUri: "parts://kept" },
@@ -161,28 +134,23 @@ it("numbers visible resources without restoring hidden options through shortcuts
   await press("1");
   expect(container.querySelector(".chat-question-panel__option")).toBeNull();
   for (const key of ["1", "2"]) {
-    const event = keydown(group, key);
-    expect(event.defaultPrevented).toBe(false);
+    expect(keydown(group, key).defaultPrevented).toBe(false);
   }
   group.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: [] });
 });
 
-it.each([8, 9])(
-  "offers an Other shortcut only within the nine-key range (%d options)",
-  async (count) => {
-    const { container, press } = await mountQuestion({
-      isOther: true,
-      options: options.slice(0, count),
-    });
-    expect(
-      container.querySelector(".chat-question-panel__option--other kbd")?.textContent?.trim(),
-    ).toBe(count === 8 ? "9" : undefined);
-    await press("9");
-    if (count === 8) {
-      expect(document.activeElement).toBe(container.querySelector("textarea"));
-    } else {
-      expect(container.querySelector('[aria-checked="true"]')?.textContent).toContain("Format 9");
-    }
-  },
-);
+it.each([8, 9])("limits Other shortcuts to nine keys (%d options)", async (count) => {
+  const { container, press } = await mountQuestion({
+    isOther: true,
+    options: options.slice(0, count),
+  });
+  const badge = container.querySelector(".chat-question-panel__option--other kbd");
+  expect(badge?.textContent?.trim()).toBe(count === 8 ? "9" : undefined);
+  await press("9");
+  if (count === 8) {
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+  } else {
+    expect(container.querySelector('[aria-checked="true"]')?.textContent).toContain("Format 9");
+  }
+});

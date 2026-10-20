@@ -104,15 +104,11 @@ it.each<[string, unknown, string, number]>([
   const props = threadProps("rail-content", "agent:main:main", [
     message("question", "user", "Inspect the card", 1),
     {
-      ...message("response", "assistant", content, 2, "content-run"),
+      ...message("response", "assistant", content, 2, "run-1"),
       stopReason,
       errorMessage: stopReason === "error" ? "Request failed" : undefined,
     },
-    {
-      ...message("tool", "toolResult", "Read progress and result", 3, "content-run"),
-      toolCallId: "read-1",
-      toolName: "read",
-    },
+    toolResult("tool", "Read progress and result", 3),
   ]);
   props.showToolCalls = true;
   withPositionIndex(props, (read) => {

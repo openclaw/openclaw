@@ -3,53 +3,39 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { ChatQuestionCard, QuestionPanelProps } from "./chat-question-card.ts";
 
 afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
   vi.doUnmock("./chat-question-panel.tsx");
   vi.restoreAllMocks();
 });
 
 function model(key: string, text: string, defaults?: string[]): QuestionPanelProps["model"] {
+  const form = defaults ? { presentation: "form" as const, defaultAnswers: defaults } : {};
   return {
     requestKey: key,
     title: "Question",
-    questions: [
-      {
-        questionId: "answer",
-        header: "Answer",
-        question: text,
-        options: [],
-        ...(defaults ? { presentation: "form" as const, defaultAnswers: defaults } : {}),
-      },
-    ],
+    questions: [{ questionId: "answer", header: "Answer", question: text, options: [], ...form }],
     collapsed: false,
     disabled: false,
     drafts: new Map(),
   };
 }
 function mountDock(initial: QuestionPanelProps | null = null) {
-  const container = document.body.appendChild(document.createElement("div"));
   let updatePanel!: (value: QuestionPanelProps | null) => void;
-  mountSolid(
-    () => {
-      const [panel, setPanel] = createSignal(initial);
-      updatePanel = setPanel;
-      return createComponent(ComposerQuestionDock, {
-        get panel() {
-          return panel();
-        },
-      });
-    },
-    { container },
-  );
+  const { container } = mountSolid(() => {
+    const [panel, setPanel] = createSignal(initial);
+    updatePanel = setPanel;
+    return createComponent(ComposerQuestionDock, {
+      get panel() {
+        return panel();
+      },
+    });
+  });
   flush();
   return { container, updatePanel };
 }
@@ -58,10 +44,9 @@ it("defers controls, retries loading, and mounts only the current connected requ
   const initialLoad = createDeferred();
   const retryLoad = createDeferred();
   const loadStarted = createDeferred();
-  const load = vi
-    .fn<() => Promise<void>>()
-    .mockReturnValueOnce(initialLoad.promise)
-    .mockReturnValueOnce(retryLoad.promise);
+  const load = vi.fn<() => Promise<void>>();
+  load.mockReturnValueOnce(initialLoad.promise);
+  load.mockReturnValueOnce(retryLoad.promise);
   vi.doMock(import("./chat-question-panel.tsx"), async (importOriginal) => {
     const pending = load();
     loadStarted.resolve();
@@ -76,16 +61,11 @@ it("defers controls, retries loading, and mounts only the current connected requ
   updatePanel(props);
   flush();
   const card = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
-  await card.updateComplete;
-  await loadStarted.promise;
+  await Promise.all([card.updateComplete, loadStarted.promise]);
   expect(card.querySelector('[role="status"]')).not.toBeNull();
   expect(card.querySelector("openclaw-chat-question-panel")).toBeNull();
   const loadError = new Error("Synthetic load failure");
-  const failed = expect(
-    ensureCustomElementDefined("openclaw-chat-question-panel", async () => {
-      throw new Error("Expected the question card to start loading its panel");
-    }),
-  ).rejects.toMatchObject({ cause: loadError });
+  const failed = expect(questionPanelIn(container)).rejects.toMatchObject({ cause: loadError });
   initialLoad.reject(loadError);
   await failed;
   await card.updateComplete;

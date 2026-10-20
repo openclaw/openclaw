@@ -13,6 +13,7 @@ import "./chat-processes-panel.tsx";
 
 const mainRead = ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }];
 const workerRead = ["sessions.processes.list", { key: "global", agentId: "worker" }];
+const completeList = { sessionId: "parent-session", truncated: false };
 
 function process(overrides: Partial<SessionsProcessesListResult["processes"][number]> = {}) {
   return {
@@ -57,39 +58,30 @@ async function settle(element: { updateComplete: Promise<unknown> }, ms: number)
   await vi.advanceTimersByTimeAsync(ms);
 }
 
-it.each([false, true])(
-  "distinguishes a retired process from an incomplete list (truncated: %s)",
-  async (truncated) => {
-    let result: SessionsProcessesListResult = {
-      sessionId: "parent-session",
-      truncated: false,
-      processes: [process()],
-    };
-    const { connection, mount } = mountProcesses(() => result);
-    const panel = document.createElement("openclaw-chat-processes-panel");
-    panel.sessionKey = "agent:main:parent";
-    mount(panel);
+it.each([false, true])("distinguishes retired vs unlisted (truncated: %s)", async (truncated) => {
+  let result: SessionsProcessesListResult = { ...completeList, processes: [process()] };
+  const { connection, mount } = mountProcesses(() => result);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  mount(panel);
 
-    await settle(panel, 0);
-    await panel.updateComplete;
-    panel.querySelector<HTMLButtonElement>(".chat-processes__open")!.click();
-    await panel.updateComplete;
-    expect(panel.textContent).toContain("Compiling");
-    result = { sessionId: "parent-session", processes: [], truncated };
-    connection.publishEvent("sessions.processes.changed", {
-      sessionKey: "agent:main:parent",
-      agentId: "main",
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    await panel.updateComplete;
-    if (truncated) {
-      expect(panel.textContent).toContain("limited list");
-      expect(panel.textContent).not.toContain("no longer retained");
-    } else {
-      expect(panel.textContent).toContain("no longer retained");
-    }
-  },
-);
+  await settle(panel, 0);
+  await panel.updateComplete;
+  panel.querySelector<HTMLButtonElement>(".chat-processes__open")!.click();
+  await panel.updateComplete;
+  expect(panel.textContent).toContain("Compiling");
+  result = { ...completeList, processes: [], truncated };
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: "agent:main:parent",
+    agentId: "main",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  await panel.updateComplete;
+  expect(panel.textContent).toContain(truncated ? "limited list" : "no longer retained");
+  if (truncated) {
+    expect(panel.textContent).not.toContain("no longer retained");
+  }
+});
 
 it("retires stop authority immediately and reads the complete replacement scope", async () => {
   const request = vi.fn((method: string, params?: unknown) => {
@@ -98,8 +90,8 @@ it("retires stop authority immediately and reads the complete replacement scope"
     }
     const target = asOptionalRecord(params);
     return {
+      ...completeList,
       sessionId: target?.key === "global" ? "worker-session" : "parent-session",
-      truncated: false,
       processes: target?.key === "global" ? [] : [process({ canStop: true })],
     } satisfies SessionsProcessesListResult;
   });
@@ -117,10 +109,7 @@ it("retires stop authority immediately and reads the complete replacement scope"
   stop.click();
   expect(request.mock.calls.filter(([method]) => method === "sessions.processes.stop")).toEqual([]);
   await settle(panel, 0);
-  expect(request.mock.calls.filter(([method]) => method === "sessions.processes.list")).toEqual([
-    mainRead,
-    workerRead,
-  ]);
+  expect(request.mock.calls).toEqual([mainRead, workerRead]);
 });
 
 it("keeps details process observation through refreshes and follows its presented scope", async () => {
@@ -128,8 +117,8 @@ it("keeps details process observation through refreshes and follows its presente
     expect(method).toBe("sessions.processes.list");
     const target = asOptionalRecord(params);
     return {
+      ...completeList,
       sessionId: target?.key === "global" ? "worker-session" : "parent-session",
-      truncated: false,
       processes: [process({ name: target?.agentId === "worker" ? "Worker build" : "Main build" })],
     } satisfies SessionsProcessesListResult;
   });
@@ -166,7 +155,6 @@ it("keeps details process observation through refreshes and follows its presente
 
   details.presented = true;
   await settle(details, 0);
-  expect(request.mock.calls.at(-1)).toEqual(mainRead);
-  expect(request).toHaveBeenCalledTimes(3);
+  expect(request.mock.calls).toEqual([mainRead, workerRead, mainRead]);
   expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
 });

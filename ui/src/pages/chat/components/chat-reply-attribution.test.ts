@@ -308,31 +308,28 @@ it.each([
   { status: "missing", snapshot: jordanSnapshot, reserve: true },
   { status: "oversized", snapshot: jordanSnapshot, reserve: true },
   { status: "oversized", snapshot: undefined, reserve: true },
-] as const)(
-  "settles a $status lookup with reserved row $reserve and snapshot $snapshot",
-  ({ status, snapshot, reserve }) => {
-    const { row } = draw(prompt, [reply("deleted", snapshot)], false, "group", {
-      ...(reserve ? (status === "oversized" ? turnSource : { replyShared: true }) : {}),
-      ...(status ? { [status]: ["deleted"] } : {}),
-    });
-    if (!reserve) {
-      expect(find(".chat-reply-attribution")).toBeNull();
-      expect(container.textContent).not.toContain("Original message unavailable");
-      return;
-    }
-    const unavailable = status === "missing" || (status === "oversized" && !snapshot);
-    const name = snapshot?.senderLabel;
-    expect(row.classList.contains("chat-reply-attribution--pending")).toBe(status === "pending");
-    expect(replyName(row)).toBe(name);
-    expect(Boolean(row.querySelector(".chat-reply-attribution__person"))).toBe(Boolean(name));
-    expect(unavailableElement(row)?.textContent).toBe(
-      unavailable ? "Original message unavailable" : undefined,
-    );
-    expect(Boolean(row.querySelector(".chat-author-avatar, button, a"))).toBe(
-      status === "oversized" && !unavailable,
-    );
-  },
-);
+] as const)("settles $status lookups ($reserve, $snapshot)", ({ status, snapshot, reserve }) => {
+  const { row } = draw(prompt, [reply("deleted", snapshot)], false, "group", {
+    ...(reserve ? (status === "oversized" ? turnSource : { replyShared: true }) : {}),
+    ...(status ? { [status]: ["deleted"] } : {}),
+  });
+  if (!reserve) {
+    expect(find(".chat-reply-attribution")).toBeNull();
+    expect(container.textContent).not.toContain("Original message unavailable");
+    return;
+  }
+  const unavailable = status === "missing" || (status === "oversized" && !snapshot);
+  const name = snapshot?.senderLabel;
+  expect(row.classList.contains("chat-reply-attribution--pending")).toBe(status === "pending");
+  expect(replyName(row)).toBe(name);
+  expect(Boolean(row.querySelector(".chat-reply-attribution__person"))).toBe(Boolean(name));
+  expect(unavailableElement(row)?.textContent).toBe(
+    unavailable ? "Original message unavailable" : undefined,
+  );
+  expect(Boolean(row.querySelector(".chat-author-avatar, button, a"))).toBe(
+    status === "oversized" && !unavailable,
+  );
+});
 
 it.each([
   ["group", true, 0, "", true],
@@ -387,37 +384,27 @@ it.each([
   { promptRun: undefined, name: undefined, anonymous: true },
   { promptRun: "run-a", name: undefined, anonymous: false },
   { promptRun: "run-b", name: "Alice", anonymous: false },
-])(
-  "settles a 1:1 reply to a paged-out prompt by run ownership, not its snapshot (run $promptRun)",
-  ({ promptRun, name, anonymous }) => {
-    const paged = textMessage("user", "Deploy?", {
-      id: "p1",
-      ...(anonymous ? {} : { senderName: "Alice", idempotencyKey: `${promptRun}:user` }),
-    });
-    const { row } = draw(
-      prompt,
-      [
-        {
-          ...reply("p1", anonymous ? undefined : { senderLabel: "Alice", text: "Deploy?" }),
-          content: "Deploying",
-        },
-      ],
-      false,
-      "group",
-      {
-        runId: "run-a",
-        replyToSender: undefined,
-        replyToMessage: undefined,
-        ...(promptRun || anonymous ? { fetched: { p1: paged } } : { pending: ["p1"] }),
-      },
-    );
-    if (anonymous) {
-      expect(find(".chat-reply-attribution")).toBeNull();
-    }
-    expect(replyName(row)).toBe(name);
-    expect(find(".chat-reply-attribution--pending")).toBeNull();
-  },
-);
+])("attributes paged-out prompts by run ($promptRun)", ({ promptRun, name, anonymous }) => {
+  const paged = textMessage("user", "Deploy?", {
+    id: "p1",
+    ...(anonymous ? {} : { senderName: "Alice", idempotencyKey: `${promptRun}:user` }),
+  });
+  const answer = {
+    ...reply("p1", anonymous ? undefined : { senderLabel: "Alice", text: "Deploy?" }),
+    content: "Deploying",
+  };
+  const { row } = draw(prompt, [answer], false, "group", {
+    runId: "run-a",
+    replyToSender: undefined,
+    replyToMessage: undefined,
+    ...(promptRun || anonymous ? { fetched: { p1: paged } } : { pending: ["p1"] }),
+  });
+  if (anonymous) {
+    expect(find(".chat-reply-attribution")).toBeNull();
+  }
+  expect(replyName(row)).toBe(name);
+  expect(find(".chat-reply-attribution--pending")).toBeNull();
+});
 
 it("does not resolve a shared reply_to_current to a prompt without sender provenance", () => {
   const unattributed = textMessage("user", "Question", { id: "current" });
@@ -435,55 +422,48 @@ it.each([
   { finalTarget: "current", recipient: "Bob" },
   { finalTarget: "older", recipient: "Jordan" },
   { finalTarget: undefined, recipient: undefined },
-])(
-  "attributes a frame only through the final answer's target ($finalTarget)",
-  ({ finalTarget, recipient }) => {
-    const currentPrompt = textMessage("user", "Bob's current question", {
-      id: "current-prompt",
-      senderId: "bob",
-      senderName: "Bob",
-    });
-    const older = textMessage("user", "Earlier question", {
-      id: "older",
-      senderId: "jordan",
-      senderName: "Jordan",
-    });
-    const bob = { key: "current-prompt-render-key", message: currentPrompt };
-    const explicitOlder = finalTarget === "older" || !finalTarget;
-    draw(
-      prompt,
-      [
-        explicitOlder ? reply("older") : finalTarget === "current" ? reply("prompt") : currentReply,
-        finalTarget === "current"
-          ? currentReply
-          : finalTarget
-            ? reply(finalTarget)
-            : { role: "assistant", content: "Final answer" },
-      ],
-      true,
-      "frame",
-      explicitOlder
-        ? {
-            replyShared: true,
-            replyToSender: undefined,
-            replyToMessage: undefined,
-            sources: { older: { message: older, senderLabel: "Jordan" } },
-          }
-        : {
-            runId: "run",
-            replyToSender: { id: "bob", name: "Bob" },
-            replyToMessage: bob,
-            replyCurrentSource: bob,
-            sources: { "current-prompt": { message: currentPrompt, senderLabel: "Bob" } },
-          },
-    );
-    expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(
-      recipient ? 1 : 0,
-    );
-    expect(replyName(container)).toBe(recipient);
-    expect(find(".chat-reply-attribution--inline")).toBeNull();
-  },
-);
+])("attributes frames by final answer ($finalTarget)", ({ finalTarget, recipient }) => {
+  const currentPrompt = textMessage("user", "Bob's current question", {
+    id: "current-prompt",
+    senderId: "bob",
+    senderName: "Bob",
+  });
+  const older = textMessage("user", "Earlier question", {
+    id: "older",
+    senderId: "jordan",
+    senderName: "Jordan",
+  });
+  const bob = { key: "current-prompt-render-key", message: currentPrompt };
+  const explicitOlder = finalTarget === "older" || !finalTarget;
+  const responses = [
+    explicitOlder ? reply("older") : finalTarget === "current" ? reply("prompt") : currentReply,
+    finalTarget === "current"
+      ? currentReply
+      : finalTarget
+        ? reply(finalTarget)
+        : { role: "assistant", content: "Final answer" },
+  ];
+  const context: Parameters<typeof draw>[4] = explicitOlder
+    ? {
+        replyShared: true,
+        replyToSender: undefined,
+        replyToMessage: undefined,
+        sources: { older: { message: older, senderLabel: "Jordan" } },
+      }
+    : {
+        runId: "run",
+        replyToSender: { id: "bob", name: "Bob" },
+        replyToMessage: bob,
+        replyCurrentSource: bob,
+        sources: { "current-prompt": { message: currentPrompt, senderLabel: "Bob" } },
+      };
+  draw(prompt, responses, true, "frame", context);
+  expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(
+    recipient ? 1 : 0,
+  );
+  expect(replyName(container)).toBe(recipient);
+  expect(find(".chat-reply-attribution--inline")).toBeNull();
+});
 
 it.each([
   {
@@ -492,27 +472,24 @@ it.each([
   },
   { source: { role: "user", content: "Pending question" }, explicit: false },
   { source: null, explicit: false },
-])(
-  "renders a known recipient with navigation only for persisted sources ($source)",
-  ({ source, explicit }) => {
-    const { row } = draw(source, explicit ? [reply("prompt")] : undefined);
-    expect(replyName(row)).toBe("Alice");
-    if (explicit) {
-      expect(row.querySelector(".chat-author-avatar")?.getAttribute("aria-label")).toBe("Alice");
-    } else {
-      expect(row.querySelector("button, a")).toBeNull();
-    }
-    if (source === null) {
-      const label = row.querySelector(".chat-reply-attribution__label")!;
-      expect(label.textContent?.trim()).toBe("Replying to");
-      expect(
-        label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
-      ).toBe("true");
-      expect(unavailableElement(row)).toBeNull();
-      expect(row.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
-    }
-  },
-);
+])("only navigates to persisted recipients ($source)", ({ source, explicit }) => {
+  const { row } = draw(source, explicit ? [reply("prompt")] : undefined);
+  expect(replyName(row)).toBe("Alice");
+  if (explicit) {
+    expect(row.querySelector(".chat-author-avatar")?.getAttribute("aria-label")).toBe("Alice");
+  } else {
+    expect(row.querySelector("button, a")).toBeNull();
+  }
+  if (source === null) {
+    const label = row.querySelector(".chat-reply-attribution__label")!;
+    expect(label.textContent?.trim()).toBe("Replying to");
+    expect(
+      label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(unavailableElement(row)).toBeNull();
+    expect(row.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
+  }
+});
 
 it.each([
   ["assistant", { type: "agent", id: "main" }, "OpenClaw", "OpenClaw"],

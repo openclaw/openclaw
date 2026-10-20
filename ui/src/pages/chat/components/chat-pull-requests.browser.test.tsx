@@ -9,25 +9,20 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { options as accountOptions } from "../chat-github-publication.test-support.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
-import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
+import { ChatPullRequests } from "./chat-pull-requests.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import detailsStyles from "../../../styles/chat/details.css?inline";
 import layoutStyles from "../../../styles/chat/layout.css?inline";
 
-function pullRequest(
-  overrides: Partial<ChatPullRequestsProps["pullRequests"][number]> = {},
-): ChatPullRequestsProps["pullRequests"][number] {
-  return {
-    number: 42,
-    owner: "example",
-    repo: "release-planning",
-    branch: "review",
-    title: "Review release checklist",
-    url: "https://github.com/example/release-planning/pull/42",
-    state: "open",
-    ...overrides,
-  };
-}
+const baseRequest = {
+  number: 42,
+  owner: "example",
+  repo: "release-planning",
+  branch: "review",
+  title: "Review release checklist",
+  url: "https://github.com/example/release-planning/pull/42",
+  state: "open" as const,
+};
 function element<T extends HTMLElement = HTMLElement>(
   selector: string,
   root: ParentNode = container,
@@ -45,21 +40,18 @@ function expectFits(node: HTMLElement, allowance = 1) {
 }
 const longRepo = "a-very-long-repository-name-that-needs-truncation";
 const container = document.createElement("div");
-let mounted: ReturnType<typeof mountSolid> | undefined;
 let originalViewport: { width: number; height: number };
 beforeEach(() => {
   originalViewport = { width: window.innerWidth, height: window.innerHeight };
 });
 afterEach(async () => {
-  mounted?.unmount();
-  mounted = undefined;
   container.remove();
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
 function mountDetails(width: number, content: () => JSX.Element) {
   document.body.append(container);
-  mounted = mountSolid(
+  mountSolid(
     () => (
       <>
         <style>{baseStyles + layoutStyles + detailsStyles}</style>
@@ -79,36 +71,31 @@ it.each(["props", "owner", "parked"])(
     document.body.append(container);
     const owner = new EventTarget();
     let isPresented = true;
-    let updatePresented!: (value: boolean) => void;
-    let updateParked!: (value: boolean) => void;
-    let updateDismissed!: (value: boolean) => void;
+    let updateState!: (value: { presented: boolean; active: boolean; dismissed: boolean }) => void;
     const binding = { owner, isPresented: () => isPresented };
-    mounted = mountSolid(
+    mountSolid(
       () => {
-        const [presented, setPresented] = createSignal(true);
-        const [active, setActive] = createSignal(true);
-        const [dismissed, setDismissed] = createSignal(false);
-        updatePresented = setPresented;
-        updateParked = setActive;
-        updateDismissed = setDismissed;
+        const [state, setState] = createSignal({ presented: true, active: true, dismissed: false });
+        updateState = setState;
         return (
-          <ContentPresentation value={active}>
+          <ContentPresentation value={() => state().active}>
             <style>
               {baseStyles}
               {layoutStyles}
             </style>
             <section
-              style={`width: 500px; padding-top: 260px; opacity: ${mode === "props" && !presented() ? 0 : 1}`}
+              style={`width: 500px; padding-top: 260px; opacity: ${mode === "props" && !state().presented ? 0 : 1}`}
             >
               <ChatPullRequests
                 pullRequests={[
-                  pullRequest({
+                  {
+                    ...baseRequest,
                     checks: { state: "passing", passed: 4, failed: 0, skipped: 0, running: 0 },
-                  }),
+                  },
                 ]}
                 status="ready"
-                presented={mode === "props" ? presented() : binding}
-                dismissed={dismissed()}
+                presented={mode === "props" ? state().presented : binding}
+                dismissed={state().dismissed}
                 onDismiss={() => {}}
               />
             </section>
@@ -118,15 +105,14 @@ it.each(["props", "owner", "parked"])(
       { container },
     );
     const draw = (presented: boolean, dismissed = false) => {
-      updateDismissed(dismissed);
+      updateState({
+        presented: mode === "props" ? presented : true,
+        active: mode === "parked" ? presented : true,
+        dismissed,
+      });
       isPresented = presented;
-      if (mode === "props") {
-        updatePresented(presented);
-      } else {
+      if (mode !== "props") {
         owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-        if (mode === "parked") {
-          updateParked(presented);
-        }
       }
       flush();
     };
@@ -220,26 +206,17 @@ it.each([
 );
 
 it.each([
-  { width: 360, repo: "openclaw", checks: "passing", state: "merged" },
-  {
-    width: 300,
-    repo: longRepo,
-    checks: "pending",
-    state: "draft",
-  },
-  {
-    width: 220,
-    repo: longRepo,
-    checks: "failing",
-    state: "closed",
-  },
+  [360, "openclaw", "passing", "merged"],
+  [300, longRepo, "pending", "draft"],
+  [220, longRepo, "failing", "closed"],
 ] as const)(
-  "keeps title-first Details cards usable at $width px with $checks checks",
-  async ({ width, repo, checks, state }) => {
+  "keeps title-first Details cards usable at %s px (%s, %s checks, %s)",
+  async (width, repo, checks, state) => {
     await page.viewport(800, 700);
     const onDismiss = vi.fn();
     const onOpenSessionDiff = vi.fn();
-    const request = pullRequest({
+    const request = {
+      ...baseRequest,
       number: 173824,
       owner: "openclaw",
       repo,
@@ -255,7 +232,7 @@ it.each([
         skipped: 0,
         running: checks === "pending" ? 2 : 0,
       },
-    });
+    };
     mountDetails(width, () =>
       createComponent(ChatDetailsSession, {
         presented: true,
