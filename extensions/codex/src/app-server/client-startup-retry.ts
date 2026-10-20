@@ -3,8 +3,32 @@ import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import { withTimeout } from "./timeout.js";
 import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 
+const INITIALIZE_INTERRUPTED = "CODEX_APP_SERVER_WEBSOCKET_INITIALIZE_INTERRUPTED";
+
+/** Only call at the WebSocket initialize boundary, before auth or thread requests. */
+export function markRetryableCodexInitializeTransportError(error: unknown): unknown {
+  if (!(error instanceof Error)) {
+    return error;
+  }
+  const seen = new Set<Error>();
+  let cause: unknown = error;
+  while (cause instanceof Error && !seen.has(cause)) {
+    seen.add(cause);
+    if (
+      ("exitCode" in cause && cause.exitCode === 1006) ||
+      ("code" in cause && cause.code === "ECONNRESET")
+    ) {
+      return Object.assign(new Error(error.message, { cause: error }), {
+        code: INITIALIZE_INTERRUPTED,
+      });
+    }
+    cause = cause.cause;
+  }
+  return error;
+}
+
 /** Recovers physical startup, including acquisitions before thread preparation. */
-export async function withCodexWebSocketOpenRetry<T>(params: {
+export async function withCodexWebSocketStartupRetry<T>(params: {
   timeoutMs: number;
   signal: AbortSignal;
   start: (remainingTimeoutMs: number) => Promise<T>;
@@ -14,10 +38,18 @@ export async function withCodexWebSocketOpenRetry<T>(params: {
     try {
       return await params.start(resolveRemainingAcquireTimeout(params.timeoutMs, startedAt));
     } catch (error) {
-      // The transport proves no frame reached the peer. Once initialize succeeds,
-      // auth, thread and tool requests are never replayed by this recovery.
-      if (params.signal.aborted || attempt >= 3 || !isCodexWebSocketOpenFailure(error)) {
-        throw error;
+      // A new connection may repeat initialize. Auth, thread and tool requests
+      // are outside that boundary and are never replayed by this recovery.
+      const initializeInterrupted =
+        error instanceof Error && "code" in error && error.code === INITIALIZE_INTERRUPTED;
+      if (
+        params.signal.aborted ||
+        attempt >= 3 ||
+        (!isCodexWebSocketOpenFailure(error) && !initializeInterrupted)
+      ) {
+        throw initializeInterrupted && error instanceof Error && error.cause instanceof Error
+          ? error.cause
+          : error;
       }
       const remaining = resolveRemainingAcquireTimeout(params.timeoutMs, startedAt);
       const delay = 1_000 * 2 ** (attempt - 1);

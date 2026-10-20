@@ -63,9 +63,53 @@ export function registerSharedClientWebSocketStartupTests({
     expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(false);
   });
 
+  it("recovers an abnormal WebSocket close during initialize before handing off auth", async () => {
+    const failed = createClientHarness({
+      onWrite() {
+        failed.process.emit("exit", 1006, "");
+      },
+    });
+    const replacement = createInitializingClientHarness();
+    const start = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockResolvedValueOnce(failed.client)
+      .mockResolvedValueOnce(replacement.client);
+    const backoff = vi.spyOn(runtimeEnv, "sleepWithAbort").mockResolvedValue();
+    await expect(
+      getLeasedSharedCodexAppServerClient({
+        startOptions: createStartOptions({ transport: "websocket", url: "ws://example.invalid" }),
+        authProfileId: null,
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBe(replacement.client);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(backoff).toHaveBeenCalledTimes(1);
+    expect(failed.writes.map((line) => JSON.parse(line).method)).toEqual(["initialize"]);
+    expect(authHandoff).toHaveBeenCalledTimes(1);
+    expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
+  });
+
+  it("does not replay auth handoff when transport fails after initialize", async () => {
+    const client = createInitializingClientHarness();
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(client.client);
+    const error = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    vi.mocked(authHandoff).mockImplementationOnce(() => {
+      throw error;
+    });
+    await expect(
+      getLeasedSharedCodexAppServerClient({
+        startOptions: createStartOptions({ transport: "websocket", url: "ws://example.invalid" }),
+        authProfileId: null,
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toBe(error);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(authHandoff).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["unopened transient transport", "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED", 3],
-    ["post-open transport", "ECONNRESET", 1],
+    ["initialize transport reset", "ECONNRESET", 3],
     ["authentication refusal", "HTTP_401", 1],
   ])("bounds acquisition retries for %s", async (_label, code, attempts) => {
     const transports: ReturnType<typeof createClientHarness>[] = [];
@@ -79,13 +123,15 @@ export function registerSharedClientWebSocketStartupTests({
       transports.push(harness);
       return harness.client;
     });
-    await expect(
-      getLeasedSharedCodexAppServerClient({
-        startOptions: createStartOptions({ transport: "websocket", url: "ws://example.invalid" }),
-        authProfileId: null,
-        timeoutMs: 10_000,
-      }),
-    ).rejects.toThrow("transport failed");
+    const result = getLeasedSharedCodexAppServerClient({
+      startOptions: createStartOptions({ transport: "websocket", url: "ws://example.invalid" }),
+      authProfileId: null,
+      timeoutMs: 10_000,
+    });
+    await expect(result).rejects.toThrow("transport failed");
+    await expect(result).rejects.toMatchObject({
+      code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE",
+    });
     expect(start).toHaveBeenCalledTimes(attempts);
     expect(authHandoff).not.toHaveBeenCalled();
     for (const transport of transports) {
