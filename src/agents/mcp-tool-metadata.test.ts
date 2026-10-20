@@ -13,6 +13,18 @@ function catalog(tools: Tool[], classify?: Parameters<typeof normalizeMcpToolCat
 
 const draft2020 = "https://json-schema.org/draft/2020-12/schema";
 
+function referencedOutput(id: string, ref = id, $schema?: string) {
+  const outputSchema = {
+    type: "object" as const,
+    $id: "https://schema.example/root",
+    definitions: { value: { $id: id, type: "string" } },
+    properties: { value: { $ref: ref } },
+    required: ["value"],
+    ...($schema ? { $schema } : {}),
+  };
+  return catalog([tool("referenced", { outputSchema })]).metadata.validatorForCall("referenced")!;
+}
+
 it.each([
   ["IDN hosts", "https://bücher.example/value", "https://xn--bcher-kva.example/value"],
   ["relative references", "child", "./child"],
@@ -20,19 +32,7 @@ it.each([
   ["reserved path escapes", "a%3Ab", "a%3Ab"],
   ["draft-2020 embedded resources", "value", "./value", draft2020],
 ])("validates tool output schemas with %s", (_label, id, ref, $schema?: string) => {
-  const validate = catalog([
-    tool("referenced", {
-      outputSchema: {
-        ...($schema ? { $schema } : {}),
-        $id: "https://schema.example/root",
-        type: "object",
-        definitions: { value: { $id: id, type: "string" } },
-        properties: { value: { $ref: ref } },
-        required: ["value"],
-      },
-    }),
-  ]).metadata.validatorForCall("referenced")!;
-
+  const validate = referencedOutput(id, ref, $schema);
   expect(() => validate({ content: [], structuredContent: { value: "ok" } })).not.toThrow();
   expect(() => validate({ content: [], structuredContent: { value: 1 } })).toThrow(
     "Structured content does not match the tool's output schema",
@@ -48,9 +48,7 @@ it("keeps nested hostname escapes distinct when resolving tool output schemas", 
     },
     $ref: "https://127%252e0%252e0%252e1/value",
   });
-
-  expect(validate("encoded").valid).toBe(true);
-  expect(validate("plain").valid).toBe(false);
+  expect([validate("encoded").valid, validate("plain").valid]).toEqual([true, false]);
 });
 
 it.each([
@@ -58,13 +56,7 @@ it.each([
   ["invalid IPv6", "https://[1:2:3::4::5]/value", "URI host is malformed"],
   ["malformed percent escapes", "https://schema.example/%ZZ", "malformed percent-encoding"],
 ])("rejects %s in tool output schema references", (_label, ref, error) => {
-  expect(() =>
-    createMcpJsonSchemaValidator().getValidator({
-      $id: "https://schema.example/root",
-      definitions: { value: { $id: ref, type: "string" } },
-      $ref: ref,
-    }),
-  ).toThrow(error);
+  expect(() => referencedOutput(ref)).toThrow(error);
 });
 
 it.for([
