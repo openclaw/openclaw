@@ -397,7 +397,7 @@ it.each(["NO_REPLY", "[[audio_as_voice]] _NO_REPLY_"])("literal progress: %s", a
 
   narrator.preamble("[[reply_to_current]]");
   narrator.preamble(text);
-  narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
+  await narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
   await flushNarrations();
 
   expect(generate).not.toHaveBeenCalled();
@@ -502,7 +502,7 @@ it("omits exec command text and failure titles when the channel hides command te
   const { narrator, inputs } = narratorHarness({ hideCommandText: true });
 
   for (const name of ["exec", "shell", "server.exec"]) {
-    narrator.noteToolStart({ name, phase: "start", args: { command: "cat /etc/hosts" } });
+    await narrator.noteToolStart({ name, phase: "start", args: { command: "cat /etc/hosts" } });
   }
   await flushNarrations();
   narrator.failure("cat /etc/hosts");

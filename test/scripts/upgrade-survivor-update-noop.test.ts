@@ -78,10 +78,13 @@ describe("legacy-operator already-current update", () => {
     ["rejects a different skip reason", { ...noop, reason: "no-update-root" }],
     ["rejects missing steps", { ...noop, steps: undefined }],
     ["rejects repeated maintenance", { ...noop, steps: [advisory, advisory] }],
-  ] satisfies [string, Record<string, unknown>, boolean?][])("%s", (_name, report, accepted) => {
-    const result = check(report);
-    expect(result.error).toBeUndefined();
-    expect(result.signal).toBeNull();
-    expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
-  });
+  ] satisfies [string, Record<string, unknown>, boolean?][])(
+    "%s",
+    (_name, report, accepted = false) => {
+      const result = check(report);
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status, result.stderr).toBe(accepted ? 0 : 1);
+    },
+  );
 });

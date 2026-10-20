@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import type { QaTransportState } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
@@ -9,7 +10,7 @@ import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
 const scenarioId = "character-vibes-gollum";
 const reply = "The build is green, and I am here.";
-const outbound = (state: ReturnType<typeof createQaBusState>) =>
+const outbound = (state: QaTransportState) =>
   state.getSnapshot().messages.filter((message) => message.direction === "outbound");
 const classifiedFailureReplies = [
   {
@@ -29,9 +30,7 @@ const classifiedFailureReplies = [
   },
 ] as const;
 
-function createCharacterScenarioApi(
-  onWaitForOutboundMessage?: (state: ReturnType<typeof createQaBusState>) => void,
-) {
+function createCharacterScenarioApi(onWaitForOutboundMessage?: () => void) {
   return {
     env: { providerMode: "live-frontier", gateway: { workspaceDir: "/qa-character-workspace" } },
     fs: { writeFile: async () => undefined },
@@ -41,13 +40,13 @@ function createCharacterScenarioApi(
     waitForOutboundMessage: async (
       ...[state, predicate, timeoutMs, options]: Parameters<typeof waitForOutboundMessage>
     ) => {
-      onWaitForOutboundMessage?.(state);
+      onWaitForOutboundMessage?.();
       return await waitForOutboundMessage(state, predicate, timeoutMs, {
         ...options,
         accountId: "qa-channel",
       });
     },
-    formatConversationTranscript: (state: ReturnType<typeof createQaBusState>) =>
+    formatConversationTranscript: (state: QaTransportState) =>
       state
         .getSnapshot()
         .messages.map((message) => `${message.direction}:${message.text}`)
@@ -80,8 +79,8 @@ describe("character scenario transcript safety", () => {
       await expect(
         runLoadedScenarioFlow(scenarioId, {
           state,
-          api: createCharacterScenarioApi((currentState) => {
-            currentState.addOutboundMessage({
+          api: createCharacterScenarioApi(() => {
+            state.addOutboundMessage({
               accountId: "qa-channel",
               to: "dm:alice",
               text: waitCount++ === 0 ? reply : failureText,
@@ -99,11 +98,11 @@ describe("character scenario transcript safety", () => {
     const state = createQaBusState();
     const result = await runLoadedScenarioFlow(scenarioId, {
       state,
-      api: createCharacterScenarioApi((currentState) => {
-        if (outbound(currentState).length) {
+      api: createCharacterScenarioApi(() => {
+        if (outbound(state).length) {
           return;
         }
-        currentState.addOutboundMessage({
+        state.addOutboundMessage({
           accountId: "qa-channel",
           to: "dm:alice",
           text: reply,

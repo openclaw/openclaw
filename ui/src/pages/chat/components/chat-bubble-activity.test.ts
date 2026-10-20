@@ -41,19 +41,18 @@ function mountThread(id: string, overrides: Partial<ChatThreadProps> = {}) {
   render(renderChatThread(props, transcript), container);
   transcript.start();
   transcript.update();
-  const find = <T extends Element = HTMLElement>(selector: string) =>
-    container.querySelector<T>(selector);
+  const find = (selector: string) => container.querySelector(selector);
   return { container, props, draw, find };
 }
 
 it("keeps streaming text and open status details stable behind the dot preview", async () => {
-  const { props, draw, find } = mountThread("bubble-stream");
+  const { container, props, draw, find } = mountThread("bubble-stream");
   await waitForSolid(() => {
     expect(find(".chat-bubble.streaming p")?.textContent).toBe("Here is the first part");
     expect(find(".chat-bubble-activity")).not.toBeNull();
   });
   const paragraph = find(".chat-bubble.streaming p");
-  const details = find<HTMLDetailsElement>(".chat-bubble-activity");
+  const details = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
   expect(details?.open).toBe(false);
   expect(details?.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
   details!.querySelector("summary")!.click();
@@ -90,17 +89,21 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
     expect(find(".chat-activity-group--bubble > button")?.textContent).toContain("Raw details");
     expect(container.textContent).toContain("The answer keeps streaming.");
   });
-  const button = find<HTMLButtonElement>(".chat-activity-group--bubble > button");
+  const button = container.querySelector<HTMLButtonElement>(
+    ".chat-activity-group--bubble > button",
+  );
   expect(button?.querySelector(".chat-bubble-dots")).toBeNull();
   expect(container.textContent).not.toContain("Detailed file contents.");
-  const status = find<HTMLDetailsElement>(".chat-bubble-activity");
+  const status = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
   expect(status).not.toBeNull();
   status!.querySelector("summary")!.click();
   expect(status!.open).toBe(true);
   expect(status!.querySelector(".chat-working-indicator")).not.toBeNull();
   button!.click();
   await waitForSolid(() => expect(find(".chat-activity-group.is-open")).not.toBeNull());
-  const tool = find<HTMLButtonElement>(".chat-activity-group__body .chat-tool-msg-summary");
+  const tool = container.querySelector<HTMLButtonElement>(
+    ".chat-activity-group__body .chat-tool-msg-summary",
+  );
   expect(tool).not.toBeNull();
   tool!.click();
   await waitForSolid(() => {

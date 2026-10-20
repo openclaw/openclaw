@@ -8,7 +8,7 @@ import { runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js"
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function succeeds(result: ReturnType<typeof runProcess>) {
-  expect(result.status, result.stderr?.toString()).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
 }
 const sessionId = "legacy-pending-delivery";
 const sessionKey = "agent:ops:legacy-pending-delivery";

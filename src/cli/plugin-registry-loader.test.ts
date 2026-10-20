@@ -42,7 +42,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([
+it.each<{
+  initial: boolean;
+  finishFirst: "first" | "second";
+  reject: boolean;
+  routeSecond: boolean;
+}>([
   { initial: false, finishFirst: "first", reject: false, routeSecond: true },
   { initial: false, finishFirst: "second", reject: true, routeSecond: true },
   { initial: true, finishFirst: "first", reject: false, routeSecond: true },

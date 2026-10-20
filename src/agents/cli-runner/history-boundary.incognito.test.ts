@@ -4,6 +4,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
@@ -54,7 +55,7 @@ async function create(name: string) {
     lifecycleRevision: "initial",
     incognito: true,
     updatedAt: Date.now(),
-  };
+  } satisfies InternalSessionEntry;
   const created = await actor.storage!.mutate(
     { type: "session.entry.create", input: { entry } },
     authority,

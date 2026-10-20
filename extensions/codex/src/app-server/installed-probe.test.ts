@@ -27,6 +27,7 @@ function setPlatform(platform: string) {
   if (platform === "win32" || platform === "darwin") {
     return mockCommand(platform === "win32" ? programData : missingPreferences);
   }
+  return undefined;
 }
 // mock-isolation: never read or depend on the host's managed Codex configuration.
 vi.mock("node:fs/promises", async (importOriginal) => {

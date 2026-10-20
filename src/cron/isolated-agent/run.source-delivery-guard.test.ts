@@ -86,7 +86,7 @@ describe("cron source delivery policy", () => {
 
   it("rejects required message-tool delivery when the runtime cannot expose the tool", () => {
     const sourceDelivery = resolveCronSourceDeliveryPlan({
-      deliveryPlan: { mode: "announce", requested: true },
+      deliveryPlan: { source: "delivery", mode: "announce", requested: true },
       resolvedDelivery: { channel: "messagechat", to: "123" },
     });
     sourceDelivery.sourceReplyDeliveryMode = "message_tool_only";

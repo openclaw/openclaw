@@ -15,7 +15,7 @@ const transcriptRelative = "agents/main/sessions/upgrade-restored-index-history.
 const agentRelative = "agents/main/agent/openclaw-agent.sqlite";
 const legacyRelative = "agents/ops/sessions/sessions.json";
 function expectSuccess(result: ReturnType<typeof runProcess>) {
-  expect(result.status, String(result.stderr)).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
 }
 
 // A subprocess fixture owns only the published CLI boundary. The observer runs
