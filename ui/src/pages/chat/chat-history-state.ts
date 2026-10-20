@@ -18,7 +18,7 @@ export type ChatBranchesQueryState =
   | { readonly status: "loading" | "ready" }
   | { readonly status: "error"; readonly message: string };
 
-export type ChatBranchesQueryReceipt = {
+type ChatBranchesQueryReceipt = {
   readonly isCurrent: () => boolean;
   readonly query: ChatBranchesQueryState;
 };
