@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionActorHotState } from "./session-actor-state.types.js";
+import { createMemoryTestState } from "./session-actor-memory-publication.test-support.js";
 import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
@@ -27,35 +27,24 @@ function fixture() {
     effectiveParentId: "user",
     activeMessagePosition: 1,
   };
-  const hot: SessionActorHotState = {
-    target: { database: { kind: "memory", handle: "test", incarnation: "test" }, sessionKey },
-    version: { epoch: "epoch", sequence: 1 },
-    writeToken: "committed",
-    dependencySessionIds: [scope.sessionId],
-    entry: {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
-      lifecycleRevision: "lifecycle",
-      activeWriterRunId: "run",
-    },
-    hasBoard: false,
-    participants: [],
-    members: [],
-    pendingInputs: [],
-    completionKeys: [],
-    transcript: {
-      watermark: { generation: "generation", maxSeq: 4 },
-      version: { generation: "generation", rawSeq: 4, updatedAt: 1 },
-      anchorsState: "resident",
-      anchors: [user, reply],
-      idempotency: [],
-      modelContext: {
-        kind: "resident",
-        entries: [
-          { rawSeq: 3, eventId: "user" },
-          { rawSeq: 4, eventId: "reply" },
-        ],
-      },
+  const { hot } = createMemoryTestState(sessionKey, {
+    sessionId: scope.sessionId,
+    updatedAt: 1,
+    lifecycleRevision: "lifecycle",
+    activeWriterRunId: "run",
+  });
+  hot.transcript = {
+    watermark: { generation: "generation", maxSeq: 4 },
+    version: { generation: "generation", rawSeq: 4, updatedAt: 1 },
+    anchorsState: "resident",
+    anchors: [user, reply],
+    idempotency: [],
+    modelContext: {
+      kind: "resident",
+      entries: [
+        { rawSeq: 3, eventId: "user" },
+        { rawSeq: 4, eventId: "reply" },
+      ],
     },
   };
   const message = {
@@ -146,27 +135,17 @@ describe("actor transcript anchor projection", () => {
 
   it("rejects a rewritten completed-turn anchor and changed exact replay context", () => {
     const { hot, user, read } = fixture();
-    expect(() =>
-      read(
-        {
-          entryIds: [],
-          contextValidation: { through: { ...user, generation: "old-generation" } },
-        },
-        hot,
-        null,
-      ),
-    ).toThrow(SessionTranscriptReadFenceError);
-    expect(() =>
-      read(
-        {
-          entryIds: [],
-          replayValidation: { allowInitial: false },
-          contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
-        },
-        hot,
-        null,
-      ),
-    ).toThrow(SessionTranscriptReadFenceError);
+    for (const selection of [
+      { contextValidation: { through: { ...user, generation: "old-generation" } } },
+      {
+        replayValidation: { allowInitial: false },
+        contextValidation: { version: { generation: "generation", rawSeq: 3, updatedAt: 1 } },
+      },
+    ]) {
+      expect(() => read({ entryIds: [], ...selection }, hot, null)).toThrow(
+        SessionTranscriptReadFenceError,
+      );
+    }
   });
 
   it("leaves incomplete suffixes, reset visibility, and invalidated anchors to the reader", () => {

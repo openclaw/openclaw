@@ -41,6 +41,24 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
+function activityCommand(
+  f: Fixture,
+  commandId: string,
+  updatedAt: number,
+): Extract<Mutation, { type: "session.actor.patch" }> {
+  const current = f.read();
+  return {
+    type: "session.actor.patch",
+    input: {
+      target: current.target,
+      expected: current.version,
+      commandId,
+      phaseId: "terminal-accounting",
+      reducers: [{ kind: "activity", updatedAt }],
+    },
+  };
+}
+
 it("persists run adoption and its reducers once, then skips an unchanged hydrated row", async () => {
   await withActor(async (f) => {
     const initial = f.read();
@@ -389,8 +407,7 @@ it("keeps transcript residency across entry patches without losing either owner'
     );
     try {
       entryPatch({ label: "entry owner committed", model: "updated-model" });
-      expect(reads.counts.watermark).toBe(0);
-      expect(reads.counts.select).toBe(0);
+      expect(reads.counts).toEqual({ watermark: 0, select: 0 });
       runSqliteImmediateTransactionSync(f.database.db, () =>
         recordSessionParticipantFromWorker(f.database, f.scope, {
           identity: { type: "agent", id: "peer" },
@@ -399,24 +416,14 @@ it("keeps transcript residency across entry patches without losing either owner'
       );
       reads.counts.select = 0;
       const after = f.read();
-      expect(after.entry?.label).toBe("entry owner committed");
-      expect(after.entry?.model).toBe("updated-model");
+      expect(after.entry).toMatchObject({ label: "entry owner committed", model: "updated-model" });
       expect(after.hasBoard).toBe(true);
       expect(after.participants).toMatchObject([
         { identity: { id: "peer" }, contributionCount: 1 },
       ]);
       expect(after.transcript).toEqual(before.transcript);
       expect(after.version).toEqual({ ...before.version, sequence: before.version.sequence + 2 });
-      const accounting: Mutation = {
-        type: "session.actor.patch",
-        input: {
-          target: after.target,
-          expected: after.version,
-          commandId: "activity-20",
-          phaseId: "terminal-accounting",
-          reducers: [{ kind: "activity", updatedAt: 20 }],
-        },
-      };
+      const accounting = activityCommand(f, "activity-20", 20);
       await f.prepare(accounting);
       expect(f.mutate(accounting)).toMatchObject({
         kind: "committed",
@@ -629,6 +636,9 @@ function reader(f: Fixture) {
     );
   return {
     replica,
+    [Symbol.dispose]() {
+      replica.close();
+    },
     receipt,
     install() {
       expect(replica.beginRead()(f.read())).toBe(true);
@@ -649,51 +659,47 @@ function reader(f: Fixture) {
 it("reads rewritten stored bytes from compact receipts and preserves committed totals on rollback", async () => {
   await withActor((f) => {
     const { header, questionJson } = seed(f, true);
-    const context = reader(f);
-    try {
-      context.install();
-      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-      context.expectAccounting(2, Buffer.byteLength(questionJson) + 1 + storedBytes(answer));
+    using context = reader(f);
+    context.install();
+    expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+    context.expectAccounting(2, Buffer.byteLength(questionJson) + 1 + storedBytes(answer));
 
-      const rewritten = {
-        ...question,
-        message: { ...question.message, __openclaw: { steerTargetRunId: "committed-next-run" } },
-      };
+    const rewritten = {
+      ...question,
+      message: { ...question.message, __openclaw: { steerTargetRunId: "committed-next-run" } },
+    };
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+        { seq: 1, expectedEventJson: questionJson, event: rewritten },
+      ]);
+    });
+    // The compact publication updates exact totals without copying row metadata.
+    expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+    const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
+    context.expectAccounting(expected.eventCount, expected.byteSize);
+    expect(context.bounded()).toMatchObject({
+      events: [header, rewritten, answer],
+      serializedBytes: storedBytes(header) + expected.byteSize,
+    });
+
+    const rolledBack = {
+      ...rewritten,
+      message: {
+        ...rewritten.message,
+        __openclaw: { steerTargetRunId: "uncommitted-run-with-a-different-size" },
+      },
+    };
+    expect(() =>
       runSqliteImmediateTransactionSync(f.database.db, () => {
         rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
-          { seq: 1, expectedEventJson: questionJson, event: rewritten },
+          { seq: 1, expectedEventJson: JSON.stringify(rewritten), event: rolledBack },
         ]);
-      });
-      // The compact publication updates exact totals without copying row metadata.
-      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-      const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
-      context.expectAccounting(expected.eventCount, expected.byteSize);
-      expect(context.bounded()).toMatchObject({
-        events: [header, rewritten, answer],
-        serializedBytes: storedBytes(header) + expected.byteSize,
-      });
-
-      const rolledBack = {
-        ...rewritten,
-        message: {
-          ...rewritten.message,
-          __openclaw: { steerTargetRunId: "uncommitted-run-with-a-different-size" },
-        },
-      };
-      expect(() =>
-        runSqliteImmediateTransactionSync(f.database.db, () => {
-          rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
-            { seq: 1, expectedEventJson: JSON.stringify(rewritten), event: rolledBack },
-          ]);
-          throw new Error("Synthetic context rewrite rollback");
-        }),
-      ).toThrow("Synthetic context rewrite rollback");
-      context.install();
-      context.expectAccounting(expected.eventCount, expected.byteSize);
-      expect(context.bounded().events).toEqual([header, rewritten, answer]);
-    } finally {
-      context.replica.close();
-    }
+        throw new Error("Synthetic context rewrite rollback");
+      }),
+    ).toThrow("Synthetic context rewrite rollback");
+    context.install();
+    context.expectAccounting(expected.eventCount, expected.byteSize);
+    expect(context.bounded().events).toEqual([header, rewritten, answer]);
   });
 });
 
@@ -702,50 +708,46 @@ it.each(["reset", "compaction", "leaf"] as const)(
   async (kind) => {
     await withActor((f) => {
       const { header } = seed(f);
-      const context = reader(f);
-      try {
-        context.install();
-        expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-        const control =
-          kind === "leaf"
-            ? { type: kind, id: "control", parentId: "answer", targetId: "question" }
-            : kind === "compaction"
-              ? {
-                  type: kind,
-                  id: "control",
-                  parentId: "answer",
-                  summary: "The earlier conversation",
-                  tokensBefore: 20,
-                }
-              : { type: kind, id: "control", parentId: "answer", reason: "new" };
-        const tail = {
-          ...question,
-          id: "tail",
-          parentId: kind === "leaf" ? "question" : "control",
-          message: { role: "user", content: "Continue in the selected window" },
-        };
-        runSqliteImmediateTransactionSync(f.database.db, () => {
-          appendTranscriptEventsInTransaction(f.database, f.scope, [control, tail], {
-            scheduleProjectionReconcile: false,
-          });
-          reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId);
+      using context = reader(f);
+      context.install();
+      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+      const control =
+        kind === "leaf"
+          ? { type: kind, id: "control", parentId: "answer", targetId: "question" }
+          : kind === "compaction"
+            ? {
+                type: kind,
+                id: "control",
+                parentId: "answer",
+                summary: "The earlier conversation",
+                tokensBefore: 20,
+              }
+            : { type: kind, id: "control", parentId: "answer", reason: "new" };
+      const tail = {
+        ...question,
+        id: "tail",
+        parentId: kind === "leaf" ? "question" : "control",
+        message: { role: "user", content: "Continue in the selected window" },
+      };
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        appendTranscriptEventsInTransaction(f.database, f.scope, [control, tail], {
+          scheduleProjectionReconcile: false,
         });
-        context.install();
-        expect(context.receipt().facts?.contextMetadata).toBeUndefined();
-        const counted =
-          kind === "reset" ? [tail] : kind === "compaction" ? [control, tail] : [question, tail];
-        context.expectAccounting(
-          counted.length,
-          counted.reduce((total, event) => total + storedBytes(event), 0),
-        );
-        const bounded = context.bounded();
-        expect(bounded.boundaryCount).toBe(kind === "leaf" ? 0 : 1);
-        expect(bounded.events).toEqual(
-          kind === "leaf" ? [header, question, tail] : [header, question, answer, control, tail],
-        );
-      } finally {
-        context.replica.close();
-      }
+        reconcileSessionTranscriptIndexInTransaction(f.database.db, f.scope.sessionId);
+      });
+      context.install();
+      expect(context.receipt().facts?.contextMetadata).toBeUndefined();
+      const counted =
+        kind === "reset" ? [tail] : kind === "compaction" ? [control, tail] : [question, tail];
+      context.expectAccounting(
+        counted.length,
+        counted.reduce((total, event) => total + storedBytes(event), 0),
+      );
+      const bounded = context.bounded();
+      expect(bounded.boundaryCount).toBe(kind === "leaf" ? 0 : 1);
+      expect(bounded.events).toEqual(
+        kind === "leaf" ? [header, question, tail] : [header, question, answer, control, tail],
+      );
     });
   },
 );
@@ -763,70 +765,66 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
         scheduleProjectionReconcile: false,
       });
     });
-    const context = reader(f);
-    try {
-      context.install();
-      const stats = trackSqliteStatementExecutions(f.database.db, ["aggregate"], (sql) =>
-        /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
-      );
-      const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
-      context.expectAccounting(events.length, originalBytes);
-      const appended = {
-        type: "message" as const,
-        id: "after-window",
-        parentId: events.at(-1)!.id,
-        timestamp: "2026-01-01T00:00:00.000Z",
-        message: question.message,
-      };
-      const command: Mutation = {
-        type: "session.actor.appendTranscriptEvent",
-        input: {
-          target: f.target,
-          commandId: "append-after-window",
-          phaseId: "append",
-          append: {
-            kind: "metadata",
-            input: {
-              scope: f.scope,
-              event: appended,
-              message: {
-                messageJson: JSON.stringify(appended.message),
-                cwd: "/synthetic",
-                validateTurn: false,
-              },
-              options: {},
+    using context = reader(f);
+    context.install();
+    const stats = trackSqliteStatementExecutions(f.database.db, ["aggregate"], (sql) =>
+      /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
+    );
+    const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
+    context.expectAccounting(events.length, originalBytes);
+    const appended = {
+      type: "message" as const,
+      id: "after-window",
+      parentId: events.at(-1)!.id,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: question.message,
+    };
+    const command: Mutation = {
+      type: "session.actor.appendTranscriptEvent",
+      input: {
+        target: f.target,
+        commandId: "append-after-window",
+        phaseId: "append",
+        append: {
+          kind: "metadata",
+          input: {
+            scope: f.scope,
+            event: appended,
+            message: {
+              messageJson: JSON.stringify(appended.message),
+              cwd: "/synthetic",
+              validateTurn: false,
             },
+            options: {},
           },
         },
-      };
-      const rewritten = {
-        ...appended,
-        message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
-      };
-      try {
-        await f.prepare(command);
-        expect(f.mutate(command)).toMatchObject({ kind: "committed" });
-        context.install();
-        context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
-        runSqliteImmediateTransactionSync(f.database.db, () => {
-          rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
-            { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
-          ]);
-        });
-        context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
-        expect(stats.counts.aggregate).toBe(0);
-      } finally {
-        stats.restore();
-      }
-      expect(
-        readSessionTranscriptBoundedActiveContextCore(f.scope, {
-          maxBytes: 1024 * 1024,
-          maxEvents: 100,
-        }),
-      ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
+      },
+    };
+    const rewritten = {
+      ...appended,
+      message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
+    };
+    try {
+      await f.prepare(command);
+      expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+      context.install();
+      context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
+      runSqliteImmediateTransactionSync(f.database.db, () => {
+        rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
+          { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
+        ]);
+      });
+      context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
+      expect(stats.counts.aggregate).toBe(0);
     } finally {
-      context.replica.close();
+      stats.restore();
     }
+    expect(
+      readSessionTranscriptBoundedActiveContextCore(f.scope, {
+        maxBytes: 1024 * 1024,
+        maxEvents: 100,
+      }),
+    ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
   });
 });
 
@@ -856,16 +854,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     expect(f.read(other).version).toEqual(small.version);
 
     const initial = f.read();
-    const command: Mutation = {
-      type: "session.actor.patch",
-      input: {
-        target: initial.target,
-        expected: initial.version,
-        commandId: "oversized-activity",
-        phaseId: "terminal-accounting",
-        reducers: [{ kind: "activity", updatedAt: 2 }],
-      },
-    };
+    const command = activityCommand(f, "oversized-activity", 2);
     await f.prepare(command);
     const committed = f.mutate(command);
     if (committed.kind !== "committed") {
