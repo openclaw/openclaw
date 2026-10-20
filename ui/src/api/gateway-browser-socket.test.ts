@@ -29,24 +29,16 @@ class MockWebSocket extends EventTarget {
   }
 }
 
-function createHandlers() {
-  return {
-    open: vi.fn(),
-    message: vi.fn(),
-    close: vi.fn(),
-    error: vi.fn(),
-  };
-}
-
 describe("createBrowserGatewaySocket", () => {
   let socket: MockWebSocket;
-  let handlers: ReturnType<typeof createHandlers>;
+  const handlers = { open: vi.fn(), message: vi.fn(), close: vi.fn(), error: vi.fn() };
   let socketAdapter: ReturnType<typeof createBrowserGatewaySocket>;
+  const timeoutReason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
   beforeEach(() => {
     vi.useFakeTimers();
     sockets.length = 0;
     vi.stubGlobal("WebSocket", MockWebSocket);
-    handlers = createHandlers();
+    Object.values(handlers).forEach((handler) => handler.mockReset());
     socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
     const created = sockets[0];
     if (!created) {
@@ -63,21 +55,13 @@ describe("createBrowserGatewaySocket", () => {
   it("closes a websocket that never finishes opening", async () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
-    expect(handlers.error).toHaveBeenCalledOnce();
-    expect(handlers.error.mock.calls[0]?.[0]).toEqual(
-      new Error(
-        `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`,
-      ),
-    );
+    expect(handlers.error).toHaveBeenCalledExactlyOnceWith(new Error(timeoutReason));
     expect(socket.close).toHaveBeenCalledOnce();
 
     socket.emit("error");
     socket.emit("close", { code: 1006, reason: "" });
     expect(handlers.error).toHaveBeenCalledOnce();
-    expect(handlers.close).toHaveBeenCalledWith(
-      1006,
-      `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`,
-    );
+    expect(handlers.close).toHaveBeenCalledWith(1006, timeoutReason);
   });
 
   it("preserves a real close reason when an opening timeout also occurred", async () => {
@@ -102,8 +86,7 @@ describe("createBrowserGatewaySocket", () => {
     socket.emit("close", { code: 1006, reason: "" });
     await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
-    expect(handlers.error).toHaveBeenCalledOnce();
-    expect(handlers.error).toHaveBeenCalledWith(new Error("websocket error"));
+    expect(handlers.error).toHaveBeenCalledExactlyOnceWith(new Error("websocket error"));
     expect(handlers.close).toHaveBeenCalledWith(1006, "");
     expect(socket.close).not.toHaveBeenCalled();
   });

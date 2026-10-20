@@ -12,6 +12,10 @@ function event(payload: Record<string, unknown>, name = "sessions.changed"): Eve
   return { type: "event", event: name, payload };
 }
 
+function delta(set: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) {
+  return { key: "child", base: 1, version: 2, set, remove: [], ...overrides };
+}
+
 function harness() {
   const reconnect = vi.fn();
   const listener = vi.fn<(event: EventFrame) => void>();
@@ -44,12 +48,8 @@ describe("session row event ingress", () => {
     const patch = event({
       key: "child",
       sessionFieldRefs: [4],
-      session: {
-        key: "child",
-        agentId: "work",
-        base: 1,
-        version: 2,
-        set: {
+      session: delta(
+        {
           title: null,
           runtimeMs: 20,
           runtimeSampledAt: 200,
@@ -58,11 +58,9 @@ describe("session row event ingress", () => {
           zero: 0,
           disabled: false,
         },
-        remove: ["optional"],
-      },
-      ancestorSessions: [
-        { key: "parent", agentId: "work", base: 1, version: 2, set: { runtimeMs: 20 }, remove: [] },
-      ],
+        { agentId: "work", remove: ["optional"] },
+      ),
+      ancestorSessions: [delta({ runtimeMs: 20 }, { key: "parent", agentId: "work" })],
       ancestorSessionRefs: [{ key: "root", revision: "known" }],
     });
     const second = vi.fn();
@@ -101,14 +99,12 @@ describe("session row event ingress", () => {
     for (const sessionFieldRefs of [[-1], [4], [1.5], ["label"], null]) {
       h.listener.mockClear();
       h.send({
-        session: { key: "child", base: 1, version: 2, set: { label: "Changed" }, remove: [] },
+        session: delta({ label: "Changed" }),
         sessionFieldRefs,
       });
       expect(h.listener).not.toHaveBeenCalled();
     }
-    expect(h.send({ session: { key: "child", base: 1, version: 2, set: {}, remove: [] } })).toEqual(
-      event({ session: row }),
-    );
+    expect(h.send({ session: delta() })).toEqual(event({ session: row }));
   });
 
   it.each(["parent-session", undefined])(
@@ -149,14 +145,7 @@ describe("session row event ingress", () => {
       expect(
         h.send({
           ancestorSessions: [
-            {
-              key: parent.key,
-              agentId: parent.agentId,
-              base: 1,
-              version: 2,
-              set: { label: "Updated" },
-              remove: [],
-            },
+            delta({ label: "Updated" }, { key: parent.key, agentId: parent.agentId }),
           ],
         }),
       ).toEqual(event({ ancestorSessions: [{ ...parent, label: "Updated" }] }));
@@ -215,8 +204,8 @@ describe("session row event ingress", () => {
     const h = harness();
     h.send({ session: full({ key: "child", runtimeMs: 10 }) });
     const broken = event({
-      session: { key: "child", base: 1, version: 2, set: { runtimeMs: 20 }, remove: [] },
-      ancestorSessions: [{ key: "unheld", base: 1, version: 2, set: {}, remove: [] }],
+      session: delta({ runtimeMs: 20 }),
+      ancestorSessions: [delta({}, { key: "unheld" })],
     });
     h.listener.mockClear();
     h.events.dispatch(broken, h.listener);
@@ -224,20 +213,18 @@ describe("session row event ingress", () => {
     expect(h.listener).not.toHaveBeenCalled();
     expect(h.reconnect).toHaveBeenCalledExactlyOnceWith("session row baseline missing");
     // A rejected ancestor must not commit the leaf's version or contents.
-    expect(
-      h.send({
-        session: { key: "child", base: 1, version: 2, set: { title: "After" }, remove: [] },
-      }),
-    ).toEqual(event({ session: { key: "child", runtimeMs: 10, title: "After" } }));
+    expect(h.send({ session: delta({ title: "After" }) })).toEqual(
+      event({ session: { key: "child", runtimeMs: 10, title: "After" } }),
+    );
   });
 
   it.each([
-    { key: "child", base: 7, version: 8, set: {}, remove: [] },
-    { key: "child", base: 1, version: 2, set: { key: "other" }, remove: [] },
-    { key: "child", base: 1, version: 2, set: { agentId: "other" }, remove: [] },
-    { key: "child", base: 1, version: 2, set: {}, remove: ["key"] },
-    { key: "child", base: 1, version: 2, set: { title: "x" }, remove: ["title"] },
-    { key: "child", base: 1, version: Number.MAX_SAFE_INTEGER + 1, set: {}, remove: [] },
+    delta({}, { base: 7, version: 8 }),
+    delta({ key: "other" }),
+    delta({ agentId: "other" }),
+    delta({}, { remove: ["key"] }),
+    delta({ title: "x" }, { remove: ["title"] }),
+    delta({}, { version: Number.MAX_SAFE_INTEGER + 1 }),
     { key: "child", version: 2, full: { key: "other" } },
     { key: "child", version: 2, full: null },
   ])("rejects malformed or divergent row wrappers: %j", (session) => {
@@ -257,14 +244,14 @@ describe("session row event ingress", () => {
       ),
     });
     h.send({
-      session: { key: "row-0", base: 1, version: 2, set: { title: "touched" }, remove: [] },
+      session: delta({ title: "touched" }, { key: "row-0" }),
       ancestorSessions: [full({ key: "new" })],
     });
-    expect(h.send({ session: { key: "row-0", base: 2, version: 3, set: {}, remove: [] } })).toEqual(
+    expect(h.send({ session: delta({}, { key: "row-0", base: 2, version: 3 }) })).toEqual(
       event({ session: { key: "row-0", title: "touched" } }),
     );
     h.listener.mockClear();
-    h.send({ session: { key: "row-1", base: 1, version: 2, set: {}, remove: [] } });
+    h.send({ session: delta({}, { key: "row-1" }) });
     expect(h.listener).not.toHaveBeenCalled();
     expect(h.reconnect).toHaveBeenCalledOnce();
   });
@@ -276,12 +263,12 @@ describe("session row event ingress", () => {
       h.send({ session: { ...full({ key: "large", title: "Large" }), version: 2, retain: false } }),
     ).toEqual(event({ session: { key: "large", title: "Large" } }));
     h.listener.mockClear();
-    h.send({ session: { key: "large", base: 2, version: 3, set: {}, remove: [] } });
+    h.send({ session: delta({}, { key: "large", base: 2, version: 3 }) });
     expect(h.listener).not.toHaveBeenCalled();
     h.send({ session: { ...full({ key: "large", title: "Small" }), version: 4 } });
     expect(
       h.send({
-        session: { key: "large", base: 4, version: 5, set: { title: "After" }, remove: [] },
+        session: delta({ title: "After" }, { key: "large", base: 4, version: 5 }),
       }),
     ).toEqual(event({ session: { key: "large", title: "After" } }));
   });
@@ -291,7 +278,7 @@ describe("session row event ingress", () => {
     h.send({ session: full({ key: "one" }), ancestorSessions: [full({ key: "two" })] });
     h.events.clear();
     h.listener.mockClear();
-    h.send({ session: { key: "two", base: 1, version: 2, set: {}, remove: [] } });
+    h.send({ session: delta({}, { key: "two" }) });
     expect(h.listener).not.toHaveBeenCalled();
     expect(h.reconnect).toHaveBeenCalledOnce();
   });
@@ -304,10 +291,7 @@ describe("session row event ingress", () => {
     h.send({ session: full({ key: "global", agentId: "one", title: "One" }) });
     h.send({ session: full({ key: "global", agentId: "two", title: "Two" }) });
     expect(
-      h.send(
-        { session: { key: "global", agentId: "one", base: 1, version: 2, set: {}, remove: [] } },
-        "session.message",
-      ),
+      h.send({ session: delta({}, { key: "global", agentId: "one" }) }, "session.message"),
     ).toEqual(
       event({ session: { key: "global", agentId: "one", title: "One" } }, "session.message"),
     );
