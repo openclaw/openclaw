@@ -174,6 +174,10 @@ function projectPublicEntries(packages: unknown[]): ClawHubClawCatalogEntry[] {
   return packages.filter(isPublicClawListItem).map(projectCatalogEntry);
 }
 
+function rankByInstalls(left: ClawHubClawCatalogEntry, right: ClawHubClawCatalogEntry): number {
+  return right.installs - left.installs || left.packageName.localeCompare(right.packageName);
+}
+
 function readExactClawArtifact(
   response: Awaited<ReturnType<typeof fetchClawHubPackageArtifact>>,
   coordinate: ClawHubCoordinate,
@@ -245,12 +249,7 @@ export async function listClawHubClaws(
   const entries = new Map<string, ClawHubClawCatalogEntry>();
   const finish = () => {
     const result = [...entries.values()];
-    return params.category && !params.featured
-      ? result.toSorted(
-          (left, right) =>
-            right.installs - left.installs || left.packageName.localeCompare(right.packageName),
-        )
-      : result;
+    return params.category && !params.featured ? result.toSorted(rankByInstalls) : result;
   };
   const seenCursors = new Set<string>();
   const requestedLimit =
@@ -306,7 +305,8 @@ export async function searchClawHubClaws(
     category: params.category,
     limit: params.limit ?? CATALOG_PAGE_SIZE,
   });
-  return projectPublicEntries(results.map((result) => result.package));
+  const entries = projectPublicEntries(results.map((result) => result.package));
+  return params.category ? entries.toSorted(rankByInstalls) : entries;
 }
 
 export async function readClawHubClawDetail(

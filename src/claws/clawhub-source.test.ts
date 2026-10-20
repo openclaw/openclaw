@@ -306,6 +306,23 @@ describe("public ClawHub Claw catalog", () => {
     );
   });
 
+  it("keeps install order when searching within a category", async () => {
+    mocks.search.mockResolvedValue([
+      { score: 10, package: { ...officialPackage(), stats: { installs: 1 } } },
+      { score: 1, package: { ...communityPackage(), stats: { installs: 20 } } },
+    ]);
+
+    const entries = await searchClawHubClaws({ query: "briefing", category: "research" });
+
+    expect(entries.map((entry) => entry.packageName)).toEqual([
+      "@alice/research-briefing",
+      packageName,
+    ]);
+    expect(mocks.search).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "briefing", category: "research", family: "claw" }),
+    );
+  });
+
   it("uses the current publisher badge without hiding a former official Claw", async () => {
     const revoked = { ...officialPackage(), ownerOfficial: false };
     mocks.list.mockResolvedValue({ items: [revoked], nextCursor: null });
