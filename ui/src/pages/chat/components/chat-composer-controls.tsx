@@ -7,36 +7,13 @@ import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
-import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
-import {
-  realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkDeviceIssue,
-  type RealtimeTalkInputDevice,
-} from "../talk/input.ts";
+import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
+import { realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
 type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runControlsProps"];
-
-export type MicrophonePickerProps = {
-  devices: RealtimeTalkInputDevice[];
-  loading: boolean;
-  open: boolean;
-  selectedDeviceId: string;
-  voiceActive: boolean;
-  issue: RealtimeTalkDeviceIssue | null;
-  holdToDictate?: boolean;
-  showRealtimeCapability?: boolean;
-  realtimeStatus: ComposerTalkCapabilityStatus;
-  dictationStatus: ComposerTalkCapabilityStatus;
-  onOpen: () => void;
-  onClose: () => void;
-  onSelect: (deviceId: string) => void;
-  onHoldToDictateChange?: (enabled: boolean) => void;
-  onOpenTalkSettings?: () => void;
-  onOpenDictationSettings?: () => void;
-};
 
 export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
   const menuId = createUniqueId();

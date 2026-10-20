@@ -18,8 +18,10 @@ import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
-import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import type { MicrophonePickerProps } from "./chat-composer-controls.tsx";
+import type {
+  ComposerMicrophoneOwner,
+  MicrophonePickerProps,
+} from "../composer-microphone-picker.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
