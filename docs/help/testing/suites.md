@@ -304,23 +304,31 @@ Native dependency policy:
       the checkout's `.cache/bun-transpiler` directory across runs. Set
       `BUN_RUNTIME_TRANSPILER_CACHE_PATH` to use another location, or `0` to
       disable it. Explicit values, including an empty value, are preserved.
-    - Local Node runs also reuse compiled runtime-worker outputs from
-      `.artifacts/vitest-worker-cache`. The runner reserves an exclusive
-      checkout-local output slot and transfers verified artifacts into that slot.
-      After its borrowers and resources join, it transfers completed artifacts
-      back to the cache and removes the invocation directory. Occupied or
-      uncertain generations are never reclaimed automatically.
+    - Local Node runs share compiled runtime-worker outputs across slots and
+      worktrees of one clone. The store lives in the Git common directory when
+      it is on the worktree's volume; otherwise it lives under that volume's
+      `.openclaw-vitest-workers`, keyed by the Git common directory. The runner
+      reserves an exclusive checkout-local output slot and clones verified
+      artifacts into it. APFS uses a bulk directory clone; other filesystems
+      use independent file copies or reflinks. Borrowers keep their own writable
+      files and package resolution. After borrowers and resources join, the
+      runner removes the invocation directory. Occupied or uncertain invocations
+      are never reclaimed automatically.
       Content, compiler, configuration, or resolution changes invalidate the
-      seed; timestamp-only touches do not. Build provenance and resource receipts
+      seed; timestamp-only touches do not. A miss clones a previous generation
+      and writes only changed compiler outputs, while still running the compiler
+      to discover the complete current graph. Completed snapshots publish before
+      lending; the store retains the eight most recently used input generations.
+      Old per-slot caches are ignored. Build provenance and resource receipts
       are refreshed for each invocation, and source/output verification still
       runs before lending and after completion. Cold cache-enabled preparation overlaps
       the independent worker and finalizer builds when at least 8 GiB of memory
       is available; smaller hosts keep sequential compilation. CI keeps fresh compilation
       unless its workflow enables `OPENCLAW_VITEST_WORKER_CACHE=1` after restoring
-      a protected cache. Only the protected warmer publishes shared generations;
-      ordinary CI jobs remain remote-cache readers. Reuse requires the same
-      absolute checkout and reserved output paths, Node version, compiler options,
-      and verified inputs. Incompatible or missing generations compile normally.
+      a protected cache. Only the protected warmer uploads cache archives;
+      ordinary CI jobs remain remote-cache readers. Reuse requires matching
+      Node version, compiler options, resolution topology, and verified inputs.
+      Incompatible or missing generations compile normally.
       Bun and custom Node loader runs keep fresh compilation.
       This cache does not share Vitest's writable
       filesystem module cache with another checkout.

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
@@ -31,6 +31,11 @@ import {
   vitestWorkerDeclarationEntries,
   vitestWorkerRuntimeAssets,
 } from "./vitest-worker-declarations.mts";
+import { createVitestWorkerOutput } from "./vitest-worker-output.mts";
+import {
+  createVitestWorkerPackageBoundariesPlugin,
+  createVitestWorkerRelativeExternalsPlugin,
+} from "./vitest-worker-package-boundaries.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -77,7 +82,10 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   // The native child owns the compiler module graph for this one preparation.
   const { build }: typeof import("tsdown") = require("tsdown");
   const inputs: Record<string, string> = {};
-  const outputs: Record<string, string> = {};
+  const previous = await cache?.prepareOutputs();
+  const output = createVitestWorkerOutput(directory, previous?.outputs);
+  const { outputs } = output;
+  let nativeWrittenFiles = 0;
   const packageDirectories = new Set<string>();
   const legacyOutputPrefix = "legacy-finalizer/";
   const recordInput = (id: string) => {
@@ -158,10 +166,15 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               packageDirectory = path.dirname(packageDirectory);
             }
           }
-          for (const [name, output] of Object.entries(bundle)) {
-            outputs[outputPrefix + name] = hashVitestWorkerArtifact(
-              output.type === "chunk" ? output.code : Buffer.from(output.source),
-            );
+          for (const [name, artifact] of Object.entries(bundle)) {
+            const bytes = artifact.type === "chunk" ? artifact.code : Buffer.from(artifact.source);
+            if (previous) {
+              output.write(outputPrefix + name, bytes);
+            } else {
+              // Let the bundler own cold writes; incremental builds preserve cloned bytes.
+              outputs[outputPrefix + name] = hashVitestWorkerArtifact(bytes);
+              nativeWrittenFiles++;
+            }
           }
         },
       },
@@ -196,6 +209,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     dts: false,
     envPrefix: [],
     clean: false,
+    write: !previous,
     outExtensions: () => ({ js: ".js" }),
     deps: {
       // Runtime entries share bundled query builders; other root dependencies stay external.
@@ -229,8 +243,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                 path.join(root, "src/commands/message.ts")
             ) {
               return {
-                id: pathToFileURL(path.join(outDir, "commands/message.js")).href,
-                external: "absolute",
+                id: path.join(outDir, "commands/message.js"),
+                external: "relative",
               };
             }
             return null;
@@ -271,46 +285,15 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             const boundary = fixtureModuleBoundaries.get(source);
             return boundary
               ? {
-                  id: pathToFileURL(path.join(outDir, boundary)).href,
-                  external: "absolute",
+                  id: path.join(outDir, boundary),
+                  external: "relative",
                 }
               : null;
           },
         },
       },
-      {
-        name: "openclaw:quickjs-package-boundary",
-        resolveId(id, importer) {
-          if (
-            id !== "quickjs-wasi" ||
-            !importer ||
-            path.resolve(importer) !==
-              path.join(root, "extensions/code-mode-quickjs/src/code-mode.worker.ts")
-          ) {
-            return null;
-          }
-          // Native snapshot fixtures patch this same package instance before loading the worker.
-          const dependency = createRequire(importer).resolve(id);
-          recordInput(dependency);
-          return { id: pathToFileURL(dependency).href, external: "absolute" };
-        },
-      },
-      {
-        name: "openclaw:discord-voice-package-boundary",
-        resolveId(id, importer) {
-          if (!importer || !id.startsWith(".")) {
-            return null;
-          }
-          const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
-          if (source !== path.join(root, "extensions/discord/src/voice/sdk-runtime.ts")) {
-            return null;
-          }
-          // This small native TypeScript module uses createRequire(import.meta.url)
-          // to resolve Discord's own voice dependency; shared chunks lose that owner.
-          recordInput(source);
-          return { id: pathToFileURL(source).href, external: "absolute" };
-        },
-      },
+      createVitestWorkerPackageBoundariesPlugin(root, recordInput),
+      createVitestWorkerRelativeExternalsPlugin(root),
       ...commonPlugins,
     ],
   };
@@ -335,6 +318,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         cwd: root,
         outDir,
         clean: false,
+        write: !previous,
         logLevel: config.logLevel,
         // Keep the invocation's loader boundaries while recording the binary
         // input and output alongside its sealed JavaScript consumers.
@@ -377,17 +361,16 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             }
             // Keep hookable barrels intact instead of redirecting imports to their leaf owners.
             return {
-              id: pathToFileURL(
-                path.join(
-                  outDir,
-                  legacyOutputPrefix,
-                  path.relative(root, source).replace(/\.[cm]?ts$/u, ".js"),
-                ),
-              ).href,
-              external: "absolute",
+              id: path.join(
+                outDir,
+                legacyOutputPrefix,
+                path.relative(root, source).replace(/\.[cm]?ts$/u, ".js"),
+              ),
+              external: "relative",
             };
           },
         },
+        createVitestWorkerRelativeExternalsPlugin(root),
         ...createInputPlugins(legacyOutputPrefix),
       ],
     });
@@ -418,15 +401,19 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ),
   ]) {
     const source = path.join(root, asset);
-    const destination = path.join(directory, relativeDestination);
     const contents = fs.readFileSync(source);
     const hash = hashVitestWorkerArtifact(contents);
     inputs[source] ??= hash;
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, contents, { flag: "wx" });
     // Output paths stay relative to dist, including package-root runtime assets.
-    outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
+    output.write(
+      path.relative(outDir, path.join(directory, relativeDestination)).replaceAll("\\", "/"),
+      contents,
+    );
   }
+  output.finish();
+  console.error(
+    `[vitest-workers] wrote ${nativeWrittenFiles + output.writtenFiles} compiler outputs`,
+  );
   const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
@@ -435,6 +422,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   }
   manifest.durationMs = performance.now() - started;
   fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  if (cache) {
+    // Publish an independent snapshot before any borrower can mutate its private clone.
+    const { retainVitestWorkerArtifacts } = await import("./vitest-worker-cache.mts");
+    await retainVitestWorkerArtifacts(root, directory, manifest);
+  }
 }
 
 async function writeVitestWorkerManifest(
@@ -448,7 +440,7 @@ async function writeVitestWorkerManifest(
   // Version consumers need the built source identity without making this
   // disposable generation a competing OpenClaw installation root.
   const buildInfo = `${JSON.stringify(resolveBuildInfo({ rootDir: root }), null, 2)}\n`;
-  fs.writeFileSync(path.join(outDir, "build-info.json"), buildInfo, restored ? {} : { flag: "wx" });
+  fs.writeFileSync(path.join(outDir, "build-info.json"), buildInfo);
   outputs["build-info.json"] = hashVitestWorkerArtifact(buildInfo);
   const sortedInputs = Object.fromEntries(
     Object.entries(inputs).toSorted(([a], [b]) => a.localeCompare(b)),

@@ -26,7 +26,7 @@ import {
   QuickJS,
   type JSValueHandle,
   type Snapshot,
-} from "quickjs-wasi";
+} from "./quickjs-runtime.js";
 import { readSourceLocation } from "./source-location.js";
 import type { QuickJsWorkerPayload as CodeModeWorkerPayload } from "./worker-types.js";
 

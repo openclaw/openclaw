@@ -88,6 +88,28 @@ function heldWorkerBorrowingProbe(directory: string) {
 }
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
+  it("keeps emitted module references independent of the compiling checkout and slot", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { prepareWorkers } = workerArtifacts.createFixtureCommands();
+      const owner = workerArtifacts.createWorkerRun();
+      try {
+        await prepareWorkers(owner);
+        const directory = owner.descriptor.directory;
+        const manifest = JSON.parse(fs.readFileSync(path.join(directory, "manifest.json"), "utf8"));
+        for (const name of Object.keys(manifest.outputs)) {
+          if (/\.[cm]?js$/u.test(name)) {
+            const code = fs.readFileSync(path.join(directory, "dist", name), "utf8");
+            expect(code, name).not.toContain(root.replaceAll("\\", "/"));
+            expect(code, name).not.toContain(pathToFileURL(root).href);
+          }
+        }
+      } finally {
+        await owner.dispose();
+      }
+    }));
+
   it("uses installed fs-safe packages from compiled subprocesses", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { copyTree } from "@openclaw/fs-safe/copy";
 import {
   acquireBuildArtifactLockAsync,
   ARTIFACT_CACHE_VERSION,
   portableRelativePath,
   readArtifactRecord,
-  resolveBuildStepCacheState,
   resolveTsdownCompilerFiles,
   writeArtifactRecord,
   type ArtifactRecord,
@@ -18,44 +18,82 @@ import {
 } from "./vitest-worker-artifacts.mts";
 
 const isCacheSlot = (directory: string) => /^run-cache-\d+$/u.test(path.basename(directory));
+const MAX_GENERATIONS = 8;
+const GENERATION_NAME = /^[a-f0-9]{64}$/u;
 
-function cacheLocation(root: string, directory: string) {
-  const cacheRoot = path.join(root, ".artifacts/vitest-worker-cache");
-  fs.mkdirSync(path.join(cacheRoot, path.basename(directory)), { recursive: true, mode: 0o700 });
-  const planned = resolveBuildStepCacheState(
-    {
-      label: path.basename(directory),
-      cache: { inputs: ["package.json"], outputs: [], restore: "always" },
-    },
-    {
-      rootDir: root,
-      artifactRoot: directory,
-      env: {
-        ...process.env,
-        BUILD_ALL_CACHE_ROOT: cacheRoot,
-      },
-      inputSignature: () => "",
-    },
-  );
-  if (!planned.stampPath || !planned.outputRoot) {
-    throw new Error("Compiled subprocess cache location is unavailable");
+function storeLocation(root: string) {
+  let common: string | undefined;
+  try {
+    const dotGit = path.join(root, ".git");
+    const gitDir = fs.statSync(dotGit).isDirectory()
+      ? dotGit
+      : path.resolve(
+          root,
+          fs
+            .readFileSync(dotGit, "utf8")
+            .trim()
+            .replace(/^gitdir:\s*/u, ""),
+        );
+    const commonFile = path.join(gitDir, "commondir");
+    common = fs.realpathSync(
+      fs.existsSync(commonFile)
+        ? path.resolve(gitDir, fs.readFileSync(commonFile, "utf8").trim())
+        : gitDir,
+    );
+  } catch {
+    // Isolated source fixtures need no Git administrative directory.
   }
-  return { stampPath: planned.stampPath, outputRoot: planned.outputRoot, record: planned.record };
+  let store = path.join(root, ".artifacts/vitest-worker-store");
+  if (common) {
+    if (fs.statSync(common).dev === fs.statSync(root).dev) {
+      store = path.join(common, "vitest-worker-store");
+    } else {
+      let volume = fs.realpathSync(root);
+      while (true) {
+        const parent = path.dirname(volume);
+        if (parent === volume || fs.statSync(parent).dev !== fs.statSync(volume).dev) {
+          break;
+        }
+        volume = parent;
+      }
+      store = path.join(volume, ".openclaw-vitest-workers", hashVitestWorkerArtifact(common));
+    }
+  }
+  try {
+    fs.mkdirSync(store, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    if (!["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      throw error;
+    }
+    // A read-only shared administrative directory or volume root keeps the local fallback.
+    store = path.join(root, ".artifacts/vitest-worker-store");
+    fs.mkdirSync(store, { recursive: true, mode: 0o700 });
+  }
+  return store;
 }
 
-function inputSignature(metadata: string, inputs: string[], hashes: Record<string, string>) {
-  return hashVitestWorkerArtifact(
-    JSON.stringify([
-      metadata,
-      inputs.map((file) => {
-        const hash = hashes[file];
-        if (!hash) {
-          throw new Error(`Compiler input hash unavailable: ${file}`);
-        }
-        return [file, hash];
-      }),
-    ]),
+function portableInputs(root: string, inputs: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(inputs)
+      .map(([file, hash]): [string, string] => {
+        const relative = path.isAbsolute(file) ? portableRelativePath(root, file) : file;
+        return [relative === ".." || relative.startsWith("../") ? file : relative, hash];
+      })
+      .toSorted(([left], [right]) => left.localeCompare(right)),
   );
+}
+
+function localManifest(root: string, manifest: VitestWorkerManifest): VitestWorkerManifest {
+  return {
+    ...manifest,
+    inputs: Object.fromEntries(
+      Object.entries(manifest.inputs).map(([file, hash]) => [path.resolve(root, file), hash]),
+    ),
+  };
+}
+
+function inputSignature(metadata: string, inputs: Record<string, string>) {
+  return hashVitestWorkerArtifact(JSON.stringify([metadata, Object.entries(inputs)]));
 }
 
 function outputInventory(
@@ -145,30 +183,93 @@ function matchesInventory(
   manifest: VitestWorkerManifest,
   outputs: Record<string, string>,
 ) {
-  const inputs = Object.keys(manifest.inputs).toSorted();
   return (
     manifest.cacheSignature === record.signature &&
-    JSON.stringify(record.inputs) === JSON.stringify(inputs) &&
+    JSON.stringify(record.inputs) === JSON.stringify(Object.keys(manifest.inputs).toSorted()) &&
     Object.keys(outputs).length === Object.keys(record.outputs).length &&
     Object.entries(outputs).every(([name, hash]) => record.outputs[name] === hash)
   );
 }
 
-async function transferRoots(source: string, target: string, outputs: Record<string, string>) {
-  const roots = [...new Set(Object.keys(outputs).map((name) => name.split("/")[0]!))];
-  for (const name of roots) {
-    try {
-      await fs.promises.lstat(path.join(target, name));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
+type Generation = { name: string; directory: string; used: number };
+async function generations(store: string): Promise<Generation[]> {
+  const entries = await fs.promises.readdir(store, { withFileTypes: true });
+  const result: Generation[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory() && GENERATION_NAME.test(entry.name)) {
+      const directory = path.join(store, entry.name);
+      result.push({
+        name: entry.name,
+        directory,
+        used: (await fs.promises.stat(directory)).mtimeMs,
+      });
     }
-    throw new Error(`Compiled subprocess transfer target already exists: ${name}`);
+  }
+  return result.toSorted(
+    (left, right) => right.used - left.used || left.name.localeCompare(right.name),
+  );
+}
+
+async function readGeneration(generation: Generation) {
+  const outputRoot = path.join(generation.directory, "outputs");
+  try {
+    const record = readArtifactRecord(path.join(generation.directory, "stamp.json"));
+    if (!record || record.signature !== generation.name) {
+      return undefined;
+    }
+    const bytes = await fs.promises.readFile(path.join(outputRoot, "manifest.json"));
+    const manifest: VitestWorkerManifest = JSON.parse(bytes.toString("utf8"));
+    const outputs = outputInventory(outputRoot, manifest, bytes);
+    if (
+      !outputs ||
+      !matchesInventory(record, manifest, outputs) ||
+      !(await hasExactInventory(outputRoot, outputs, false))
+    ) {
+      return undefined;
+    }
+    // The store owns immutable output bytes; source verification uses the borrower's root below.
+    await verifyVitestWorkerArtifacts(outputRoot, { ...manifest, inputs: {} });
+    return { manifest, outputRoot, outputs };
+  } catch {
+    return undefined;
+  }
+}
+
+async function copyOutputs(source: string, target: string, outputs: Record<string, string>) {
+  const roots = [...new Set(Object.keys(outputs).map((name) => name.split("/")[0]!))].filter(
+    (name) => name !== "manifest.json",
+  );
+  for (const name of roots) {
+    if (fs.existsSync(path.join(target, name))) {
+      throw new Error(`Compiled subprocess copy target already exists: ${name}`);
+    }
   }
   for (const name of roots) {
-    await fs.promises.rename(path.join(source, name), path.join(target, name));
+    const from = path.join(source, name);
+    const to = path.join(target, name);
+    if ((await fs.promises.lstat(from)).isDirectory()) {
+      // APFS uses one bulk clone. Other filesystems retain independent owned copies.
+      await copyTree(from, to, { clone: "auto" });
+    } else {
+      await fs.promises.copyFile(from, to, fs.constants.COPYFILE_FICLONE);
+    }
+  }
+}
+
+async function touchGeneration(directory: string) {
+  const now = new Date();
+  await fs.promises.utimes(directory, now, now);
+}
+
+async function pruneGenerations(store: string) {
+  for (const stale of (await generations(store)).slice(MAX_GENERATIONS)) {
+    await fs.promises.rm(stale.directory, { recursive: true, force: true });
+  }
+  // Publication holds this same lock, so any leftover private stage belongs to a dead publisher.
+  for (const entry of await fs.promises.readdir(store)) {
+    if (entry.startsWith(".stage-")) {
+      await fs.promises.rm(path.join(store, entry), { recursive: true, force: true });
+    }
   }
 }
 
@@ -177,15 +278,14 @@ export async function createVitestWorkerCache(root: string, directory: string) {
   if (!isCacheSlot(directory)) {
     return undefined;
   }
+  const store = storeLocation(root);
   const { CompilerInputSnapshot } = await import("./compiler-input-snapshot.mts");
   const snapshot = new CompilerInputSnapshot(root, {
     toolchainFiles: resolveTsdownCompilerFiles(),
     generatorInputs: ["package.json", "pnpm-lock.yaml"],
     isGeneratorInput: (file) => file.endsWith("/package.json"),
   });
-  // These absolute external URLs must return to the same exclusively reserved slot.
   const args = [
-    `output=${fs.realpathSync(directory)}`,
     `schtasks=${process.env.CI_WINDOWS_SCHTASKS_INTEGRATION ?? ""}`,
     `node-options=${process.env.NODE_OPTIONS ?? ""}`,
     `node-arguments=${JSON.stringify(process.execArgv)}`,
@@ -198,76 +298,82 @@ export async function createVitestWorkerCache(root: string, directory: string) {
       return snapshot.environmentSignature(args);
     })());
 
-  async function restoreGeneration(): Promise<VitestWorkerManifest | undefined> {
-    const location = cacheLocation(root, directory);
-    const lock = await acquireBuildArtifactLockAsync(location.stampPath);
-    try {
-      const record = readArtifactRecord(location.stampPath);
-      if (!record?.inputs || JSON.stringify(record) !== JSON.stringify(location.record)) {
-        return undefined;
-      }
-      let manifest: VitestWorkerManifest;
-      let outputs: Record<string, string>;
-      try {
-        const bytes = await fs.promises.readFile(path.join(location.outputRoot, "manifest.json"));
-        manifest = JSON.parse(bytes.toString("utf8"));
-        const inventory = outputInventory(directory, manifest, bytes);
-        if (
-          !inventory ||
-          !matchesInventory(record, manifest, inventory) ||
-          !(await hasExactInventory(location.outputRoot, inventory, false))
-        ) {
-          return undefined;
-        }
-        await verifyVitestWorkerArtifacts(location.outputRoot, manifest);
-        outputs = inventory;
-      } catch {
-        return undefined;
-      }
-      // No compiler runs on a hit. Observe resolution after the byte reads,
-      // immediately before transfer, rather than scanning the namespace twice.
-      const signature = await prepare();
-      if (inputSignature(signature, record.inputs, manifest.inputs) !== record.signature) {
-        return undefined;
-      }
-      await fs.promises.rm(location.stampPath, { force: true });
-      await transferRoots(location.outputRoot, directory, outputs);
-      await fs.promises.rmdir(location.outputRoot);
-      return manifest;
-    } finally {
-      await lock.release();
-    }
-  }
-
   return {
     async restore(): Promise<VitestWorkerManifest | undefined> {
-      const restored = await restoreGeneration();
-      // A miss still captures the inputs used by the next compilation.
+      const lock = await acquireBuildArtifactLockAsync(path.join(store, "store"));
+      try {
+        for (const generation of await generations(store)) {
+          const retained = await readGeneration(generation);
+          if (!retained) {
+            continue;
+          }
+          const manifest = localManifest(root, retained.manifest);
+          const signature = await prepare();
+          let current: Record<string, string>;
+          try {
+            current = Object.fromEntries(
+              Object.keys(retained.manifest.inputs).map((file) => [
+                file,
+                snapshot.hash(path.resolve(root, file)),
+              ]),
+            );
+          } catch {
+            continue;
+          }
+          if (inputSignature(signature, current) !== generation.name) {
+            continue;
+          }
+          await copyOutputs(retained.outputRoot, directory, retained.outputs);
+          await fs.promises.writeFile(
+            path.join(directory, "manifest.json"),
+            `${JSON.stringify(manifest)}\n`,
+          );
+          await touchGeneration(generation.directory);
+          return manifest;
+        }
+      } finally {
+        await lock.release();
+      }
       await prepare();
-      return restored;
+      return undefined;
+    },
+    async prepareOutputs(): Promise<VitestWorkerManifest | undefined> {
+      const lock = await acquireBuildArtifactLockAsync(path.join(store, "store"));
+      try {
+        for (const generation of await generations(store)) {
+          const retained = await readGeneration(generation);
+          if (retained) {
+            await copyOutputs(retained.outputRoot, directory, retained.outputs);
+            return localManifest(root, retained.manifest);
+          }
+        }
+      } finally {
+        await lock.release();
+      }
+      return undefined;
     },
     async seal(manifest: VitestWorkerManifest) {
-      return inputSignature(
-        await prepare(),
-        Object.keys(manifest.inputs).toSorted(),
-        manifest.inputs,
-      );
+      return inputSignature(await prepare(), portableInputs(root, manifest.inputs));
     },
   };
 }
 
-/** Only the run owner may retain artifacts after every borrower and resource has joined. */
+/** The compiler publishes independent snapshots before borrowers can mutate their output. */
 export async function retainVitestWorkerArtifacts(
   root: string,
   directory: string,
   manifest: VitestWorkerManifest,
 ) {
-  if (!isCacheSlot(directory) || !manifest.cacheSignature) {
+  if (
+    !isCacheSlot(directory) ||
+    !manifest.cacheSignature ||
+    !GENERATION_NAME.test(manifest.cacheSignature)
+  ) {
     return false;
   }
   const completed: VitestWorkerManifest = {
     identity: manifest.identity,
-    inputs: manifest.inputs,
+    inputs: portableInputs(root, manifest.inputs),
     outputs: manifest.outputs,
     durationMs: manifest.durationMs,
     cacheSignature: manifest.cacheSignature,
@@ -277,29 +383,45 @@ export async function retainVitestWorkerArtifacts(
   if (!outputs || !(await hasExactInventory(directory, outputs, true))) {
     return false;
   }
-  // Rebuild the manifest from the owner's captured facts, never runtime-written metadata.
-  const temporary = path.join(directory, `.manifest-${randomUUID()}.tmp`);
+  const store = storeLocation(root);
+  const lock = await acquireBuildArtifactLockAsync(path.join(store, "store"));
+  let temporary: string | undefined;
   try {
-    await fs.promises.writeFile(temporary, bytes, { flag: "wx" });
-    await fs.promises.rename(temporary, path.join(directory, "manifest.json"));
-  } finally {
-    await fs.promises.rm(temporary, { force: true });
-  }
-  const location = cacheLocation(root, directory);
-  const lock = await acquireBuildArtifactLockAsync(location.stampPath);
-  try {
-    await fs.promises.rm(location.stampPath, { force: true });
-    await fs.promises.rm(location.outputRoot, { force: true, recursive: true });
-    await fs.promises.mkdir(location.outputRoot, { recursive: true, mode: 0o700 });
-    await transferRoots(directory, location.outputRoot, outputs);
-    writeArtifactRecord(location.stampPath, {
+    await pruneGenerations(store);
+    const destination = path.join(store, completed.cacheSignature!);
+    const winner = await readGeneration({
+      name: completed.cacheSignature!,
+      directory: destination,
+      used: 0,
+    });
+    if (winner) {
+      await touchGeneration(destination);
+      await pruneGenerations(store);
+      return true;
+    }
+    await fs.promises.rm(destination, { force: true, recursive: true });
+    temporary = path.join(store, `.stage-${randomUUID()}`);
+    const outputRoot = path.join(temporary, "outputs");
+    await fs.promises.mkdir(outputRoot, { recursive: true, mode: 0o700 });
+    await copyOutputs(directory, outputRoot, outputs);
+    await fs.promises.writeFile(path.join(outputRoot, "manifest.json"), bytes, { flag: "wx" });
+    writeArtifactRecord(path.join(temporary, "stamp.json"), {
       version: ARTIFACT_CACHE_VERSION,
       signature: completed.cacheSignature!,
       inputs: Object.keys(completed.inputs).toSorted(),
       outputs,
     });
+    await fs.promises.rename(temporary, destination);
+    temporary = undefined;
+    await pruneGenerations(store);
     return true;
   } finally {
-    await lock.release();
+    try {
+      if (temporary) {
+        await fs.promises.rm(temporary, { recursive: true, force: true });
+      }
+    } finally {
+      await lock.release();
+    }
   }
 }

@@ -297,6 +297,7 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             TMPDIR: root,
             TMP: root,
             TEMP: root,
+            OPENCLAW_VITEST_RUNTIME: "node",
             ...(route.startsWith("ci")
               ? {
                   OPENCLAW_VITEST_MAX_WORKERS: "3",

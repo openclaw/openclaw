@@ -425,17 +425,17 @@ runs:
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: .artifacts/vitest-worker-cache
-        key: ${{ github.repository }}-vitest-workers-v1-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .git/vitest-worker-store
+        key: ${{ github.repository }}-vitest-workers-v2-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-workers-v1-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-
+          ${{ github.repository }}-vitest-workers-v2-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-
 
     - name: Enable restored Vitest workers
       if: inputs.cache-mode != 'off' && inputs.vitest-worker-cache == 'true' && runner.os == 'Linux' && steps.vitest-worker-cache.outputs.cache-matched-key != ''
       shell: bash
       run: |
         # The worker owner validates source, toolchain, topology, output bytes,
-        # and the exact checkout/slot path before reuse. A mismatch builds fresh.
+        # and rebased source paths before reuse. A mismatch builds fresh.
         # Cold runners avoid cache sealing work when no shared seed exists.
         echo "OPENCLAW_VITEST_WORKER_CACHE=1" >> "$GITHUB_ENV"
 

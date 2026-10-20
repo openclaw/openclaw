@@ -48,9 +48,6 @@ export function createVitestWorkerRun(
 ) {
   const directory = parent?.directory ?? createVitestWorkerDirectory(env);
   let preparation: Promise<VitestWorkerManifest> | undefined;
-  let retainArtifacts:
-    | typeof import("./vitest-worker-cache.mts").retainVitestWorkerArtifacts
-    | undefined;
   let disposal: Promise<void> | undefined;
   let releaseCleanup: Awaited<ReturnType<typeof acquireManagedCleanup>>;
   const borrowers: Promise<unknown>[] = [];
@@ -88,10 +85,6 @@ export function createVitestWorkerRun(
         return JSON.parse(
           await fs.promises.readFile(path.join(directory, "manifest.json"), "utf8"),
         ) as VitestWorkerManifest;
-      }
-      if (useVitestWorkerCache(env)) {
-        // Load cleanup before the runner's loader service can stop during shutdown.
-        retainArtifacts = (await import("./vitest-worker-cache.mts")).retainVitestWorkerArtifacts;
       }
       compilerJoined = false;
       const code = await runManagedCommand({
@@ -228,11 +221,6 @@ export function createVitestWorkerRun(
               if (fs.existsSync(path.join(directory, "manifest.json"))) {
                 console.error("[vitest-workers] verifying completed generation before cleanup");
                 await verifyVitestWorkerArtifacts(directory, manifest);
-              }
-              if (!parent && manifest?.cacheSignature) {
-                if (await retainArtifacts?.(root, directory, manifest)) {
-                  console.error("[vitest-workers] retained completed compiler outputs for reuse");
-                }
               }
             } finally {
               process.off("disconnect", onParentDisconnect);

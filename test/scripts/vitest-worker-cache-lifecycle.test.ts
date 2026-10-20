@@ -10,10 +10,11 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
-it("retains verified artifacts after the runner's module loader stops", async () => {
+it("preserves compiler-published artifacts after the runner's module loader stops", async () => {
   const root = tempDirs.make("vitest-worker-loader-shutdown-");
   const ownerPath = "scripts/lib/vitest-worker-run.mts";
-  const closure = collectRuntimeImportClosure(repoRoot, [ownerPath], {
+  const cachePath = "scripts/lib/vitest-worker-cache.mts";
+  const closure = collectRuntimeImportClosure(repoRoot, [ownerPath, cachePath], {
     includeDynamicImports: true,
   });
   for (const file of new Set([...closure, "package.json", "tsconfig.json"])) {
@@ -29,7 +30,7 @@ it("retains verified artifacts after the runner's module loader stops", async ()
   const artifactsUrl = pathToFileURL(
     path.join(root, "scripts/lib/vitest-worker-artifacts.mts"),
   ).href;
-  const cacheUrl = pathToFileURL(path.join(root, "scripts/lib/vitest-worker-cache.mts")).href;
+  const cacheUrl = pathToFileURL(path.join(root, cachePath)).href;
   const input = path.join(root, "fixture-input.ts");
   const output = 'export const value = "compiled fixture";\n';
   fs.writeFileSync(input, "export {};\n");
@@ -39,6 +40,7 @@ it("retains verified artifacts after the runner's module loader stops", async ()
     `import fs from 'node:fs';
 import path from 'node:path';
 import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
+import { retainVitestWorkerArtifacts } from ${JSON.stringify(cacheUrl)};
 const directory = process.argv[2];
 fs.mkdirSync(path.join(directory, 'dist'));
 const code = ${JSON.stringify(output)};
@@ -47,10 +49,12 @@ fs.writeFileSync(path.join(directory, 'dist/probe.js'), code);
 fs.writeFileSync(path.join(directory, 'dist/build-info.json'), info);
 const inputs = { [${JSON.stringify(input)}]: hash(fs.readFileSync(${JSON.stringify(input)})) };
 const outputs = { 'probe.js': hash(code), 'build-info.json': hash(info) };
-fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+const manifest = {
   identity: hash(JSON.stringify([inputs, outputs])), inputs, outputs, durationMs: 1,
   cacheSignature: hash('fixture compiler generation'),
-}));
+};
+fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
+if (!await retainVitestWorkerArtifacts(${JSON.stringify(root)}, directory, manifest)) throw new Error('fixture compiler publication failed');
 `,
   );
   const borrower = path.join(root, "borrower.mjs");
@@ -102,7 +106,8 @@ try {
   await owner.borrow(child, completion);
   stopped = true;
   await owner.dispose();
-  const cached = path.join(${JSON.stringify(root)}, '.artifacts/vitest-worker-cache', path.basename(owner.descriptor.directory));
+  const store = path.join(${JSON.stringify(root)}, '.artifacts/vitest-worker-store');
+  const cached = path.join(store, fs.readdirSync(store).find((name) => /^[a-f0-9]{64}$/.test(name)));
   assert.equal(fs.existsSync(owner.descriptor.directory), false);
   assert.equal(fs.readFileSync(path.join(cached, 'outputs/dist/probe.js'), 'utf8'), ${JSON.stringify(output)});
   assert.equal(fs.existsSync(path.join(cached, 'stamp.json')), true);
@@ -128,7 +133,7 @@ try {
     DEFAULT_VITEST_TEST_TIMEOUT_MS,
     { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
   );
-  expect(result.error).toBeUndefined();
+  expect(result.error, result.stderr + result.stdout).toBeUndefined();
   expect(result.status, result.stderr + result.stdout).toBe(0);
   expect(result.stdout).toContain("joined cleanup retained verified artifacts");
 });
