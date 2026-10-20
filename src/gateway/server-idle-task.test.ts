@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
@@ -39,47 +39,24 @@ function schedule(overrides: Pick<IdleTaskOptions, "run"> & Partial<IdleTaskOpti
   });
 }
 
-describe("scheduleGatewayIdleTask", () => {
-  it("still completes ordinary idle work", async () => {
-    const run = vi.fn(async () => {});
-    const handle = schedule({ run });
-
-    await clock.advanceBy(10);
-    await Promise.resolve();
-    expect(run).toHaveBeenCalledOnce();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await handle.stop();
+it.each(["ordinary", "draining", "error"] as const)("settles %s idle work", async (mode) => {
+  const error = new GatewayDrainingError("unexpected task failure");
+  const run = vi.fn(async () => {
+    if (mode === "error") {
+      throw error;
+    }
   });
-
-  it("quietly cancels idle work rejected by an active restart drain", async () => {
-    const run = vi.fn(async () => {});
-    const warn = vi.fn();
-    const handle = schedule({ run, log: { warn } });
-
+  const warn = vi.fn();
+  const handle = schedule({ run, log: { warn } });
+  if (mode === "draining") {
     markGatewayRestartDraining();
-    await clock.advanceBy(10);
-
-    expect(run).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await handle.stop();
-  });
-
-  it("warns when idle work throws a draining error without an active restart", async () => {
-    const error = new GatewayDrainingError("unexpected task failure");
-    const warn = vi.fn();
-    const handle = schedule({
-      run: async () => {
-        throw error;
-      },
-      log: { warn },
-    });
-
-    await clock.advanceBy(10);
-
-    expect(warn).toHaveBeenCalledWith(`idle task failed: ${String(error)}`);
-    await handle.stop();
-  });
+  }
+  await clock.advanceBy(10);
+  await Promise.resolve();
+  expect(run).toHaveBeenCalledTimes(mode === "draining" ? 0 : 1);
+  expect(warn.mock.calls).toEqual(mode === "error" ? [[`idle task failed: ${String(error)}`]] : []);
+  expect(scheduler.nextWakeAtMs).toBeNull();
+  await handle.stop();
 });
 
 it("repeats only after completion, defers busy work once, and joins stop", async () => {
