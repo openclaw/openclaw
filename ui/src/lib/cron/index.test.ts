@@ -25,6 +25,7 @@ import type { CronState } from "../../lib/cron/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import {
   createCronJob,
+  createCronRunsResult,
   createMethodRequest,
   createStateWithRequest,
   cronJobsListResponse,
@@ -101,19 +102,6 @@ function sent(request: ReturnType<typeof createMethodRequest>, method = "cron.ad
     throw new Error(`Expected ${method} request call`);
   }
   return requireRecord(call[1], `${method} payload`);
-}
-
-function createCronRunsResult(
-  entries: CronRunsResult["entries"],
-  overrides: Partial<Omit<CronRunsResult, "entries">> = {},
-): CronRunsResult {
-  return {
-    entries,
-    total: entries.length,
-    hasMore: false,
-    nextOffset: null,
-    ...overrides,
-  };
 }
 
 function runEntry(jobId: string, ts: number) {

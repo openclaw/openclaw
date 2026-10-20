@@ -22,7 +22,7 @@ import {
   normalizeAccountId,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
+import { writeRuntimeJson, defaultRuntime as runtime } from "../runtime.js";
 import {
   evaluateAgentDatabaseAdmissions,
   hasAgentDatabaseAdmissions,
@@ -423,10 +423,7 @@ async function enrichProviderSummaries(
   }
 }
 
-export async function agentsListCommand(
-  opts: AgentsListOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsListCommand(opts: AgentsListOptions) {
   const cfg = await requireValidConfig(runtime, { adoptPluginMetadata: true });
   if (!cfg) {
     return;

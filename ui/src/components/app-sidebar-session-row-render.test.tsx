@@ -321,7 +321,7 @@ it.each([false, null, undefined])(
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
-  async (kind) => {
+  (kind) => {
     const { dom, session, current, setCurrent } = mountRow({
       label: "Research",
       color: "blue",
@@ -330,7 +330,7 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada" } },
     });
     const chip = dom.query("openclaw-session-owner-chip");
-    await chip?.updateComplete;
+    flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector("svg");
@@ -362,7 +362,6 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
     });
     flush();
-    await chip?.updateComplete;
     expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
     expect(archive.querySelector("svg")).toBe(archiveIcon);
     expect(content.firstElementChild).toBe(artwork);

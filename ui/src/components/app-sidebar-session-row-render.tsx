@@ -22,7 +22,6 @@ import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
-import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
 /** Compose independently owned session state and context indicators. */

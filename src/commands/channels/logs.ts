@@ -8,7 +8,7 @@ import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 
 type ChannelsLogsOptions = {
   channel?: string;
@@ -76,10 +76,7 @@ function matchesChannel(
 }
 
 /** Print or serialize recent log lines matching one channel subsystem/module. */
-export async function channelsLogsCommand(
-  opts: ChannelsLogsOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function channelsLogsCommand(opts: ChannelsLogsOptions) {
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
   const limit = parseLogsPositiveInt(opts.lines, DEFAULT_LIMIT, "--lines");
@@ -92,24 +89,24 @@ export async function channelsLogsCommand(
   const { lines, truncated } = tail;
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { file: tail.file, channel, truncated, lines });
+    defaultRuntime.writeJson({ file: tail.file, channel, truncated, lines });
     return;
   }
 
-  runtime.log(theme.info(`Log file: ${tail.file}`));
+  defaultRuntime.log(theme.info(`Log file: ${tail.file}`));
   if (channel !== "all") {
-    runtime.log(theme.info(`Channel: ${channel}`));
+    defaultRuntime.log(theme.info(`Channel: ${channel}`));
   }
   if (truncated) {
-    runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
+    defaultRuntime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
   }
   if (lines.length === 0) {
-    runtime.log(theme.muted("No matching log lines."));
+    defaultRuntime.log(theme.muted("No matching log lines."));
     return;
   }
   for (const line of lines) {
     const ts = line.time ? `${line.time} ` : "";
     const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
-    runtime.log(`${ts}${level}${line.message}`.trim());
+    defaultRuntime.log(`${ts}${level}${line.message}`.trim());
   }
 }

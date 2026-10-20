@@ -1,12 +1,4 @@
-import {
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  onCleanup,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createUniqueId, For, onCleanup, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -224,12 +216,12 @@ export function AgentOverview(
     return result;
   };
 
-  const [avatarPickerOpen, setAvatarPickerOpen] = createSignal(false);
   const avatarPickerId = `agent-avatar-picker-${createUniqueId()}`;
-  const pickerContentVisible = createMemo(() => avatarPickerOpen() && uploadsEnabled());
   const avatarOverlay = createOverlay(avatarPickerId, undefined, {
     exclusiveGroup: "menu",
   });
+  const avatarPickerOpen = projectOwner(avatarOverlay, (overlay) => overlay.open).read;
+  const pickerContentVisible = createMemo(() => avatarPickerOpen() && uploadsEnabled());
   let avatarTrigger: HTMLButtonElement | undefined;
   let avatarSurface: HTMLDivElement | undefined;
   onSettled(() => {
@@ -241,14 +233,13 @@ export function AgentOverview(
     avatarOverlay.setParent(findOverlayParent(avatarTrigger));
     const anchor = createOverlayAnchor(avatarSurface, { sameRoot: true });
     anchor.update(avatarTrigger, "right-start");
-    const unsubscribe = avatarOverlay.subscribe(setAvatarPickerOpen);
+    // Retire the native overlay synchronously when upload authority is revoked.
     const unsubscribeConfig = applicationConfig?.subscribe((nextConfig) => {
       if (!nextConfig.uploadsEnabled) {
         avatarOverlay.request(false);
       }
     });
     return () => {
-      unsubscribe();
       unsubscribeConfig?.();
       anchor.dispose();
       avatarOverlay.dispose();
