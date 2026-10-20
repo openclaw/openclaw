@@ -276,8 +276,6 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   }
   if (
     !stageSqliteTransactionState(db, {
-      stage: () => {},
-      rollback: () => {},
       commit: () => publishSqliteDatabaseSchemaChange(db),
       invalidate: () => publishSqliteDatabaseSchemaChange(db),
     })

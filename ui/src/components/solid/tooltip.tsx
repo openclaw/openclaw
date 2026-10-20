@@ -114,7 +114,7 @@ export const Tooltip = Object.assign(
       <openclaw-tooltip
         {...props}
         prop:content={props.content ?? ""}
-        prop:placement={props.placement ?? "top"}
+        prop:placement={props.placement}
         prop:closeDelay={props.closeDelay ?? 100}
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}

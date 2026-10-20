@@ -268,6 +268,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       showToast({ message: uploadsDisabledMessage() });
       return;
     }
+    // The question carries the model controls shown when it was asked.
+    const modelSelection = this.sessionCompanionThreads.view(sessionKey, agentId).modelSelection;
     const ask = (key: string, value: string, requestedAttachments?: ChatAttachment[]) =>
       requestSessionCompanionAnswer(
         client,
@@ -276,6 +278,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
         agentId,
         requestedAttachments,
         state.uploadConfig,
+        modelSelection,
       );
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };

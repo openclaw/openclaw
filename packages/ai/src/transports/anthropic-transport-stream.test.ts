@@ -1322,18 +1322,16 @@ describe("anthropic transport stream", () => {
     );
   });
 
-  it.each([false, true])("quarantines malformed tools (valid sibling=%s)", async (withValid) => {
+  it.each([false, true])("quarantines malformed schemas (valid sibling=%s)", async (withValid) => {
     const result = await runTransportStream(
       makeAnthropicTransportModel(),
       {
         messages: [{ role: "user", content: "hello" }],
         tools: [
           {
-            name: "unreadable_plugin_tool",
-            description: "unreadable schema",
-            get parameters() {
-              throw new Error("fuzz parameters getter exploded");
-            },
+            name: "invalid_required_tool",
+            description: "invalid required",
+            parameters: { type: "object", required: "query" },
           },
           ...(withValid
             ? [

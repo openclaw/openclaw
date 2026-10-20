@@ -196,32 +196,29 @@ export async function startGatewayBonjourAdvertiser(
     const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
     const displayName = prettifyInstanceName(instanceName);
 
-    const txtBase: Record<string, string> = {
+    const gatewayTxt: Record<string, string> = {
       role: "gateway",
       gatewayPort: String(opts.gatewayPort),
       lanHost: `${hostname}.local`,
       displayName,
     };
     if (opts.gatewayTlsEnabled) {
-      txtBase.gatewayTls = "1";
+      gatewayTxt.gatewayTls = "1";
       if (opts.gatewayTlsFingerprintSha256) {
-        txtBase.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
+        gatewayTxt.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
       }
     }
     if (opts.gatewayDirectReachable) {
-      txtBase.gatewayDirectReachable = "1";
+      gatewayTxt.gatewayDirectReachable = "1";
     }
     if (!opts.minimal && opts.tailnetDns?.trim()) {
-      txtBase.tailnetDns = opts.tailnetDns.trim();
+      gatewayTxt.tailnetDns = opts.tailnetDns.trim();
     }
     if (!opts.minimal && opts.cliPath?.trim()) {
-      txtBase.cliPath = opts.cliPath.trim();
+      gatewayTxt.cliPath = opts.cliPath.trim();
     }
 
-    const gatewayTxt: Record<string, string> = {
-      ...txtBase,
-      transport: "gateway",
-    };
+    gatewayTxt.transport = "gateway";
     if (!opts.minimal) {
       gatewayTxt.sshPort = String(opts.sshPort ?? 22);
     }

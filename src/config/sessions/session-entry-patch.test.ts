@@ -57,7 +57,7 @@ import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcri
 import * as reconcile from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
 
-const { getSessionEntryPatchDelivery } =
+const { getSessionEntryPatchDelivery, observeCommitAdmission } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
 
@@ -65,23 +65,6 @@ function patchSessionEntryCore(
   ...[scope, update, options]: Parameters<typeof patchInternalSessionEntry>
 ) {
   return patchInternalSessionEntry(scope, update, { workerGuard: {}, ...options });
-}
-
-function observeCommitAdmission() {
-  let current: admission.SqliteWorkerOperationAdmission | undefined;
-  const create = admission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (callback, attachment) => {
-      const owned = create((request, grant) => {
-        if (request.stage === "commit") {
-          current = owned;
-        }
-        callback(request, grant);
-      }, attachment);
-      return owned;
-    },
-  );
-  return () => current;
 }
 
 function releasableSource(release: () => void | Promise<void>) {

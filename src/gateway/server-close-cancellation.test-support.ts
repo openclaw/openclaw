@@ -81,6 +81,31 @@ export function registerGatewayCancellationTests({
     expect(rpcSourceTesting.size).toBe(0);
   });
 
+  it.each([-60_000, 60_000])(
+    "honors the reply drain budget when the wall clock moves by %s ms",
+    async (clockShift) => {
+      const { source } = await createSource("clock-shift");
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(100_000);
+      const closing = createClose()({ reason: "clock-shift shutdown", drainTimeoutMs: 1_000 });
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        vi.setSystemTime(Date.now() + clockShift);
+        await vi.advanceTimersByTimeAsync(899);
+        expect(source.input.abortSignal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(source.input.abortSignal.aborted).toBe(true);
+        expect((await closing).warnings).toContain("restart-reply-drain");
+        expect(rpcSourceTesting.size).toBe(0);
+      } finally {
+        // Release the original wall-clock implementation too when proving the regression red.
+        vi.setSystemTime(102_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await closing;
+      }
+    },
+  );
+
   it("settles aborted sources and effects while retaining unfinished source cleanup", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const active = [];

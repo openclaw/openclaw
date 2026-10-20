@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   asPositiveFiniteNumber,
   parseDateStringTimestampMs,
@@ -380,6 +381,7 @@ export async function runFirecrawlSearch(
     JSON.stringify({
       type: "firecrawl-search",
       provider: providerId,
+      credential: apiKey ? sha256Hex(apiKey) : undefined,
       q: params.query,
       count,
       baseUrl,

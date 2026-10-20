@@ -13,7 +13,7 @@ export function telegramGatewayOptions({
   runtimeEnvPatch,
   ...options
 }: Omit<GatewayOptions, "repoRoot" | "transport" | "transportBaseUrl" | "controlUiEnabled"> & {
-  workspace: string;
+  workspace?: string;
   apiRoot: string;
   telegram: NonNullable<OpenClawConfig["channels"]>["telegram"];
   messages?: OpenClawConfig["messages"];
@@ -33,7 +33,9 @@ export function telegramGatewayOptions({
       ...runtimeEnvPatch,
     },
     mutateConfig: (cfg) => {
-      cfg.agents!.defaults!.workspace = workspace;
+      if (workspace !== undefined) {
+        cfg.agents!.defaults!.workspace = workspace;
+      }
       return mutateConfig ? mutateConfig(cfg) : cfg;
     },
   };

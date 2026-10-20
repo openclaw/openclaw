@@ -1,10 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function run(command: string, args: string[], env: NodeJS.ProcessEnv) {
+  return spawnSync(command, args, { encoding: "utf8", env: { ...process.env, ...env } });
+}
 
 const fixture = String.raw`
 require "json"
@@ -19,7 +23,6 @@ def lane(*); end
 alias private_lane lane
 load ARGV.fetch(0)
 
-# No pre-created devices, including a stale device with the preferred name.
 def available_simulator_devices; []; end
 module Open3
   def self.capture3(*arguments)
@@ -28,13 +31,9 @@ module Open3
       { name: "Apple Watch Series 12 (46mm)", identifier: "series-12" },
       { name: "Apple Watch Ultra 4 (49mm)", identifier: "ultra-4" }
     ]
-    runtimes = [
-      { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-26-0", version: "26.0", isAvailable: true, supportedDeviceTypes: types },
-      { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-28-0", version: "28.0", isAvailable: false, supportedDeviceTypes: types },
-      { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", version: "27.0", isAvailable: true, supportedDeviceTypes: types }
-    ]
-    if ARGV[1] == "unavailable"
-      runtimes.each { |runtime| runtime[:isAvailable] = false }
+    runtimes = [["26.0", true], ["28.0", false], ["27.0", true]].map do |version, available|
+      { identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr('.', '-')}", version: version,
+        isAvailable: available && ARGV[1] != "unavailable", supportedDeviceTypes: types }
     end
     [JSON.generate({ runtimes: runtimes }), "", Struct.new(:success?).new(true)]
   end
@@ -46,58 +45,45 @@ rescue => error
 end
 `;
 
-function resolve(scenario: string, name: string) {
-  const result = spawnSync(
+const runtimeError =
+  "No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS";
+it.each([
+  ["available", "Apple Watch Series 12 (46mm)", "Apple Watch Series 12 (46mm)", "series-12"],
+  ["available", "Apple Watch Ultra 3 (49mm)", "Apple Watch Ultra 4 (49mm)", "ultra-4"],
+  ["unavailable", "Apple Watch Ultra 3 (49mm)", "", ""],
+])("resolves %s runtime for %s without pre-created devices", (scenario, requested, name, id) => {
+  const result = run(
     "ruby",
-    ["-e", fixture, path.join(process.cwd(), "apps/ios/fastlane/Fastfile"), scenario, name],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CI: "false",
-      },
-    },
+    ["-e", fixture, path.resolve("apps/ios/fastlane/Fastfile"), scenario, requested],
+    { CI: "false" },
   );
   expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout);
-}
-
-it("creates a Watch descriptor from the latest available runtime without pre-created devices", () => {
-  expect(resolve("available", "Apple Watch Series 12 (46mm)")).toEqual({
-    device: {
-      name: "Apple Watch Series 12 (46mm)",
-      deviceTypeIdentifier: "series-12",
-      runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
-    },
-  });
-  expect(resolve("available", "Apple Watch Ultra 3 (49mm)")).toEqual({
-    device: {
-      name: "Apple Watch Ultra 4 (49mm)",
-      deviceTypeIdentifier: "ultra-4",
-      runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
-    },
-  });
+  const device = {
+    name,
+    deviceTypeIdentifier: id,
+    runtime: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0",
+  };
+  expect(JSON.parse(result.stdout)).toEqual(
+    scenario === "unavailable" ? { error: runtimeError } : { device },
+  );
 });
 
-it("reports missing runtime setup separately from a screenshot failure", () => {
-  expect(resolve("unavailable", "Apple Watch Ultra 3 (49mm)")).toEqual({
-    error:
-      "No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS",
-  });
-});
-
-it.each(["installed", "missing", "download-failed", "watch-disabled"])(
-  "prepares the CI runtime before capture: %s",
-  (scenario) => {
-    const root = tempDirs.make("watch-runtime-");
-    const bin = path.join(root, "bin");
-    const calls = path.join(root, "calls");
-    const installed = path.join(root, "installed");
-    mkdirSync(bin);
-    if (scenario === "installed") {
-      writeFileSync(installed, "");
-    }
-    const tool = `#!${process.execPath}
+const download = ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"];
+const capture = ["bundle", "_4.0.22_", "exec", "fastlane", "ios", "screenshots"];
+it.each<[string, number, string[][], string[][]]>([
+  ["installed", 0, [], [capture]],
+  ["missing", 0, [download], [capture]],
+  ["download-failed", 42, [download], []],
+  ["watch-disabled", 0, [], [capture]],
+])("prepares runtime: %s", (scenario, status, downloads, captures) => {
+  const root = tempDirs.make("watch-runtime-");
+  const calls = path.join(root, "calls");
+  const installed = path.join(root, "installed");
+  const marker = JSON.stringify(installed);
+  if (scenario === "installed") {
+    writeFileSync(installed, "");
+  }
+  const tool = `#!${process.execPath}
 const fs = require("node:fs");
 const name = require("node:path").basename(process.argv[1]);
 const args = process.argv.slice(2);
@@ -106,47 +92,30 @@ if (name === "xcrun") {
   if (args[0] === "--sdk") console.log("27.0");
   else if (args.includes("--json")) console.log(JSON.stringify({runtimes: [
     {identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-26-0", version: "26.0", isAvailable: true},
-    {identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", version: "27.0", isAvailable: fs.existsSync(${JSON.stringify(installed)})}
+    {identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", version: "27.0", isAvailable: fs.existsSync(${marker})}
   ]}));
 } else if (name === "xcodebuild" && args[0] === "-downloadPlatform") {
   if (${JSON.stringify(scenario)} === "download-failed") process.exit(42);
-  if (fs.existsSync(${JSON.stringify(installed)})) process.exit(70);
-  fs.writeFileSync(${JSON.stringify(installed)}, "");
+  if (fs.existsSync(${marker})) process.exit(70);
+  fs.writeFileSync(${marker}, "");
 }
 `;
-    for (const name of ["xcrun", "xcodebuild", "bundle"]) {
-      const executable = path.join(bin, name);
-      writeFileSync(executable, tool);
-      chmodSync(executable, 0o755);
-    }
-    const result = spawnSync("/bin/bash", ["scripts/ios-screenshots.sh"], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CI: "true",
-        OPENCLAW_SNAPSHOT_SKIP_WATCH: scenario === "watch-disabled" ? "1" : "0",
-        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-      },
-    });
-    const commands: string[][] = readFileSync(calls, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    const downloads = commands.filter((command) => command[1] === "-downloadPlatform");
-    const captures = commands.filter((command) => command.includes("fastlane"));
-    expect(result.status, result.stderr).toBe(scenario === "download-failed" ? 42 : 0);
-    expect(downloads).toEqual(
-      scenario === "installed" || scenario === "watch-disabled"
-        ? []
-        : [["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"]],
-    );
-    expect(captures).toEqual(
-      scenario === "download-failed"
-        ? []
-        : [["bundle", "_4.0.22_", "exec", "fastlane", "ios", "screenshots"]],
-    );
-    if (scenario === "watch-disabled") {
-      expect(commands.filter(([name]) => name === "xcodebuild" || name === "xcrun")).toEqual([]);
-    }
-  },
-);
+  for (const name of ["xcrun", "xcodebuild", "bundle"]) {
+    writeFileSync(path.join(root, name), tool, { mode: 0o755 });
+  }
+  const result = run("/bin/bash", ["scripts/ios-screenshots.sh"], {
+    CI: "true",
+    OPENCLAW_SNAPSHOT_SKIP_WATCH: scenario === "watch-disabled" ? "1" : "0",
+    PATH: `${root}${path.delimiter}${process.env.PATH}`,
+  });
+  const commands: string[][] = readFileSync(calls, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(result.status, result.stderr).toBe(status);
+  expect(commands.filter((command) => command[1] === "-downloadPlatform")).toEqual(downloads);
+  expect(commands.filter((command) => command.includes("fastlane"))).toEqual(captures);
+  if (scenario === "watch-disabled") {
+    expect(commands.filter(([name]) => name === "xcodebuild" || name === "xcrun")).toEqual([]);
+  }
+});

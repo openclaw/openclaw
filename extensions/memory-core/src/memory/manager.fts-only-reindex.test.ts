@@ -22,7 +22,8 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
@@ -209,22 +210,6 @@ describe("memory manager FTS-only reindex", () => {
     }
   }
 
-  async function writeExistingMeta(
-    memoryManager: MemoryIndexManager,
-    model: string,
-  ): Promise<void> {
-    const metaWriter = memoryManager as unknown as {
-      writeMeta(meta: MemoryIndexMeta): Promise<void>;
-    };
-    await metaWriter.writeMeta({
-      model,
-      provider: "openai",
-      chunkTokens: 600,
-      chunkOverlap: 120,
-      sources: ["memory"],
-    });
-  }
-
   it("keeps a reopened semantic index valid before discovering the provider model", async () => {
     providerAvailable = true;
     const indexed = await createManager({ provider: "openai" });
@@ -284,23 +269,24 @@ describe("memory manager FTS-only reindex", () => {
       providerEmbeddingError = new Error("embedding request failed during bootstrap");
       const memoryManager = await createManager();
       const metadata = vi
-        .spyOn(
-          memoryManager as unknown as { writeMeta(meta: MemoryIndexMeta): Promise<void> },
-          "writeMeta",
-        )
+        .spyOn(MemoryIndexDatabase.prototype, "writeMetadata")
         .mockImplementationOnce(() => {
           throw new Error("keyword publication failed");
         });
 
-      await expect(memoryManager.search("Alpha topic")).resolves.toEqual([]);
-      await expect(memoryManager.search("Alpha topic")).resolves.toEqual([]);
-      expect(metadata).toHaveBeenCalledOnce();
+      try {
+        await expect(memoryManager.search("Alpha topic")).resolves.toEqual([]);
+        await expect(memoryManager.search("Alpha topic")).resolves.toEqual([]);
+        expect(metadata).toHaveBeenCalledOnce();
 
-      providerAvailable = false;
-      nowSpy.mockReturnValue(now + 60_000);
-      await expect(memoryManager.search("Alpha topic")).resolves.toEqual([
-        expect.objectContaining({ path: "MEMORY.md", source: "memory" }),
-      ]);
+        providerAvailable = false;
+        nowSpy.mockReturnValue(now + 60_000);
+        await expect(memoryManager.search("Alpha topic")).resolves.toEqual([
+          expect.objectContaining({ path: "MEMORY.md", source: "memory" }),
+        ]);
+      } finally {
+        metadata.mockRestore();
+      }
     } finally {
       nowSpy.mockRestore();
     }
@@ -709,8 +695,25 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("aborts instead of downgrading an existing semantic index to FTS-only", async () => {
+    const database = await MemoryIndexDatabase.openPublished({
+      agentId: "main",
+      writeOptions: captureMemoryDatabaseWriteOptions("main", indexPath),
+      readOnly: false,
+      allowExtension: false,
+      schema: { cacheEnabled: false, ftsEnabled: true },
+    });
+    try {
+      await database.writeMetadata({
+        model: "mock-embed",
+        provider: "openai",
+        chunkTokens: 600,
+        chunkOverlap: 120,
+        sources: ["memory"],
+      });
+    } finally {
+      await database.closeShadow();
+    }
     const memoryManager = await createManager();
-    await writeExistingMeta(memoryManager, "mock-embed");
 
     await expect(memoryManager.sync({ force: true })).rejects.toThrow(
       "Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: mock-embed).",

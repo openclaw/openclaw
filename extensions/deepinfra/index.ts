@@ -8,9 +8,9 @@ import {
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
 import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
-import { buildDeepInfraEmbeddingAdapter } from "./embedding-adapter.js";
+import { deepinfraEmbeddingProviderAdapter } from "./embedding-adapter.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
-import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyDeepInfraConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepInfraApiKeyCatalog } from "./provider-catalog.js";
@@ -83,8 +83,8 @@ export default defineSingleProviderPluginEntry({
       kinds: ["image_generation"],
       liveCatalog: listDeepInfraImageGenCatalog,
     });
-    api.registerMediaUnderstandingProvider(buildDeepInfraMediaUnderstandingProvider());
-    api.registerEmbeddingProvider(buildDeepInfraEmbeddingAdapter());
+    api.registerMediaUnderstandingProvider(deepinfraMediaUnderstandingProvider);
+    api.registerEmbeddingProvider(deepinfraEmbeddingProviderAdapter);
     api.registerSpeechProvider(buildDeepInfraSpeechProvider());
     api.registerVideoGenerationProvider(buildDeepInfraVideoGenerationProvider());
     api.registerModelCatalogProvider({

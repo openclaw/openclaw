@@ -4,6 +4,8 @@ import type { Server } from "node:net";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import plugin from "../index.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 
 export function mockFetch(implementation: typeof globalThis.fetch) {
   const fetch = vi.fn(implementation);
@@ -62,8 +64,8 @@ export function registeredDecisionProvider(
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
   assert(provider);
-  if (provider.contractVersion !== 1) {
+  if (provider.contractVersion !== 2) {
     throw new Error("TypeSafe fixture registered an unexpected decision contract");
   }
-  return provider;
+  return legacyWireFixture(provider, () => resolveRuntimeConfig(current()));
 }

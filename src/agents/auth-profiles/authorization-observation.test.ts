@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -55,6 +56,7 @@ describe("auth-profile writer publication", () => {
           databasePath: root.sharedPath,
           payload: {
             pid: process.pid,
+            processNamespace: readGatewayLockProcessNamespace(),
             createdAt: new Date().toISOString(),
             configPath: `${root.stateDir}/openclaw.json`,
             role: "gateway",

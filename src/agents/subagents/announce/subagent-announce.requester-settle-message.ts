@@ -14,6 +14,7 @@ import {
   buildSubagentRestartRecoveryRoster,
   SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
 } from "../subagent-restart-recovery-prompt.js";
+import { needsRequesterSettleFindings } from "./subagent-announce.requester-settle-state.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
@@ -55,13 +56,16 @@ export function buildRequesterSettleWakeMessage(params: {
       ...(retryInstruction ? [retryInstruction] : []),
     ].join("\n");
   }
+  const deliveredChildren = params.children.filter((entry) => !needsRequesterSettleFindings(entry));
   // The scheduling row need not be the rerouted child. Keep every current
-  // child's producer-owned notice, with stable bytes and one batch-wide cap.
+  // needed child's producer-owned notice, with stable bytes and one batch-wide cap.
   const routeNotices = [
     ...new Set(
-      params.children.flatMap(({ completion }) => {
-        const reply = completion?.terminalReply;
-        return reply?.disposition === "visible" && reply.modelRouteChange
+      params.children.flatMap((entry) => {
+        const reply = entry.completion?.terminalReply;
+        return needsRequesterSettleFindings(entry) &&
+          reply?.disposition === "visible" &&
+          reply.modelRouteChange
           ? [reply.modelRouteChange]
           : [];
       }),
@@ -101,6 +105,14 @@ export function buildRequesterSettleWakeMessage(params: {
         ]
       : []),
     "",
+    ...(deliveredChildren.length
+      ? [
+          `Already delivered child results (not repeated): ${deliveredChildren
+            .map((entry) => entry.runId)
+            .toSorted()
+            .join(", ")}.`,
+        ]
+      : []),
     params.findings ??
       "(each child result was announced individually in earlier completion events)",
     ...(retryInstruction ? [retryInstruction] : []),

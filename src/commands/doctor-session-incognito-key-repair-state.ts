@@ -6,6 +6,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
@@ -141,7 +142,9 @@ export function rewriteSharedStateSessionKeys(
       } catch {
         continue;
       }
-      const rewritten = JSON.stringify(replaceSessionKeyReferences(parsed, renames));
+      const rewritten = JSON.stringify(
+        mapNestedStrings(parsed, (value) => renames.get(value) ?? value),
+      );
       if (rewritten !== row.value) {
         executeSqliteQuerySync(
           database,
@@ -254,23 +257,5 @@ export function deleteRepairJournal(database: EngineConnection): void {
       .deleteFrom("state_leases")
       .where("scope", "=", REPAIR_JOURNAL_SCOPE)
       .where("lease_key", "=", REPAIR_JOURNAL_KEY),
-  );
-}
-
-function replaceSessionKeyReferences(
-  value: unknown,
-  renames: ReadonlyMap<string, string>,
-): unknown {
-  if (typeof value === "string") {
-    return renames.get(value) ?? value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => replaceSessionKeyReferences(item, renames));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, replaceSessionKeyReferences(item, renames)]),
   );
 }

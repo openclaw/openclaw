@@ -14,14 +14,16 @@ import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
 } from "./commander-parse-facts.js";
-import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 
 const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
 const CLI_LOG_LEVEL_VALUES = ALLOWED_LOG_LEVELS.join("|");
 const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
-  ...getCoreCliCommandsWithSubcommands(),
+  ...getCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name),
   ...getSubCliCommandMetadata()
     .filter((descriptor) => descriptor.hasSubcommands)
     .map((descriptor) => descriptor.name),

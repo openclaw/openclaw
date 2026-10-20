@@ -6,6 +6,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
@@ -28,11 +29,7 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { resolveWindowsSpawnProgramCandidate } from "../plugin-sdk/windows-spawn.js";
 import { ExitError, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import {
-  TRIAGE_EXTERNAL_AGENTS,
-  formatTriageHandoffCommands,
-  type TriageExternalAgent,
-} from "./triage-handoff.js";
+import { TRIAGE_EXTERNAL_AGENTS, type TriageExternalAgent } from "./triage-handoff.js";
 import {
   renderTriagePrompt,
   type TriageBundle,
@@ -293,14 +290,52 @@ export async function triageCommand(
     return;
   }
   const promptPath = promptArtifact.ok ? promptArtifact.value : null;
-  const handoffCommands = formatTriageHandoffCommands({
-    target,
-    env: targetEnv,
-    prompt,
-    promptPath,
-    updateResultPath,
-    agent: options.agent,
-  });
+  const handoffAgent = options.agent;
+  // Keep executable manual commands and the complete JSON handoff pinned to the same target.
+  const format = (argv: string[], stdinPath?: string | null) =>
+    formatInstallationTargetCommand(argv, target, {
+      env: targetEnv,
+      ...(stdinPath ? { stdinPath } : {}),
+    });
+  const external = {
+    // agy takes its initial prompt in argv, not plain-text stdin. Keep native approvals.
+    agy: format([
+      "agy",
+      "--prompt-interactive",
+      promptPath
+        ? `Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.`
+        : prompt,
+    ]),
+    claude: format(["claude", "-p", ...(promptPath ? [] : [prompt])], promptPath),
+    codex: format(
+      ["codex", "exec", "--skip-git-repo-check", promptPath ? "-" : prompt],
+      promptPath,
+    ),
+    cursor: format(["cursor-agent", "--print", ...(promptPath ? [] : [prompt])], promptPath),
+    grok: format(["grok", ...(promptPath ? ["--prompt-file", promptPath] : ["--single", prompt])]),
+    kimi: format([
+      "kimi",
+      "--prompt",
+      promptPath
+        ? `Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.`
+        : prompt,
+    ]),
+    muse: format(["muse", "exec", ...(promptPath ? ["--prompt-file", promptPath] : [prompt])]),
+    opencode: format(["opencode", "run", ...(promptPath ? [] : [prompt])], promptPath),
+    pi: format(["pi", "--print", ...(promptPath ? [] : [prompt])], promptPath),
+    qwen: format(["qwen", ...(promptPath ? [] : [prompt])], promptPath),
+  };
+  const failureArgs = updateResultPath ? ["--update-result", updateResultPath] : [];
+  const handoffCommands = {
+    external,
+    embedded: format(["openclaw", "triage", "--run", ...failureArgs]),
+    retry: format([
+      "openclaw",
+      "triage",
+      ...(handoffAgent ? ["--agent", handoffAgent] : []),
+      ...failureArgs,
+    ]),
+  };
   const suggestedCommands = [
     ...TRIAGE_EXTERNAL_AGENTS.map((agent) => handoffCommands.external[agent]),
     handoffCommands.embedded,

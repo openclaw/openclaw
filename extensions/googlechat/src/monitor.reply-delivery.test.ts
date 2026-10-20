@@ -1,10 +1,11 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { createGoogleChatTypingMessage, deliverGoogleChatReply } from "./monitor-reply-delivery.js";
-import type { GoogleChatCoreRuntime } from "./monitor-types.js";
+import type { GoogleChatCoreRuntime, WebhookTarget } from "./monitor-types.js";
+import { createGoogleChatReplyDeliveryHarness } from "./monitor.reply-delivery.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   deleteGoogleChatMessage: vi.fn(),
@@ -15,54 +16,78 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api.js")>()),
   ...mocks,
+  sendGoogleChatMessage: (
+    params: Parameters<typeof import("./api.js").sendGoogleChatMessage>[0],
+  ) =>
+    params.text === "_OpenClaw is typing..._"
+      ? Promise.resolve({
+          messageName: "spaces/AAA/messages/typing",
+          threadName: params.thread,
+        })
+      : mocks.sendGoogleChatMessage(params),
 }));
 
+const harness = createGoogleChatReplyDeliveryHarness();
 const account = {
   accountId: "default",
   enabled: true,
   credentialSource: "inline",
-  config: {},
+  config: { replyToMode: "all", typingIndicator: "message" },
 } as ResolvedGoogleChatAccount;
+const noTypingAccount: ResolvedGoogleChatAccount = {
+  ...account,
+  config: { replyToMode: "all", typingIndicator: "none" },
+};
 
 const SPACE = "spaces/AAA";
 const ROOT = `${SPACE}/threads/root`;
 const TYPING = `${SPACE}/messages/typing`;
-const typingMessage = createGoogleChatTypingMessage({
-  messageName: TYPING,
-  requestedThreadName: ROOT,
-  deliveredThreadName: ROOT,
-});
 const typingTarget = { account, messageName: TYPING };
-const sent = (text: string, thread?: string) => ({ account, space: SPACE, text, thread });
+const sent = (text: string, thread?: string, sendAccount = account) => ({
+  account: sendAccount,
+  space: SPACE,
+  text,
+  thread,
+});
 
 function deliver(
-  payload: Parameters<typeof deliverGoogleChatReply>[0]["payload"],
+  payload: ReplyPayload,
   {
     typing = true,
     chunks,
     limit,
-    ...overrides
-  }: Partial<Omit<Parameters<typeof deliverGoogleChatReply>[0], "payload">> & {
+    core = createCore(chunks),
+    statusSink,
+  }: {
     typing?: boolean;
     chunks?: readonly string[];
     limit?: number;
+    core?: GoogleChatCoreRuntime;
+    statusSink?: WebhookTarget["statusSink"];
   } = {},
 ) {
-  return deliverGoogleChatReply({
-    payload,
-    account: limit ? { ...account, config: { textChunkLimit: limit } } : account,
-    spaceId: SPACE,
-    runtime: createRuntimeSpies(),
-    core: createCore(chunks),
-    config: {},
-    typingMessage: typing ? typingMessage : undefined,
-    ...overrides,
-  });
+  const selectedAccount = typing ? account : noTypingAccount;
+  return harness.process(
+    {
+      account: limit
+        ? { ...selectedAccount, config: { ...selectedAccount.config, textChunkLimit: limit } }
+        : selectedAccount,
+      runtime: createRuntimeSpies(),
+      core,
+      config: {},
+      statusSink,
+    },
+    async (delivery) => {
+      await delivery.deliver(payload, { kind: "final" });
+    },
+  );
 }
 
 function createCore(chunks?: readonly string[]) {
   return {
+    ...harness.core,
     channel: {
+      ...harness.core.channel,
       text: {
         resolveChunkMode: vi.fn(() => "markdown"),
         chunkMarkdownTextWithMode: vi.fn(
@@ -152,11 +177,11 @@ describe("Google Chat reply delivery", () => {
 
     expect(mocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(
       1,
-      sent("first chunk", "spaces/AAA/threads/requested"),
+      sent("first chunk", "spaces/AAA/threads/requested", noTypingAccount),
     );
     expect(mocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(
       2,
-      sent("second chunk", expectedThread),
+      sent("second chunk", expectedThread, noTypingAccount),
     );
   });
 

@@ -192,7 +192,7 @@ function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRe
   return value.draft === true ? "draft" : "open";
 }
 
-export function parsePullListItem(value: unknown) {
+function parsePullListItem(value: unknown) {
   if (!isRecord(value)) {
     return null;
   }

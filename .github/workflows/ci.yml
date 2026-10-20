@@ -4542,21 +4542,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - *linux_node_setup_step
-      - name: Start PostgreSQL service
-        run: |
-          docker run --detach --name openclaw-postgres --publish 127.0.0.1:5432:5432 \
-            --shm-size=1g --user postgres pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d bash -ec \
-            'initdb -A trust -U postgres -D /tmp/openclaw-pg >/dev/null;
-             echo "host all all all trust" >> /tmp/openclaw-pg/pg_hba.conf;
-             exec postgres -D /tmp/openclaw-pg -h 0.0.0.0'
-          timeout 60s docker exec openclaw-postgres bash -c 'until pg_isready -U postgres; do sleep 1; done'
-          docker exec openclaw-postgres psql -U postgres -v ON_ERROR_STOP=1 -c \
-            'CREATE EXTENSION unaccent WITH SCHEMA public; CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE EXTENSION vector WITH SCHEMA public;'
       - name: Run PostgreSQL conformance
-        run: node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}
-      - name: Stop PostgreSQL service
-        if: always()
-        run: docker rm --force openclaw-postgres
+        uses: ./.ci-harness/.github/actions/postgres-conformance
+        with:
+          image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+          shard: ${{ matrix.shard }}
 
   check-docs:
     permissions:

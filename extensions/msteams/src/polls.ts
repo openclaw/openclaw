@@ -36,21 +36,17 @@ type MSTeamsPoll = {
 
 export type MSTeamsPollStore = {
   createPoll: (poll: MSTeamsPoll) => Promise<void>;
-  getPoll: (pollId: string) => Promise<MSTeamsPoll | null>;
+  getPoll: (pollId: string) => Promise<StoredMSTeamsPoll | null>;
   recordVote: (params: {
     pollId: string;
     voterId: string;
     selections: string[];
-  }) => Promise<MSTeamsPoll | null>;
+  }) => Promise<true | null>;
 };
 
 type MSTeamsPollCard = {
   pollId: string;
-  question: string;
-  options: string[];
-  maxSelections: number;
   card: Record<string, unknown>;
-  fallbackText: string;
 };
 
 type StoredMSTeamsPoll = Omit<MSTeamsPoll, "votes">;
@@ -208,18 +204,9 @@ export function buildMSTeamsPollCard(params: {
     ],
   };
 
-  const fallbackLines = [
-    `Poll: ${params.question}`,
-    ...params.options.map((option, index) => `${index + 1}. ${option}`),
-  ];
-
   return {
     pollId,
-    question: params.question,
-    options: params.options,
-    maxSelections: cappedMaxSelections,
     card,
-    fallbackText: fallbackLines.join("\n"),
   };
 }
 
@@ -229,7 +216,7 @@ function isPollExpired(poll: StoredMSTeamsPoll): boolean {
   return !(timestamp >= cutoff);
 }
 
-function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
+function normalizeMSTeamsPollSelections(poll: StoredMSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
     .map((entry) => parseStrictNonNegativeInteger(entry))
@@ -272,16 +259,6 @@ export function createMSTeamsPollStoreState(params?: {
     ),
     maxEntries: MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS,
   });
-
-  const readPollVotes = async (pollId: string): Promise<Record<string, string[]>> => {
-    const votes: Record<string, string[]> = {};
-    for (const row of await voteBucketStore.entries()) {
-      if (row.value.pollId === pollId) {
-        Object.assign(votes, row.value.votes);
-      }
-    }
-    return votes;
-  };
 
   const deletePollVotes = async (
     pollId: string,
@@ -342,10 +319,6 @@ export function createMSTeamsPollStoreState(params?: {
     );
   };
 
-  const reconstructPoll = async (metadata: StoredMSTeamsPoll): Promise<MSTeamsPoll> => {
-    return { ...metadata, votes: await readPollVotes(metadata.id) };
-  };
-
   const prunePollStoreToLimit = async (): Promise<void> => {
     let voteRows: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>> | undefined;
     const deletePrunedPollVotes = async (pollId: string) => {
@@ -394,11 +367,11 @@ export function createMSTeamsPollStoreState(params?: {
     if (isPollExpired(poll)) {
       return null;
     }
-    return await reconstructPoll(poll);
+    return poll;
   };
 
   const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) => {
-    return await withMSTeamsSqliteMutationLock(namespace, async () => {
+    return await withMSTeamsSqliteMutationLock<true | null>(namespace, async () => {
       const pollKey = buildMSTeamsPollStateKey(vote.pollId);
       const poll = await pollStore.lookup(pollKey);
       if (!poll) {
@@ -409,14 +382,13 @@ export function createMSTeamsPollStoreState(params?: {
         await deletePollVotes(vote.pollId);
         return null;
       }
-      const currentPoll = await reconstructPoll(poll);
-      const normalized = normalizeMSTeamsPollSelections(currentPoll, vote.selections);
+      const normalized = normalizeMSTeamsPollSelections(poll, vote.selections);
       const updatedAt = new Date().toISOString();
       poll.updatedAt = updatedAt;
       await pollStore.register(pollKey, toPluginJsonValue(poll));
       await registerPollVote(vote.pollId, vote.voterId, normalized, updatedAt);
       await prunePollStoreToLimit();
-      return await reconstructPoll(poll);
+      return true;
     });
   };
 

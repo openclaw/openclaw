@@ -89,7 +89,7 @@ function CommitAge(props: { commitAt: string | null }) {
 }
 
 function Commit(props: AboutProps) {
-  const label = createMemo(() =>
+  const label = () =>
     t(
       {
         idle: "aboutPage.copyCommit",
@@ -97,8 +97,7 @@ function Commit(props: AboutProps) {
         copied: "aboutPage.copiedCommit",
         error: "aboutPage.copyCommitFailed",
       }[props.copyState],
-    ),
-  );
+    );
   return (
     <Show when={props.buildInfo.commit} fallback={<Unavailable />}>
       {(commit) => (

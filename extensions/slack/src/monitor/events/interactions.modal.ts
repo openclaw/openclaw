@@ -41,7 +41,7 @@ function resolveSlackModalPluginInteractiveData(params: {
   callbackId: string;
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
 }): string | undefined {
-  const metadataData = params.metadata.pluginInteractiveData?.trim();
+  const metadataData = params.metadata.pluginInteractiveData;
   if (metadataData) {
     return metadataData;
   }
@@ -50,16 +50,6 @@ function resolveSlackModalPluginInteractiveData(params: {
   }
   const callbackData = params.callbackId.slice(OPENCLAW_MODAL_CALLBACK_PREFIX.length).trim();
   return callbackData || undefined;
-}
-
-function shouldHandleSlackModalLifecycleBody(body: unknown): boolean {
-  const typed = body as SlackModalBody;
-  const callbackId = typed.view?.callback_id ?? "";
-  if (callbackId.startsWith(OPENCLAW_MODAL_CALLBACK_PREFIX)) {
-    return true;
-  }
-  const metadata = parseSlackModalPrivateMetadata(typed.view?.private_metadata);
-  return Boolean(metadata.pluginInteractiveData?.trim());
 }
 
 function resolveSlackPluginSystemEventPayload(
@@ -121,11 +111,12 @@ async function resolveModalSessionRouting(params: {
 async function emitSlackModalLifecycleEvent(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
+  metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
   eventScope?: SlackEventScope;
   teamId?: string;
   interactionType: SlackModalInteractionKind;
 }): Promise<void> {
-  const metadata = parseSlackModalPrivateMetadata(params.body.view?.private_metadata);
+  const { metadata } = params;
   const callbackId = params.body.view?.callback_id ?? "unknown";
   const userId = params.body.user?.id ?? "unknown";
   const viewId = params.body.view?.id;
@@ -317,7 +308,12 @@ export function registerModalLifecycleHandler(params: {
     { callback_id: /.*/, type: params.interactionType },
     async (args: SlackModalEventHandlerArgs) => {
       const { ack, body } = args;
-      if (!shouldHandleSlackModalLifecycleBody(body)) {
+      const typedBody = body as SlackModalBody;
+      const metadata = parseSlackModalPrivateMetadata(typedBody.view?.private_metadata);
+      if (
+        !typedBody.view?.callback_id?.startsWith(OPENCLAW_MODAL_CALLBACK_PREFIX) &&
+        !metadata.pluginInteractiveData
+      ) {
         return;
       }
       await ack();
@@ -339,10 +335,10 @@ export function registerModalLifecycleHandler(params: {
         return;
       }
       params.trackEvent?.();
-      const typedBody = body as SlackModalBody;
       await emitSlackModalLifecycleEvent({
         ctx: await params.ctx.readRuntimeContext(),
         body: typedBody,
+        metadata,
         eventScope,
         teamId: args.context.teamId,
         interactionType: params.interactionType,

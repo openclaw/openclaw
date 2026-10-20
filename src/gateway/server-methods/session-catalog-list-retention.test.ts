@@ -2,9 +2,9 @@ import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   startCall,
 } from "./session-catalog.test-helpers.js";

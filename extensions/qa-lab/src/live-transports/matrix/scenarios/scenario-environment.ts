@@ -252,13 +252,11 @@ function isMatrixQaAccountReady(
 }
 
 export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnvironmentParams) {
-  const syncState: MatrixQaScenarioContext["syncState"] = {};
   const syncStreams: Partial<Record<"driver" | "observer", MatrixQaRoomObserver>> = {};
   let canary: MatrixQaCanaryArtifact | undefined;
   let baselineConfig: OpenClawConfig | undefined;
   const resetObserverState = () => {
     for (const actorId of ["driver", "observer"] as const) {
-      delete syncState[actorId];
       syncStreams[actorId] = createMatrixQaRoomObserver({
         accessToken: params.provisioning.observationAccounts[actorId].accessToken,
         baseUrl: params.harness.baseUrl,
@@ -432,7 +430,6 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutAccessToken: params.provisioning.sut.accessToken,
       sutDeviceId: params.provisioning.sut.deviceId,
       sutPassword: params.provisioning.sut.password,
-      syncState,
       syncStreams,
       sutUserId: params.provisioning.sut.userId,
       timeoutMs: input.timeoutMs,

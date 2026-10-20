@@ -22,6 +22,7 @@ import {
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { truncateToolResultMessage } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import { createSessionStatusTool } from "./session-status-tool.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
@@ -559,9 +560,18 @@ describe("sessions_send directed policy at the tool boundary", () => {
       query: "private",
     });
     expect(search.details).toMatchObject({ status: "forbidden" });
-    await expect(
-      createSessionStatusTool(options).execute("status", { sessionKey: workerKey }),
-    ).rejects.toThrow("visibility");
+    const statusGateway = vi
+      .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+      .mockImplementation(callGateway);
+    try {
+      await expect(
+        createSessionStatusTool({ config, agentSessionKey: requesterKey }).execute("status", {
+          sessionKey: workerKey,
+        }),
+      ).rejects.toThrow("visibility");
+    } finally {
+      statusGateway.mockRestore();
+    }
     expectNoDispatch();
     expect(gatewayMethods()).not.toContain("sessions.search");
     expect(gatewayMethods()).not.toContain("chat.history");

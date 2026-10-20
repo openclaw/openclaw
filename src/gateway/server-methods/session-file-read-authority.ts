@@ -1,8 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import { readRetainedSessionEntryFacts } from "../../config/sessions/session-entry-read-facts.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -72,38 +70,13 @@ export function sessionFileWorkspaceMatches(
   );
 }
 
-/** Read the committed snapshot already prepared by the file route, without another database read. */
-export function captureSessionFileEntryRead(
-  source: Pick<GatewaySessionEntryRead, "agentId" | "canonicalKey" | "storePath" | "readSource">,
-  assertCurrent: () => void,
-) {
-  const metadata = captureSessionEntryMetadataRead(
-    { agentId: source.agentId, sessionKey: source.canonicalKey, storePath: source.storePath },
-    assertCurrent,
-  );
-  return () => {
-    assertCurrent();
-    return metadata
-      ? metadata.readCurrent()
-      : readRetainedSessionEntryFacts(
-          {
-            agentId: source.readSource?.agentId ?? source.agentId,
-            path: source.readSource?.path ?? source.storePath,
-          },
-          {
-            sessionKeys: [source.canonicalKey],
-            projection: "exact",
-            snapshotFields: ["skillsSnapshot"],
-          },
-        )?.entries.find((row) => row.sessionKey === source.canonicalKey)?.entry;
-  };
-}
-
 /** Host reads borrow the turn owner's prepared facts and the placement owner's live observation. */
 export function createSessionFileReadAuthority(
   options: GatewayRequestHandlerOptions,
   source: Pick<GatewaySessionEntryRead, "agentId" | "canonicalKey" | "storePath" | "readSource"> & {
     entry?: InternalSessionEntry;
+    readEntry: () => InternalSessionEntry | undefined;
+    assertSourceCurrent: () => void;
     root?: string;
     fileRoot?: string;
     fileWorkspace?: Awaited<ReturnType<typeof prepareSessionFileWorkspace>>;
@@ -111,9 +84,6 @@ export function createSessionFileReadAuthority(
 ) {
   const { context } = options;
   const { agentId } = source;
-  // The HTTP grant has its own retained session authority; do not capture the
-  // request's shorter planning-row lifetime in this reader.
-  const readEntry = captureSessionFileEntryRead(source, () => {});
   let placement:
     | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
     | undefined;
@@ -183,13 +153,9 @@ export function createSessionFileReadAuthority(
     // Downloads retain the exact session row separately; recheck host configuration
     // and the placement owner's current observation immediately before HTTP delivery.
     assertCurrent: () => {
-      if (source.entry && source.fileWorkspace) {
-        const current = readEntry();
-        if (!current || !sessionFileWorkspaceMatches(source.entry, current)) {
-          throw new SessionMutationAuthorizationChangedError(
-            errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
-          );
-        }
+      source.assertSourceCurrent();
+      const current = source.readEntry();
+      if (current && source.fileWorkspace) {
         source.fileWorkspace.assertCurrent(context.getRuntimeConfig(), current);
         assertSessionFileReadPolicy(options, {
           ...source,

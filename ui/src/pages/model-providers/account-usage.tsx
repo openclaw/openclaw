@@ -93,10 +93,10 @@ function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElem
       request.cancel();
     };
   });
-  const summary = createMemo(() => {
+  const summary = () => {
     const current = state();
     return current.phase === "complete" ? current.summary : undefined;
-  });
+  };
   const error = createMemo(() => {
     const current = state();
     return current.phase === "error" ? formatUiError(current.error) : undefined;

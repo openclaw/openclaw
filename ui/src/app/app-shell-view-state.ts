@@ -339,6 +339,5 @@ export function readShellView(host: ShellViewHost) {
     connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
-    navigationSnapshot,
   };
 }

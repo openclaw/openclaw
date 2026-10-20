@@ -5,7 +5,6 @@ import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-r
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
   ProviderThinkingProfile,
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -330,38 +329,6 @@ function configuredBaseUrl(
   return config?.models?.providers?.[PROVIDER_ID]?.baseUrl;
 }
 
-function dynamicModelScope(ctx: ProviderResolveDynamicModelContext): string {
-  return JSON.stringify([
-    ctx.agentDir ?? "",
-    ctx.workspaceDir ?? "",
-    ctx.authProfileId ?? "",
-    normalizeClawRouterRootUrl(ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config)),
-  ]);
-}
-
-function buildRuntimeModels(
-  providerConfig: Awaited<ReturnType<typeof buildClawRouterProviderConfig>>,
-): Map<string, ProviderRuntimeModel> {
-  const models = new Map<string, ProviderRuntimeModel>();
-  for (const model of providerConfig.models) {
-    const api = model.api ?? providerConfig.api;
-    const baseUrl = model.baseUrl ?? providerConfig.baseUrl;
-    if (!api || !baseUrl) {
-      continue;
-    }
-    models.set(model.id, {
-      ...model,
-      api,
-      baseUrl,
-      provider: PROVIDER_ID,
-      input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-      ),
-    });
-  }
-  return models;
-}
-
 function resolveToolFamily(modelId: string) {
   const normalized = modelId.toLowerCase();
   if (normalized.startsWith("deepseek/")) {
@@ -481,8 +448,6 @@ export default defineSingleProviderPluginEntry({
     );
   },
   provider() {
-    const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
-
     return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
@@ -529,28 +494,9 @@ export default defineSingleProviderPluginEntry({
           };
         },
       },
-      resolveDynamicModel: (ctx) => dynamicModels.get(dynamicModelScope(ctx))?.get(ctx.modelId),
-      // Match by agentDir/workspaceDir/baseUrl; the context carries no auth
-      // profile id, so any profile scope for the same deployment counts.
-      preferRuntimeResolvedModel: (ctx) => {
-        const agentDir = ctx.agentDir ?? "";
-        const workspaceDir = ctx.workspaceDir ?? "";
-        const rootUrl = normalizeClawRouterRootUrl(configuredBaseUrl(ctx.config));
-        for (const [scope, models] of dynamicModels) {
-          const [scopeAgentDir, scopeWorkspaceDir, , scopeRootUrl] = JSON.parse(scope) as string[];
-          if (
-            scopeAgentDir === agentDir &&
-            scopeWorkspaceDir === workspaceDir &&
-            scopeRootUrl === rootUrl &&
-            models.has(ctx.modelId)
-          ) {
-            return true;
-          }
-        }
-        return false;
-      },
+      // Live catalog routing also applies to explicitly configured model rows.
+      preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {
-        const scope = dynamicModelScope(ctx);
         const { resolveApiKeyForProvider } =
           await import("openclaw/plugin-sdk/provider-auth-runtime");
         const apiKey = (
@@ -563,17 +509,26 @@ export default defineSingleProviderPluginEntry({
           })
         )?.apiKey;
         if (!apiKey) {
-          // Rebuilds publish atomically so catalog errors keep the prior snapshot.
-          // Missing credentials are the sole fail-closed clearing path.
-          dynamicModels.delete(scope);
-          return;
+          return undefined;
         }
         const providerConfig = await buildClawRouterProviderConfig({
           apiKey,
           discoveryApiKey: apiKey,
           baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
         });
-        dynamicModels.set(scope, buildRuntimeModels(providerConfig));
+        const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
+        if (!model) {
+          return undefined;
+        }
+        return {
+          ...model,
+          api: model.api ?? providerConfig.api,
+          baseUrl: model.baseUrl ?? providerConfig.baseUrl,
+          provider: PROVIDER_ID,
+          input: model.input.filter(
+            (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+          ),
+        };
       },
       normalizeConfig: ({ providerConfig }) => {
         const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);

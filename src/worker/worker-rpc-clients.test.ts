@@ -373,8 +373,9 @@ it("reports stream gaps but accepts later events and the terminal outcome", asyn
   const harness = connectionHarness();
   harness.start.mockResolvedValueOnce(successResponse({ status: "accepted" as const }));
   const client = new WorkerInferenceProxyClient(harness.connection);
-  const onEvent = vi.fn();
-  const onStreamGap = vi.fn();
+  const deliveries: string[] = [];
+  const onEvent = () => deliveries.push("event");
+  const onStreamGap = () => deliveries.push("gap");
   const terminal = TERMINAL_OUTCOME;
 
   const outcome = client.start(INFERENCE_REQUEST, { onEvent, onStreamGap });
@@ -385,8 +386,7 @@ it("reports stream gaps but accepts later events and the terminal outcome", asyn
   harness.emitInferenceTerminal(4, terminal);
 
   await expect(outcome).resolves.toEqual(terminal);
-  expect(onStreamGap.mock.calls).toEqual([[{ expectedSeq: 2, receivedSeq: 3 }]]);
-  expect(onEvent).toHaveBeenCalledTimes(2);
+  expect(deliveries).toEqual(["event", "gap", "event"]);
   client.dispose();
 });
 

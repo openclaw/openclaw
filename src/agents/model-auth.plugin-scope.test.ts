@@ -386,7 +386,7 @@ describe("plugin physical credential ownership through common auth", () => {
     });
   });
 
-  it("keeps native presence scoped to its declared runtime", async () => {
+  it("keeps native presence scoped to its declared runtime and rejects HTTP credential lookup", async () => {
     const f = fixture({
       hook: () => ({
         apiKey: CUSTOM_LOCAL_AUTH_MARKER,
@@ -411,6 +411,10 @@ describe("plugin physical credential ownership through common auth", () => {
         availability: true,
         runtimeAuth: { id: "native-fixture", source: "native" },
         selectedCredential: { source: "harness" },
+      });
+      await expect(resolveApiKeyForProviderCore(f.params)).rejects.toMatchObject({
+        code: "missing-provider-auth",
+        provider: id,
       });
     });
   });

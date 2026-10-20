@@ -197,12 +197,11 @@ it.each(
               : "Side chat could not answer right now.",
       });
       expect(runLoop).toHaveBeenCalledTimes(warm ? 1 : 0);
-      expect(service.state(request)).toEqual({
-        exchanges:
-          warm && cancellation === "request-abort"
-            ? [{ question: "Why?", answer: "Existing answer.", ts: 123 }]
-            : [],
-      });
+      expect(service.state(request).exchanges).toEqual(
+        warm && cancellation === "request-abort"
+          ? [{ question: "Why?", answer: "Existing answer.", ts: 123 }]
+          : [],
+      );
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });

@@ -450,7 +450,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const rail = renderSidebarRail(this);
       const Pages = () => renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
-      const online = renderAppSidebarOnline(this);
+      const Online = () => renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);
       const statusVisible = () =>
         this.gatewayStatus?.kind &&
@@ -499,7 +499,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         </>
                       }
                     >
-                      {online}
+                      <Online />
                     </Show>
                   }
                 >

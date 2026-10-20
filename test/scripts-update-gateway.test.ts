@@ -60,6 +60,8 @@ function runUpdater(overrides: Record<string, string> = {}) {
       UPDATE_TEST_LOG: invocationLog,
       UPDATE_TEST_BIN: shimDir,
       UPDATE_TEST_LIVE_ROOT: workdir,
+      TMPDIR: scratch,
+      UPDATE_TEST_PRIVATE_TMPDIR: scratch,
     },
   });
 }
@@ -91,11 +93,19 @@ describe("source updater lifecycle preflight", () => {
     // Git/package-manager commands are controlled by this shell scenario.
     fs.writeFileSync(
       path.join(seed, "scripts/tsx.mjs"),
-      `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href)};\n`,
+      `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href)};
+import fs from "node:fs";
+import path from "node:path";
+import { resolveManagedUpdateLeaseDatabasePath } from ${JSON.stringify(new URL("../src/infra/update-managed-service-handoff-lease.js", updateGatewayBuildUrl).href)};
+const database = resolveManagedUpdateLeaseDatabasePath();
+if (!fs.realpathSync(path.dirname(database)).startsWith(fs.realpathSync(process.env.UPDATE_TEST_PRIVATE_TMPDIR) + path.sep)) throw Error("Non-private handoff database");
+`,
     );
     fs.writeFileSync(
       path.join(seed, "scripts/update-gateway-build.mts"),
-      `import { runUpdateGatewayBuild } from ${JSON.stringify(updateGatewayBuildUrl.href)};\nprocess.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));\n`,
+      `import { runUpdateGatewayBuild } from ${JSON.stringify(updateGatewayBuildUrl.href)};
+process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
+`,
     );
     fs.writeFileSync(
       path.join(seed, "package.json"),
@@ -190,6 +200,77 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     });
     return { result, original, dependency };
   }
+
+  it.each([
+    "registered",
+    "foreign",
+    "fake",
+    "unregistered",
+    "rerouted",
+    "ordinary-changed",
+  ] as const)("preserves only verified registered nested worktrees (%s)", (kind) => {
+    const nested = path.join(workdir, "operator projects", "unpublished");
+    const repository = kind === "foreign" ? path.join(scratch, "seed") : workdir;
+    git(repository, "worktree", "add", "--detach", nested, "HEAD");
+    const gitFile = path.join(nested, ".git");
+    const originalGitFile = fs.readFileSync(gitFile, "utf8");
+    const admin = originalGitFile.slice("gitdir: ".length).trim();
+    const backlink = fs.readFileSync(path.join(admin, "gitdir"), "utf8");
+    const before = git(nested, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(nested, "package.json"), "unpublished tracked bytes\n");
+    fs.writeFileSync(path.join(nested, "local.txt"), "unpublished untracked bytes\n");
+    fs.writeFileSync(
+      path.join(workdir, "operator projects/operator-input.txt"),
+      "ordinary input\n",
+    );
+    if (kind === "fake") {
+      fs.writeFileSync(
+        path.join(admin, "gitdir"),
+        path.join(scratch, "not-this-worktree", ".git") + "\n",
+      );
+    } else if (kind === "unregistered") {
+      // An independent nested Git repository is not this checkout's linked worktree.
+      fs.unlinkSync(gitFile);
+      git(nested, "init", "-q");
+    }
+    const observation = path.join(scratch, "candidate-inputs");
+    const { result, original, dependency } = runRefusedSourceUpdate(
+      [
+        'test ! -e "operator projects/unpublished" || exit 41',
+        'cat "operator projects/operator-input.txt" > "$UPDATE_TEST_INPUT_OBSERVATION"',
+        ...(kind === "rerouted"
+          ? ['printf "gitdir: %s\n" "$UPDATE_TEST_OTHER_ADMIN" > "$UPDATE_TEST_NESTED_GIT"']
+          : kind === "ordinary-changed"
+            ? ['echo changed > "$UPDATE_TEST_LIVE_ROOT/operator projects/operator-input.txt"']
+            : []),
+      ],
+      {
+        UPDATE_TEST_INPUT_OBSERVATION: observation,
+        UPDATE_TEST_NESTED_GIT: gitFile,
+        UPDATE_TEST_OTHER_ADMIN: path.join(workdir, ".git"),
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(kind === "registered" ? 23 : 1);
+    expect(calls().includes("stop-refused")).toBe(kind === "registered");
+    expect(calls()).not.toContain("unexpected-restart");
+    expect(calls()).not.toContain("live-install");
+    expect(git(workdir, "rev-parse", "HEAD")).toBe(original);
+    expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency\n");
+    expect(fs.readFileSync(path.join(nested, "package.json"), "utf8")).toBe(
+      "unpublished tracked bytes\n",
+    );
+    expect(fs.readFileSync(path.join(nested, "local.txt"), "utf8")).toBe(
+      "unpublished untracked bytes\n",
+    );
+    if (["registered", "rerouted", "ordinary-changed"].includes(kind)) {
+      expect(fs.readFileSync(observation, "utf8")).toBe("ordinary input\n");
+    }
+    if (kind === "registered") {
+      expect(git(nested, "rev-parse", "HEAD")).toBe(before);
+      expect(fs.readFileSync(gitFile, "utf8")).toBe(originalGitFile);
+      expect(fs.readFileSync(path.join(admin, "gitdir"), "utf8")).toBe(backlink);
+    }
+  });
 
   it("preserves changed live artifacts under inspected custody", () => {
     const seed = path.join(scratch, "seed");

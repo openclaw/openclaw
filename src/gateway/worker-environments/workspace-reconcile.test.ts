@@ -511,6 +511,8 @@ it("applies the three-way matrix while keeping local conflicts", async () => {
   await expect(fs.readlink(path.join(local, "link"))).resolves.toBe("local-target");
   expect(result.manifest).toEqual(await manifestFor(local));
   await result.verifyLocalStable();
+  await fs.writeFile(path.join(local, "conflict.txt"), "changed after acceptance");
+  await expect(result.verifyLocalStable()).rejects.toThrow("Gateway workspace changed");
 });
 
 it("preserves a local directory deletion instead of recreating the worker ancestor", async () => {

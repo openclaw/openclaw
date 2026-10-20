@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import {
   createNativeSessionCommitFinalizer,
   wrapNativeSessionDeletionMutation,
 } from "../../agents/harness/native-session/deletion-participant.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { assertPluginStatePublicationSettled } from "../../plugin-state/plugin-state-publication.js";
 import * as execution from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import * as entryPatch from "./session-entry-patch.js";
 import * as native from "./session-native-binding.execution.test-support.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
@@ -39,6 +43,59 @@ afterEach(() => vi.restoreAllMocks());
 
 const observeNativeGrants = (observe: Parameters<typeof native.observeNativeGrants>[1]) =>
   native.observeNativeGrants(admission, observe);
+
+it("retains both result and storage settlement failures for a native binding operation", async () => {
+  await withNativeBindingFixture("agentsapi", async (fixture) => {
+    const resultFailure = new Error("Native binding result was lost");
+    const settlementFailure = Object.assign(new Error("database or disk is full"), {
+      code: "SQLITE_FULL",
+    });
+    const run = entryPatch.runSessionEntryWorkerOperation;
+    vi.spyOn(entryPatch, "runSessionEntryWorkerOperation").mockImplementation((params) => {
+      const nativeSettlement = params.nativeSettlement;
+      if (!nativeSettlement) {
+        return run(params);
+      }
+      return run({
+        ...params,
+        nativeSettlement: {
+          ...nativeSettlement,
+          get failure() {
+            return nativeSettlement.failure;
+          },
+          onAdmission(owned, retained, request, grant) {
+            return nativeSettlement.onAdmission(
+              owned,
+              {
+                settled: retained.settled.then(() => ({
+                  kind: "unknown" as const,
+                  error: settlementFailure,
+                })),
+              },
+              request,
+              grant,
+            );
+          },
+        },
+      });
+    });
+    delivery.afterExecution = () => {
+      throw resultFailure;
+    };
+    await expect(fixture.remove()).rejects.toSatisfy((error: unknown) => {
+      expect(error).toMatchObject({ code: "outcome-unknown" });
+      expect(formatErrorMessageWithCode(error)).toContain(resultFailure.message);
+      expect(formatErrorMessageWithCode(error)).toContain(settlementFailure.message);
+      expect(
+        renderAssistantRequestFailureCopy({
+          storageFailure: classifyGatewayStorageFailure(error),
+        }),
+      ).toContain("disk is full. Free up space");
+      return true;
+    });
+    expect(delivery.dispatched).toBe(1);
+  });
+});
 
 it("releases a binding after refusal before worker dispatch and permits a fresh deletion", async () => {
   await withNativeBindingFixture("agentsapi", async (fixture) => {

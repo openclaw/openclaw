@@ -529,16 +529,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             assertCurrent();
             greetingAuditSequence = facts.auditSequence;
             persistWelcome ||= facts.recentExternalEdit;
-            welcome = (
-              await resolveSystemAgentGreeting({
-                overview,
-                facts,
-                planner: (plannerParams) => engine.planGreeting(plannerParams),
-                allowInference: welcomeOnly,
-                cacheStore: greetingCache,
-                cacheOwner: sessions,
-              })
-            ).text;
+            welcome = await resolveSystemAgentGreeting({
+              overview,
+              facts,
+              planner: (plannerParams) => engine.planGreeting(plannerParams),
+              allowInference: welcomeOnly,
+              cacheStore: greetingCache,
+              cacheOwner: sessions,
+            });
             assertCurrent();
             welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
             engine.noteAssistantMessage(welcome);

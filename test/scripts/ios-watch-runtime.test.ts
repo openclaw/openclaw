@@ -1,18 +1,14 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const step = parse(fs.readFileSync(".github/workflows/ci.yml", "utf8")).jobs[
+  "ios-screenshot-capture"
+].steps.find((entry: { name?: string }) => entry.name === "Install Watch screenshot runtime");
 
 it.each([
   ["ready", 0],
@@ -28,27 +24,25 @@ it.each([
   (scenario, expectedStatus) => {
     const root = tempDirs.make("openclaw-watch-runtime-");
     const bin = path.join(root, "bin");
-    mkdirSync(bin);
+    fs.mkdirSync(bin);
     const calls = path.join(root, "calls");
     const tool = String.raw`#!/bin/bash
 set -euo pipefail
 printf "%s %s\n" "$(basename "$0")" "$*" >> "$FIXTURE_CALLS"
+missing_runtime() { echo "runtime path not found" >&2; exit 145; }
 if [[ "$(basename "$0")" == "xcrun" ]]; then
   case "$1 $2" in
     "simctl create")
       if [[ "$FIXTURE_SCENARIO" == "missing" && ! -f "$FIXTURE_ROOT/imported" ]]; then
-        echo "runtime path not found" >&2
-        exit 145
+        missing_runtime
       fi
-      # Creating metadata need not boot (or even mount) the runtime.
       mkdir "$FIXTURE_ROOT/device"
       echo "00000000-0000-0000-0000-000000000001"
       ;;
     "simctl bootstatus")
       if [[ "$FIXTURE_SCENARIO" == "unrecoverable" || ( "$FIXTURE_SCENARIO" != "ready" && "$FIXTURE_SCENARIO" != "cleanup-failed" && ! -f "$FIXTURE_ROOT/imported" ) ]]; then
         if [[ "$FIXTURE_SCENARIO" == "boot-stopped" ]]; then exit 0; fi
-        echo "runtime path not found" >&2
-        exit 145
+        missing_runtime
       fi
       touch "$FIXTURE_ROOT/device/booted"
       ;;
@@ -68,7 +62,6 @@ if [[ "$(basename "$0")" == "xcrun" ]]; then
     *) exit 3 ;;
   esac
 elif [[ "$1" == "-downloadPlatform" ]]; then
-  # A cached download is not evidence that CoreSimulator can boot a device.
   if [[ "$#" == 4 ]]; then echo "watchOS 27.0 is already downloaded."; exit 70; fi
   if [[ "$FIXTURE_SCENARIO" == "download-failed" ]]; then exit 70; fi
   [[ "$5" == "-exportPath" ]]
@@ -83,13 +76,8 @@ fi
 `;
     for (const name of ["xcrun", "xcodebuild"]) {
       const file = path.join(bin, name);
-      writeFileSync(file, tool);
-      chmodSync(file, 0o755);
+      fs.writeFileSync(file, tool, { mode: 0o755 });
     }
-    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-    const step = workflow.jobs["ios-screenshot-capture"].steps.find(
-      (entry: { name?: string }) => entry.name === "Install Watch screenshot runtime",
-    );
     const result = spawnSync("/bin/bash", ["-e", "-c", step.run], {
       encoding: "utf8",
       env: {
@@ -102,7 +90,7 @@ fi
       },
     });
     expect(result.status, result.stderr).toBe(expectedStatus);
-    const observed = readFileSync(calls, "utf8");
+    const observed = fs.readFileSync(calls, "utf8");
     if (scenario === "ready" || scenario === "cleanup-failed") {
       expect(observed).not.toContain("xcodebuild");
     } else if (scenario === "download-failed") {
@@ -110,11 +98,11 @@ fi
     } else {
       expect(observed).toContain("xcodebuild -importPlatform");
     }
-    expect(existsSync(path.join(root, "device")), "all deletable probes must be removed").toBe(
+    expect(fs.existsSync(path.join(root, "device")), "all deletable probes must be removed").toBe(
       scenario === "cleanup-failed",
     );
-    expect(readdirSync(root).filter((name) => name.startsWith("openclaw-watch-runtime."))).toEqual(
-      [],
-    );
+    expect(
+      fs.readdirSync(root).filter((name) => name.startsWith("openclaw-watch-runtime.")),
+    ).toEqual([]);
   },
 );

@@ -11,7 +11,6 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { chromium, type Browser } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
-import { createSandboxHostHttpServer } from "../src/gateway/mcp-app-sandbox-http.js";
 import { captureSessionRowGeneration } from "../src/gateway/session-row-identity.js";
 import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
@@ -26,6 +25,7 @@ import {
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import {
   createControlUiStreamingReply,
@@ -47,6 +47,7 @@ import {
   summarizeColdLoadTrace,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
+import { installWidgetReadiness } from "./lib/control-ui-dashboard-probe.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 
@@ -64,33 +65,6 @@ function readRigProbeSnapshot() {
       .filter((entry) => /\/api\/users\/[^/]+\/avatar/u.test(new URL(entry.name).pathname))
       .map((entry) => ({ url: entry.name, start: entry.startTime, duration: entry.duration })),
   };
-}
-
-function installWidgetReadiness() {
-  const ready = new Map<string, number>();
-  window.addEventListener("message", (event) => {
-    if (event.data?.method !== "ui/notifications/sandbox-resource-loaded") {
-      return;
-    }
-    for (const [kind, selector] of [
-      ["board", ".board-widget__frame"],
-      ["inline", ".chat-tool-card__preview-frame"],
-    ] as const) {
-      const frames = [...document.querySelectorAll<HTMLIFrameElement>(selector)];
-      const index = frames.findIndex((frame) => frame.contentWindow === event.source);
-      const key = `${kind}:${index}`;
-      if (index >= 0 && !ready.has(key)) {
-        ready.set(key, performance.now());
-      }
-    }
-  });
-  Reflect.set(window, "__readWidgetReadiness", () => ({
-    measurement:
-      "sandbox resource-loaded notification after the widget document load; not a paint timestamp",
-    firstInlineReadyMs: [...ready].find(([key]) => key.startsWith("inline:"))?.[1] ?? null,
-    firstBoardReadyMs: [...ready].find(([key]) => key.startsWith("board:"))?.[1] ?? null,
-    ready: Object.fromEntries(ready),
-  }));
 }
 
 function summarizeResponseTasks(raw: unknown[]) {
@@ -225,6 +199,8 @@ const { values } = parseArgs({
     "cpu-profile-compare": { type: "string" },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
+    "dashboard-widget": { type: "boolean", default: false },
+    "connect-not-before-ms": { type: "string", default: "0" },
     "transcript-messages": { type: "string" },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
@@ -241,6 +217,8 @@ const { values } = parseArgs({
     "fixture-now-ms": { type: "string" },
     "live-start-at-ms": { type: "string" },
     "duplicate-boot-reads": { type: "boolean", default: false },
+    "dashboard-mcp-app": { type: "boolean", default: false },
+    "chat-dashboard-route": { type: "boolean", default: false },
     "closed-menu-members": { type: "boolean", default: false },
     "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
@@ -300,6 +278,7 @@ const baselineCpu = values["cpu-profile-compare"]
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
+const connectNotBeforeMs = Number(values["connect-not-before-ms"]);
 const methodLatencyMs: Record<string, number> = {};
 for (const value of values["method-latency-ms"]) {
   const [method, delay, ...extra] = value.split("=");
@@ -318,6 +297,9 @@ for (const value of values["method-latency-ms"]) {
 const face = values.face;
 if (face !== "chat" && face !== "dashboard") {
   throw new Error("Expected face chat or dashboard");
+}
+if (values["chat-dashboard-route"] && face !== "dashboard") {
+  throw new Error("chat-dashboard-route requires the dashboard face");
 }
 const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
@@ -350,6 +332,8 @@ if (
   runs > (values["compare-bundle-dir"].length ? 60 : 20) ||
   !Number.isFinite(latencyMs) ||
   latencyMs < 0 ||
+  !Number.isFinite(connectNotBeforeMs) ||
+  connectNotBeforeMs < 0 ||
   !Number.isFinite(frameGapMs) ||
   frameGapMs < 0 ||
   !Number.isFinite(captureMs) ||
@@ -370,14 +354,14 @@ if (
 if (
   values["compare-bundle-dir"].length &&
   (!values["bundle-dir"] ||
-    !values["warm-reload"] ||
+    (!values["warm-reload"] && !values["streaming-reply"]) ||
     !values.untraced ||
     cpuProfile ||
     values["compare-bundle-dir"].length > 2 ||
     runs % (values["compare-bundle-dir"].length + 1))
 ) {
   throw new Error(
-    "Bundle comparison requires complete cycles of two or three unprofiled warm bundles",
+    "Bundle comparison requires complete cycles of two or three unprofiled warm or streaming bundles",
   );
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
@@ -415,7 +399,15 @@ async function selectComparisonBundle(index: number) {
   await server.replaceBuild(bundleSlots[index]!, bundleSlots[activeBundle]!);
   activeBundle = index;
 }
-const sandbox = createSandboxHostHttpServer();
+const dashboardFont = values["dashboard-widget"]
+  ? await readFile("ui/public/fonts/space-grotesk-latin.woff2")
+  : undefined;
+const dashboardFontPath = "/__openclaw__/bench/dashboard-font.woff2";
+const sandbox = createControlUiSandboxFixtureServer((pathname) =>
+  dashboardFont && pathname === dashboardFontPath
+    ? { contentType: "font/woff2", body: dashboardFont }
+    : fixture.assets.get(pathname),
+);
 await new Promise<void>((resolve, reject) => {
   sandbox.once("error", reject);
   sandbox.listen(sandboxPort ?? 0, "127.0.0.1", resolve);
@@ -427,7 +419,14 @@ if (!address || typeof address === "string") {
 const fixture = createControlUiTeamScaleFixture({
   now: fixtureNowMs,
   baseUrl: server.baseUrl,
-  sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+  sandboxUrl: buildSandboxHostPath({
+    blockDescendantFrames: true,
+    resourceDomains: values["dashboard-mcp-app"]
+      ? [`http://127.0.0.1:${address.port}`]
+      : values["dashboard-widget"]
+        ? [new URL(server.baseUrl).origin]
+        : undefined,
+  }),
   sandboxPort: address.port,
   liveRun: values["live-events"] || values["streaming-reply"],
   sidebarListChurn: values["sidebar-list-churn"],
@@ -436,9 +435,15 @@ const fixture = createControlUiTeamScaleFixture({
   sessionEventDurationMs,
   sessionEventAncestorRefs: values["session-event-ancestor-refs"],
   duplicateBootReads: values["duplicate-boot-reads"],
+  dashboardMcpApp: values["dashboard-mcp-app"]
+    ? { font: await readFile("ui/public/fonts/space-grotesk-latin.woff2") }
+    : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
   transcriptMessages,
+  dashboardWidgetFontUrl: dashboardFont
+    ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
+    : undefined,
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -464,6 +469,7 @@ try {
     permissions: ["local-network-access"],
   });
   const page = await context.newPage();
+  await page.addInitScript("globalThis.__name = (fn) => fn");
   const rigProbeScript = values["probe-dir"]
     ? (
         await Promise.all(
@@ -525,7 +531,12 @@ try {
   ]);
   await page.route("**/__openclaw__/**", (route) => {
     const asset = assets.get(new URL(route.request().url()).pathname);
-    return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
+    return asset
+      ? route.fulfill({
+          status: 200,
+          ...asset,
+        })
+      : route.fallback();
   });
   if (values["duplicate-boot-reads"]) {
     await page.route("**/api/chat/media/outgoing/**", (route) => {
@@ -578,7 +589,7 @@ try {
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, methodLatencyMs, connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = values["full-uuid-route"]
     ? new URL(
@@ -608,7 +619,11 @@ try {
       }
       if (face === "dashboard") {
         await page
-          .frameLocator(".board-widget__frame")
+          .frameLocator(
+            values["dashboard-mcp-app"]
+              ? "openclaw-board-view mcp-app-view iframe"
+              : ".board-widget__frame",
+          )
           .frameLocator("iframe")
           .getByText("Team metric 1", { exact: true })
           .waitFor();
@@ -623,6 +638,12 @@ try {
         await page.waitForFunction(() => {
           const ready = Reflect.get(window, "__readWidgetReadiness")();
           return ready.firstBoardReadyMs !== null;
+        });
+      }
+      if (face === "dashboard" && values["dashboard-widget"]) {
+        await page.waitForFunction(() => {
+          const stages = Reflect.get(window, "__readWidgetReadiness")().dashboardStages;
+          return stages.appReadyMs !== null && stages.fontLoaded;
         });
       }
       await page.waitForFunction(
@@ -640,7 +661,10 @@ try {
         { timeout: 30_000 },
       );
     } catch (error) {
-      const diagnostics = await page.evaluate(() => Reflect.get(window, "__coldLoad")?.read());
+      const diagnostics = await page.evaluate(() => ({
+        ...Reflect.get(window, "__coldLoad")?.read(),
+        widgetReadiness: Reflect.get(window, "__readWidgetReadiness")?.(),
+      }));
       await writeFile(
         path.join(artifactDir, "failure.json"),
         JSON.stringify({ diagnostics, errors }, null, 2),
@@ -674,21 +698,48 @@ try {
     await page.locator('[data-navigation-view="online"]').click();
   }
   await settle();
+  if (values["chat-dashboard-route"] || (face === "dashboard" && values["dashboard-widget"])) {
+    // Save the operator's dashboard-first layout through its normal action.
+    await page.locator("button.chat-pane__layout-trigger:not([inert] *)").first().click();
+    const menu = page.locator(".chat-pane__layout-menu");
+    await menu
+      .getByRole("menuitem", { name: /^Swap / })
+      .or(menu.getByRole("menuitemcheckbox", { name: /^Swap / }))
+      .click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector("openclaw-board-view")
+          ?.closest("[data-region]")
+          ?.getAttribute("data-region") === "main",
+    );
+    if (values["chat-dashboard-route"]) {
+      await page.evaluate(
+        (deepLink) => history.replaceState(null, "", deepLink),
+        controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "chat"),
+      );
+    }
+    await settle();
+  }
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
   const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
     sessionKey: fixture.selectedSessionKey,
     sidebarView: sidebarView === "online" ? "online" : "sessions",
   };
-  await page.evaluate("globalThis.__name = (fn) => fn");
   const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
     persistColdLoadWarmState,
     warmInput,
   );
+  const warmStates = [warmStorage];
+  const snapshotSaves = [snapshotSave];
   for (let index = 1; index < bundleSlots.length; index++) {
     await restoreColdLoadWarmState(page, warmStorage);
     await selectComparisonBundle(index);
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
+    const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
+    warmStates.push(storage);
+    snapshotSaves.push(saved);
   }
   await selectComparisonBundle(0);
   for (let run = 0; run < runs; run++) {
@@ -710,7 +761,7 @@ try {
       );
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.${phase}.cpuprofile`),
-        JSON.stringify(profile),
+        JSON.stringify(mapped.profile),
       );
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpu-profile.json`),
@@ -718,8 +769,9 @@ try {
       );
       return { ...mapped, summary };
     }
-    await restoreColdLoadWarmState(page, warmStorage);
-    await selectComparisonBundle(run % bundleSlots.length);
+    const bundleIndex = run % bundleSlots.length;
+    await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
+    await selectComparisonBundle(bundleIndex);
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -728,6 +780,9 @@ try {
     const rawTrace: unknown[] = [];
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
+    if (cpuProfile) {
+      await cdp.send("Performance.enable");
+    }
     if (!values.untraced || cpuProfile) {
       await cdp.send("Profiler.enable");
       await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
@@ -746,13 +801,29 @@ try {
     if (captureMs) {
       await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
     }
-    const metrics = await page.evaluate(() => ({
-      ...Reflect.get(window, "__coldLoad").read(),
-      widgetReadiness: Reflect.get(window, "__readWidgetReadiness")(),
-    }));
+    const metrics = await page.evaluate(() => {
+      const pane = document.querySelector(".chat-pane-cache__pane--active");
+      const rows = pane ? [...pane.querySelectorAll(".chat-virtual-row")] : null;
+      return {
+        ...Reflect.get(window, "__coldLoad").read(),
+        widgetReadiness: Reflect.get(window, "__readWidgetReadiness")(),
+        finalTranscript: {
+          rows: rows?.length ?? null,
+          rowKeys: rows?.map((row) => row.getAttribute("data-virtual-row-key")) ?? null,
+          sessionKey: pane ? Reflect.get(pane, "sessionKey") : null,
+          ready: pane ? Reflect.get(pane, "transcriptReady") === true : false,
+        },
+      };
+    });
     const warmReload = values["warm-reload"]
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
       : undefined;
+    if (cpuProfile) {
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.cpu-clock.json`),
+        JSON.stringify((await cdp.send("Performance.getMetrics")).metrics),
+      );
+    }
     await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
     const profile = values.untraced && !cpuProfile ? undefined : await cdp.send("Profiler.stop");
     if (!values.untraced) {
@@ -1260,7 +1331,7 @@ try {
       streaming,
       sessionSwitch,
       warmReload,
-      snapshotSave,
+      snapshotSave: snapshotSaves[bundleIndex],
       overlays,
     };
     results.push(result);
@@ -1326,6 +1397,8 @@ try {
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],
+        dashboardMcpApp: values["dashboard-mcp-app"],
+        chatDashboardRoute: values["chat-dashboard-route"],
         traced: !values.untraced,
         cpuProfile,
         cpuProfileCompare: values["cpu-profile-compare"],
@@ -1335,6 +1408,8 @@ try {
           : undefined,
         latencyMs,
         methodLatencyMs,
+        connectNotBeforeMs,
+        dashboardWidget: values["dashboard-widget"],
         face,
         shortRoute: values["short-route"],
         fullUuidRoute: values["full-uuid-route"],

@@ -9,8 +9,10 @@ export const page = defineSolidPage<"claws", ApplicationContext, ClawsRouteData>
   "claws",
   () => import("./page.tsx").then((module) => module.ClawsPage),
   {
-    loaderDeps: (_context: ApplicationContext, location) =>
-      restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM).pathname,
+    loaderDeps: (_context: ApplicationContext, location) => {
+      const restored = restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM);
+      return `${restored.pathname}${restored.search}`;
+    },
     loader: (context: ApplicationContext, options): ClawsRouteData => ({
       location: restoreBridgedRouteLocation(options.location, INTERNAL_CLAWS_PATH_PARAM),
       basePath: context.basePath,

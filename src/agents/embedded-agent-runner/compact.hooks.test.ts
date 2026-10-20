@@ -1169,7 +1169,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             compaction: { enabled: false, reserveTokens: 1_024, keepRecentTokens: 1 },
             retry: { enabled: false },
           }),
-          resourceLoader: createResourceLoader(),
+          resourceLoader: await createResourceLoader(),
         });
       });
       mockDelegatingEngine();

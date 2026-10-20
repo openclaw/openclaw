@@ -101,7 +101,7 @@ export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
  * plugins that need richer shapes should leave them out of the typed contract
  * and interpret the forwarded opaque value inside their own provider code.
  */
-export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
+type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 
 /** Capability limits and supported options for one video generation mode. */
 export type VideoGenerationModeCapabilities = {

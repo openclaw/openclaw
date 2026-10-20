@@ -309,18 +309,11 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
 }
 
 function buildWebhookBody(payload: ChatWebhookPayload, userId?: string): string {
-  const numericId = parseNumericUserId(userId);
+  const numericId = parseStrictNonNegativeInteger(userId);
   if (numericId !== undefined) {
     payload.user_ids = [numericId];
   }
   return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-}
-
-function parseNumericUserId(userId?: string): number | undefined {
-  if (userId === undefined) {
-    return undefined;
-  }
-  return parseStrictNonNegativeInteger(userId);
 }
 
 type SynologyResponse = { statusCode?: number; data: Buffer };

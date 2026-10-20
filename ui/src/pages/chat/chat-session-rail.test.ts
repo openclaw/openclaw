@@ -6,6 +6,7 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
@@ -16,6 +17,7 @@ import {
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
+import { DirectDictationControl } from "./composer-direct-dictation.ts";
 import "./components/chat-session-rail.tsx";
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
@@ -78,6 +80,55 @@ describe("ChatSessionCompanionThreads", () => {
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.companion.ask",
       { sessionKey: "one", agentId: "work", question: "Question" },
+      { timeoutMs: 70_000 },
+    );
+  });
+
+  it("carries the agent's Side chat model choices on questions", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate(
+      "one",
+      async () => ({ exchanges: [], defaultModel: "test/utility" }),
+      "work",
+    );
+    threads.setModelSelection("work", {
+      model: "test/model-c",
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    // A choice follows the agent into its other sessions, never into another agent.
+    expect(threads.view("two", "work").modelSelection).toEqual({
+      model: "test/model-c",
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    expect(threads.view("one", "other").modelSelection).toEqual({});
+    threads.setModelSelection("work", { model: undefined, fastMode: false });
+    expect(threads.view("one", "work")).toMatchObject({
+      defaultModel: "test/utility",
+      modelSelection: { thinkingLevel: "high", fastMode: false },
+    });
+
+    const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
+    const client = { request: request as GatewayBrowserClient["request"] };
+    await requestSessionCompanionAnswer(
+      client,
+      "one",
+      "Question",
+      "work",
+      undefined,
+      undefined,
+      threads.view("one", "work").modelSelection,
+    );
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.companion.ask",
+      {
+        sessionKey: "one",
+        agentId: "work",
+        question: "Question",
+        thinkingLevel: "high",
+        fastMode: false,
+      },
       { timeoutMs: 70_000 },
     );
   });
@@ -437,6 +488,82 @@ describe("ChatSessionRailElement", () => {
     selection.removeAllRanges();
   });
 
+  it("offers the main composer's attachment and dictation controls", async () => {
+    const element = await mount({
+      client: createTestGatewayClient(async () => ({})),
+      companion: { turns: [], loading: false, draft: "" },
+    });
+    const attach = () => element.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach");
+    const microphone = () => element.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
+    expect(attach()?.disabled).toBe(false);
+    expect(microphone()?.disabled).toBe(false);
+    expect(element.querySelector<HTMLInputElement>(".agent-chat__file-input")?.accept).toBe(
+      "image/*",
+    );
+
+    element.connected = false;
+    await element.updateComplete;
+    expect(attach()?.disabled).toBe(true);
+    expect(microphone()?.disabled).toBe(true);
+  });
+
+  it("offers Side chat's own model picker instead of canned starter questions", async () => {
+    const onModelSelect = vi.fn();
+    const element = await mount({
+      companion: { turns: [], loading: false, draft: "" },
+      modelControls: {
+        activeRunId: null,
+        agentDefaultModel: "test/model-a",
+        connected: true,
+        gatewayAvailable: true,
+        loading: false,
+        modelCatalog: [{ id: "model-a", name: "Model A", provider: "test" }],
+        modelCatalogState: { status: "ready", hasSnapshot: true, initialized: true },
+        modelOverrides: { "side-chat:agent:main:run": null },
+        modelSwitching: false,
+        sending: false,
+        sessionKey: "side-chat:agent:main:run",
+        selectedSession: undefined,
+        sessionsResult: null,
+        stream: null,
+        onModelSelect,
+      },
+    });
+    const picker = element.querySelector<HTMLElement>(
+      ".agent-chat__composer-trail [data-chat-model-select]",
+    );
+    expect(picker?.textContent).toContain("Model A");
+    expect(element.querySelector(".chat-session-rail__starter")).toBeNull();
+  });
+
+  it("commits active dictation before a keyboard submit sends the question", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: { turns: [], loading: false, draft: "Summarize" },
+    });
+    const finishActive = vi.fn(async () => {
+      element.companion = { turns: [], loading: false, draft: "Summarize the spoken part" };
+      await element.updateComplete;
+      return true;
+    });
+    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
+      active: true,
+      finalizing: false,
+      finishActive,
+    } as never);
+
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
+    );
+    expect(finishActive).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "uses an empty-question fallback only for images (image: %s)",
     async (image) => {
@@ -464,7 +591,9 @@ describe("ChatSessionRailElement", () => {
           ],
         },
       });
-      expect(element.querySelector<HTMLButtonElement>(".chat-send-btn")?.disabled).toBe(!image);
+      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(
+        !image,
+      );
       element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
       element
         .querySelector("textarea")!
@@ -506,7 +635,7 @@ describe("ChatSessionRailElement", () => {
       await threads.submit("one", "Explain this image", ask);
       await element.updateComplete;
       expect(element.textContent).toContain(
-        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
       );
       expect(element.textContent).not.toContain("No utility model is configured");
       expect(ask).toHaveBeenCalledOnce();
@@ -556,7 +685,7 @@ describe("ChatSessionRailElement", () => {
         },
       });
       const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
-      const send = element.querySelector<HTMLButtonElement>(".chat-send-btn")!;
+      const send = element.querySelector<HTMLButtonElement>("button[type=submit]")!;
       const type = async (draft: string) => {
         textarea.value = draft;
         textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -636,20 +765,5 @@ describe("ChatSessionRailElement", () => {
     const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
-  });
-
-  it("offers starter questions instead of an empty thread, and asks the tapped one", async () => {
-    const onSubmit = vi.fn();
-    const element = await mount({ onSubmit });
-
-    const starters = [...element.querySelectorAll(".chat-session-rail__starter")];
-    expect(starters.map((starter) => starter.textContent?.trim())).toEqual([
-      "What changed?",
-      "Why did it stop?",
-      "What's left?",
-    ]);
-
-    (starters[1] as HTMLButtonElement).click();
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Why did it stop?");
   });
 });

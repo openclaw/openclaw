@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH } from "./update-channels.js";
@@ -118,67 +119,6 @@ async function resolveExplicitTarget(params: {
     }
   }
   return null;
-}
-
-async function resolveUpstreamCandidates(params: {
-  gitRoot: string;
-  needsCheckoutMain: boolean;
-  refreshedRemotes: readonly string[];
-  devSource?: GitFetchTarget & { revision?: string };
-  step: StepFactory;
-}): Promise<
-  | {
-      status: "ok";
-      sha: string;
-      candidates: string[];
-      selectedDevUpstream: string | null;
-      localDevBranchExists: boolean | null;
-    }
-  | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> }
-> {
-  const step = createGitStepFactory(params.gitRoot, params.step);
-  let localDevBranchExists: boolean | null = null;
-  if (params.needsCheckoutMain) {
-    const localMainStep = await runStep(
-      step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
-    );
-    localDevBranchExists = localMainStep.exitCode === 0;
-  }
-  const readGit = async (...args: string[]) => {
-    const result = await runStep(step("upstream-check", ...args));
-    return !isFailedUpdateStep(result) ? result.stdoutTail?.trim() || null : null;
-  };
-  const source = params.devSource;
-  if (!source || (source.remote !== "." && !params.refreshedRemotes.includes(source.remote))) {
-    return { status: "skipped", reason: "no-upstream" };
-  }
-  const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
-  if (!upstreamRef) {
-    return { status: "skipped", reason: "no-upstream" };
-  }
-  const upstreamSha = await readGit("rev-parse", "--verify", `${upstreamRef}^{commit}`);
-  if (!upstreamSha) {
-    return { status: "error", reason: "no-upstream-sha" };
-  }
-  // Local branches are operator state, not remote cache refs to publish after admission.
-  const selectedDevUpstream = upstreamRef.startsWith("refs/heads/") ? null : upstreamRef;
-  const revListStep = await runStep(
-    step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
-  );
-  if (isFailedUpdateStep(revListStep)) {
-    return { status: "error", reason: "preflight-revlist-failed" };
-  }
-  const candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
-  if (candidates.length === 0) {
-    return { status: "error", reason: "preflight-no-candidates" };
-  }
-  return {
-    status: "ok",
-    sha: upstreamSha,
-    candidates,
-    selectedDevUpstream,
-    localDevBranchExists,
-  };
 }
 
 type PreflightCandidateResult =
@@ -391,6 +331,24 @@ async function testPreflightCandidate(
     // Global source exposure can run package lifecycle scripts. Validate and retain
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
+    // Exposure can run another install after postbuild. Its final topology, not
+    // the earlier build graph, must own the packaged plugin dependency links.
+    const metadataScript = "scripts/copy-bundled-plugin-metadata.mjs";
+    if (
+      params.prepareGitExposure &&
+      (
+        await fs.stat(path.join(params.worktreeDir, metadataScript)).catch(ignoreMissingPath)
+      )?.isFile()
+    ) {
+      const relink = await runCandidateCheck(
+        "bundled-plugin-dependency-links",
+        ["node", metadataScript],
+        candidateCommand.env,
+      );
+      if (relink) {
+        return { status: classifyPreflightFailure(relink) };
+      }
+    }
     await candidateCommand.restoreWorkspace?.();
     params.steps.push(...((await params.validateCandidate(params.worktreeDir)) ?? []));
     // Activation checks out candidateSha and promotes only generated runtime paths.
@@ -520,14 +478,41 @@ export async function runGitCandidatePreflight(params: {
       }
     }
   } else {
-    const upstream = await resolveUpstreamCandidates(params);
-    if (upstream.status !== "ok") {
-      return upstream;
+    if (params.needsCheckoutMain) {
+      const localMainStep = await runStep(
+        step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
+      );
+      localDevBranchExists = localMainStep.exitCode === 0;
     }
-    preflightBaseSha = upstream.sha;
-    candidates = upstream.candidates;
-    selectedDevUpstream = upstream.selectedDevUpstream;
-    localDevBranchExists = upstream.localDevBranchExists;
+    const readGit = async (...args: string[]) => {
+      const result = await runStep(step("upstream-check", ...args));
+      return !isFailedUpdateStep(result) ? result.stdoutTail?.trim() || null : null;
+    };
+    const source = params.devSource;
+    if (!source || (source.remote !== "." && !params.refreshedRemotes.includes(source.remote))) {
+      return { status: "skipped", reason: "no-upstream" };
+    }
+    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
+    if (!upstreamRef) {
+      return { status: "skipped", reason: "no-upstream" };
+    }
+    const upstreamSha = await readGit("rev-parse", "--verify", `${upstreamRef}^{commit}`);
+    if (!upstreamSha) {
+      return { status: "error", reason: "no-upstream-sha" };
+    }
+    // Local branches are operator state, not remote cache refs to publish after admission.
+    selectedDevUpstream = upstreamRef.startsWith("refs/heads/") ? null : upstreamRef;
+    const revListStep = await runStep(
+      step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
+    );
+    if (isFailedUpdateStep(revListStep)) {
+      return { status: "error", reason: "preflight-revlist-failed" };
+    }
+    candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
+    if (candidates.length === 0) {
+      return { status: "error", reason: "preflight-no-candidates" };
+    }
+    preflightBaseSha = upstreamSha;
   }
 
   // Reference builds must consume operator inputs even when their Git HEAD is current.

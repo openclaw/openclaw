@@ -18,6 +18,7 @@ import {
   type TerminalPanelSessionState,
   type TerminalPanelSessionTab,
 } from "./terminal-panel-session-types.ts";
+import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { createTerminalStartupInput } from "./terminal-startup-input.ts";
 import type { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { terminalDynamicColors, terminalTheme } from "./terminal-theme.ts";
@@ -149,7 +150,7 @@ export async function bootTerminalPanelSession(params: {
     reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
   });
   const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>
-    panel.inputs.createTerminalController(
+    createIsolatedGhosttyTerminal(
       {
         parent,
         readOnly: controllerOptions?.readOnly ?? false,

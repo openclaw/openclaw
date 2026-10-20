@@ -81,6 +81,11 @@
       "import": "./dist/internal/google-model-family.mjs",
       "default": "./dist/internal/google-model-family.mjs"
     },
+    "./internal/model-request-body": {
+      "types": "./dist/internal/model-request-body.d.mts",
+      "import": "./dist/internal/model-request-body.mjs",
+      "default": "./dist/internal/model-request-body.mjs"
+    },
     "./internal/openai": {
       "types": "./dist/internal/openai.d.mts",
       "import": "./dist/internal/openai.mjs",

@@ -6,6 +6,15 @@ type DomChatLayoutScope = {
   click: (element: HTMLElement) => Promise<void>;
 };
 
+function domMenu(scope: DomChatLayoutScope) {
+  const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
+  const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
+  if (!menu || !trigger) {
+    throw new Error("Expected a chat Layout menu");
+  }
+  return { menu, trigger };
+}
+
 function isChatLayoutMenuOpen(element: Element): boolean {
   const surface = element.querySelector<HTMLElement>(".oc-menu");
   return (
@@ -48,32 +57,22 @@ export async function openChatLayoutMenu(
   scope: Page | Locator | DomChatLayoutScope,
 ): Promise<Locator | HTMLElement> {
   if ("container" in scope) {
-    const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-    const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
-    if (!menu || !trigger) {
-      throw new Error("Expected a chat Layout menu");
-    }
+    const { menu, trigger } = domMenu(scope);
+    const shown = waitForMenuShow(menu);
     if (!isChatLayoutMenuOpen(menu)) {
-      const shown = waitForMenuShow(menu);
       await scope.click(trigger);
-      await shown;
-    } else {
-      await waitForMenuShow(menu);
     }
+    await shown;
     return menu;
   }
   const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
   const menu = trigger.locator("..");
   if (!(await menu.evaluate(isChatLayoutMenuOpen))) {
-    const element = await menu.elementHandle();
+    await using element = await menu.elementHandle();
     if (!element) {
       throw new Error("Expected a chat Layout menu");
     }
-    try {
-      await Promise.all([element.evaluate(waitForMenuShow), trigger.click()]);
-    } finally {
-      await element.dispose();
-    }
+    await Promise.all([element.evaluate(waitForMenuShow), trigger.click()]);
   } else {
     await menu.evaluate(waitForMenuShow);
   }
@@ -84,11 +83,7 @@ export async function closeChatLayoutMenu(
   scope: Page | Locator | DomChatLayoutScope,
 ): Promise<void> {
   if ("container" in scope) {
-    const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-    const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
-    if (!menu || !trigger) {
-      throw new Error("Expected a chat Layout menu");
-    }
+    const { menu, trigger } = domMenu(scope);
     if (isChatLayoutMenuOpen(menu)) {
       await scope.click(trigger);
     }
@@ -100,13 +95,9 @@ export async function closeChatLayoutMenu(
   if (await menu.evaluate(isChatLayoutMenuOpen)) {
     await trigger.click();
   }
-  const element = await menu.elementHandle();
+  await using element = await menu.elementHandle();
   if (element) {
-    try {
-      await waitForMenuClose(element);
-    } finally {
-      await element.dispose();
-    }
+    await waitForMenuClose(element);
   }
 }
 
@@ -131,15 +122,11 @@ export async function selectChatLayoutAction(
   const action = menu
     .getByRole("menuitem", { name, exact: true })
     .or(menu.getByRole("menuitemcheckbox", { name, exact: true }));
-  const element = await menu.elementHandle();
+  await using element = await menu.elementHandle();
   if (!element) {
     throw new Error("Expected a chat Layout menu");
   }
-  try {
-    await action.click();
-    // The overlay closes before actions can change the retained header.
-    await waitForMenuClose(element);
-  } finally {
-    await element.dispose();
-  }
+  await action.click();
+  // The overlay closes before actions can change the retained header.
+  await waitForMenuClose(element);
 }

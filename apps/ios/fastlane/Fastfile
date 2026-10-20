@@ -236,7 +236,25 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from simctl runtime list: #{e.message}")
 end
 
+def mark_ios_resource_phase(phase)
+  path = ENV["OPENCLAW_IOS_RESOURCE_PHASE_PATH"]
+  File.write(path, phase) if path && !path.empty?
+rescue SystemCallError
+  # Optional incident evidence must not change the release result.
+  nil
+end
+
 def screenshot_phase(diagnostics, phase, device: nil, udid: nil, log_path: nil, &operation)
+  family = if device.to_s.start_with?("iPhone")
+    "iphone"
+  elsif device.to_s.start_with?("iPad")
+    "ipad"
+  elsif device.to_s.include?("Watch")
+    "watch"
+  else
+    "all"
+  end
+  mark_ios_resource_phase("screenshot-#{family}-#{phase}")
   return operation.call unless diagnostics
 
   diagnostics.measure(phase, device: device, udid: udid, log_path: log_path, &operation)
@@ -1914,6 +1932,7 @@ def capture_release_ios_screenshot!(
 end
 
 def build_app_store_release(context)
+  mark_ios_resource_phase("release-archive")
   version = context[:version]
   project_path = File.join(ios_root, "OpenClaw.xcodeproj")
   output_directory = File.join(ios_root, "build", "app-store")
@@ -1937,6 +1956,7 @@ def build_app_store_release(context)
       "OpenClaw",
       "-configuration",
       "Release",
+      "-showBuildTimingSummary",
       "-destination",
       "generic/platform=iOS",
       "-archivePath",
@@ -1946,6 +1966,7 @@ def build_app_store_release(context)
     ])
   )
 
+  mark_ios_resource_phase("release-export")
   sh(
     xcodebuild_shell_join(
       [
@@ -2178,6 +2199,7 @@ platform :ios do
       UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane upload is disabled.")
     end
 
+    mark_ios_resource_phase("release-prepare")
     release_signing_check!
     context = prepare_app_store_context(
       require_api_key: true,
@@ -2223,6 +2245,7 @@ platform :ios do
     if context[:destination] == "testflight"
       assert_testflight_upload_ready!(current_plan)
     else
+      mark_ios_resource_phase("release-metadata")
       ENV["DELIVER_SCREENSHOTS"] = "1"
       ENV["DELIVER_RELEASE_NOTES"] = "0"
       metadata(
@@ -2232,6 +2255,7 @@ platform :ios do
       )
     end
 
+    mark_ios_resource_phase("release-upload")
     upload_to_testflight(
       api_key: context[:api_key],
       ipa: build[:ipa_path],
@@ -2261,6 +2285,7 @@ platform :ios do
 
   desc "Stage saved release notes and select an already uploaded iOS build without uploading again"
   lane :release_stage do |options|
+    mark_ios_resource_phase("release-stage")
     unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
       UI.user_error!("Use `node scripts/mobile-release.mjs stage --platform ios --recovery-dir DIR` to recover release staging.")
     end
@@ -2402,6 +2427,7 @@ platform :ios do
       run_screenshot_xcodebuild!(
         [
           "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
+          "-showBuildTimingSummary",
           "-derivedDataPath", derived_data_path,
           "-destination", "generic/platform=iOS Simulator",
           "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",

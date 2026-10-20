@@ -2,7 +2,8 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { clearBootRecords, type BootRecord } from "./boot-record.ts";
+import { clearBootRecords } from "./boot-record.ts";
+import { makeBootRecord } from "./bootstrap.test-support.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
@@ -10,18 +11,29 @@ import { loadSettings, persistSessionToken } from "./settings.ts";
 const originalUrl = window.location.href;
 const runtimes: ApplicationRuntime[] = [];
 let connections: GatewayBrowserClientOptions[];
-const mainRecord = (): BootRecord => ({
-  version: 2,
-  authMethod: "token",
-  credential: "9d17676d",
-  recoveryScope: "main-device",
-  scope: gatewayCredentialScope(loadSettings().gatewayUrl),
-  savedAt: Date.now(),
-  profileId: "same-profile",
-  agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-  groups: [{ name: "Main private group", position: 0 }],
-  sectionOrder: ["Main private group"],
-});
+let key: string;
+let bytes: string;
+const mainRecord = () =>
+  makeBootRecord(gatewayCredentialScope(loadSettings().gatewayUrl), {
+    recoveryScope: "main-device",
+    profileId: "same-profile",
+    groups: [{ name: "Main private group", position: 0 }],
+    sectionOrder: ["Main private group"],
+  });
+
+const replies = new Map<string, () => unknown>([
+  ["agents.list", () => mainRecord().agents],
+  ["sessions.groups.list", () => ({ groups: [], sectionOrder: [] })],
+  ["sessions.groups.defaults", () => ({ defaults: {} })],
+]);
+
+function createTestClient(opts: GatewayBrowserClientOptions) {
+  connections.push(opts);
+  const client = new GatewayBrowserClient(opts);
+  vi.spyOn(client, "start").mockImplementation(() => {});
+  vi.spyOn(client, "request").mockImplementation(async (method) => replies.get(method)?.() ?? {});
+  return client;
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -32,40 +44,19 @@ beforeEach(() => {
     vi.fn(async () => new Response("{}", { status: 200 })),
   );
   persistSessionToken(loadSettings().gatewayUrl, "test-token");
+  const record = mainRecord();
+  key = "openclaw.control.bootRecord.v1:" + record.scope;
+  bytes = JSON.stringify(record);
+  localStorage.setItem(key, bytes);
   connections = [];
   const createGateway = gatewayStore.createApplicationGateway;
   vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation(
     (settings, password, bootstrap, _factory, options) =>
-      createGateway(
-        settings,
-        password,
-        bootstrap,
-        (opts) => {
-          connections.push(opts);
-          const client = new GatewayBrowserClient(opts);
-          vi.spyOn(client, "start").mockImplementation(() => {});
-          vi.spyOn(client, "request").mockImplementation(async (method) => {
-            if (method === "agents.list") {
-              return mainRecord().agents;
-            }
-            if (method === "sessions.groups.list") {
-              return { groups: [], sectionOrder: [] };
-            }
-            if (method === "sessions.groups.defaults") {
-              return { defaults: {} };
-            }
-            return {};
-          });
-          return client;
-        },
-        options,
-      ),
+      createGateway(settings, password, bootstrap, createTestClient, options),
   );
 });
 afterEach(async () => {
-  for (const runtime of runtimes.splice(0)) {
-    runtime.stop();
-  }
+  runtimes.splice(0).forEach((runtime) => runtime.stop());
   clearBootRecords();
   await vi.dynamicImportSettled();
   window.history.replaceState({}, "", originalUrl);
@@ -79,36 +70,50 @@ function open(path: string) {
   const runtime = bootstrapApplication();
   runtimes.push(runtime);
   runtime.context.gateway.connect();
-  const opts = connections.at(-1)!;
-  return { runtime, opts };
+  return { runtime, opts: connections.at(-1)! };
+}
+
+type HelloSnapshot = Parameters<NonNullable<GatewayBrowserClientOptions["onHello"]>>[0]["snapshot"];
+function admit(
+  opts: GatewayBrowserClientOptions,
+  recoveryScope: string,
+  deviceToken?: string,
+  snapshot?: HelloSnapshot,
+) {
+  opts.onHello?.({
+    type: "hello-ok",
+    protocol: 1,
+    auth: {
+      role: "operator",
+      scopes: [],
+      recoveryScope,
+      method: deviceToken ? "bootstrap-token" : "token",
+      ...(deviceToken ? { deviceToken } : {}),
+    },
+    ...(snapshot ? { snapshot } : {}),
+  });
+}
+
+function reject(opts: GatewayBrowserClientOptions, message: string) {
+  opts.onClose?.({
+    code: 4008,
+    reason: "rejected",
+    willRetry: false,
+    error: { code: "PAIRING_REQUIRED", message },
+  });
 }
 
 it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
   "keeps shellless %s out of main admission reads, publication, and retirement",
   async (route) => {
-    const record = mainRecord();
-    const key = "openclaw.control.bootRecord.v1:" + record.scope;
-    const bytes = JSON.stringify(record);
-    localStorage.setItem(key, bytes);
     const reads = vi.spyOn(localStorage, "getItem");
     const { runtime, opts } = open(route + "#bootstrapToken=synthetic-independent-handoff");
     expect(reads.mock.calls.filter(([readKey]) => readKey === key)).toEqual([]);
     expect(runtime.warmBoot).toBe(false);
     expect(opts.offlineRecoveryScope).toBeUndefined();
     expect(runtime.context.sessions.state.groupSettings).toEqual([]);
-    opts.onHello?.({
-      type: "hello-ok",
-      protocol: 1,
-      auth: {
-        role: "operator",
-        scopes: [],
-        method: "bootstrap-token",
-        deviceToken: "independent-device-grant",
-        recoveryScope: "independent-device",
-      },
-      snapshot: {
-        presence: [{ ts: 0, instanceId: opts.instanceId, user: { id: "same-profile" } }],
-      },
+    admit(opts, "independent-device", "independent-device-grant", {
+      presence: [{ ts: 0, instanceId: opts.instanceId, user: { id: "same-profile" } }],
     });
     await runtime.context.agents.ensureList();
     await runtime.context.sessions.groupsLoad();
@@ -117,12 +122,7 @@ it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
     window.dispatchEvent(new StorageEvent("storage", { key, oldValue: bytes, newValue: null }));
     expect(runtime.context.gateway.snapshot.phase).toBe("connected");
     runtime.context.gateway.connect({ password: "independent-password" });
-    connections.at(-1)!.onClose?.({
-      code: 4008,
-      reason: "rejected",
-      willRetry: false,
-      error: { code: "PAIRING_REQUIRED", message: "Independent rejection" },
-    });
+    reject(connections.at(-1)!, "Independent rejection");
     expect(localStorage.getItem(key)).toBe(bytes);
   },
 );
@@ -130,43 +130,15 @@ it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
 it.each(["accepted", "rejected"])(
   "keeps an admitted Chat beside a fresh %s bootstrap document",
   async (outcome) => {
-    const record = mainRecord();
-    const key = "openclaw.control.bootRecord.v1:" + record.scope;
-    localStorage.setItem(key, JSON.stringify(record));
     const chat = open("/chat/main");
-    chat.opts.onHello?.({
-      type: "hello-ok",
-      protocol: 1,
-      auth: {
-        role: "operator",
-        scopes: [],
-        method: "token",
-        recoveryScope: "main-device",
-      },
-      snapshot: { authMode: "token" },
-    });
+    admit(chat.opts, "main-device", undefined, { authMode: "token" });
     const writes = vi.spyOn(localStorage, "removeItem");
     const peer = open("/activity?view=run&run=synthetic#bootstrapToken=synthetic-fresh-handoff");
     expect(peer.runtime.warmBoot).toBe(false);
     if (outcome === "rejected") {
-      peer.opts.onClose?.({
-        code: 4008,
-        reason: "rejected",
-        willRetry: false,
-        error: { code: "PAIRING_REQUIRED", message: "Rejected synthetic handoff" },
-      });
+      reject(peer.opts, "Rejected synthetic handoff");
     } else {
-      peer.opts.onHello?.({
-        type: "hello-ok",
-        protocol: 1,
-        auth: {
-          role: "operator",
-          scopes: [],
-          method: "bootstrap-token",
-          deviceToken: "test-token",
-          recoveryScope: "main-device",
-        },
-      });
+      admit(peer.opts, "main-device", "test-token");
       await peer.runtime.context.agents.ensureList();
       await peer.runtime.context.sessions.groupsLoad();
       window.dispatchEvent(new Event("pagehide"));
@@ -177,8 +149,7 @@ it.each(["accepted", "rejected"])(
     const stored = JSON.parse(localStorage.getItem(key)!);
     expect(stored.recoveryScope).toBe("main-device");
     if (outcome === "accepted") {
-      expect(stored.authMethod).toBe("device-token");
-      expect(stored.credential).toBe("9d17676d");
+      expect(stored).toMatchObject({ authMethod: "device-token", credential: "9d17676d" });
       expect(JSON.stringify(stored)).not.toContain("synthetic-fresh-handoff");
     }
   },

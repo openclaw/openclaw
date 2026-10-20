@@ -4,6 +4,15 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  logbook: TranslationMap;
+  gatewayLogs: TranslationMap;
+  standingGrants: TranslationMap;
+  approvalHistory: TranslationMap;
+  secretsStore: TranslationMap &
+    Record<
+      "allowedHosts" | "allowedHostsPlaceholder" | "protectedSecret" | "agentReadable" | "hint",
+      string
+    >;
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
@@ -1062,6 +1071,18 @@ export const en: TranslationMap & {
       "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
   },
   execApproval: {
+    watcherApprovalScope:
+      "Approval applies to this saved watcher. Source changes or reactivation may require approval again.",
+    watcherSandboxSummary:
+      "Runs in your sandbox after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherGatewaySummary:
+      "Runs on the Gateway after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    watcherSummary:
+      "Runs after you leave this chat, until stopped. Restarts automatically after interruptions.",
+    startWatcher: "Start watching",
+    saveWatcher: "Save watcher change",
+    cancelWatcher: "Cancel",
+
     scope: {
       standingGrant:
         'Always allow runs this exact command for "{automation}" without asking, until revoked (revocable)',
@@ -1111,6 +1132,15 @@ export const en: TranslationMap & {
       "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
     retry: "Retry",
     execTitle: "Command approval",
+    watcherTitle: "Watcher approval: {name}",
+    watcherChangeTitle: "Watcher change: {name}",
+    watcherLifetime:
+      "If saved and enabled, this watcher runs after you leave this chat, until stopped. It is configured to restart automatically after interruptions.",
+    watcherAllowed:
+      "This proposal was approved. Approval alone does not confirm that the change was saved or the watcher started. Check its current status in Automations.",
+    watcherNotCreated: "This proposal did not create a watcher.",
+    watcherNotChanged:
+      "This proposal did not save the change. It did not stop or change the existing watcher.",
     pending: "Waiting for your decision",
     pendingDescription: "Review the request carefully. The first answer from any surface wins.",
     approvedHere: "Approved here",
@@ -1126,7 +1156,7 @@ export const en: TranslationMap & {
     allowedAlwaysDescription: "The operation was approved with the always-allow decision.",
     deniedDescription: "The operation was denied and will not continue.",
     expiredDescription: "No decision arrived before the deadline, so the operation was denied.",
-    cancelledDescription: "The requesting run ended before a decision could be used.",
+    cancelledDescription: "This approval request was canceled and can no longer be used.",
     summaryLabel: "Summary",
     commandLabel: "Command",
     requestLabel: "Request details",
@@ -1746,77 +1776,13 @@ export const en: TranslationMap & {
       done: "Done",
     },
   },
-  gatewayLogs: {
-    title: "Logs",
-    subtitle: "Gateway file logs (JSONL).",
-    exportButton: "Export {label}",
-    exportLabels: {
-      filtered: "filtered",
-      visible: "visible",
-    },
-    filter: "Filter",
-    searchPlaceholder: "Search logs",
-    autoFollow: "Auto-follow",
-    file: "File: {file}",
-    truncated: "Log output truncated; showing latest chunk.",
-    empty: "No log entries.",
-  },
+  gatewayLogs: {},
   pluginTabs: {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
   },
-  logbook: {
-    nav: {
-      previousDay: "Previous day",
-      nextDay: "Next day",
-      today: "Today",
-    },
-    status: {
-      capturing: "Capturing every {seconds}s",
-      paused: "Capture paused",
-      disabled: "Capture off",
-      nodeHelp: "Device providing screen snapshots.",
-      pending: "{count} frames queued",
-      pendingHelp: "Snapshots waiting for the next analysis batch.",
-      analyzing: "Analyzing…",
-      captureError: "Capture error",
-      batchError: "Analysis error",
-      modelMissing: "No vision model",
-      modelMissingHelp:
-        "Set plugins.entries.logbook.config.visionModel or configure tools.media models.",
-    },
-    actions: {
-      pause: "Pause",
-      resume: "Resume",
-      analyzeNow: "Analyze now",
-    },
-    empty: {
-      title: "Nothing on the timeline yet.",
-      subtitle:
-        "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
-    },
-    card: {
-      keyframeAlt: "Screen snapshot from this activity",
-      distractions: "Distractions",
-    },
-    stats: {
-      title: "Day at a glance",
-      focus: "{pct}% focus",
-      tracked: "{duration} tracked",
-    },
-    standup: {
-      title: "Daily standup",
-      generate: "Generate",
-      refresh: "Regenerate",
-      empty: "Turn today's timeline into a ready-to-paste standup update.",
-    },
-    ask: {
-      title: "Ask your day",
-      placeholder: "When did I review the gateway PR?",
-      submit: "Ask",
-    },
-  },
+  logbook: {},
   board: {
     label: "Session dashboard",
     tabsLabel: "Dashboard tabs",
@@ -1844,40 +1810,6 @@ export const en: TranslationMap & {
       resize: "Resize",
       autoHeight: "Auto height",
       remove: "Delete",
-      needsApproval: "Needs approval",
-      needsApprovalDetail: "This widget requested additional access.",
-      networkAccess: "Network origins",
-      hostTools: "Host tools and data",
-      activeCapabilities: "Active widget capabilities",
-      networkCapability: "Network: {capability}",
-      toolCapability: "Tool: {capability}",
-      granted: "Granted",
-      allow: "Allow",
-      allowFailed: "Could not allow widget access. Try again.",
-      reject: "Reject",
-      rejectFailed: "Could not reject widget access. Try again.",
-      rejected: "Access rejected",
-      rejectedDetail: "This widget stays inactive until it is removed or replaced.",
-      appLoading: "Restoring app…",
-      appStaleTitle: "This pinned app is stale",
-      appStaleDetail: "Its server, resource, or originating transcript is no longer available.",
-      retry: "Retry",
-      frameResolverMissing: "Widget content is unavailable.",
-      sandboxUnavailable: "Widget sandbox host is unavailable.",
-      accessDenied: "You don’t have access to this widget in this conversation.",
-      waitingForResult: "Waiting for the widget result.",
-      runtimeError: "Script error: {message}",
-      waitingForConnection: "Waiting for the connection. This view will recover automatically.",
-      resourceUnavailable:
-        "A widget resource could not load. Retry when the connection is available.",
-      frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
-      sandboxOriginRequired:
-        "Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener.",
-      errorTitle: "This widget could not load",
-      errorDetail: "The problem is contained to this card.",
-      actionErrorTitle: "Widget change failed",
-      actionErrorDetail: "The dashboard kept the previous widget state.",
-      errorShow: "Show details",
       kindMcp: "MCP",
       kindHtml: "HTML",
       kindPlugin: "Plugin",
@@ -1955,72 +1887,8 @@ export const en: TranslationMap & {
   attention: {
     issues: "Inbox",
   },
-  standingGrants: {
-    title: "Standing grants",
-    description:
-      "Allow-always on an automation approval mints a standing grant for that exact command. Revoking one makes the next occurrence ask again.",
-    historyTitle: "Approval history",
-    empty: "No standing grants. Answer an automation approval with Always allow to mint one.",
-    stateUntilRevoked: "Until revoked",
-    stateExpiresIn: "Expires in {count}d",
-    stateExpired: "Expired",
-    stateRevoked: "Revoked",
-    revoke: "Revoke",
-    revoking: "Revoking…",
-    columns: {
-      automation: "Automation",
-      command: "Command",
-      uses: "Uses",
-      state: "State",
-    },
-  },
-  approvalHistory: {
-    description:
-      "Terminal exec, plugin, and system-agent approvals recorded by this gateway, newest first.",
-    loading: "Loading approval history…",
-    loadingMore: "Loading…",
-    loadMore: "Load more",
-    empty: "No resolved approvals in the rolling 30-day window.",
-    retention: "Approval history is a rolling 30-day window.",
-    offline: "Connect to the gateway to load approval history.",
-    invalidResponse: "The gateway returned an invalid approval history response.",
-    unknown: "Unknown",
-    notApplicable: "N/A",
-    columns: {
-      resolved: "Resolved",
-      kind: "Kind",
-      request: "Request",
-      decision: "Decision",
-      reason: "Resolution reason",
-      source: "Source agent / session",
-      resolver: "Resolver",
-    },
-    kinds: {
-      exec: "Exec",
-      plugin: "Plugin",
-      systemAgent: "System agent",
-    },
-    statuses: {
-      allowed: "Allowed",
-      denied: "Denied",
-      expired: "Expired",
-      cancelled: "Cancelled",
-    },
-    decisions: {
-      allowOnce: "Allow once",
-      allowAlways: "Always allow",
-      deny: "Deny",
-    },
-    reasons: {
-      user: "User decision",
-      timeout: "Timed out",
-      malformedVerdict: "Malformed verdict",
-      noRoute: "No route",
-      runAborted: "Run aborted",
-      gatewayRestart: "Gateway restart",
-      storageCorrupt: "Storage corrupt",
-    },
-  },
+  standingGrants: {},
+  approvalHistory: {},
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
@@ -2251,6 +2119,9 @@ export const en: TranslationMap & {
       online: "Online",
       offline: "Offline",
       unavailable: "Could not load people. Try again.",
+      accessDenied: "Mention access denied. Sign in or contact an admin.",
+      profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
+      rejected: "Mention search rejected. Check access or use another chat.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
@@ -2342,7 +2213,6 @@ export const en: TranslationMap & {
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
-      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",
@@ -3062,11 +2932,6 @@ export const en: TranslationMap & {
       checksPending: "{count} running",
       finished: "Finished {time}",
       empty: "Answers come from this session's transcript and its project files.",
-      starters: {
-        changed: "What changed?",
-        stopped: "Why did it stop?",
-        remaining: "What's left?",
-      },
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
@@ -3080,7 +2945,7 @@ export const en: TranslationMap & {
       askMissing: "This session is no longer available.",
       askModelUnavailable: "No utility model is configured for this session.",
       askImageUnsupported:
-        "This Side chat model cannot read images. Choose an image-capable utility model, then retry.",
+        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
@@ -3713,47 +3578,13 @@ export const en: TranslationMap & {
     ru: "Русский (Russian)",
     sv: "Svenska (Swedish)",
   },
+  // Navigation and in-chat secret requests render before the Secrets page loads.
   secretsStore: {
-    name: "Name",
-    access: "Access",
-    accessMode: "Access mode",
-    value: "Value",
     allowedHosts: "Allowed hosts",
     allowedHostsPlaceholder: "api.example.com",
-    allowedHostsHint:
-      "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
-    noAllowedHosts: "None",
-    updated: "Last updated",
-    by: "{time} by {name}",
-    actions: "Actions",
-    add: "Add",
-    edit: "Edit",
-    bulk: "Bulk Add",
     protectedSecret: "Protected secret",
-    protectedSecretHint:
-      "Hidden after save and inert unless referenced by a SecretRef or used through enabled destination-bound Gateway egress. It is never directly readable.",
     agentReadable: "Agent-readable environment",
-    agentReadableHint:
-      "High risk: visible to admins and plaintext to Gateway-hosted agent commands. The agent can print, transmit, or persist it. Applies from the next run.",
     hint: "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
-    required: "Enter a value.",
-    detect: "Protect credential-like names automatically",
-    detected: "{count} protected secrets detected",
-    detectedOne: "{count} protected secret detected",
-    unavail: "Gateway/admin required.",
-    badName: "Use SERVICE_API_KEY.",
-    tooLarge: "Max 64 KiB.",
-    savedProtected:
-      "Saved {name} as Protected secret. Add a SecretRef or enable destination-bound Gateway egress to use it.",
-    savedReadable:
-      "Saved {name} as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
-    savedMany:
-      "Saved {count} entries ({protected} protected, {readable} agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
-    warnings: "{count} runtime warnings.",
-    partial: "{saved}/{total}: {error}",
-    confirmDelete: "Delete {name}?",
-    deleted: "Deleted {name}.",
-    deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",

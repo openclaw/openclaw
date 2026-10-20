@@ -117,9 +117,7 @@ openclaw-board-view {
   --oc-overlay-distance: 0px;
 
   min-width: 190px;
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }

@@ -165,6 +165,42 @@ describe("memory_search unavailable payloads", () => {
     expect(searchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["initialization", "search"] as const)(
+    "classifies a closed storage scope by code during %s",
+    async (phase) => {
+      const error = "SQLite read-only worker scope closed";
+      const storage = {
+        error,
+        code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+      };
+      if (phase === "initialization") {
+        setMemorySearchManagerImpl(async () => storage);
+      } else {
+        mockSearch(async () => {
+          throw Object.assign(new Error(error), { code: storage.code });
+        });
+      }
+      expectUnavailableMemorySearchDetails((await executeSearch()).details, {
+        error,
+        warning: "Memory search is unavailable because its storage scope closed.",
+        action:
+          "Run openclaw plugins reload memory-core, or restart the Gateway, then retry memory_search.",
+      });
+    },
+  );
+
+  it("does not classify a provider error by storage-scope wording", async () => {
+    const error = "SQLite read-only worker scope closed";
+    mockSearch(async () => {
+      throw new Error(error);
+    });
+    expectUnavailableMemorySearchDetails((await executeSearch()).details, {
+      error,
+      warning: "Memory search is unavailable due to an embedding/provider error.",
+      action: "Check embedding provider configuration and retry memory_search.",
+    });
+  });
+
   it("returns unavailable metadata when memory search does not settle", async () => {
     vi.useFakeTimers();
     let searchSignal: AbortSignal | undefined;

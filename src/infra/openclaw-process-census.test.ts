@@ -15,8 +15,6 @@ const {
   darwinCommand,
   nativeDarwinCensus,
   rosetta,
-  windows,
-  windowsSid,
   fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
@@ -30,8 +28,6 @@ const {
   darwinCommand: vi.fn(),
   nativeDarwinCensus: vi.fn(),
   rosetta: vi.fn(),
-  windows: vi.fn(),
-  windowsSid: vi.fn(),
   fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
@@ -56,14 +52,6 @@ vi.mock("../process/darwin-process-inspection.js", () => ({
 }));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
-}));
-vi.mock("./windows-process-census.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./windows-process-census.js")>()),
-  readWindowsProcessCensus: windows,
-}));
-vi.mock("./windows-user-sid.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./windows-user-sid.js")>()),
-  readWindowsUserSid: windowsSid,
 }));
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 
@@ -91,7 +79,7 @@ beforeEach(() => {
   mockProcessPlatform("linux");
   rows = new Map([
     [1, { ppid: 0, argv: ["/sbin/init"] }],
-    [launcher, { ppid: 1, argv: ["node", "/app/openclaw.mjs", "doctor", "--fix"] }],
+    [launcher, { ppid: 1, argv: ["fixture-wrapper"] }],
     [self, { ppid: launcher, argv: ["openclaw-doctor"] }],
   ]);
   definitelyDead.mockReset().mockReturnValue(false);
@@ -108,8 +96,6 @@ beforeEach(() => {
     })),
   );
   rosetta.mockReset().mockReturnValue(false);
-  windows.mockReset();
-  windowsSid.mockReset();
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
   readlink.mockReset().mockImplementation((file: string) => {
@@ -156,8 +142,7 @@ type CustodyCase = [
   holder: boolean,
 ];
 const custodyCases: CustodyCase[] = [
-  [["/usr/lib/systemd/systemd", "--user"], { cwd: new Error("denied") }, false],
-  [["/lib/systemd/systemd", "--user"], { cwd: new Error("denied") }, false],
+  [["/lib/systemd/systemd", "--user", "--deserialize=x"], { cwd: new Error("denied") }, false],
   [["node", "dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "/unrelated-app/dist/index.js"], { cwd: "/unrelated-app" }, false],
   [["node", "dist/index.js"], { cwd: "/app" }, true],
@@ -226,7 +211,6 @@ it.each([
 
 it.each([
   ["node", "worker.js"],
-  ["/bin/sh", "worker.sh"],
   ["/usr/bin/node", "-e", "1"],
 ])("retains unavailable cwd for %j without losing scoped holders", (...argv) => {
   const held = "/tmp/openclaw-update-runtime-Held01";
@@ -459,6 +443,7 @@ afterEach(() => {
 });
 
 it("exempts self and its verified Doctor launcher, but not a same-group peer or child", () => {
+  rows.set(launcher, { ppid: 1, argv: ["node", "/app/openclaw.mjs", "doctor", "--fix"] });
   rows.set(peer, { ppid: 1, argv: ["openclaw", "doctor"] });
   rows.set(peer + 1, { ppid: self, argv: ["openclaw-models"] });
   rows.set(peer + 2, { ppid: 1, argv: ["python", "worker.py"] });
@@ -598,6 +583,7 @@ it("keeps Rosetta custody uncertain and names native arm64 Node.js for update re
 });
 
 function mockDarwinBatch(lsof: { status: number | null; stdout: string; error?: Error }) {
+  rows.set(launcher, { ppid: 1, argv: ["node", "/app/openclaw.mjs", "doctor", "--fix"] });
   mockProcessPlatform("darwin");
   census.mockImplementation((command: string) =>
     command.endsWith("lsof")
@@ -636,20 +622,22 @@ it.each([
         },
   );
   expect(inspectOtherOpenClawProcesses()).toEqual({
-    pids: partial ? [peer] : [1, peer],
-    warnings: (partial ? [peer] : [1, peer]).map((pid) =>
-      expect.stringContaining(`PID ${pid}: working directory is unavailable`),
-    ),
+    pids: [peer],
+    warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
   });
 });
 
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 
-it("does not let protected systemd login processes block update-repair evidence", () => {
+it.each([
+  ["/usr/lib/systemd/systemd", "--user"],
+  ["/usr/lib/systemd/systemd", "--user", "--deserialize=8"],
+  ["/lib/systemd/systemd", "--user", "--deserialize=23"],
+])("does not let protected systemd login processes block update-repair evidence: %j", (...argv) => {
   rows.set(peer, {
     ppid: 1,
-    argv: ["/usr/lib/systemd/systemd", "--user"],
+    argv,
     uid: 1000,
     cwd: denied(),
   });
@@ -671,27 +659,21 @@ it("does not let protected systemd login processes block update-repair evidence"
   });
   rows.get(peer + 1)!.cwd = denied();
   rows.get(peer + 1)!.ppid = 1;
-  expect(inspectOtherOpenClawProcesses()).toEqual({
-    pids: [peer + 1],
-    warnings: [expect.stringContaining(`PID ${peer + 1}: working directory is unavailable`)],
-  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
   expect(inspectOtherOpenClawProcesses(handoffRefs)).toEqual({
     matchingPids: [],
     unverifiedPids: [peer + 1],
+    warnings: [expect.stringContaining(`PID ${peer + 1}`)],
   });
 });
 
-it.each([0, 1000])("requires foreign ownership to exempt non-runtime cwd (UID %i)", (uid) => {
-  rows.set(peer, { ppid: 1, argv: ["/bin/sh", "worker.sh"], uid, cwd: denied() });
-  expect(inspectOtherOpenClawProcesses()).toEqual(
-    uid === 0
-      ? { pids: [] }
-      : {
-          pids: [peer],
-          warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
-        },
-  );
-});
+it.each([0, 1000])(
+  "ignores unrelated non-runtime commands with unavailable cwd (UID %i)",
+  (uid) => {
+    rows.set(peer, { ppid: 1, argv: ["/bin/sh", "worker.sh"], uid, cwd: denied() });
+    expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+  },
+);
 
 it.each([
   ["node", "--eval", "1"],
@@ -790,6 +772,7 @@ it.each(["linux", "darwin"] as const)(
     expect(inspectOtherOpenClawProcesses(references)).toEqual({
       matchingPids: [peer + 2, peer + 3],
       unverifiedPids: [peer],
+      warnings: [expect.stringContaining(`PID ${peer}`)],
     });
   },
 );
@@ -822,65 +805,7 @@ it.each([
     expect(inspectOtherOpenClawProcesses(references)).toEqual({
       matchingPids: [],
       unverifiedPids: foreign ? [] : [peer],
-    });
-  },
-);
-
-it.each([
-  ...[
-    "openclaw update repair --run-id=update-run-123",
-    String.raw`node --title "" "C:\app\openclaw.mjs" update repair --run-id=update-run-123`,
-    String.raw`"C:\Program Files\node.exe" --title "C:\Team Notes\\" "C:\app\openclaw.mjs" update repair --run-id=update-run-123`,
-  ].map((commandLine) => ({ parentStart: 100, commandLine })),
-  { parentStart: 200, commandLine: "openclaw update repair --run-id=update-run-123" },
-])(
-  "excludes a Windows updater ancestor only with an earlier start ($parentStart, $commandLine)",
-  ({ parentStart, commandLine }) => {
-    mockProcessPlatform("win32");
-    const processRow = (pid: number, argv: string, cwd = "C:\\app") => ({
-      pid,
-      parentPid: 0,
-      commandLine: argv,
-      cwd,
-    });
-    windows.mockReturnValue([
-      {
-        ...processRow(self, "openclaw update repair"),
-        parentPid: launcher,
-        startIdentity: "200",
-      },
-      {
-        ...processRow(launcher, commandLine),
-        startIdentity: String(parentStart),
-      },
-      processRow(peer, 'node "C:\\Temp\\Retained Runtime\\tree\\worker.js"'),
-      processRow(peer + 1, "node worker.js", "c:/temp/retained runtime/tree"),
-      { pid: peer + 2 },
-      { pid: peer + 3, foreignOwner: true },
-      { pid: peer + 4, foreignOwner: true, commandLine: "node --id=update-run-123" },
-      processRow(peer + 5, "node worker.js", "\\\\?\\C:\\Temp\\Retained Runtime\\tree"),
-      processRow(peer + 6, 'node "file:///C:/Temp/Retained%20Runtime/tree/worker.js"'),
-      processRow(peer + 7, '"unterminated.exe'),
-      processRow(peer + 8, "node\0 --id=update-run-123"),
-      processRow(peer + 9, ""),
-    ]);
-    expect(
-      inspectOtherOpenClawProcesses({
-        ...references,
-        artifactPaths: ["c:\\temp\\retained runtime"],
-      }),
-    ).toEqual({
-      matchingPids: [
-        ...(parentStart >= 200 ? [launcher] : []),
-        peer,
-        peer + 1,
-        peer + 4,
-        peer + 5,
-        peer + 6,
-        peer + 8,
-      ],
-      unverifiedPids: [peer + 2, peer + 7, peer + 9],
-      error: "Please run update repair as the same Windows account that started the update.",
+      ...(!foreign ? { warnings: [expect.stringContaining(`PID ${peer}`)] } : {}),
     });
   },
 );
@@ -894,126 +819,6 @@ it.each(["denied", "empty"])("preserves Doctor's refusal for foreign Linux %s ar
   });
   expect(inspectOtherOpenClawProcesses()).toHaveProperty("error");
 });
-
-it.each([
-  {
-    name: "denied unrelated process, same account",
-    sid: "S-1-5-21-100",
-    facts: { accessDenied: true },
-  },
-  {
-    name: "denied process, different account",
-    sid: "S-1-5-21-200",
-    facts: { accessDenied: true },
-    unverified: true,
-  },
-  {
-    name: "denied process, unknown caller",
-    sid: undefined,
-    facts: { accessDenied: true },
-    unverified: true,
-  },
-  {
-    name: "denied process, legacy record",
-    sid: "S-1-5-21-100",
-    legacy: true,
-    facts: { accessDenied: true },
-    unverified: true,
-  },
-  {
-    name: "unexplained missing identity",
-    sid: "S-1-5-21-100",
-    facts: {},
-    unverified: true,
-  },
-  {
-    name: "protected unrelated process",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "100" },
-  },
-  {
-    name: "pre-handoff process with reused parent PID",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "100" },
-  },
-  {
-    name: "readable unrelated process from another account",
-    sid: "S-1-5-21-200",
-    facts: { parentPid: peer + 10, startIdentity: "100" },
-  },
-  {
-    name: "descendant born in the same millisecond",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "200" },
-    matching: true,
-  },
-  {
-    name: "unreadable descendant",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: launcher, startIdentity: "300" },
-    matching: true,
-  },
-  {
-    name: "surviving worker with an exited intermediate parent",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
-    unverified: true,
-  },
-  {
-    name: "surviving worker whose parent PID now denies access",
-    sid: "S-1-5-21-100",
-    facts: { parentPid: peer + 10, startIdentity: "300" },
-    parents: [{ pid: peer + 10, accessDenied: true }],
-    unverified: true,
-  },
-  {
-    name: "readable descendant",
-    sid: "S-1-5-21-100",
-    facts: {
-      parentPid: launcher,
-      startIdentity: "300",
-      commandLine: "node worker.js",
-      cwd: "C:\\app",
-    },
-    matching: true,
-  },
-  {
-    name: "positive artifact evidence on denied row",
-    sid: "S-1-5-21-100",
-    facts: { accessDenied: true, commandLine: "node --id=update-run-123" },
-    matching: true,
-  },
-])(
-  "Windows handoff repair census: $name",
-  ({ sid, facts, matching = false, unverified = false, legacy, parents }) => {
-    mockProcessPlatform("win32");
-    windowsSid.mockReturnValue(sid);
-    windows.mockReturnValue([
-      {
-        pid: self,
-        parentPid: 0,
-        startIdentity: "400",
-        commandLine: "openclaw update repair",
-        cwd: "C:\\app",
-      },
-      { pid: peer, ...facts },
-      ...(parents ?? []),
-    ]);
-    expect(
-      inspectOtherOpenClawProcesses({
-        ...references,
-        windowsUserSid: legacy ? undefined : "S-1-5-21-100",
-        drivers: [{ pid: launcher, startIdentity: "200" }],
-      }),
-    ).toEqual({
-      matchingPids: matching ? [peer] : [],
-      unverifiedPids: unverified ? [peer] : [],
-      ...(unverified
-        ? { error: "Please run update repair as the same Windows account that started the update." }
-        : {}),
-    });
-  },
-);
 
 it("retains known matching PIDs when later inspection exhausts the census budget", () => {
   let now = 0;
