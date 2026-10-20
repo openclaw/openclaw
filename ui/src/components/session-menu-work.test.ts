@@ -1,78 +1,105 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
-import {
-  createTestGatewayClient,
-  type GatewayRequestHandler,
-} from "../test-helpers/gateway-client.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 
-const pullRequest: ControlUiSessionPullRequest = {
-  number: 1,
-  owner: "openclaw",
-  repo: "openclaw",
-  branch: "feature/demo",
-  title: "Demo",
-  url: "https://example.test/pr",
-  state: "open",
-};
-const snapshot = { pullRequests: [pullRequest], rateLimited: false, status: "ready" as const };
-const noWork = { pullRequestUrl: null, worktreePath: null };
-
-function loadWork(
-  request: GatewayRequestHandler,
-  options: Omit<Parameters<typeof fetchSessionMenuWork>[0], "client" | "worktreeId"> = {},
-) {
-  return fetchSessionMenuWork({
-    client: createTestGatewayClient(request),
-    worktreeId: "wt-1",
-    ...options,
-  });
+function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUiSessionPullRequest {
+  return {
+    number: 1,
+    owner: "openclaw",
+    repo: "openclaw",
+    branch: "feature/demo",
+    title: "Demo",
+    url: "https://github.com/openclaw/openclaw/pull/1",
+    state: "open",
+    ...overrides,
+  };
 }
 
-afterEach(clearNativeGatewayTestState);
+function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
+  return { request: request as never };
+}
 
-it.each([
-  ["127.0.0.5", true],
-  ["[::1]", true],
-  ["127.0.0.1.evil.com", false],
-])("classifies %s as loopback: %s", (hostname, expected) => {
-  expect(isLoopbackHostname(hostname)).toBe(expected);
+beforeEach(() => {
+  setNativeGatewayTestState("local");
 });
 
-it.each([
-  [null, undefined, null],
-  ["local", undefined, "/work/trees/demo"],
-  ["remote", undefined, null],
-  ["local", "build-mac", null],
-] as const)(
-  "exposes editor paths only for native-local files: %s / %s",
-  async (nativeGateway, execNode, expectedPath) => {
-    setNativeGatewayTestState(nativeGateway);
-    const request = vi.fn(async () => ({ worktrees: [{ id: "wt-1", path: "/work/trees/demo" }] }));
+afterEach(() => {
+  clearNativeGatewayTestState();
+  vi.restoreAllMocks();
+});
+
+describe("isLoopbackHostname", () => {
+  it.each([
+    ["127.0.0.5", true],
+    ["[::1]", true],
+    ["127.0.0.1.evil.com", false],
+  ])("classifies %s as loopback: %s", (hostname, expected) => {
+    expect(isLoopbackHostname(hostname)).toBe(expected);
+  });
+});
+
+describe("fetchSessionMenuWork", () => {
+  it.each([
+    { name: "plain browser", nativeGateway: null, expectedPath: null },
+    { name: "native local gateway", nativeGateway: "local", expectedPath: "/work/trees/demo" },
+    { name: "native remote gateway", nativeGateway: "remote", expectedPath: null },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      expectedPath: null,
+    },
+  ] as const)("exposes editor paths only for native-local files: $name", async (testCase) => {
+    setNativeGatewayTestState(testCase.nativeGateway);
+    const request = vi.fn(async () => ({
+      worktrees: [{ id: "wt-1", path: "/work/trees/demo" }],
+    }));
+
     await expect(
-      loadWork(request, {
-        loadPullRequests: async () => snapshot,
-        execNode,
+      fetchSessionMenuWork({
+        client: sessionMenuClient(request),
+        loadPullRequests: async () => ({
+          pullRequests: [pullRequest({ url: "https://example.test/pr" })],
+          rateLimited: false,
+          status: "ready",
+        }),
+        worktreeId: "wt-1",
+        execNode: "execNode" in testCase ? testCase.execNode : undefined,
       }),
     ).resolves.toEqual({
       pullRequestUrl: "https://example.test/pr",
-      worktreePath: expectedPath,
+      worktreePath: testCase.expectedPath,
     });
-    expect(request).toHaveBeenCalledTimes(expectedPath ? 1 : 0);
-  },
-);
+    expect(request).toHaveBeenCalledTimes(testCase.expectedPath ? 1 : 0);
+  });
 
-it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {
-  setNativeGatewayTestState("local");
-  const failing = vi.fn(() => Promise.reject(new Error("offline")));
-  await expect(loadWork(failing, { loadPullRequests: failing })).resolves.toEqual(noWork);
+  it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {
+    const failing = vi.fn(() => Promise.reject(new Error("offline")));
+    await expect(
+      fetchSessionMenuWork({
+        client: sessionMenuClient(failing),
+        loadPullRequests: async () => {
+          throw new Error("offline");
+        },
+        worktreeId: "wt-1",
+      }),
+    ).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });
 
-  const request = vi.fn(async () => ({ worktrees: [{ id: "wt-1", path: "/gone", removedAt: 5 }] }));
-  await expect(loadWork(request)).resolves.toEqual(noWork);
-  expect(request.mock.calls).toEqual([["worktrees.list", {}]]);
+    const request = vi.fn(() =>
+      Promise.resolve({ worktrees: [{ id: "wt-1", path: "/gone", removedAt: 5 }] }),
+    );
+    await expect(
+      fetchSessionMenuWork({
+        client: sessionMenuClient(request),
+        worktreeId: "wt-1",
+      }),
+    ).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("worktrees.list", {});
+  });
 });

@@ -104,8 +104,9 @@ describe("Slack edits", () => {
 
   it("retries native data blocks once with complete ordered text and surviving blocks", async () => {
     client.chat.update.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const overview = section("Overview");
     const blocks = [
-      section("Overview"),
+      overview,
       chart("Revenue mix", {
         type: "pie",
         segments: [
@@ -121,7 +122,7 @@ describe("Slack edits", () => {
       [update("Overview\n\n" + chartText + "\n\n" + tableSummary, blocks)],
       [
         update("Overview\n\n" + chartText + "\n\n" + tablePlain, [
-          blocks[0],
+          overview,
           section(chartText, "plain_text"),
           section(tablePlain, "plain_text"),
         ]),

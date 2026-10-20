@@ -5,11 +5,6 @@ import {
 import { expect, it, vi } from "vitest";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
-if (!transcribeOpenRouterAudio) {
-  throw new Error("expected OpenRouter audio transcription provider");
-}
-
 const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = getProviderHttpMocks();
 const defaultModel = "openai/whisper-large-v3-turbo";
 
@@ -28,7 +23,15 @@ function respond(body = JSON.stringify({ text: "ok" }), status = 200) {
   postJsonRequestMock.mockResolvedValue({ response: new Response(body, { status }), release });
   return release;
 }
-function transcribe(overrides: Partial<Parameters<typeof transcribeOpenRouterAudio>[0]> = {}) {
+function transcribe(
+  overrides: Partial<
+    Parameters<NonNullable<typeof openrouterMediaUnderstandingProvider.transcribeAudio>>[0]
+  > = {},
+) {
+  const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
+  if (!transcribeOpenRouterAudio) {
+    throw new Error("expected OpenRouter audio transcription provider");
+  }
   return transcribeOpenRouterAudio({
     buffer: Buffer.from("audio"),
     fileName: "voice.wav",

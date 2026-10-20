@@ -40,8 +40,8 @@ suite.define(() => {
     );
     setJob(54, "Overdue report", { nextRunAtMs: now - 600_000 });
     const compactJobs = jobs.map(compactCronJobFixture);
-    const pageResponse = (compact: boolean, offset: number) => ({
-      jobs: (compact ? compactJobs : jobs).slice(offset, offset + 50),
+    const pageResponse = <T>(entries: T[], offset: number) => ({
+      jobs: entries.slice(offset, offset + 50),
       snapshotRevision: "synthetic-inventory-1",
       total: jobs.length,
       limit: 50,
@@ -59,8 +59,8 @@ suite.define(() => {
           deferredMethods: ["chat.startup"],
           methodResponses: {
             "cron.list": cronListResponseFixture([
-              { match: { offset: 50 }, response: pageResponse(false, 50) },
-              { response: pageResponse(false, 0) },
+              { match: { offset: 50 }, response: pageResponse(jobs, 50) },
+              { response: pageResponse(jobs, 0) },
             ]),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: jobs.length },
             "models.authStatus": { providers: [], ts: now },
@@ -87,7 +87,11 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests("cron.list");
         const bytes = (compact: boolean, offset: number) =>
-          Buffer.byteLength(JSON.stringify(pageResponse(compact, offset)));
+          Buffer.byteLength(
+            JSON.stringify(
+              compact ? pageResponse(compactJobs, offset) : pageResponse(jobs, offset),
+            ),
+          );
         const responseBytes = requests.reduce((sum, request) => {
           const params = request.params as { compact?: boolean; offset?: number };
           return sum + bytes(params.compact === true, params.offset ?? 0);

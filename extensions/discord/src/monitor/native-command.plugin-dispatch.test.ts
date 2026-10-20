@@ -243,7 +243,9 @@ async function createMockPluginNativeCommand(cfg: OpenClawConfig, spec: NativeCo
   return await createPluginCommand({ cfg, name: spec.name });
 }
 
-function registerPairPlugin(requiredScopes?: string[]) {
+function registerPairPlugin(
+  requiredScopes?: Parameters<typeof registerPluginCommand>[1]["requiredScopes"],
+) {
   const handler = vi.fn(async ({ args }: { args?: string }) => ({ text: `paired:${args ?? ""}` }));
   expect(
     registerPluginCommand("demo-plugin", {

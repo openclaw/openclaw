@@ -48,9 +48,13 @@ function session() {
   });
 }
 
-function runWorker() {
+async function runWorker() {
   const worker = session();
-  return worker.run("fixture", { mode: "staging-create" }).finally(() => worker.close());
+  try {
+    return await worker.run("fixture", { mode: "staging-create" });
+  } finally {
+    await worker.close();
+  }
 }
 
 function readinessChecker() {

@@ -70,8 +70,12 @@ it("adds the exact run-session inspection link only to the final visible payload
     { gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } } },
   );
   expect(result).toMatchObject({ status: "ok", delivered: true });
-  expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
-  const finalText = `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`;
+  const sessionKey = result.sessionKey;
+  if (typeof sessionKey !== "string") {
+    throw new Error("expected a cron run session key");
+  }
+  expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+  const finalText = `final cron summary\nInspect: https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")}`;
   expect(vi.mocked(deps.telegram).mock.calls).toEqual([
     ["123", "first cron update", expect.any(Object)],
     ["123", finalText, expect.any(Object)],

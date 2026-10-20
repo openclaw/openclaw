@@ -90,13 +90,13 @@ it("reapplies channel and thread admission when download metadata is refreshed",
   expect(isAllowed(fileInfo(privateShare("C123", "222.222")))).toBe(false);
 });
 
-it.each([
+it.each<[string, Record<string, unknown>, string?, string?]>([
   ["missing private URL", { url_private_download: undefined }],
   ["wrong channel", { channels: ["C999"] }],
   ["wrong thread", privateShare("C123", "111.111", "111.111"), "222.222"],
   ["shares without timestamps", { channels: undefined, shares: { private: { C123: [{}] } } }],
   ["blank requested channel", {}, undefined, "   "],
-] as const)("rejects %s before downloading", async (_name, file, threadId, channelId) => {
+])("rejects %s before downloading", async (_name, file, threadId, channelId) => {
   const client = createClient(file);
   await expect(download(client, { threadId, channelId: channelId ?? "C123" })).resolves.toBeNull();
   expect(resolveSlackMedia).not.toHaveBeenCalled();

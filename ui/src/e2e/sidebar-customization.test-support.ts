@@ -44,14 +44,19 @@ export async function captureSidebarUiProof(
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  const destination = path.join(owner.artifactDir, fileName);
-  const proofSurface = surface ?? page.locator(".shell");
-  await (page.video()
-    ? writeFile(
-        destination,
-        await takeControlUiViewportScreenshot(page, proofSurface, content ?? [proofSurface]),
-      )
-    : page.screenshot({ animations: "disabled", fullPage: true, path: destination }));
+  if (page.video()) {
+    const proofSurface = surface ?? page.locator(".shell");
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, proofSurface, content ?? [proofSurface]),
+    );
+    return;
+  }
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(owner.artifactDir, fileName),
+  });
 }
 
 export async function captureSettingsSidebarUiProof(
@@ -62,16 +67,19 @@ export async function captureSettingsSidebarUiProof(
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  const destination = path.join(owner.artifactDir, fileName);
-  const page = sidebar.page();
-  await (page.video()
-    ? writeFile(
-        destination,
-        await takeControlUiElementScreenshot(page, sidebar, [
-          sidebar.getByRole("searchbox", { name: "Search settings" }),
-        ]),
-      )
-    : sidebar.screenshot({ animations: "disabled", path: destination }));
+  if (sidebar.page().video()) {
+    await writeFile(
+      path.join(owner.artifactDir, fileName),
+      await takeControlUiElementScreenshot(sidebar.page(), sidebar, [
+        sidebar.getByRole("searchbox", { name: "Search settings" }),
+      ]),
+    );
+    return;
+  }
+  await sidebar.screenshot({
+    animations: "disabled",
+    path: path.join(owner.artifactDir, fileName),
+  });
 }
 
 export async function openSidebarCustomizationPage(

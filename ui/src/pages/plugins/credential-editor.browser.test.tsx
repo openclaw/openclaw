@@ -16,6 +16,7 @@ const inspectParams = { pluginId: "example", path, baseHash: "revision" };
 const descriptor = {
   path,
   label: "Example API key",
+  envVars: ["EXAMPLE_KEY"],
   signupUrl: "https://example.com/keys",
   placeholder: "example-…",
 };

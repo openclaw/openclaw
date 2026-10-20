@@ -127,7 +127,7 @@ it("rejects disabled hooks without a managed disable requirement", async () => {
   await rejectsIsolation("cannot disable hooks without a managed requirement");
 });
 
-it.each([
+it.each<JsonObject>([
   { hooks: [{ key: "user:stop:0:0", enabled: true, isManaged: false }] },
   { hooks: [{ key: "unknown:stop:0:0", enabled: true }] },
   { warnings: ["Hook file could not be parsed"] },
