@@ -34,7 +34,17 @@ export type PageCacheProgress = PayloadWarmStats & {
 };
 
 function readIo() {
-  const io = fs.readFileSync("/proc/self/io", "utf8");
+  let io: string;
+  try {
+    io = fs.readFileSync("/proc/self/io", "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      // Stock WSL kernels ship no CONFIG_TASKSTATS procfs I/O accounting.
+      // Warming does not depend on it; byte counters stay zeroed and unmetered.
+      return { readBytes: 0, diskBytes: 0 };
+    }
+    throw error;
+  }
   return {
     readBytes: Number(/^rchar: (\d+)$/m.exec(io)?.[1] ?? 0),
     diskBytes: Number(/^read_bytes: (\d+)$/m.exec(io)?.[1] ?? 0),
