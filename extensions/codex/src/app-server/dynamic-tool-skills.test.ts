@@ -1,7 +1,6 @@
 import "./dynamic-tool-build.test-support.js";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { renderCodexSkillsInstructions } from "./attempt-context.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 
@@ -21,20 +20,15 @@ beforeEach(async () => {
   tempDir = await setupDynamicToolBuildFixture();
 });
 
-afterEach(async () => {
-  await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
-});
+afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
-describe("Codex installed skills", () => {
-  it.each([
-    { denied: false, oversized: false },
-    { denied: true, oversized: false },
-    { denied: false, oversized: true },
-  ])("delivers whole host instructions or refuses the read (%j)", async ({ denied, oversized }) => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
+it.each(["allowed", "denied", "oversized"])(
+  "delivers whole skills or refuses %s reads",
+  async (mode) => {
+    const denied = mode === "denied";
+    const oversized = mode === "oversized";
+    const workspaceDir = tempDir;
     const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir, {
-      disableTools: false,
       runtimePlan: createCodexRuntimePlanFixture(),
       config: {
         plugins: { enabled: false },
@@ -47,12 +41,7 @@ describe("Codex installed skills", () => {
       filePath: path.join(workspaceDir, "skills/release-guide/SKILL.md"),
       baseDir: path.join(workspaceDir, "skills/release-guide"),
       source: "test",
-      sourceInfo: {
-        source: "test",
-        scope: "temporary" as const,
-        origin: "top-level" as const,
-        path: "/skills/release-guide/SKILL.md",
-      },
+      sourceInfo: { source: "test", scope: "temporary", origin: "top-level", path: "/s" } as const,
       disableModelInvocation: false,
       readContent: oversized
         ? `# Release\n\n${"Complete instructions. ".repeat(5_000)}\nEND OF SKILL`
@@ -74,7 +63,6 @@ describe("Codex installed skills", () => {
     });
     const guidance = renderCodexSkillsInstructions({
       attempt: params,
-      skillsPrompt: "",
       dynamicTools: bridge.availableSpecs,
     });
     const call = (tool: string, arguments_: Record<string, string>) =>
@@ -103,16 +91,9 @@ describe("Codex installed skills", () => {
         expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
         expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
       } else {
-        expect(read.contentItems).toEqual([
-          {
-            type: "inputText",
-            text:
-              `Skill location: ${skill.filePath}\n` +
-              "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-              skill.readContent,
-          },
-        ]);
+        const text = `Skill location: ${skill.filePath}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${skill.readContent}`;
+        expect(read.contentItems).toEqual([{ type: "inputText", text }]);
       }
     }
-  });
-});
+  },
+);
