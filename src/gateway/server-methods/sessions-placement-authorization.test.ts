@@ -49,6 +49,7 @@ it("rejects queued placement mutations after session participation is revoked", 
     { method: "reclaim", failed: false },
     { method: "reclaim", failed: true },
   ] as const;
+  const expected = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
 
   for (const scenario of scenarios) {
     let participating = true;
@@ -101,14 +102,7 @@ it("rejects queued placement mutations after session participation is revoked", 
       scenario.method === "dispatch"
         ? invokeSessionDispatch(context, scenario.target, authorization)
         : scenario.method === "move"
-          ? invokeSessionMove(
-              context,
-              {
-                expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-                target: scenario.target,
-              },
-              authorization,
-            )
+          ? invokeSessionMove(context, { expected, target: scenario.target }, authorization)
           : invokeSessionReclaim(context, authorization);
     await operationStarted.promise;
     participating = false;

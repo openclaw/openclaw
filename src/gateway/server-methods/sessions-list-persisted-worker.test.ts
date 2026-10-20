@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
 import { persistRegistryFixture } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -7,23 +7,22 @@ import { createEmbeddedCallGateway } from "../../agents/tools/embedded-gateway-s
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
-import { lookupPluginStateInWorker } from "../../plugin-state/plugin-state-worker-client.js";
+import {
+  lookupPluginStateInWorker,
+  registerPluginStateInWorker,
+} from "../../plugin-state/plugin-state-worker-client.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { EmbeddedTuiBackend } from "../../tui/embedded-backend.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
+import { sessionReader } from "./sessions-keyed-read.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
-import type { RespondFn } from "./types.js";
 
 function run(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   const now = Date.now();
@@ -43,6 +42,9 @@ function run(runId: string, overrides: Partial<SubagentRunRecord> = {}): Subagen
   };
 }
 const controller = "agent:main:controller";
+const mainConfig = () => ({ agents: { entries: { main: {} } } });
+const writeSession = (sessionKey: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
+  upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
 const group = { groupId: "retained-group", done: 1 };
 const childLinks = {
   childSessions: ["agent:main:subagent:child"],
@@ -76,26 +78,24 @@ it.each(["replaced", "made private"])(
         sessions: { others: "view" as const },
       };
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: {} } },
+        ...mainConfig(),
         gateway: { roles: { default: "reader", definitions: { reader } } },
       };
       setRuntimeConfigSnapshot(cfg);
       const ownerId = ensureProfileForEmail("owner@example.com").id;
       const viewerId = ensureProfileForEmail("viewer@example.com").id;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: controller },
-        {
-          sessionId: "original-session",
-          updatedAt: Date.now(),
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: ownerId },
-        },
-      );
+      await writeSession(controller, {
+        sessionId: "original-session",
+        updatedAt: Date.now(),
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: ownerId },
+      });
       const [child, collector] = linkedRuns();
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: child.childSessionKey },
-        { sessionId: "child-session", updatedAt: Date.now(), visibility: "shared" },
-      );
+      await writeSession(child.childSessionKey, {
+        sessionId: "child-session",
+        updatedAt: Date.now(),
+        visibility: "shared",
+      });
       persistRegistryFixture(new Map([child, collector].map((entry) => [entry.runId, entry])));
       clearSubagentRunsReadCacheForTest();
       const context = requestContext(cfg);
@@ -110,27 +110,16 @@ it.each(["replaced", "made private"])(
         return undefined;
       };
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-      const respond = vi.fn<RespondFn>();
       try {
         await reading.promise;
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: controller },
+        await writeSession(
+          controller,
           change === "replaced"
             ? { sessionId: "replacement-session", label: "Current conversation" }
             : { visibility: "draft" },
         );
         // Row workers may yield; the unrelated catalog renewal stays held until cleanup.
-        await sessionByKeyReadHandlers["sessions.describe"]!({
-          req: { type: "req", id: "describe-projection", method: "sessions.describe" },
-          params: { key: controller },
-          client: identifiedClient(viewerId),
-          context,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond).toHaveBeenCalledTimes(1);
-        expect(respond.mock.calls[0]?.[0]).toBe(true);
-        const result = respond.mock.calls[0]?.[1];
+        const result = await sessionReader(context, identifiedClient(viewerId), controller)();
         if (change === "made private") {
           expect(result).toEqual({ session: null });
         } else {
@@ -144,7 +133,6 @@ it.each(["replaced", "made private"])(
           expect(JSON.stringify(result)).not.toContain("retained synthetic");
         }
       } finally {
-        vi.restoreAllMocks();
         catalog.resolve();
         await Promise.allSettled([projection.ensureMaterialized()]);
         projection.dispose();
@@ -158,7 +146,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
   await withRunState(async () => {
     clearSubagentRunsReadCacheForTest();
     const cfg = {
-      agents: { entries: { main: {} } },
+      ...mainConfig(),
       // Session reads need the real embedded host, but no bundled plugin runtimes.
       plugins: { enabled: false },
     };
@@ -170,44 +158,26 @@ it("lists off-page controller links and deleted-collector totals while a sibling
       [child.childSessionKey, 200, requester],
       [controller, 300, undefined],
     ] as const) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        { sessionId: key, updatedAt, visibility: "shared", spawnedBy },
-      );
+      await writeSession(key, { sessionId: key, updatedAt, visibility: "shared", spawnedBy });
     }
     persistRegistryFixture(new Map([child, collector].map((entry) => [entry.runId, entry])));
     const key = { pluginId: "session-list-proof", namespace: "mixed-progress", key: "written" };
     const context = requestContext(cfg);
     await initializeSessionReadContext(context);
-    const workerContext = captureOpenClawStateWorkerContext();
     try {
-      const [result, written] = await Promise.all([
+      const [result] = await Promise.all([
         listSessions({
           client: identifiedClient("owner@example.com"),
           context,
           request: { limit: 1 },
         }),
-        runOpenClawStateWorkerOperation(
-          workerContext,
-          (worker) =>
-            worker.execute({
-              type: "pluginState.register",
-              input: {
-                ...key,
-                valueJson: "true",
-                maxEntries: 4,
-                overflowPolicy: "reject-new",
-              },
-            }),
-          {
-            createAdmission: createSqliteWorkerWriteAdmission(
-              workerContext.admission.assertCurrent,
-              [workerContext.admission.databasePath],
-            ),
-          },
-        ),
+        registerPluginStateInWorker({
+          ...key,
+          valueJson: "true",
+          maxEntries: 4,
+          overflowPolicy: "reject-new",
+        }),
       ]);
-      expect(written).toEqual({ ok: true, value: undefined });
       expect(result).toMatchObject({
         count: 1,
         totalCount: 3,

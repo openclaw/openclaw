@@ -5,15 +5,11 @@ import { appendTranscriptMessage } from "../../config/sessions/session-accessor.
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  bindSessionRowProjection,
-  getSessionRowProjection,
-} from "../session-row-projection-access.js";
-import {
-  createSessionRowProjection,
-  type SessionRowProjection,
-} from "../session-row-projection.js";
+import * as projectionAccess from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { sessionReactionHandlers } from "./sessions-reactions.js";
+import { profileSessionEntry } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionKey = "agent:main:main";
@@ -21,15 +17,10 @@ export const sessionId = "reactions-session";
 export const transcriptScope = { agentId: "main", sessionKey, sessionId };
 
 export function client(profileId: string, displayName = profileId, admin = false): GatewayClient {
+  const scopes = admin ? ["operator.admin"] : ["operator.read", "operator.write"];
   return {
     connId: `conn-${profileId}`,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: admin ? ["operator.admin"] : ["operator.read", "operator.write"],
-    },
+    connect: sharingPolicyClient({ scopes }).connect,
     authenticatedUserProfile: { profileId, displayName, hasAvatar: false, updatedAt: 1 },
     preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
   };
@@ -44,10 +35,10 @@ export function context(config: OpenClawConfig = {}): GatewayRequestContext {
   } as unknown as GatewayRequestContext;
 }
 
-let reactionProjection: Promise<SessionRowProjection> | undefined;
+let reactionProjection: ReturnType<typeof createSessionRowProjection> | undefined;
 
-export async function withReactionState(consume: () => Promise<void>) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+export const withReactionState = (consume: () => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     try {
       await consume();
@@ -56,7 +47,6 @@ export async function withReactionState(consume: () => Promise<void>) {
       reactionProjection = undefined;
     }
   });
-}
 
 export async function call(
   method: "session.reactions.set" | "session.reactions.list",
@@ -65,12 +55,10 @@ export async function call(
   requestContext = context(),
   hasCurrentClientAuthority?: () => boolean,
 ) {
-  if (!getSessionRowProjection(requestContext)) {
-    const projection = await (reactionProjection ??= createSessionRowProjection({
-      cfg: {},
-      modelCatalog: [],
-    }));
-    bindSessionRowProjection(requestContext, () => projection);
+  if (!projectionAccess.getSessionRowProjection(requestContext)) {
+    reactionProjection ??= createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+    const projection = await reactionProjection;
+    projectionAccess.bindSessionRowProjection(requestContext, () => projection);
   }
   const respond = vi.fn<RespondFn>();
   await sessionReactionHandlers[method]?.({
@@ -111,33 +99,26 @@ export function setReaction(
   );
 }
 
-export function listReactions(
+export const listReactions = (
   requestClient?: GatewayClient | null,
   requestContext?: GatewayRequestContext,
   key = sessionKey,
-) {
-  return call("session.reactions.list", { sessionKey: key }, requestClient, requestContext);
-}
+) => call("session.reactions.list", { sessionKey: key }, requestClient, requestContext);
 
 export async function seedSession(overrides: Partial<SessionEntry> = {}, key = sessionKey) {
   const entry = {
-    sessionId,
-    updatedAt: 1,
-    createdActor: { type: "human", source: "profile", id: "owner" },
-    visibility: "shared",
+    ...profileSessionEntry(sessionId, 1, "owner"),
     ...overrides,
   } satisfies SessionEntry;
   await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
   return { agentId: "main", sessionKey: key, sessionId: entry.sessionId };
 }
 
-export async function appendMessage(
+export const appendMessage = async (
   message: Record<string, unknown> = {
     role: "user",
     content: [{ type: "text", text: "Riley's persisted prompt" }],
     __openclaw: { senderName: "Riley", senderUsername: "riley", senderId: "peer-riley" },
   },
   scope = transcriptScope,
-) {
-  return (await appendTranscriptMessage(scope, { message })).messageId;
-}
+) => (await appendTranscriptMessage(scope, { message })).messageId;
