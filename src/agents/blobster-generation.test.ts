@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { generateBlobsterForAgent } from "./blobster-generation.js";
 
@@ -17,7 +16,8 @@ vi.mock("./isolated-completion-route.js", () => ({
 // mock-isolation: avoid invoking a real model in generation tests.
 vi.mock("./isolated-completion.js", () => ({ runIsolatedCompletion: complete }));
 
-const cfg: OpenClawConfig = {
+const selection = { provider: "ollama", model: "qwen3:4b-instruct", agentId: "garden" };
+const cfg = {
   agents: { defaults: { model: { primary: "ollama/qwen3:4b-instruct" } } },
 };
 const overlay = '<path d="M1 1L2 2"/>';
@@ -32,33 +32,26 @@ const design = {
 const operatorAuthority = {} as AdmittedRunOperatorAuthority;
 const input = {
   cfg,
-  agentId: "garden",
+  agentId: selection.agentId,
   prompt: "A patient gardener",
-  assertCurrent: vi.fn(),
+  assertCurrent: () => {},
   operatorAuthority,
 };
+const generate = () => generateBlobsterForAgent(input);
 
 beforeEach(() => {
-  prepare.mockReset().mockResolvedValue({
-    config: cfg,
-    agentId: "garden",
-    provider: "ollama",
-    model: "qwen3:4b-instruct",
-  });
+  prepare.mockReset().mockResolvedValue({ config: cfg, ...selection });
   provider.mockReset().mockReturnValue({ provider: "ollama" });
   route.mockReset().mockResolvedValue({ selection: { selectedHarnessId: "openclaw" } });
   complete.mockReset().mockResolvedValue({ text: JSON.stringify(design) });
-  input.assertCurrent.mockReset();
 });
 
 it("uses the agent's selected text model without tools or ClawHub", async () => {
-  const result = await generateBlobsterForAgent(input);
+  const result = await generate();
   expect(prepare).toHaveBeenCalledWith({ cfg, agentId: "garden", useUtilityModel: false });
   expect(complete).toHaveBeenCalledWith(
     expect.objectContaining({
-      provider: "ollama",
-      model: "qwen3:4b-instruct",
-      agentId: "garden",
+      ...selection,
       prompt: "A patient gardener",
       operatorAuthority,
       agentHarnessRuntimeOverride: "openclaw",
@@ -76,7 +69,7 @@ it("rejects active model markup even when the model returns valid JSON", async (
       layers: { ...design.layers, accessory: '<image href="https://evil.invalid/a.png"/>' },
     }),
   });
-  await expect(generateBlobsterForAgent(input)).rejects.toThrow("Unsupported SVG");
+  await expect(generate()).rejects.toThrow("Unsupported SVG");
   expect(complete).toHaveBeenCalledTimes(2);
 });
 
@@ -85,7 +78,7 @@ it.each([
   ["empty description", JSON.stringify({ ...design, description: "" })],
 ])("retries an invalid design (%s)", async (_name, text) => {
   complete.mockResolvedValueOnce({ text });
-  await expect(generateBlobsterForAgent(input)).resolves.toMatchObject({
+  await expect(generate()).resolves.toMatchObject({
     name: "Garden Keeper",
     description: design.description,
   });
@@ -101,20 +94,18 @@ it("passes model-policy denials through the typed completion authorization mappe
       new Error("Your operator role cannot use this model."),
     );
   });
-  await expect(generateBlobsterForAgent(input)).rejects.toMatchObject({
-    code: "LLM_COMPLETION_NOT_AUTHORIZED",
-  });
+  await expect(generate()).rejects.toMatchObject({ code: "LLM_COMPLETION_NOT_AUTHORIZED" });
   expect(complete).toHaveBeenCalledTimes(1);
 });
 
 it("does not retry provider errors", async () => {
   complete.mockRejectedValueOnce(new Error("provider offline"));
-  await expect(generateBlobsterForAgent(input)).rejects.toThrow("provider offline");
+  await expect(generate()).rejects.toThrow("provider offline");
   expect(complete).toHaveBeenCalledTimes(1);
 });
 
 it("rejects a runtime that cannot guarantee a tool-free completion", async () => {
   route.mockResolvedValue({ selection: { selectedHarnessId: "agentsapi" } });
-  await expect(generateBlobsterForAgent(input)).rejects.toThrow("tool-free");
+  await expect(generate()).rejects.toThrow("tool-free");
   expect(complete).not.toHaveBeenCalled();
 });

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  isExecApprovalRunAbortedError,
-  registerExecApprovalRequestForHostOrThrow,
-  resolveRegisteredExecApprovalDecision,
+  isExecApprovalRunAbortedError as isAborted,
+  registerExecApprovalRequestForHostOrThrow as registerRequest,
+  resolveRegisteredExecApprovalDecision as resolveDecision,
 } from "./bash-tools.exec-approval-request.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -20,10 +20,8 @@ vi.mock("./bash-tools.exec-approval-request.runtime.js", () => ({
 }));
 vi.mock("./tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 
-function register(
-  overrides: Partial<Parameters<typeof registerExecApprovalRequestForHostOrThrow>[0]> = {},
-) {
-  return registerExecApprovalRequestForHostOrThrow({
+function register(overrides: Partial<Parameters<typeof registerRequest>[0]> = {}) {
+  return registerRequest({
     approvalId: "approval-id",
     command: "echo hi",
     workdir: "/tmp/project",
@@ -40,17 +38,15 @@ function payload() {
 beforeEach(() => {
   vi.mocked(callGatewayTool).mockReset().mockResolvedValue({ id: "approval-id" });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(vi.restoreAllMocks);
 
 it("distinguishes run cancellation from timeout fallback", async () => {
   vi.mocked(callGatewayTool)
     .mockResolvedValueOnce({ decision: null, terminalReason: "timeout" })
     .mockResolvedValueOnce({ decision: null, terminalReason: "run-aborted" });
   const request = { approvalId: "approval-id", preResolvedDecision: undefined };
-  await expect(resolveRegisteredExecApprovalDecision(request)).resolves.toBeNull();
-  await expect(resolveRegisteredExecApprovalDecision(request)).rejects.toSatisfy(
-    isExecApprovalRunAbortedError,
-  );
+  await expect(resolveDecision(request)).resolves.toBeNull();
+  await expect(resolveDecision(request)).rejects.toSatisfy(isAborted);
 });
 
 it.each([
@@ -67,11 +63,7 @@ it.each([
 
 it("registers command spans with the originating run and reviewer", async () => {
   const origin = { sessionId: "s", runId: "r", toolCallId: "t", approvalReviewerDeviceIds: ["d"] };
-  await register({
-    ...origin,
-    command: "ls foo",
-    commandHighlighting: true,
-  });
+  await register({ ...origin, command: "ls foo", commandHighlighting: true });
   expect(payload()).toMatchObject({
     ...origin,
     commandSpans: [
@@ -81,17 +73,12 @@ it("registers command spans with the originating run and reviewer", async () => 
   });
 });
 
+const plan = { argv: ["node"], cwd: "/tmp", commandText: "node", agentId: null, sessionKey: null };
 it.each([
   {
     name: "prepared system run command when raw command is absent",
     command: undefined,
-    systemRunPlan: {
-      argv: ["node"],
-      cwd: "/tmp/project",
-      commandText: "node",
-      agentId: null,
-      sessionKey: null,
-    },
+    systemRunPlan: plan,
   },
   { name: "explicit command spans", commandSpans: [{ startIndex: 0, endIndex: 4 }] },
 ])("highlights $name", async ({ name: _name, ...params }) => {

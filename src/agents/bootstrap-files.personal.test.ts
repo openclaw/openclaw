@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -13,7 +12,6 @@ import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js
 vi.mock("../plugins/memory-runtime.js", () => ({
   classifyActiveMemoryWorkspacePaths: vi.fn(async () => ({ status: "unavailable" })),
 }));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let workspaceDir: string;
 let alice: string;
@@ -32,7 +30,7 @@ function load(
 }
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "personal-" });
-  workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
+  workspaceDir = state.path("users", "arbitrary");
   alice = profile("alice");
 });
 afterEach(async () => {

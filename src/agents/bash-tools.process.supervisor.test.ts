@@ -25,7 +25,10 @@ function caller(scopeKey?: string) {
   return (action: string) => tool.execute(action, { action, sessionId: "session" });
 }
 
-it("confirms a requested stop without reporting a new process failure", async () => {
+it.each([
+  ["manual-cancel", { status: "completed", exitSignal: "SIGTERM", timedOut: false }],
+  ["overall-timeout", { status: "failed" }],
+] as const)("keeps %s distinct from a stop request", async (reason, details) => {
   const { session, call } = harness();
   expect((await call("kill")).content[0]).toMatchObject({
     text: "Termination requested for session session. Use process poll to confirm exit and cleanup before reporting it stopped.",
@@ -33,17 +36,12 @@ it("confirms a requested stop without reporting a new process failure", async ()
   expect(cancel).toHaveBeenCalledWith(session.id, "manual-cancel");
   expect(registry.getSession(session.id)?.exited).toBe(false);
   expect(registry.getActiveBackgroundExecSessionCount()).toBe(1);
-  registry.markExited(session, null, "SIGTERM", "failed", "manual-cancel");
+  registry.markExited(session, null, "SIGTERM", "failed", reason);
   for (const action of ["kill", "poll", "log"]) {
     const result = await call(action);
-    expect(result.details).toMatchObject({
-      status: "completed",
-      exitSignal: "SIGTERM",
-      exitReason: "manual-cancel",
-      timedOut: false,
-    });
-    expect(isToolResultError(result)).toBe(false);
-    if (action === "poll") {
+    expect(result.details).toMatchObject({ ...details, exitReason: reason });
+    expect(isToolResultError(result)).toBe(reason === "overall-timeout");
+    if (action === "poll" && reason === "manual-cancel") {
       expect(result.content[0]).toMatchObject({
         text: "(no new output)\n\nProcess stopped by request (signal SIGTERM).",
       });
@@ -51,17 +49,6 @@ it("confirms a requested stop without reporting a new process failure", async ()
   }
   expect(cancel).toHaveBeenCalledTimes(1);
   expect(registry.getFinishedSession(session.id)?.terminalStatus).toBe("failed");
-});
-
-it("does not let a stop request hide a timeout failure", async () => {
-  const { session, call } = harness();
-  await call("kill");
-  registry.markExited(session, null, "SIGTERM", "failed", "overall-timeout");
-  for (const action of ["kill", "poll", "log"]) {
-    const result = await call(action);
-    expect(result.details).toMatchObject({ status: "failed", exitReason: "overall-timeout" });
-    expect(isToolResultError(result)).toBe(true);
-  }
 });
 
 it("remove hides a running session without releasing its active-process count", async () => {

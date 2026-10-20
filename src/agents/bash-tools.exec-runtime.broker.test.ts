@@ -88,8 +88,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("exec tool broker transp
     );
     const broker = createSpawnBrokerHost();
     await broker.ready();
-    const nativeSpawn = vi.mocked(spawn);
-    nativeSpawn.mockClear();
+    vi.mocked(spawn).mockClear();
     const brokerSpawn = vi.spyOn(broker, "spawn");
     const scopeKey = `exec-broker:${home}`;
     const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
@@ -111,7 +110,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("exec tool broker transp
       expect(Number(await fs.readFile(path.join(home, "capture-parent"), "utf8"))).toBe(broker.pid);
       // Capture and validation both precede the supervised command's relay.
       expect(brokerSpawn.mock.calls.filter(([command]) => command === "/bin/bash")).toHaveLength(2);
-      expect(nativeSpawn).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       await closeScope();
       await broker.close();
