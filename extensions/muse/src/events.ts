@@ -1,4 +1,4 @@
-import type { FoldedItem, Turn } from "@muse-code/sdk";
+import type { FoldedItem, SessionFoldView, Turn } from "@muse-code/sdk";
 import {
   emitAgentHarnessAttemptEvent,
   makeZeroUsageSnapshot,
@@ -35,9 +35,9 @@ export async function consumeTurn(
   turn: Turn,
   params: AgentHarnessAttemptParamsV2,
   record: (itemId: string, messages: AgentMessage[]) => Promise<void>,
+  itemFields: SessionFoldView["items"],
 ) {
   const items = new Map<string, FoldedItem>();
-  const streamed = new Map<string, string>();
   const emitted = new Map<string, number>();
   const settled = new Set<string>();
   const foregroundItems = new Set<string>();
@@ -74,11 +74,10 @@ export async function consumeTurn(
   const deltas = (async () => {
     for await (const delta of turn.deltas()) {
       const field = delta.field ?? "text";
-      const key = `${delta.itemId}:${field}`;
-      const value = (streamed.get(key) ?? "") + delta.delta;
-      streamed.set(key, value);
+      // Deltas are live-only; the SDK fold also owns prefixes received before subscription.
+      const value = itemFields.accumulated(delta.itemId, field);
       const item = items.get(delta.itemId);
-      if (item) {
+      if (item && value !== undefined) {
         await emitField(item, field, value);
       }
     }
@@ -113,10 +112,8 @@ export async function consumeTurn(
         finalizing = true;
       }
       if (first) {
-        for (const [key, value] of streamed) {
-          if (key.startsWith(`${item.itemId}:`)) {
-            await emitField(item, key.slice(item.itemId.length + 1), value);
-          }
+        for (const field of itemFields.accumulatedFields(item.itemId)) {
+          await emitField(item, field, itemFields.accumulated(item.itemId, field) ?? "");
         }
       }
       if (item.kind === "toolCall" && first) {

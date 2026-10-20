@@ -468,7 +468,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         active.set(params.sessionId, abort);
         params.onExecutionStarted?.({ backend: "muse" });
         const nativeSessionId = session.sessionId;
-        const result = await consumeTurn(turn, params, async (itemId, group) => {
+        const recordNativeGroup: Parameters<typeof consumeTurn>[2] = async (itemId, group) => {
           const entries = group.map((message, index) => {
             const idempotencyKey = `muse:${nativeSessionId}:${itemId}:${index}`;
             if (message.role === "assistant" && message.stopReason !== "toolUse") {
@@ -505,7 +505,8 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           }
           messages.push(...group);
           assistantTranscriptOwned = finalKey !== undefined;
-        });
+        };
+        const result = await consumeTurn(turn, params, recordNativeGroup, session.fold.items);
         text = result.visibleText;
         lastToolError = result.lastToolError;
         if (result.outcome.kind !== "completed") {
