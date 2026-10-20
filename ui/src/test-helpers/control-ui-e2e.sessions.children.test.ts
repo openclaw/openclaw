@@ -1,14 +1,18 @@
 /* @vitest-environment jsdom */
 import { expect } from "vitest";
 import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
+import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
+
+const parentKey = "agent:main:parent";
+const row = (name: string, fields: Partial<ControlUiSessionFixture> = {}) => ({
+  key: `agent:main:${name}`,
+  ...fields,
+});
 
 it("excludes a running parent from child queries", async ({ connect }) => {
-  const parent = { key: "agent:main:main", sessionId: "parent-session" };
-  const rows = [parent, { key: "agent:main:unrelated", sessionId: "unrelated-session" }];
-  const { request } = await connect({
-    sessionKey: parent.key,
-    sessions: rows,
-  });
+  const parent = row("main", { sessionId: "parent-session" });
+  const rows = [parent, row("unrelated", { sessionId: "unrelated-session" })];
+  const { request } = await connect({ sessionKey: parent.key, sessions: rows });
   await request("chat.send", {
     sessionKey: parent.key,
     message: "Start the parent turn",
@@ -26,26 +30,24 @@ it("excludes a running parent from child queries", async ({ connect }) => {
 });
 
 it("uses current child ownership before archive partitioning", async ({ connect }) => {
-  const parent = "agent:main:parent";
-  const spawned = { key: "agent:main:spawned", spawnedBy: parent };
-  const navigation = { key: "agent:main:navigation", parentSessionKey: parent };
-  const controlled = {
-    key: "agent:main:controlled",
+  const spawned = row("spawned", { spawnedBy: parentKey });
+  const navigation = row("navigation", { parentSessionKey: parentKey });
+  const controlled = row("controlled", {
     spawnedBy: "agent:main:old-owner",
-    controlOwnerSessionKey: parent,
-  };
-  const archived = { key: "agent:main:archived-child", spawnedBy: parent, archived: true };
+    controlOwnerSessionKey: parentKey,
+  });
+  const archived = row("archived-child", { spawnedBy: parentKey, archived: true });
   const rows = [
-    { key: parent, spawnedBy: parent },
+    row("parent", { spawnedBy: parentKey }),
     spawned,
     navigation,
     controlled,
     archived,
-    { key: "agent:main:moved", spawnedBy: parent, controlOwnerSessionKey: "agent:main:other" },
-    { key: "agent:main:unrelated" },
+    row("moved", { spawnedBy: parentKey, controlOwnerSessionKey: "agent:main:other" }),
+    row("unrelated"),
   ];
   const { request } = await connect({
-    sessionKey: parent,
+    sessionKey: parentKey,
     sessionArchiveFiltering: true,
     methodResponses: { "sessions.list": { sessions: rows, count: rows.length } },
   });
@@ -55,10 +57,10 @@ it("uses current child ownership before archive partitioning", async ({ connect 
     ["all", [spawned, navigation, controlled, archived]],
   ] as const) {
     expect(
-      (await request("sessions.list", { spawnedBy: ` ${parent} `, archived: filter })).payload,
+      (await request("sessions.list", { spawnedBy: ` ${parentKey} `, archived: filter })).payload,
     ).toMatchObject({
       count: expected.length,
-      sessions: expected.map((row) => expect.objectContaining(row)),
+      sessions: expected.map((entry) => expect.objectContaining(entry)),
     });
   }
   expect((await request("sessions.list", { archived: "all" })).payload.count).toBe(rows.length);
@@ -67,35 +69,31 @@ it("uses current child ownership before archive partitioning", async ({ connect 
 it.for(["empty", "materialized", "scoped"])(
   "preserves child pagination for a %s fixture",
   async (kind, { connect }) => {
-    const parent = "agent:main:parent";
-    const child = {
-      key: "agent:main:child",
+    const child = row("child", {
       sessionId: "session:agent:main:child",
-      spawnedBy: parent,
+      spawnedBy: parentKey,
       archived: false,
       pinned: false,
-    };
+    });
     const scoped = kind === "scoped";
     const page = {
-      sessions: scoped ? [child] : [{ key: parent }],
+      sessions: scoped ? [child] : [{ key: parentKey }],
       count: 1,
       totalCount: scoped ? 200 : 1,
       offset: 0,
       hasMore: scoped,
       nextOffset: scoped ? 1 : null,
     };
-    const { request, controls } = await connect({
-      methodResponses: { "sessions.list": page },
-    });
+    const { request, controls } = await connect({ methodResponses: { "sessions.list": page } });
     const children =
       kind === "materialized" ? ["agent:main:child-one", "agent:main:child-two"] : [];
     for (const key of children) {
-      controls.setMethodResponse("sessions.create", { key, entry: { spawnedBy: parent } });
+      controls.setMethodResponse("sessions.create", { key, entry: { spawnedBy: parentKey } });
       await request("sessions.create", {});
     }
 
     const result = (
-      await request("sessions.list", { spawnedBy: parent, ...(scoped ? { limit: 1 } : {}) })
+      await request("sessions.list", { spawnedBy: parentKey, ...(scoped ? { limit: 1 } : {}) })
     ).payload;
     if (scoped) {
       expect(result).toEqual({ ...page, sessions: [{ ...child, snapshotAt: expect.any(Number) }] });

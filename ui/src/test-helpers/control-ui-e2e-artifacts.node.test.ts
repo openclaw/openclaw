@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { once } from "node:events";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,10 +14,38 @@ const readArtifacts = (directory: string) =>
   artifactNames.map((name) => readFileSync(path.join(directory, name), "utf8"));
 // Vite rewrites asset-style new URL expressions under the ordinary UI test runner.
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
+const moduleUrl = pathToFileURL(path.join(sourceDir, "control-ui-e2e-artifacts.ts")).href;
+
+async function captureInWorker(parent: string, contents: string): Promise<string> {
+  const worker = new Worker(
+    `const { parentPort, workerData } = require("node:worker_threads");
+             const { writeFileSync } = require("node:fs");
+             const path = require("node:path");
+             import(workerData.moduleUrl).then(({ createControlUiE2eArtifactDir }) => {
+               const directory = createControlUiE2eArtifactDir("same-scenario", workerData.parent);
+               for (const name of workerData.names) {
+                 writeFileSync(path.join(directory, name), workerData.contents);
+               }
+               parentPort.postMessage(directory);
+             });`,
+    { eval: true, workerData: { moduleUrl, parent, contents, names: artifactNames } },
+  );
+  let directory: string | undefined;
+  worker.once("message", (value: string) => {
+    directory = value;
+  });
+  const [code] = await once(worker, "exit");
+  if (code !== 0) {
+    throw new Error(`Capture worker exited with ${code}`);
+  }
+  if (typeof directory !== "string") {
+    throw new Error("Capture worker returned no directory");
+  }
+  return directory;
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.restoreAllMocks();
   cleanupTempDirs(tempDirs);
 });
 
@@ -27,38 +56,8 @@ it("allocates independently in concurrent workers sharing the same parent and sc
   for (const name of artifactNames) {
     writeFileSync(path.join(previous, name), `old:${name}`);
   }
-  const moduleUrl = pathToFileURL(path.join(sourceDir, "control-ui-e2e-artifacts.ts")).href;
   const outputs = await Promise.all(
-    ["first", "second"].map(
-      (contents) =>
-        new Promise<string>((resolve, reject) => {
-          const worker = new Worker(
-            `const { parentPort, workerData } = require("node:worker_threads");
-             const { writeFileSync } = require("node:fs");
-             const path = require("node:path");
-             import(workerData.moduleUrl).then(({ createControlUiE2eArtifactDir }) => {
-               const directory = createControlUiE2eArtifactDir("same-scenario", workerData.parent);
-               for (const name of workerData.names) {
-                 writeFileSync(path.join(directory, name), workerData.contents);
-               }
-               parentPort.postMessage(directory);
-             });`,
-            { eval: true, workerData: { moduleUrl, parent, contents, names: artifactNames } },
-          );
-          let directory: string;
-          worker.once("message", (value: string) => {
-            directory = value;
-          });
-          worker.once("error", reject);
-          worker.once("exit", (code) => {
-            if (code === 0) {
-              resolve(directory);
-            } else {
-              reject(new Error(`Capture worker exited with ${code}`));
-            }
-          });
-        }),
-    ),
+    ["first", "second"].map((contents) => captureInWorker(parent, contents)),
   );
   expect(new Set(outputs).size).toBe(2);
   expect(readArtifacts(previous)).toEqual(artifactNames.map((name) => `old:${name}`));
@@ -92,7 +91,6 @@ it("does not enable optional capture when allocating an always-on scenario", () 
   const parent = makeTempDir(tempDirs, "control-ui-proof-disabled-");
   vi.stubEnv("OPENCLAW_UI_E2E_ARTIFACT_DIR", undefined);
   vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", "0");
-  expect(readdirSync(parent)).toEqual([]);
   const directory = createControlUiE2eArtifactDir("always-on", parent);
   expect(readdirSync(parent)).toEqual([path.basename(directory)]);
   expect(process.env.OPENCLAW_CAPTURE_UI_PROOF).toBe("0");

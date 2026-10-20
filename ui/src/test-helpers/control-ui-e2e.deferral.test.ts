@@ -7,6 +7,15 @@ import {
   mockGatewayTest as it,
 } from "./mock-gateway-page.test-support.ts";
 
+const ids = (items: readonly { id?: string }[]) => items.map(({ id }) => id);
+function expectReply(frames: readonly unknown[], id: string, payload?: unknown) {
+  expect(frames.at(-1)).toMatchObject({
+    id,
+    ok: true,
+    ...(payload === undefined ? {} : { payload }),
+  });
+}
+
 it.for(["resolve", "reject"] as const)(
   "%ss every held request without changing one-shot deferrals",
   async (outcome, { gatewayPage }) => {
@@ -32,50 +41,40 @@ it.for(["resolve", "reject"] as const)(
     sockets[0].send("model-held", "models.list");
     sockets[0].send("model-next", "models.list");
     await flush();
-    expect(frames.map((frame) => frame.id)).toEqual(["model-next"]);
+    expect(ids(frames)).toEqual(["model-next"]);
 
     if (outcome === "resolve") {
       gateway.resolveDeferred("environments.list");
     } else {
       gateway.rejectDeferred("environments.list", { message: "catalog unavailable" });
     }
+    const released =
+      outcome === "resolve"
+        ? { ok: true, payload: catalog }
+        : { ok: false, error: expect.objectContaining({ message: "catalog unavailable" }) };
     expect(frames.filter((frame) => frame.id.startsWith("catalog-"))).toEqual(
       ["catalog-first", "catalog-replacement"].map((id) =>
-        expect.objectContaining(
-          outcome === "resolve"
-            ? { id, ok: true, payload: catalog }
-            : {
-                id,
-                ok: false,
-                error: expect.objectContaining({ message: "catalog unavailable" }),
-              },
-        ),
+        expect.objectContaining({ id, ...released }),
       ),
     );
     sockets[1].send("catalog-after-release", "environments.list");
     await flush();
-    expect(frames.at(-1)).toMatchObject({
-      id: "catalog-after-release",
-      ok: true,
-      payload: catalog,
-    });
+    expectReply(frames, "catalog-after-release", catalog);
     gateway.resolveDeferred("models.list");
-    expect(frames.at(-1)).toMatchObject({ id: "model-held", ok: true });
+    expectReply(frames, "model-held");
 
     gateway.deferNext("environments.list");
     sockets[0].send("catalog-one-shot", "environments.list");
     sockets[0].send("catalog-unblocked", "environments.list");
     await flush();
-    expect(frames.at(-1)).toMatchObject({ id: "catalog-unblocked", ok: true });
+    expectReply(frames, "catalog-unblocked");
     expect(frames.some((frame) => frame.id === "catalog-one-shot")).toBe(false);
     gateway.resolveDeferred("environments.list");
-    expect(frames.at(-1)).toMatchObject({ id: "catalog-one-shot", ok: true });
+    expectReply(frames, "catalog-one-shot");
   },
 );
 
-it("separates canonical roster capture and deferrals from child session queries", async ({
-  gatewayPage,
-}) => {
+it("keeps roster deferrals separate from child queries", async ({ gatewayPage }) => {
   const { window, execute, responses: frames } = gatewayPage;
   execute(createControlUiMockGatewayInitScript());
   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
@@ -94,11 +93,9 @@ it("separates canonical roster capture and deferrals from child session queries"
   send("health", "health", {});
   await flush();
 
-  expect(frames.map((frame) => frame.id)).toEqual(["child-before", "child-after", "health"]);
-  expect(gateway.findRequests("sessions.list", rosterMatch).map((request) => request.id)).toEqual([
-    "roster-held",
-  ]);
-  expect(gateway.findRequests("sessions.list").map((request) => request.id)).toEqual([
+  expect(ids(frames)).toEqual(["child-before", "child-after", "health"]);
+  expect(ids(gateway.findRequests("sessions.list", rosterMatch))).toEqual(["roster-held"]);
+  expect(ids(gateway.findRequests("sessions.list"))).toEqual([
     "child-before",
     "roster-held",
     "child-after",
@@ -106,11 +103,11 @@ it("separates canonical roster capture and deferrals from child session queries"
   expect(gateway.findRequests()).toHaveLength(4);
 
   gateway.resolveDeferred("sessions.list");
-  expect(frames.at(-1)).toMatchObject({ id: "roster-held", ok: true });
+  expectReply(frames, "roster-held");
   send("roster-next", "sessions.list", rosterMatch);
   await flush();
-  expect(frames.at(-1)).toMatchObject({ id: "roster-next", ok: true });
+  expectReply(frames, "roster-next");
   const rosterRequests = gateway.findRequests("sessions.list", rosterMatch);
-  expect(rosterRequests.map((request) => request.id)).toEqual(["roster-held", "roster-next"]);
+  expect(ids(rosterRequests)).toEqual(["roster-held", "roster-next"]);
   expect(gateway.deferNext("sessions.list", rosterMatch)).toBe(rosterRequests.length);
 });

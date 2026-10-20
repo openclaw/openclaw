@@ -6,6 +6,7 @@ import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stall.ts";
 
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
@@ -122,13 +123,11 @@ export async function installControlUiE2eUnhandledRejectionRing(page: Page): Pro
   }
   controlUiE2eUnhandledRejectionPages.add(page);
   await page.addInitScript(() => {
+    type Rejection = { at: string; reason: unknown };
     const windowWithDiagnostics = window as Window & {
-      __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: Array<{
-        at: string;
-        reason: unknown;
-      }>;
+      __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: Rejection[];
     };
-    const events: Array<{ at: string; reason: unknown }> = [];
+    const events: Rejection[] = [];
     windowWithDiagnostics["__OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__"] = events;
     window.addEventListener("unhandledrejection", (event) => {
       let reason: unknown;
@@ -286,12 +285,7 @@ function summarizeRecordedModelResponses(
   };
 }
 
-/**
- * Capture a screenshot plus a browser/app-state report for a failed E2E wait.
- * Wired into mock-Gateway request timeouts automatically; boot/readiness waits
- * in individual tests should call this from their failure path so CI artifacts
- * explain stalls instead of surfacing all-null poll snapshots.
- */
+/** Capture failed waits; mock request timeouts call this automatically, readiness waits explicitly. */
 export async function captureControlUiE2eFailureDiagnostics(
   page: Page,
   options: ControlUiE2eFailureDiagnosticsOptions,
@@ -309,8 +303,6 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     error,
     label,
     pageErrors = [],
-    // The mock-Gateway installer keeps a per-page diagnostic ring; default to
-    // it so ad-hoc test callers get console/navigation history for free.
     pageEvents = controlUiE2ePageDiagnostics.get(page) ?? [],
     modelResponses,
   }: ControlUiE2eFailureDiagnosticsOptions,
@@ -337,61 +329,59 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           return String(value);
         }
       };
-      type MockGateway = {
-        requests?: unknown[];
-        socketStates?: () => Array<{ readyState: number; state: string; url: string }>;
-        socketUrls?: () => string[];
-      };
       const windowState = window as Window & {
         __OPENCLAW_CONTROL_UI_E2E_LONG_FRAMES__?: () => unknown[];
         __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: unknown[];
-        openclawControlUiE2eGateway?: MockGateway;
+        openclawControlUiE2eGateway?: Partial<
+          Pick<ControlUiMockGateway, "requests" | "socketStates" | "socketUrls">
+        >;
       };
-      const app = document.querySelector("openclaw-app");
-      const shell = document.querySelector("openclaw-app-shell");
-      const runInspector = document.querySelector("#activity-run-panel");
+      const query = <T extends Element = HTMLElement>(
+        selector: string,
+        root: ParentNode | null = document,
+      ) => root?.querySelector<T>(selector) ?? null;
+      const queryAll = (selector: string) => [...document.querySelectorAll(selector)];
+      const app = query("openclaw-app");
+      const shell = query("openclaw-app-shell");
+      const runInspector = query("#activity-run-panel");
       const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
         window.openclawControlUi?.diagnostics();
       const readiness = window.openclawControlUi?.snapshot();
       const agentsState = diagnostics?.roster;
       const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
-      for (const element of document.querySelectorAll("*")) {
+      for (const element of queryAll("*")) {
         const name = element.localName;
         if (!name.includes("-")) {
           continue;
         }
         customElementCounts[name] = (customElementCounts[name] ?? 0) + 1;
       }
-      const textarea = document.querySelector<HTMLTextAreaElement>(
-        ".agent-chat__composer-combobox textarea",
-      );
+      const textarea = query<HTMLTextAreaElement>(".agent-chat__composer-combobox textarea");
       const roster =
         agentsState?.agentsList && typeof agentsState.agentsList === "object"
           ? (agentsState.agentsList as { agents?: unknown })
           : null;
-      const send = document.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+      const send = query<HTMLButtonElement>(".chat-send-btn--send");
       const sendLabel = send?.getAttribute("aria-label");
       // Submit-disabled labels can contain server errors. Only known static UI copy
       // may reach CI logs; private reports retain the existing detailed state.
       const safeValue = (value: unknown, allowed: string[]) =>
         allowed.find((entry) => entry === value) ?? "unknown";
       const nullableBoolean = (value: unknown) => (typeof value === "boolean" ? value : null);
-      const agentPage = document.querySelector("openclaw-agents-page");
+      const agentPage = query("openclaw-agents-page");
       const agentProperty = (key: string) => (agentPage ? Reflect.get(agentPage, key) : undefined);
       const selectedAgent = agentProperty("agentsSelectedId");
       const fileList = agentProperty("agentFilesList");
-      const fileEditor = document.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
+      const fileEditor = query<HTMLTextAreaElement>(".agent-file-textarea");
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
-      const groupMode = document.querySelector<HTMLElement>(
-        ".session-group-defaults__mode-dropdown",
-      );
-      const groupMenu = groupMode?.querySelector<HTMLElement>(".session-group-defaults__mode-menu");
-      const groupFolderPicker = document.querySelector<HTMLElement>(
-        ".session-group-defaults__folder-popover",
-      );
+      const groupElement = (part: string, root: ParentNode | null = document) =>
+        query(`.session-group-defaults__${part}`, root);
+      const groupMode = groupElement("mode-dropdown");
+      const groupMenu = groupElement("mode-menu", groupMode);
+      const groupFolderPicker = groupElement("folder-popover");
       return {
         failureSummary: {
           readiness: readiness
@@ -409,18 +399,14 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             ? {
                 open: groupMenu?.matches(":popover-open") ?? false,
                 expanded: safeValue(
-                  groupMode
-                    .querySelector(".session-group-defaults__mode-trigger")
-                    ?.getAttribute("aria-expanded"),
+                  groupElement("mode-trigger", groupMode)?.getAttribute("aria-expanded"),
                   ["true", "false"],
                 ),
                 menuInert: groupMenu?.inert ?? null,
                 menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
                 folderPickerOpen: groupFolderPicker?.matches(":popover-open") ?? null,
                 items: ["local", "worktree"].map((value) => {
-                  const item = groupMode.querySelector<HTMLElement>(
-                    `[data-environment-mode="${value}"]`,
-                  );
+                  const item = query(`[data-environment-mode="${value}"]`, groupMode);
                   return {
                     value,
                     present: Boolean(item),
@@ -436,7 +422,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                 }),
               }
             : null,
-          canvasWidgets: [...document.querySelectorAll("openclaw-canvas-widget-view")]
+          canvasWidgets: queryAll("openclaw-canvas-widget-view")
             .slice(0, 8)
             .map((widget) => ({
               loading: Boolean(widget.querySelector(".skeleton")),
@@ -498,9 +484,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             "interactive",
             "complete",
           ]),
-          providerStatuses: [
-            ...document.querySelectorAll(".model-providers__head .settings-status"),
-          ]
+          providerStatuses: queryAll(".model-providers__head .settings-status")
             .slice(0, 8)
             .map((badge) => {
               const text = badge.textContent?.trim();
@@ -536,9 +520,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           hasApp: Boolean(app),
           hasShell: Boolean(shell),
           readyState: document.readyState,
-          // A stalled or failed bundle fetch shows as a script src with no
-          // matching completed resource entry (resource timing only records
-          // finished requests).
+          // Resource timing omits stalled fetches; compare it with the script sources.
           completedResources: performance
             .getEntriesByType("resource")
             .filter((entry) => /\.(?:js|css)(?:\?|$)/u.test(entry.name))
@@ -591,18 +573,16 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     }
     frameDepthCounts[depth] = (frameDepthCounts[depth] ?? 0) + 1;
   }
+  const failureKind =
+    new Map([
+      ["TimeoutError", "timeout"],
+      ["AssertionError", "assertion"],
+      ["AbortError", "abort"],
+      ["Error", "error"],
+    ]).get(error.name) ?? "unknown";
   const publicSummary = {
     schemaVersion: 1,
-    failureKind:
-      error.name === "TimeoutError"
-        ? "timeout"
-        : error.name === "AssertionError"
-          ? "assertion"
-          : error.name === "AbortError"
-            ? "abort"
-            : error.name === "Error"
-              ? "error"
-              : "unknown",
+    failureKind,
     browser: summary,
     hostBeforeRead,
     lifecycle: controlUiE2ePageLifecycles.get(page) ?? null,
