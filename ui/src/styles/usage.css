@@ -348,8 +348,7 @@
 .usage-date-range,
 .usage-query-actions,
 .usage-filter-trigger > .oc-menu-item__label,
-.legend-item,
-.session-log-has-tools {
+.legend-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1811,6 +1810,9 @@
 }
 
 .session-log-has-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
