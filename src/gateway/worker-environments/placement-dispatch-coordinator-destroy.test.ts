@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
@@ -8,17 +8,25 @@ import {
   REQUEST,
 } from "./placement-dispatch-coordinator.test-support.js";
 import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
 
-describe("worker placement forced-destroy admission", () => {
-  it("settles an in-flight placement before destroying its environment", async () => {
+it.each(["in-flight", "success", "failure", "discovery failure"] as const)(
+  "holds forced-destroy admission while unrelated sessions proceed: %s",
+  async (scenario) => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
+    const failure = new Error(scenario);
+    const inFlight = scenario === "in-flight";
+    const dispatched: string[] = [];
     let finished = false;
+    let destroyed = false;
     const coordinated = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({
         dispatch: async (request, report) => {
-          if (request.sessionId === REQUEST.sessionId) {
+          if (scenario === "discovery failure") {
+            throw new Error("Unexpected placement fixture operation");
+          }
+          dispatched.push(request.sessionId);
+          if (inFlight && request.sessionId === REQUEST.sessionId) {
             report?.({ ...PROVISIONING_PLACEMENT, ...request });
             entered.resolve();
             await release.promise;
@@ -26,92 +34,61 @@ describe("worker placement forced-destroy admission", () => {
           }
           return { ...ACTIVE_PLACEMENT, ...request };
         },
+        readEnvironmentSessionIds: async () => {
+          if (scenario === "discovery failure") {
+            throw failure;
+          }
+          return inFlight ? [] : [REQUEST.sessionId];
+        },
         forceDestroyEnvironment: async () => {
-          expect(finished).toBe(true);
+          destroyed = true;
+          if (inFlight) {
+            expect(finished).toBe(true);
+          } else {
+            entered.resolve();
+            await release.promise;
+            if (scenario === "failure") {
+              throw failure;
+            }
+          }
           return createDispatchEnvironmentFixtures().destroyedEnvironment(2);
         },
       }),
       (_request, run) => run(),
     );
-    const dispatching = coordinated.dispatch(REQUEST);
-    await entered.promise;
+    const environmentId = inFlight ? PROVISIONING_PLACEMENT.environmentId : "worker-shared";
+    if (scenario === "discovery failure") {
+      await expect(coordinated.forceDestroyEnvironment(environmentId)).rejects.toBe(failure);
+      expect(destroyed).toBe(false);
+      return;
+    }
+    const dispatching = inFlight ? coordinated.dispatch(REQUEST) : undefined;
+    if (inFlight) {
+      await entered.promise;
+    }
     const destroying = coordinated
-      .forceDestroyEnvironment(PROVISIONING_PLACEMENT.environmentId)
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      .forceDestroyEnvironment(environmentId)
+      .catch((error: unknown) => error);
+    if (!inFlight) {
+      await entered.promise;
+    }
+    const owner = inFlight ? undefined : coordinated.dispatch(REQUEST);
     try {
       await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+      if (!inFlight) {
+        expect(dispatched).toEqual(["unrelated"]);
+      }
     } finally {
       release.resolve();
-      await dispatching;
+      await Promise.all([dispatching, owner, destroying]);
     }
-    expect(await destroying).toBeUndefined();
-  });
-
-  it.each(["success", "failure"] as const)(
-    "holds discovered owners through destroy %s while unrelated sessions proceed",
-    async (outcome) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const failure = new Error("destroy failed");
-      const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => ({
-        ...ACTIVE_PLACEMENT,
-        ...request,
-      }));
-      const coordinated = coordinateWorkerPlacementDispatch(
-        createCoordinatorTestService({
-          dispatch,
-          readEnvironmentSessionIds: async () => [REQUEST.sessionId],
-          forceDestroyEnvironment: async () => {
-            entered.resolve();
-            await release.promise;
-            if (outcome === "failure") {
-              throw failure;
-            }
-            return createDispatchEnvironmentFixtures().destroyedEnvironment(2);
-          },
-        }),
-        (_request, run) => run(),
-      );
-      const destroying = coordinated
-        .forceDestroyEnvironment("worker-shared")
-        .catch((error: unknown) => error);
-      await entered.promise;
-      const owner = coordinated.dispatch(REQUEST);
-      try {
-        await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
-        expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["unrelated"]);
-      } finally {
-        release.resolve();
-        await Promise.all([owner, destroying]);
-      }
-      expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
-        "unrelated",
-        REQUEST.sessionId,
-      ]);
-      if (outcome === "failure") {
-        expect(await destroying).toBe(failure);
-      } else {
-        expect(await destroying).toMatchObject({ state: "destroyed" });
-      }
-    },
-  );
-
-  it("propagates owner discovery failure without destroying the environment", async () => {
-    const failure = new Error("owner read failed");
-    const destroy = vi.fn();
-    const coordinated = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        readEnvironmentSessionIds: async () => {
-          throw failure;
-        },
-        forceDestroyEnvironment: destroy,
-      }),
-      (_request, run) => run(),
-    );
-    await expect(coordinated.forceDestroyEnvironment("worker-shared")).rejects.toBe(failure);
-    expect(destroy).not.toHaveBeenCalled();
-  });
-});
+    if (!inFlight) {
+      expect(dispatched).toEqual(["unrelated", REQUEST.sessionId]);
+    }
+    if (scenario === "failure") {
+      expect(await destroying).toBe(failure);
+    } else {
+      expect(await destroying).toMatchObject({ state: "destroyed" });
+    }
+  },
+);

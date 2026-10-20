@@ -36,67 +36,41 @@ describe("worker placement restart continuity", () => {
     return { active, claim, restartedStore, restarted };
   }
 
-  it.each(["stopped", "stop failed", "owner changed"] as const)(
-    "recovers a previous-instance pending result on its surviving node only after the old runtime is stopped: %s",
-    async (outcome) => {
-      const { active, claim, restartedStore, restarted } = await restartWithClaim(true);
-      restarted.markEnvironmentNodeDeviceId("surviving-node");
-      vi.mocked(restarted.environments.stopTunnel).mockImplementation(async () => {
-        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
-        expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
-        if (outcome === "stop failed") {
-          throw new Error("worker has not confirmed stop");
-        }
-        if (outcome === "owner changed") {
-          restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch + 1);
-        }
-      });
-
-      await restarted.service.reconcile();
-
-      expect(restarted.environments.stopTunnel).toHaveBeenCalledWith(
-        active.environmentId,
-        active.activeOwnerEpoch,
-      );
-      expect(restarted.environments.destroy).not.toHaveBeenCalled();
-      expect(restarted.placements.current()).toMatchObject({
-        state: "active",
-        environmentId: active.environmentId,
-        activeOwnerEpoch: active.activeOwnerEpoch,
-        remoteWorkspaceDir: active.remoteWorkspaceDir,
-        turnClaim: outcome === "stopped" ? null : { claimId: claim.claimId },
-      });
-      if (outcome === "stopped") {
-        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-        expect(restarted.placements.current()?.workspaceBaseManifestRef).toBe(
-          restarted.reconciledManifestRef,
-        );
-        expect(restarted.log).toContain("workspace:resume");
-        expect(restartedStore.validateTurnClaim(claim)).toBe(false);
-      } else {
-        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
-        expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
+  it.each([
+    [true, "stopped"],
+    [true, "stop failed"],
+    [true, "owner changed"],
+    [false, "SSH"],
+    [false, "stopped"],
+    [false, "stop failed"],
+  ] as const)(
+    "recovers restart custody after %s pending-result state and %s stop outcome",
+    async (pending, outcome) => {
+      const { active, claim, restartedStore, restarted } = await restartWithClaim(pending);
+      if (!pending) {
+        restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       }
-    },
-  );
-
-  it.each(["SSH", "node", "node stop failed"] as const)(
-    "fences an interrupted worker turn after restart while preserving its surviving node: %s",
-    async (scenario) => {
-      const { active, claim, restartedStore, restarted } = await restartWithClaim(false);
-      restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
-      if (scenario !== "SSH") {
+      if (outcome !== "SSH") {
         restarted.markEnvironmentNodeDeviceId("surviving-node");
       }
-      if (scenario === "node stop failed") {
+      if (pending) {
+        vi.mocked(restarted.environments.stopTunnel).mockImplementation(async () => {
+          expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+          expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
+          if (outcome === "stop failed") {
+            throw new Error("worker has not confirmed stop");
+          }
+          if (outcome === "owner changed") {
+            restarted.markEnvironmentOwnerEpoch(active.activeOwnerEpoch + 1);
+          }
+        });
+      } else if (outcome === "stop failed") {
         vi.mocked(restarted.environments.stopTunnel).mockRejectedValueOnce(
           new Error("worker has not confirmed stop"),
         );
       }
-
       await restarted.service.reconcile();
-
-      if (scenario === "SSH") {
+      if (outcome === "SSH") {
         expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
         expect(restarted.placements.current()).toMatchObject({
           state: "failed",
@@ -106,30 +80,42 @@ describe("worker placement restart continuity", () => {
         expect(restarted.environments.destroy).toHaveBeenCalledWith(active.environmentId);
         return;
       }
-      if (scenario === "node stop failed") {
-        expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
-        expect(restarted.placements.current()).toMatchObject({
-          state: "active",
-          turnClaim: { claimId: claim.claimId },
-        });
-        expect(restarted.environments.destroy).not.toHaveBeenCalled();
-        await restarted.service.reconcileActive();
-      }
-      expect(restarted.placements.current()).toMatchObject({
-        state: "active",
-        environmentId: active.environmentId,
-        activeOwnerEpoch: active.activeOwnerEpoch,
-        remoteWorkspaceDir: active.remoteWorkspaceDir,
-        workspaceBaseManifestRef: restarted.reconciledManifestRef,
-        turnClaim: null,
-      });
-      expect(restartedStore.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
-      expect(restartedStore.validateTurnClaim(claim)).toBe(false);
       expect(restarted.environments.stopTunnel).toHaveBeenCalledWith(
         active.environmentId,
         active.activeOwnerEpoch,
       );
       expect(restarted.environments.destroy).not.toHaveBeenCalled();
+      const identity = {
+        state: "active",
+        environmentId: active.environmentId,
+        activeOwnerEpoch: active.activeOwnerEpoch,
+        remoteWorkspaceDir: active.remoteWorkspaceDir,
+      };
+      if (outcome !== "stopped") {
+        expect(restarted.environments.startTunnel).not.toHaveBeenCalled();
+        expect(restarted.placements.current()).toMatchObject({
+          ...identity,
+          turnClaim: { claimId: claim.claimId },
+        });
+        if (pending) {
+          expect(await restartedStore.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+          return;
+        }
+        await restarted.service.reconcileActive();
+      }
+      expect(restarted.placements.current()).toMatchObject({
+        ...identity,
+        workspaceBaseManifestRef: restarted.reconciledManifestRef,
+        turnClaim: null,
+      });
+      expect(restartedStore.validateTurnClaim(claim)).toBe(false);
+      expect(restarted.environments.destroy).not.toHaveBeenCalled();
+      if (pending) {
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+        expect(restarted.log).toContain("workspace:resume");
+        return;
+      }
+      expect(restartedStore.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
       const replacement = await restartedStore.claimTurn({
         ...REQUEST,
         claimId: "replacement-claim",

@@ -1,11 +1,9 @@
 import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
+import type { WorkerPlacementDispatchService as DispatchService } from "./placement-dispatch.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementMoveRequest,
 } from "./service-contract.js";
-
-type DispatchService = WorkerPlacementDispatchService;
 
 export function admittedRecovery(
   run: (
@@ -18,7 +16,7 @@ export function admittedRecovery(
       throw new Error("Recovery fixture requires the coordinator admission owner");
     }
     return await admit(async (signal) => {
-      await run(placement, async () => await core(signal));
+      await run(placement, () => core(signal));
       return undefined;
     });
   };
