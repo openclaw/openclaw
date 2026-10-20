@@ -120,7 +120,7 @@ export function createMessageEndContext(
         : {}),
       ...(params.enforceFinalTag !== undefined ? { enforceFinalTag: params.enforceFinalTag } : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
-      ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
+      onBlockReply: params.onBlockReply ?? vi.fn(),
     },
     noteLastAssistant: vi.fn(),
     captureModelEvent: vi.fn(),
@@ -149,30 +149,20 @@ export function createMessageEndContext(
   return ctx;
 }
 
-function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+export function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} to be called`);
   }
-  return call;
-}
-
-export function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  return firstMockCall(mock, label)[0];
+  return call[0];
 }
 
 export function createMessageToolEnvelope(
   message: string,
   args: Record<string, unknown> = {},
 ): string {
-  // Messaging tool envelopes mimic provider tool-call JSON used by fallback
-  // reply extraction when the assistant otherwise says NO_REPLY.
   return JSON.stringify({
     name: "message",
-    arguments: {
-      action: "send",
-      message,
-      ...args,
-    },
+    arguments: { action: "send", message, ...args },
   });
 }

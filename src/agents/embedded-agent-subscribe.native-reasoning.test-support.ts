@@ -2,13 +2,15 @@ import {
   AssistantMessageEventStream,
   type AssistantMessage,
   type Message,
-  type Model,
 } from "openclaw/plugin-sdk/llm";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
-import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
+import { runAgentLoop } from "../plugin-sdk/agent-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 export const NATIVE_REASONING_BENCH_PREFIX = "REASONING_BENCH:";
@@ -23,32 +25,26 @@ export async function measureNativeReasoningSubscription(
   const chunks =
     options.chunks ??
     Array.from({ length: 4096 }, (_, index) =>
-      index === 0
-        ? NATIVE_REASONING_BENCH_PREFIX + "x".repeat(64 - NATIVE_REASONING_BENCH_PREFIX.length)
-        : "x".repeat(64),
+      (index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "").padEnd(64, "x"),
     );
-  const model = {
+  const model = makeProviderModelFixture({
     id: "reasoning-fixture",
     name: "Reasoning fixture",
     api: "openai-completions",
     provider: "synthetic",
     baseUrl: "https://example.test/v1",
     reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 128_000,
-  } satisfies Model;
-  const output: AssistantMessage = {
-    role: "assistant",
+  });
+  const output: AssistantMessage = makeAgentAssistantMessage({
     content: [],
     api: model.api,
     provider: model.provider,
     model: model.id,
     usage: makeZeroUsageSnapshot(),
-    stopReason: "stop",
     timestamp: 1,
-  };
+  });
   const acknowledgments = chunks.map(() => createDeferredCore());
   const releaseAcknowledgments = () => {
     acknowledgments.forEach((acknowledgment) => acknowledgment.resolve());
@@ -57,40 +53,24 @@ export async function measureNativeReasoningSubscription(
   if (options.signal?.aborted) {
     releaseAcknowledgments();
   }
+  const frame = (
+    delta: { role?: "assistant"; reasoning_content?: string },
+    finish_reason: "stop" | null = null,
+  ) => ({
+    id: "reasoning-fixture",
+    object: "chat.completion.chunk" as const,
+    created: 1,
+    model: model.id,
+    choices: [{ index: 0, delta, finish_reason }],
+  });
   async function* wire() {
     for (const [index, text] of chunks.entries()) {
-      yield {
-        id: "reasoning-fixture",
-        object: "chat.completion.chunk" as const,
-        created: 1,
-        model: model.id,
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant" as const, reasoning_content: text },
-            finish_reason: null,
-          },
-        ],
-      };
+      yield frame({ role: "assistant", reasoning_content: text });
       await acknowledgments[index]!.promise;
     }
-    yield {
-      id: "reasoning-fixture",
-      object: "chat.completion.chunk" as const,
-      created: 1,
-      model: model.id,
-      choices: [{ index: 0, delta: {}, finish_reason: "stop" as const }],
-    };
+    yield frame({}, "stop");
   }
-  let handler: ((event: AgentEvent) => void) | undefined;
-  const session = {
-    subscribe(callback: (event: AgentEvent) => void) {
-      handler = callback;
-      return () => {
-        handler = undefined;
-      };
-    },
-  } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
+  const { session, emit } = createStubSessionHarness();
   const runId = options.runId ?? "native-reasoning-work-fixture";
   const subscription = subscribeEmbeddedAgentSession({ session, runId });
   let lastText = "";
@@ -124,7 +104,7 @@ export async function measureNativeReasoningSubscription(
           ),
       },
       async (event) => {
-        handler?.(event);
+        emit(event);
         await subscription.waitForPendingEvents();
         if (
           event.type === "message_update" &&

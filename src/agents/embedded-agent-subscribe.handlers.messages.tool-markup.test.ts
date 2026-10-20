@@ -8,7 +8,7 @@ import {
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import { extractAssistantVisibleText } from "./embedded-agent-utils.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const markup = [
   "<tool_call>exec<arg_key>command</arg_key><arg_value>echo hidden</arg_value></tool_call>",
@@ -23,17 +23,31 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
   "%s tool markup delivery",
   (api) => {
     function message(text: string) {
-      return {
-        role: "assistant" as const,
+      return makeAgentAssistantMessage({
         api,
         provider: "fixture",
         model: "fixture",
-        usage: createZeroUsageFixture(),
-        timestamp: 0,
-        stopReason: "stop" as const,
         ...(api === "openai-responses" ? { phase: "final_answer" as const } : {}),
-        content: [{ type: "text" as const, text }],
-      };
+        content: [{ type: "text", text }],
+      });
+    }
+
+    function update(
+      context: ReturnType<typeof createMessageUpdateContext>,
+      text: string,
+      type: "text_delta" | "text_end",
+      delta = text,
+    ) {
+      const partial = message(text);
+      return updateMessage(context, {
+        message: partial,
+        assistantMessageEvent: {
+          type,
+          ...(type === "text_delta" ? { delta } : { content: text }),
+          partial,
+          contentIndex: 0,
+        },
+      });
     }
 
     it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
@@ -49,11 +63,7 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         for (let offset = 0; offset < source.length; offset += 4) {
           const delta = source.slice(offset, offset + 4);
           text += delta;
-          const partial = message(text);
-          await updateMessage(context, {
-            message: partial,
-            assistantMessageEvent: { type: "text_delta", delta, partial, contentIndex: 0 },
-          });
+          await update(context, text, "text_delta", delta);
         }
         expect(context.state.assistantStream?.text).toBe(source.trimEnd());
         const parsedCharacters = regions.mock.calls.reduce(
@@ -73,9 +83,10 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         { type: "text", text: " \n" },
         { type: "text", text: "hidden</arg_value></tool_call>\nDone." },
       ];
-      const snapshot = extractAssistantStreamSnapshot(createMessageUpdateContext(), partial);
-      expect(snapshot.text).toBe("Visible\n\nDone.");
-      expect(snapshot.blockText).toBe("Visible\n\nDone.");
+      expect(extractAssistantStreamSnapshot(createMessageUpdateContext(), partial)).toMatchObject({
+        text: "Visible\n\nDone.",
+        blockText: "Visible\n\nDone.",
+      });
       expect(extractAssistantVisibleText(partial)).toBe("Visible\n\nDone.");
     });
 
@@ -91,9 +102,10 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
           { type: "text", text: "Done." },
         ],
       };
-      const snapshot = extractAssistantStreamSnapshot(createMessageUpdateContext(), partial);
-      expect(snapshot.text).toBe("Done.");
-      expect(snapshot.blockText).toBe("Done.");
+      expect(extractAssistantStreamSnapshot(createMessageUpdateContext(), partial)).toMatchObject({
+        text: "Done.",
+        blockText: "Done.",
+      });
       expect(extractAssistantVisibleText(partial)).toBe("Done.");
     });
 
@@ -105,20 +117,13 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         let text = "";
         for (const delta of ["Visible\n", ...shadow.split(""), "\nDone."]) {
           text += delta;
-          const partial = message(text);
-          await updateMessage(context, {
-            message: partial,
-            assistantMessageEvent: { type: "text_delta", delta, partial, contentIndex: 0 },
-          });
+          await update(context, text, "text_delta", delta);
           expect(context.state.assistantStream?.text).toBe(
             text.endsWith("Done.") ? "Visible\n\nDone." : "Visible",
           );
         }
         const partial = message(text);
-        await updateMessage(context, {
-          message: partial,
-          assistantMessageEvent: { type: "text_end", content: text, partial, contentIndex: 0 },
-        });
+        await update(context, text, "text_end");
         expect(context.state.assistantStream?.text).toBe("Visible\n\nDone.");
         expect(extractAssistantStreamSnapshot(context, partial).blockText).toBe("Visible\n\nDone.");
         if (api === "openai-responses") {
@@ -141,18 +146,11 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       "restores the terminal literal %s after withholding its ambiguous suffix",
       async (text) => {
         const context = createMessageUpdateContext();
-        const partial = message(text);
-        await updateMessage(context, {
-          message: partial,
-          assistantMessageEvent: { type: "text_delta", delta: text, partial, contentIndex: 0 },
-        });
+        await update(context, text, "text_delta");
         expect(context.state.assistantStream?.text).toBe("Use");
-        await updateMessage(context, {
-          message: partial,
-          assistantMessageEvent: { type: "text_end", content: text, partial, contentIndex: 0 },
-        });
+        await update(context, text, "text_end");
         expect(context.state.assistantStream?.text).toBe(text);
-        expect(extractAssistantStreamSnapshot(context, partial).blockText).toBe(text);
+        expect(extractAssistantStreamSnapshot(context, message(text)).blockText).toBe(text);
         if (api === "openai-responses") {
           expect(context.blockChunker.bufferedText).toBe(text);
         }
