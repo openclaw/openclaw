@@ -10,21 +10,14 @@ async function readTelegramInbound(url: string) {
 }
 
 it.each([
-  {
-    conversation: { id: "alice/team", kind: "direct" },
-    senderId: "alice/team",
-    threadId: "42",
-  },
-  {
-    conversation: { id: "telegram-announcements", kind: "channel" },
-    senderId: "alice",
-    threadId: undefined,
-  },
+  ["direct", "alice/team", "alice/team", "42"],
+  ["channel", "telegram-announcements", "alice", undefined],
 ] as const)(
-  "correlates $conversation.kind replies without delivery registration",
-  async ({ conversation, senderId, threadId }) => {
+  "correlates %s replies without delivery registration",
+  async (kind, id, senderId, threadId) => {
     await withTransport("telegram", async (transport) => {
       const api = telegramApi(transport);
+      const conversation = { kind, id };
       const target = { conversation, ...(threadId ? { threadId } : {}) };
       const inbound = await transport.sendInbound({
         ...target,

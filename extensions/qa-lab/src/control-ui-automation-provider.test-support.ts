@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { buffer } from "node:stream/consumers";
 import { inspect } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
@@ -11,8 +12,6 @@ import {
   hasToolOutput,
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
-
-const makeRestartCheckpoint = (marker: string) => ({ marker, recovering: false, reached: false });
 
 export async function startAutomationProvider() {
   const requests = new Map<string, Record<string, unknown>>();
@@ -26,19 +25,16 @@ export async function startAutomationProvider() {
     marker: string | null;
     error: unknown;
   }> = [];
-  let restartHold: ReturnType<typeof makeRestartCheckpoint> | undefined;
+  let restartHold: { marker: string; recovering: boolean; reached: boolean } | undefined;
   const server = createServer((request, response) => {
     let marker: string | undefined;
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
+      const bytes = await buffer(request);
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;
       }
-      const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const body: unknown = JSON.parse(bytes.toString("utf8"));
       if (!isRecord(body) || !Array.isArray(body.input)) {
         throw new Error("Expected a Responses request");
       }
@@ -80,15 +76,12 @@ export async function startAutomationProvider() {
             ? buildToolCallEventsWithArgs("automations", args)
             : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
           : buildAssistantEvents(reply);
-      if (body.stream === true) {
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
-      } else {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify(events.find((event) => event.type === "response.completed")?.response),
-        );
-      }
+      const streaming = body.stream === true;
+      const contentType = streaming ? "text/event-stream" : "application/json";
+      const payload = streaming
+        ? events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
+        : JSON.stringify(events.find((event) => event.type === "response.completed")?.response);
+      response.writeHead(200, { "content-type": contentType }).end(payload);
     })().catch((error: unknown) => {
       failures.push({ method: request.method, url: request.url, marker: marker ?? null, error });
       response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -104,21 +97,18 @@ export async function startAutomationProvider() {
     requests,
     results,
     toolAvailability,
-    diagnostics(marker: string) {
-      return {
-        marker,
-        matchingInitialRequestObserved: toolAvailability.has(marker),
-        automationsToolAvailable: toolAvailability.get(marker) ?? null,
-        resultReceived: results.has(marker),
-        observedRequests,
-        providerErrors: failures.map((failure) =>
-          Object.assign({}, failure, { error: redactQaGatewayDebugText(inspect(failure.error)) }),
-        ),
-      };
-    },
-    holdInitialRequestForRestart(marker: string) {
-      return (restartHold = makeRestartCheckpoint(marker));
-    },
+    diagnostics: (marker: string) => ({
+      marker,
+      matchingInitialRequestObserved: toolAvailability.has(marker),
+      automationsToolAvailable: toolAvailability.get(marker) ?? null,
+      resultReceived: results.has(marker),
+      observedRequests,
+      providerErrors: failures.map((failure) =>
+        Object.assign({}, failure, { error: redactQaGatewayDebugText(inspect(failure.error)) }),
+      ),
+    }),
+    holdInitialRequestForRestart: (marker: string) =>
+      (restartHold = { marker, recovering: false, reached: false }),
     async stop() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {

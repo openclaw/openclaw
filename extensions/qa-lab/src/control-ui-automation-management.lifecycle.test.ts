@@ -17,9 +17,14 @@ afterEach(() => {
   vi.resetModules();
 });
 
-it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-cleanup"] as const)(
+it.each([
+  ["transport", 0, ["gateway", "provider"]],
+  ["gateway-cleanup", 0, ["gateway", "provider"]],
+  ["gateway-start", 1, ["gateway", "transport", "provider"]],
+  ["restart-gateway-cleanup", 1, ["gateway", "provider"]],
+] as const)(
   "settles the automation provider after a %s failure",
-  async (failure) => {
+  async (failure, startCount, expectedStops) => {
     const originalError = new Error("fixture acquisition failed");
     const cleanupError = new Error("Gateway cleanup failed");
     const cleanupFails = failure.endsWith("gateway-cleanup");
@@ -50,9 +55,7 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
         define: (body: () => void) => body(),
       }),
     });
-    const start = vi.fn(async () => {
-      throw originalError;
-    });
+    const start = vi.fn<() => Promise<never>>().mockRejectedValue(originalError);
     mockModule("./gateway-child.ts", {
       createQaGatewayChild: () => ({
         start,
@@ -92,14 +95,8 @@ it.each(["transport", "gateway-cleanup", "gateway-start", "restart-gateway-clean
       } else {
         await expect(result).rejects.toBe(originalError);
       }
-      expect(start).toHaveBeenCalledTimes(
-        failure === "gateway-start" || failure === "restart-gateway-cleanup" ? 1 : 0,
-      );
-      expect(stopped).toEqual(
-        failure === "gateway-start"
-          ? ["gateway", "transport", "provider"]
-          : ["gateway", "provider"],
-      );
+      expect(start).toHaveBeenCalledTimes(startCount);
+      expect(stopped).toEqual(expectedStops);
       expect(servers[0]?.listening).toBe(false);
     } finally {
       // Keep the regression itself settled when run against the leaking implementation.

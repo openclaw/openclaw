@@ -38,18 +38,16 @@ export function telegramApi(transport: Pick<QaTransportAdapter, "createGatewayCo
     return payload;
   };
   const send = async (chatId: string, threadId: string, text: string) => {
-    const payload = await post("sendMessage", {
+    const reply = await post("sendMessage", {
       chat_id: chatId,
       message_thread_id: Number(threadId),
       text,
     });
     assert(
-      isRecord(payload) &&
-        isRecord(payload.result) &&
-        typeof payload.result.message_id === "number",
+      isRecord(reply) && isRecord(reply.result) && typeof reply.result.message_id === "number",
       "Crabline Telegram send did not return a message ID",
     );
-    return payload.result.message_id;
+    return reply.result.message_id;
   };
   return { url, post, send };
 }

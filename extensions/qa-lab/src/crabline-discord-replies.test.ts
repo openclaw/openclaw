@@ -68,15 +68,10 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
         const payload = {
           content: text,
           embeds: [{ description: text, title: text, url: `${origin}/semantic-link` }],
+          attachments: [{ id: "0", description: text }],
         };
         const form = new FormData();
-        form.set(
-          "payload_json",
-          JSON.stringify({
-            ...payload,
-            attachments: [{ id: "0", description: text }],
-          }),
-        );
+        form.set("payload_json", JSON.stringify(payload));
         form.set("files[0]", new Blob(["attachment bytes"]), "proof.txt");
         delivered = createDeferred<unknown>();
         const response = await fetch(messagesUrl, { method: "POST", headers, body: form });

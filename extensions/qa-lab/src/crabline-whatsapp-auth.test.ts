@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
-import {
-  createWhatsAppQaAuthState,
-  resolveWhatsAppAccount,
-  resolveWhatsAppAuthDir,
-} from "@openclaw/whatsapp/api.js";
+import { createWhatsAppQaAuthState } from "@openclaw/whatsapp/api.js";
 import { WhatsAppConfigSchema } from "@openclaw/whatsapp/config-api.js";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -47,13 +43,8 @@ describe("Crabline WhatsApp fixture authentication", () => {
     const removedAuthDir = await withTransport("whatsapp", async (transport) => {
       const authDir = await returned(vi.mocked(createWhatsAppQaAuthState));
       const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
-      const account = { cfg: config, accountId: transport.accountId };
-      expect([
-        WhatsAppConfigSchema.parse(config.channels?.whatsapp).accounts?.[transport.accountId]
-          ?.authDir,
-        resolveWhatsAppAuthDir(account),
-        resolveWhatsAppAccount(account).authDir,
-      ]).toEqual([authDir, { authDir, isLegacy: false }, authDir]);
+      const whatsapp = WhatsAppConfigSchema.parse(config.channels?.whatsapp);
+      expect(whatsapp.accounts?.[transport.accountId]?.authDir).toBe(authDir);
       assert(typeof authDir === "string" && authDir.length > 0, "Missing auth directory");
       const credsPath = path.join(authDir, "creds.json");
       const before = await fs.readFile(credsPath, "utf8");

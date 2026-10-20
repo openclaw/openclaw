@@ -4,12 +4,15 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerQaLabCli } from "./cli.js";
 import { findQaScenarioMatches, renderQaScenarioMatchesMarkdownReport } from "./coverage-report.js";
-import { defaultQaModelForMode, type QaProviderMode } from "./model-selection.js";
+import { defaultQaModelForMode } from "./model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+
+const suiteArgv = ["pnpm", "openclaw", "qa", "suite"];
+type SuiteSelection = Parameters<typeof selectQaFlowSuiteScenarios>[0];
+type SuiteFilters = Partial<Pick<SuiteSelection, "providerMode" | "channel" | "channelDriver">>;
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
@@ -30,9 +33,7 @@ function captureReportedArgv(command: string): string[] {
 function reportedCommands(scenarios: QaSeedScenarioWithSource[]) {
   const matches = scenarios.flatMap((scenario) => findQaScenarioMatches([scenario], scenario.id));
   const report = renderQaScenarioMatchesMarkdownReport({ query: "selected scenarios", matches });
-  const commands = [...report.matchAll(/`(pnpm openclaw qa suite[^`]+)`/gu)].map(([, command]) =>
-    expectDefined(command, "command"),
-  );
+  const commands = report.match(/(?<=`)pnpm openclaw qa suite[^`]+(?=`)/gu) ?? [];
   expect(commands.length).toBeGreaterThan(0);
   return commands;
 }
@@ -40,7 +41,7 @@ function reportedCommands(scenarios: QaSeedScenarioWithSource[]) {
 function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
   return reportedCommands(scenarios).map((command) => {
     const argv = captureReportedArgv(command);
-    expect(argv.slice(0, 4)).toEqual(["pnpm", "openclaw", "qa", "suite"]);
+    expect(argv.slice(0, suiteArgv.length)).toEqual(suiteArgv);
     let suite = new Command();
     registerQaLabCli(suite);
     for (const name of ["qa", "suite"]) {
@@ -50,13 +51,8 @@ function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
       );
     }
     // Parse the real options without running the suite action or starting a provider.
-    expect(suite.parseOptions(argv.slice(4))).toEqual({ operands: [], unknown: [] });
-    const opts = suite.opts<{
-      scenario: string[];
-      channelDriver?: QaScorecardChannelDriver;
-      channel?: string;
-      providerMode?: QaProviderMode;
-    }>();
+    expect(suite.parseOptions(argv.slice(suiteArgv.length))).toEqual({ operands: [], unknown: [] });
+    const opts = suite.opts<SuiteFilters & { scenario: string[] }>();
     expect(opts.scenario.length).toBeGreaterThan(0);
     const providerMode = opts.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
     const selected = selectQaFlowSuiteScenarios({
@@ -118,10 +114,7 @@ describe("QA coverage command selection", () => {
     const command = expectDefined(reportedCommands([scenario])[0], "command");
 
     expect(captureReportedArgv(command)).toEqual([
-      "pnpm",
-      "openclaw",
-      "qa",
-      "suite",
+      ...suiteArgv,
       "--channel-driver",
       requiredChannelDriver,
       "--scenario",
