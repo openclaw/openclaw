@@ -486,7 +486,14 @@ function createPublicationBackend(
         if (cacheSize() <= command.input.maxEntries) {
           return { ok: true, value: false };
         }
-        return writeCache((size) => pruneMemoryEmbeddingCache(db, size, command.input.maxEntries));
+        return writeCache((size) =>
+          pruneMemoryEmbeddingCache(
+            db,
+            size,
+            command.input.maxEntries,
+            command.input.unreferencedFirst,
+          ),
+        );
       }
       if (command.type === "cache.clear") {
         return writeCache(

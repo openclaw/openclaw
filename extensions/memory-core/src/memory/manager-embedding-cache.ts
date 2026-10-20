@@ -24,6 +24,19 @@ type MemoryEmbeddingCacheRow = {
 
 type EmbeddingCacheDatabase = {
   memory_embedding_cache: MemoryEmbeddingCacheRow & { rowid: Generated<number> };
+  memory_index_chunks: { hash: string; updated_at: number };
+};
+
+/**
+ * Capacity eviction takes rows of these identities first when no published chunk
+ * carries their hash and they were last written before the oldest published
+ * chunk. A full reindex rewrites every chunk, so such a row predates the index
+ * that dropped it; newer unreferenced rows, such as a retry's or another sync's
+ * unpublished vectors, keep plain oldest-first order. The eviction count is
+ * unchanged.
+ */
+export type MemoryEmbeddingCacheEvictionPreference = {
+  identities: MemoryIndexProviderIdentity[];
 };
 
 /** Require a finite, nonempty vector compatible with the active embedding dimensions. */
@@ -139,6 +152,7 @@ export function pruneMemoryEmbeddingCache(
   database: EngineConnection,
   cacheSize: number,
   maxEntries: number,
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference,
 ): number {
   if (cacheSize <= maxEntries) {
     return cacheSize;
@@ -149,47 +163,83 @@ export function pruneMemoryEmbeddingCache(
     return size;
   }
   const limit = Math.min(excess, 100);
-  const removed = deleteOldestMemoryEmbeddingCacheRows(database, limit);
+  const removed = deleteOldestMemoryEmbeddingCacheRows(database, limit, unreferencedFirst);
   return size - removed;
 }
 
-function deleteOldestMemoryEmbeddingCacheRows(database: EngineConnection, limit: number): number {
+function deleteOldestMemoryEmbeddingCacheRows(
+  database: EngineConnection,
+  limit: number,
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference,
+): number {
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
-  if (isPostgresSqlConnection(database)) {
-    const keys = ["provider", "model", "provider_key", "hash"] as const;
-    const oldest = db
-      .selectFrom("memory_embedding_cache")
-      .select(keys)
-      .orderBy("updated_at", "asc")
-      .orderBy("provider", "asc")
-      .orderBy("model", "asc")
-      .orderBy("provider_key", "asc")
-      .orderBy("hash", "asc")
-      .limit(limit)
-      .$asTuple(...keys);
+  const postgres = isPostgresSqlConnection(database);
+  const deleteOldest = (count: number, identities: MemoryIndexProviderIdentity[] = []) => {
+    let rows = db.selectFrom("memory_embedding_cache");
+    if (identities.length > 0) {
+      // Both uncorrelated chunk subqueries run once per statement; an empty index prefers nothing.
+      rows = rows
+        .where((eb) => {
+          // SQLite only: the no-op TEXT cast keeps the planner off the primary key, so it walks
+          // the updated_at index and stops at the limit instead of sorting every match.
+          const key = (column: "provider" | "model" | "provider_key") =>
+            postgres ? eb.ref(column) : eb.cast(column, "text");
+          return eb.or(
+            identities.map((identity) =>
+              eb.and([
+                eb(key("provider"), "=", identity.provider),
+                eb(key("model"), "=", identity.model),
+                eb(key("provider_key"), "=", identity.providerKey),
+              ]),
+            ),
+          );
+        })
+        .where((eb) =>
+          eb(
+            "updated_at",
+            "<",
+            eb
+              .selectFrom("memory_index_chunks")
+              .select((chunks) => chunks.fn.min("updated_at").as("oldest")),
+          ),
+        )
+        .where("hash", "not in", db.selectFrom("memory_index_chunks").select("hash"));
+    }
+    if (postgres) {
+      const keys = ["provider", "model", "provider_key", "hash"] as const;
+      const oldest = rows
+        .select(keys)
+        .orderBy("updated_at", "asc")
+        .orderBy("provider", "asc")
+        .orderBy("model", "asc")
+        .orderBy("provider_key", "asc")
+        .orderBy("hash", "asc")
+        .limit(count)
+        .$asTuple(...keys);
+      const result = executeSqliteQuerySync(
+        database,
+        db
+          .deleteFrom("memory_embedding_cache")
+          .where((eb) => eb(eb.refTuple(...keys), "in", oldest)),
+      );
+      return Number(result.numAffectedRows);
+    }
+    // SQLite performs eviction without materializing the full cache in JavaScript.
     const result = executeSqliteQuerySync(
       database,
-      db.deleteFrom("memory_embedding_cache").where((eb) => eb(eb.refTuple(...keys), "in", oldest)),
+      db
+        .deleteFrom("memory_embedding_cache")
+        .where(
+          "rowid",
+          "in",
+          rows.select("rowid").orderBy("updated_at", "asc").orderBy("rowid", "asc").limit(count),
+        ),
     );
     return Number(result.numAffectedRows);
-  }
-  // SQLite performs eviction without materializing the full cache in JavaScript.
-  const result = executeSqliteQuerySync(
-    database,
-    db
-      .deleteFrom("memory_embedding_cache")
-      .where(
-        "rowid",
-        "in",
-        db
-          .selectFrom("memory_embedding_cache")
-          .select("rowid")
-          .orderBy("updated_at", "asc")
-          .orderBy("rowid", "asc")
-          .limit(limit),
-      ),
-  );
-  return Number(result.numAffectedRows);
+  };
+  // Preferred rows fill the unchanged count first; the remainder stays oldest-first.
+  const preferred = unreferencedFirst ? deleteOldest(limit, unreferencedFirst.identities) : 0;
+  return preferred < limit ? preferred + deleteOldest(limit - preferred) : preferred;
 }
 
 /** Discard ambiguous vector spaces without removing unrelated provider caches or index rows. */
@@ -221,6 +271,7 @@ export function upsertMemoryEmbeddingCache(params: {
   /** Stable replayable rows let staged writes retain hashes without a second vector batch. */
   entries: () => Iterable<{ hash: string; embedding: number[] }>;
   maxEntries?: number;
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
   now?: number;
 }): number {
   let cacheSize = params.cacheSize;
@@ -248,6 +299,7 @@ export function upsertMemoryEmbeddingCache(params: {
       providerKey: params.providerKey,
       hashes: retainedRows.map(([hash]) => hash),
       maxEntries,
+      unreferencedFirst: params.unreferencedFirst,
     });
   }
   const now = params.now ?? Date.now();
@@ -309,6 +361,7 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
   providerKey: string;
   hashes: string[];
   maxEntries: number;
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
 }): number {
   const { hashes, maxEntries } = params;
   let size = countMemoryEmbeddingCache(params.db);
@@ -331,7 +384,7 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
   }
   const excess = size + hashes.length - maxEntries;
   if (excess > 0) {
-    size -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess);
+    size -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess, params.unreferencedFirst);
   }
   return size;
 }

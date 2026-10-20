@@ -309,6 +309,8 @@ let toolResults = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
+let reasoningResponses = 0;
+let reasoningReplayRequests = 0;
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -363,6 +365,8 @@ let cohort:
       arrivals: Set<number>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
+      reasoningSignatures: Map<string, string>;
+      incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
       ready: Promise<void>;
@@ -407,6 +411,28 @@ const mock = createServer((req, res) => {
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
     if (continuation) {
+      if (retentionScenario || soakScenario) {
+        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        if (
+          expectedSignature === undefined ||
+          !Array.isArray(input) ||
+          !input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+          )
+        ) {
+          throw new Error("synthetic reasoning signature did not survive the provider request");
+        }
+        const incompleteSignature = cohort?.incompleteReasoningSignatures.get(toolOutput.call_id);
+        if (
+          incompleteSignature !== undefined &&
+          input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === incompleteSignature,
+          )
+        ) {
+          throw new Error("reasoning-only output-limit signature was replayed during recovery");
+        }
+        reasoningReplayRequests++;
+      }
       if (
         toolOutputs.some(
           (toolResult) =>
@@ -480,6 +506,7 @@ const mock = createServer((req, res) => {
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
+      let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
         const items = toolPaths.map((toolPath, toolIndex) => {
@@ -494,6 +521,7 @@ const mock = createServer((req, res) => {
           };
         });
         toolCalls += items.length;
+        reasoningReplayKey = items.at(-1)?.call_id;
         toolAnswer = [
           ...items.flatMap((item, output_index) => [
             { type: "response.output_item.added", output_index, item: { ...item, arguments: "" } },
@@ -551,7 +579,37 @@ const mock = createServer((req, res) => {
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (
+          (retentionScenario || soakScenario) &&
+          (primary || continuation) &&
+          "response" in event &&
+          event.response !== undefined
+        ) {
+          const reasoning = {
+            type: "reasoning",
+            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            status: "completed",
+            summary: [],
+            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+          };
+          if (reasoningReplayKey) {
+            // Replay keeps completed reasoning and drops reasoning-only length stops.
+            const signatures =
+              event.type === "response.completed"
+                ? cohort?.reasoningSignatures
+                : cohort?.incompleteReasoningSignatures;
+            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          }
+          const output_index = event.response.output.length;
+          for (const type of ["response.output_item.added", "response.output_item.done"]) {
+            res.write(`data: ${JSON.stringify({ type, output_index, item: reasoning })}\n\n`);
+          }
+          res.write(
+            `data: ${JSON.stringify({ ...event, response: { ...event.response, output: [...event.response.output, reasoning] } })}\n\n`,
+          );
+        } else {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
         }
@@ -847,6 +905,8 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     arrivals: new Set(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
+    reasoningSignatures: new Map(),
+    incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
     beforeRelease: finishAdmissionDiagnostics
       ? async () => {
@@ -1469,6 +1529,8 @@ try {
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
+    reasoningResponses = 0;
+    reasoningReplayRequests = 0;
     recapRequests = 0;
     recapReceipts.length = 0;
     recapPhase = undefined;
@@ -1623,6 +1685,15 @@ try {
         `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
       );
     }
+    if (
+      (retentionScenario || soakScenario) &&
+      (reasoningResponses !== runCount * (retentionScenario ? 3 : 2) ||
+        reasoningReplayRequests !== runCount * (retentionScenario ? 2 : 1))
+    ) {
+      throw new Error(
+        `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
+      );
+    }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
@@ -1666,6 +1737,7 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...((retentionScenario || soakScenario) && { reasoningResponses, reasoningReplayRequests }),
       recapRequests,
       ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
