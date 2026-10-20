@@ -37,18 +37,26 @@ const scope = [
 ];
 const rows = (database: DatabaseSync, sql: string) => database.prepare(sql).all();
 const row = (database: DatabaseSync, sql: string) => database.prepare(sql).get();
-const identities = (database: DatabaseSync) =>
-  rows(database, "SELECT * FROM transcript_event_identities ORDER BY seq");
-const origins = (database: DatabaseSync) =>
-  rows(database, "SELECT * FROM memory_entry_origins ORDER BY agent_id");
 const statistics = (database: DatabaseSync) =>
   rows(database, "SELECT * FROM sqlite_stat1 ORDER BY tbl, idx");
-const originLayout = (database: DatabaseSync) =>
-  row(database, "SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")?.wr;
-
-function expectVersion(database: DatabaseSync, version: number) {
-  expect(row(database, "PRAGMA user_version")?.user_version).toBe(version);
-  expect(row(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(version);
+function capture(database: DatabaseSync, withOrigins = true) {
+  return {
+    identities: rows(database, "SELECT * FROM transcript_event_identities ORDER BY seq"),
+    windows: rows(database, "SELECT * FROM session_windows"),
+    origins: withOrigins
+      ? rows(database, "SELECT * FROM memory_entry_origins ORDER BY agent_id")
+      : row(database, "SELECT 1 FROM sqlite_schema WHERE name = 'memory_entry_origins'"),
+    originLayout: row(
+      database,
+      "SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'",
+    )?.wr,
+    indexes: indexDefinitions(database),
+    versions: [
+      row(database, "PRAGMA user_version")?.user_version,
+      row(database, "SELECT schema_version FROM schema_meta")?.schema_version,
+    ],
+    foreignKeys: rows(database, "PRAGMA foreign_key_check"),
+  };
 }
 
 function seed(database: DatabaseSync): void {
@@ -164,10 +172,7 @@ it.each(["commit", "without-origins", "rollback"] as const)(
         );
         database.exec("ROLLBACK TO physical_identity; RELEASE physical_identity");
       }
-      const indexes = indexDefinitions(database);
-      const originalIdentities = identities(database);
-      const windows = rows(database, "SELECT * FROM session_windows");
-      const originalOrigins = outcome === "without-origins" ? [] : origins(database);
+      const before = capture(database, outcome !== "without-origins");
       if (outcome === "rollback") {
         database.setAuthorizer((action, name, value) =>
           action === constants.SQLITE_PRAGMA &&
@@ -206,31 +211,24 @@ it.each(["commit", "without-origins", "rollback"] as const)(
           database.exec("ROLLBACK TO retained_content; RELEASE retained_content");
         }
       }
-      expect(identities(database)).toEqual(originalIdentities);
-      expect(rows(database, "SELECT * FROM session_windows")).toEqual(windows);
-      expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
       const expectedVersion = outcome === "rollback" ? 27 : TARGET_VERSION;
-      expectVersion(database, expectedVersion);
-      if (outcome === "rollback") {
-        expect(indexDefinitions(database)).toEqual(indexes);
-      } else {
-        expect(indexDefinitions(database)).toEqual([
-          {
-            name: "idx_agent_session_windows_conversation",
-            sql: expect.stringMatching(
-              /ON session_windows\(primary_conversation_id\)\s+WHERE primary_conversation_id IS NOT NULL/u,
-            ),
-          },
-        ]);
-      }
-      if (outcome === "without-origins") {
-        expect(
-          row(database, "SELECT 1 FROM sqlite_schema WHERE name = 'memory_entry_origins'"),
-        ).toBeUndefined();
-      } else {
-        expect(origins(database)).toEqual(originalOrigins);
-        expect(originLayout(database)).toBe(outcome === "rollback" ? 0 : 1);
-      }
+      expect(capture(database, outcome !== "without-origins")).toEqual({
+        ...before,
+        versions: [expectedVersion, expectedVersion],
+        foreignKeys: [],
+        originLayout: outcome === "without-origins" ? undefined : outcome === "rollback" ? 0 : 1,
+        indexes:
+          outcome === "rollback"
+            ? before.indexes
+            : [
+                {
+                  name: "idx_agent_session_windows_conversation",
+                  sql: expect.stringMatching(
+                    /ON session_windows\(primary_conversation_id\)\s+WHERE primary_conversation_id IS NOT NULL/u,
+                  ),
+                },
+              ],
+      });
       if (outcome === "commit") {
         // Lookup/FK behavior and uniqueness survive index retirement and narrowing.
         expect(
@@ -266,7 +264,7 @@ it("restores the scoped pre-upgrade layout without overwriting later unrelated w
     const backupPath = state.statePath("write-layout.scoped.bak");
     using database = new DatabaseSync(pathname);
     seed(database);
-    const indexes = indexDefinitions(database);
+    const before = capture(database);
     const originalStatistics = statistics(database);
     expect(
       resolveSchemaMigrationBackupTables({
@@ -288,10 +286,8 @@ it("restores the scoped pre-upgrade layout without overwriting later unrelated w
     await assertScope(database, scope, () =>
       restoreDoctorMigrationBackup({ sourcePath: pathname, backupPath, env: state.env }),
     );
-    expect(row(database, "PRAGMA user_version")?.user_version).toBe(27);
-    expect(indexDefinitions(database)).toEqual(indexes);
+    expect(capture(database)).toEqual(before);
     expect(statistics(database)).toEqual(originalStatistics);
-    expect(originLayout(database)).toBe(0);
     expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")?.bytes).toBe("BEEF");
   });
 });

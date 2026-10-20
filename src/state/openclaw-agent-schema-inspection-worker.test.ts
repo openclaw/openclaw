@@ -27,14 +27,6 @@ function createSource(sql: string) {
   return pathname;
 }
 
-function observeClose(child: ReturnType<typeof fork>) {
-  let closed = false;
-  child.once("close", () => {
-    closed = true;
-  });
-  return () => closed;
-}
-
 it("inspects state in cold children without executing comparison DDL", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
   const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
@@ -89,7 +81,8 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       fs.chmodSync(snapshot, 0);
       const inspection = reader.inspect({ pathname, supportedVersion: 21 }, undefined, snapshot);
       const refusedChild = vi.mocked(fork).mock.results.at(-1)?.value;
-      const refusedChildClosed = observeClose(refusedChild);
+      const refusedChildClosed = vi.fn();
+      refusedChild.once("close", refusedChildClosed);
       const failure = await inspection.catch((error: unknown) => error);
       expect(failure).toMatchObject({
         name: "Error",
@@ -98,7 +91,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
         message:
           "failed while creating its private snapshot: unable to open database file (code=ERR_SQLITE_ERROR, errcode=14)",
       });
-      expect(refusedChildClosed()).toBe(true);
+      expect(refusedChildClosed).toHaveBeenCalledOnce();
       expect(fs.statSync(snapshot, { bigint: true })).toMatchObject({
         dev: identity.dev,
         ino: identity.ino,
@@ -112,9 +105,9 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
           reader.inspect({ pathname, supportedVersion: 21 }, undefined, snapshot),
         ).resolves.toMatchObject({ version: 0, failure: undefined });
       }
-      expect(reader.processCount).toBe(2);
-      expect(reader.inspectionCount).toBe(2);
-      expect(reader.snapshotCount).toBe(2);
+      expect([reader.processCount, reader.inspectionCount, reader.snapshotCount]).toEqual([
+        2, 2, 2,
+      ]);
       for (const location of [pathname, snapshot]) {
         using source = sqlite.openNodeSqliteDatabase(location, { readOnly: true });
         expect(source.prepare("SELECT value FROM probe").get()).toEqual({ value: "unchanged" });
@@ -170,10 +163,11 @@ it.each(["before launch", "during read"])(
     }
     const child = vi.mocked(fork).mock.results.at(-1)?.value;
     expect(child?.pid).toBeGreaterThan(0);
-    const closed = observeClose(child);
+    const closed = vi.fn();
+    child.once("close", closed);
     const rejected = expect(operation).rejects.toBe(reason);
     controller.abort(reason);
     await rejected;
-    expect(closed()).toBe(true);
+    expect(closed).toHaveBeenCalledOnce();
   },
 );

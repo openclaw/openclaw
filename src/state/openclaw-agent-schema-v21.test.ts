@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -6,24 +5,8 @@ import {
   restoreEmptyV21StorageForHistoricalFixture,
 } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 import { collectSqliteSchemaShape } from "./sqlite-schema-shape.test-support.js";
-
-function captureDatabase(database: DatabaseSync) {
-  const schema = database
-    .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
-    .all();
-  return {
-    schema,
-    rows: schema
-      .filter((entry) => entry.type === "table")
-      .map((entry) => ({
-        table: entry.name,
-        rows: database.prepare(`SELECT * FROM "${String(entry.name).replaceAll('"', '""')}"`).all(),
-      })),
-    foreignKeys: database.prepare("PRAGMA foreign_keys").get(),
-    userVersion: database.prepare("PRAGMA user_version").get(),
-  };
-}
 
 function currentFixture(foreignKeys = 1) {
   const database = new DatabaseSync(":memory:");
@@ -45,7 +28,7 @@ it("restores the frozen outbox and trajectory storage", () => {
   restoreEmptyV21StorageForHistoricalFixture(database);
 
   const outbox = collectSqliteSchemaShape(database).context_engine_turn_outbox;
-  assert(outbox, "Historical fixture must contain the outbox");
+  expect(outbox).toBeDefined();
   expect(outbox).toEqual(collectSqliteSchemaShape(historical).context_engine_turn_outbox);
   expect(collectSqliteSchemaShape(database).trajectory_runtime_events).toEqual(
     collectSqliteSchemaShape(historical).trajectory_runtime_events,
@@ -62,7 +45,7 @@ it.each([
   ["populated", 1],
   ["rollback", 0],
   ["rollback", 1],
-] as const)("preserves storage after %s rejection (foreign_keys=%s)", (mode, foreignKeys) => {
+] as const)("preserves storage after %s rejection (foreign_keys=%s)", async (mode, foreignKeys) => {
   using database = currentFixture(foreignKeys);
   const failure = new Error(
     mode === "populated"
@@ -83,10 +66,16 @@ it.each([
       }
     });
   }
-  const before = captureDatabase(database);
-  expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(failure);
+  const metadata = () => [
+    database.prepare("PRAGMA foreign_keys").get(),
+    database.prepare("PRAGMA user_version").get(),
+  ];
+  const before = metadata();
+  await assertSqliteMigrationScopePreserved(database, [], () => {
+    expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(failure);
+  });
   vi.restoreAllMocks();
-  expect(captureDatabase(database)).toEqual(before);
+  expect(metadata()).toEqual(before);
   if (mode === "rollback") {
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");

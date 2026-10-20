@@ -3,6 +3,7 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease as withLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
@@ -40,15 +41,10 @@ function seed(database: DatabaseSync): void {
     CREATE INDEX idx_agent_session_windows_conversation
       ON session_windows(primary_conversation_id) WHERE primary_conversation_id IS NOT NULL;
     DROP TABLE memory_entry_origins;
-    CREATE TABLE memory_entry_origins (
-      entry_key TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      session_key TEXT,
-      origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
-      observed_at INTEGER NOT NULL,
-      PRIMARY KEY (entry_key, agent_id, session_id)
-    ) STRICT, WITHOUT ROWID;
+    ${extractSqliteTableSchema(schemaV27, "memory_entry_origins").replace(
+      ") STRICT;",
+      ") STRICT, WITHOUT ROWID;",
+    )}
     DROP INDEX idx_agent_session_nodes_last_interaction_at;
     DROP INDEX idx_agent_session_reactions_message;
     ALTER TABLE trajectory_runtime_events ADD COLUMN event_utf8_bytes INTEGER;
