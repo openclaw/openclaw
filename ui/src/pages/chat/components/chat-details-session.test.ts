@@ -12,14 +12,15 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsSession } from "./chat-details-session.tsx";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatDetailsSession as Details } from "./chat-details-session.tsx";
+import type { ChatDetailsProps as Props } from "./chat-details-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 const text = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
 const detail = <T extends HTMLElement = HTMLElement>(root: ParentNode, name: string) =>
   root.querySelector<T>(`.chat-details__${name}`);
+const detailText = (root: ParentNode, name: string) => detail(root, name)?.textContent;
 const child = (slug: string, state: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
   key: `agent:main:subagent:${slug}`,
   kind: "direct",
@@ -27,15 +28,20 @@ const child = (slug: string, state: Partial<GatewaySessionRow> = {}): GatewaySes
   spawnedBy: "agent:main:details",
   ...state,
 });
+const repository = { owner: "example", repo: "project", branch: "feature" };
 const pullRequest = {
+  ...repository,
   number: 7,
-  owner: "example",
-  repo: "project",
-  branch: "feature",
   title: "A compact PR title",
   url: "https://github.com/example/project/pull/7",
   state: "open" as const,
 };
+const summaryRequest = (id: string) => ({
+  sessionKey: `agent:main:${id}`,
+  agentId: "main",
+  scope: "all",
+  summaryOnly: true,
+});
 type Diff = {
   files: { path: string }[];
   additions: number;
@@ -67,33 +73,44 @@ async function liveActivity(root: ParentNode) {
   return live;
 }
 
-async function mount(overrides: Partial<ChatDetailsProps> = {}) {
-  const value: ChatDetailsProps = {
+async function mount(overrides: Partial<Props> = {}) {
+  const value: Props = {
     sessionKey: "agent:main:details",
     currentAgentId: "main",
     messages: [],
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  const view = mountSolid(() =>
-    createComponent(ChatDetailsSession, { props: value, presented: true }),
-  );
+  const view = mountSolid(() => createComponent(Details, { props: value, presented: true }));
   const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;
   return element;
 }
-async function update(element: ChatDetailsSession, changes: Partial<ChatDetailsProps> = {}) {
+async function update(element: Details, changes: Partial<Props> = {}) {
   element.props = { ...element.props!, ...changes };
   await element.updateComplete;
 }
-it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
+const updateSession = (element: Details, changes: Partial<GatewaySessionRow>) =>
+  update(element, { selectedSession: { ...element.props!.selectedSession!, ...changes } });
+it("renders arriving pull requests, preserves disclosure and CI identity, and dismisses branches", async () => {
   const element = await mount();
   expect(element.querySelector("[data-details-group]")).toBeNull();
   await update(element, {
-    pullRequests: [{ ...pullRequest, title: "A pull request arriving after the panel opens" }],
+    pullRequestsSessionId: "incarnation-7",
+    pullRequests: [{ ...pullRequest, additions: 84, deletions: 41 }],
   });
   const group = element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!;
   expect(group.open).toBe(true);
+  expect(text(element, ".chat-pr__title")).toBe("A compact PR title");
+  const link = element.querySelector(".chat-pr__link")!;
+  for (const fact of ["example/project", "feature", "Open", "+84", "−41"]) {
+    expect(link.getAttribute("title")).toContain(fact);
+    expect(link.getAttribute("aria-description")).toContain(fact);
+  }
+  expect(element.querySelector("openclaw-chat-ci-automation")).toMatchObject({
+    sessionId: "incarnation-7",
+    presented: true,
+  });
   group.open = false;
   group.dispatchEvent(new Event("toggle"));
   flush();
@@ -122,6 +139,15 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   expect(
     element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')?.open,
   ).toBe(true);
+  await update(element, {
+    pullRequests: [],
+    pullRequestsBranch: {
+      ...repository,
+      createUrl: "https://github.com/example/project/compare/feature",
+    },
+    pullRequestsBranchDismissed: true,
+  });
+  expect(element.querySelector(".chat-pr")).toBeNull();
 });
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
@@ -134,9 +160,9 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
       participantCount: 3,
     },
   });
-  expect(text(element, ".chat-details__creator")).toContain("Original creator");
-  expect(text(element, ".chat-details__creator")).not.toContain("Current owner");
-  expect(text(element, ".chat-details__participants")).toContain("Current owner");
+  expect(detailText(element, "creator")).toContain("Original creator");
+  expect(detailText(element, "creator")).not.toContain("Current owner");
+  expect(detailText(element, "participants")).toContain("Current owner");
   expect(element.textContent).toContain("3 participants");
   expect(element.textContent).toContain("2 more participants");
   expect(element.textContent).not.toMatch(/online|viewers/i);
@@ -145,43 +171,12 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
 it("shows participant controls only while the session has participants", async () => {
   const element = await mount();
   expect(detail(element, "meta-actions")).toBeNull();
-  await update(element, {
-    selectedSession: {
-      ...element.props!.selectedSession!,
-      participants: [{ identity: { type: "profile", id: "participant" }, label: "Contributor" }],
-    },
+  await updateSession(element, {
+    participants: [{ identity: { type: "profile", id: "participant" }, label: "Contributor" }],
   });
-  expect(text(element, ".chat-details__participants")).toContain("1 participants");
-  await update(element, {
-    selectedSession: { ...element.props!.selectedSession!, participantCount: 0 },
-  });
+  expect(detailText(element, "participants")).toContain("1 participants");
+  await updateSession(element, { participantCount: 0 });
   expect(detail(element, "meta-actions")).toBeNull();
-});
-it("uses the current PR renderer and preserves CI session identity and branch dismissal", async () => {
-  const element = await mount({
-    pullRequestsSessionId: "incarnation-7",
-    pullRequests: [{ ...pullRequest, additions: 84, deletions: 41 }],
-  });
-  expect(text(element, ".chat-pr__title")).toBe("A compact PR title");
-  const link = element.querySelector(".chat-pr__link")!;
-  for (const fact of ["example/project", "feature", "Open", "+84", "−41"]) {
-    expect(link.getAttribute("title")).toContain(fact);
-    expect(link.getAttribute("aria-description")).toContain(fact);
-  }
-  const automation = element.querySelector("openclaw-chat-ci-automation");
-  expect(automation).toMatchObject({ sessionId: "incarnation-7", presented: true });
-  const branch = {
-    owner: "example",
-    repo: "project",
-    branch: "feature",
-    createUrl: "https://github.com/example/project/compare/feature",
-  };
-  await update(element, {
-    pullRequests: [],
-    pullRequestsBranch: branch,
-    pullRequestsBranchDismissed: true,
-  });
-  expect(element.querySelector(".chat-pr")).toBeNull();
 });
 it("admits only the latest visible native summary inputs and retires detached work", async () => {
   vi.useFakeTimers();
@@ -217,23 +212,13 @@ it("admits only the latest visible native summary inputs and retires detached wo
   select("first");
   await element.updateComplete;
   await vi.advanceTimersByTimeAsync(0);
-  expect(diff).toHaveBeenCalledExactlyOnceWith({
-    sessionKey: "agent:main:first",
-    agentId: "main",
-    scope: "all",
-    summaryOnly: true,
-  });
+  expect(diff).toHaveBeenCalledExactlyOnceWith(summaryRequest("first"));
   select("accepted");
   first.resolve({ ...result, additions: 999 });
   await vi.advanceTimersByTimeAsync(0);
-  await waitForSolid(() => expect(text(element, ".chat-details__change-lines--add")).toBe("+3"));
+  await waitForSolid(() => expect(detailText(element, "change-lines--add")).toBe("+3"));
   expect(diff).toHaveBeenCalledTimes(2);
-  expect(diff).toHaveBeenLastCalledWith({
-    sessionKey: "agent:main:accepted",
-    agentId: "main",
-    scope: "all",
-    summaryOnly: true,
-  });
+  expect(diff).toHaveBeenLastCalledWith(summaryRequest("accepted"));
 
   const button = detail(element, "all-changes");
   element.remove();
@@ -274,12 +259,10 @@ it("shows abbreviated colored deltas with exact accessible totals, partial and s
   try {
     const element = await mount({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway });
     await vi.advanceTimersByTimeAsync(0);
-    await waitForSolid(() =>
-      expect(text(element, ".chat-details__change-files")).toContain("1 file"),
-    );
+    await waitForSolid(() => expect(detailText(element, "change-files")).toContain("1 file"));
     const button = detail<HTMLButtonElement>(element, "all-changes")!;
-    expect(text(element, ".chat-details__change-lines--add")).toBe("+12.5K");
-    expect(text(element, ".chat-details__change-lines--del")).toBe("−61");
+    expect(detailText(element, "change-lines--add")).toBe("+12.5K");
+    expect(detailText(element, "change-lines--del")).toBe("−61");
     expect(button.getAttribute("aria-description")).toContain("+12480 lines, −61 lines");
     expect(button.textContent).toContain("partial");
     diff.mockRejectedValue(new Error("offline"));
@@ -334,7 +317,7 @@ it("groups every direct subagent with counts, live activity first, and a bounded
   const lane = element.querySelector<HTMLDetailsElement>('[data-details-group="subagents"]')!;
   expect(lane.open).toBe(true);
   const summary = lane.querySelector("summary")!;
-  expect(text(summary, ".chat-details__tally-summary")).toBe(
+  expect(detailText(summary, "tally-summary")).toBe(
     "1 running · 1 queued · 1 done · 1 failed · 1 stopped",
   );
   // The bar sits in the heading so a collapsed group still shows it.
@@ -385,7 +368,7 @@ it("shows finished subagents after the parent stops waiting and omits the group 
     subagentSessionsHydrated: true,
   });
   const group = element.querySelector('[data-details-group="subagents"]')!;
-  expect(text(group, ".chat-details__tally-summary")).toBe("1 done");
+  expect(detailText(group, "tally-summary")).toBe("1 done");
   expect(detail(group, "more")).toBeNull();
   const live = await liveActivity(group);
   expect(text(live, ".chat-subagent-activity__status")).toBe("Completed");
@@ -419,13 +402,7 @@ it("shows live environment and context facts while preserving disclosure intent"
   const context = detail<HTMLDetailsElement>(element, "context")!;
   expect(text(context, "summary")).toContain("50%");
   context.open = true;
-  await update(element, {
-    selectedSession: {
-      ...element.props!.selectedSession!,
-      totalTokens: 32000,
-      totalTokensFresh: false,
-    },
-  });
+  await updateSession(element, { totalTokens: 32000, totalTokensFresh: false });
   expect(context.open).toBe(true);
   expect(text(context, "summary")).toContain("~25%");
   const openWorkspace = () =>

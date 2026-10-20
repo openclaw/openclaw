@@ -2,10 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
-import {
-  resolveChatFastModeSelectState,
-  type ChatFastModeSelectState,
-} from "../../../lib/chat/model-select-state.ts";
+import { resolveChatFastModeSelectState } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -15,29 +12,35 @@ import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
+type PickerProps = Parameters<typeof ChatEffortPicker>[0];
 let host: HTMLDivElement | undefined;
-let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | undefined;
+let updatePicker: ((props: PickerProps) => void) | undefined;
 
 afterEach(() => {
-  if (host) {
-    updatePicker = undefined;
-    host.remove();
-    host = undefined;
-  }
+  updatePicker = undefined;
+  host?.remove();
+  host = undefined;
   document.documentElement.removeAttribute("data-theme-mode");
 });
+
+const query = <T extends Element = HTMLElement>(selector: string) =>
+  host!.querySelector<T>(selector)!;
+const speedOptions = () => [
+  ...host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+];
+const text = (element: Node) => element.textContent?.trim();
 
 async function fixture(
   levels: Array<string | { id: string; label: string }>,
   value: string,
   inherited = false,
-  fastMode?: ChatFastModeSelectState,
+  fastMode?: PickerProps["fastMode"],
   open = true,
 ) {
   host ??= document.body.appendChild(document.createElement("div"));
   const onThinkingSelect = vi.fn(async () => undefined);
   const onFastModeSelect = vi.fn(async () => undefined);
-  const next: Parameters<typeof ChatEffortPicker>[0] = {
+  const next: PickerProps = {
     disabled: false,
     thinkingDisabled: false,
     sessionKey: "effort-preview",
@@ -68,46 +71,31 @@ async function fixture(
   if (updatePicker) {
     updatePicker(next);
   } else {
-    mountSolid(
-      () => {
-        const [props, setProps] = createSignal(next);
-        updatePicker = (nextProps) => setProps(() => nextProps);
-        return <ChatEffortPicker {...props()} />;
-      },
-      { container: host },
-    );
+    const [props, setProps] = createSignal(next);
+    updatePicker = (nextProps) => setProps(() => nextProps);
+    mountSolid(() => <ChatEffortPicker {...props()} />, { container: host });
   }
   flush();
-  const details = host.querySelector("details")!;
+  const details = query<HTMLDetailsElement>("details");
   if (open && !details.open) {
-    const opened = new Promise<void>((resolve) => {
+    await new Promise<void>((resolve) => {
       details.addEventListener("toggle", () => resolve(), { once: true });
+      details.open = true;
     });
-    details.open = true;
-    // The details toggle commits its native top-layer surface.
-    await opened;
   }
-  expect(host.querySelector("[data-anchored-overlay]")!.matches(":popover-open")).toBe(open);
-  expect(
-    host.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
-  ).toBe(open);
-  return {
-    input: host.querySelector<HTMLInputElement>("input[type=range]")!,
-    onThinkingSelect,
-    onFastModeSelect,
-  };
+  const input = query<HTMLInputElement>("input[type=range]");
+  expect(query("[data-anchored-overlay]").matches(":popover-open")).toBe(open);
+  expect(input?.checkVisibility() ?? false).toBe(open);
+  return { input, onThinkingSelect, onFastModeSelect };
 }
 
-function appearance(input: HTMLInputElement) {
-  return {
-    fill: getComputedStyle(input.parentElement!).backgroundImage,
-    glow: getComputedStyle(input).boxShadow,
-  };
-}
+const appearance = (input: HTMLInputElement) => ({
+  fill: getComputedStyle(input.parentElement!).backgroundImage,
+  glow: getComputedStyle(input).boxShadow,
+});
 
 const speedOption = (value: string) =>
-  host!.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
-const summary = () => host!.querySelector("summary")!;
+  query<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`);
 function speedState(
   mode: boolean | "ultrafast",
   tiers?: string[],
@@ -146,27 +134,22 @@ function preview(input: HTMLInputElement, value: string) {
 }
 
 it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
-  await fixture(["low", "medium", "high"], "high", false, undefined, false);
+  const { input } = await fixture(["low", "medium", "high"], "high", false, undefined, false);
   const composer = host!;
   composer.classList.add("agent-chat__input");
-  const details = composer.querySelector("details")!;
-  const trigger = details.querySelector("summary")!;
-  const surface = details.querySelector<HTMLElement>("[data-anchored-overlay]")!;
-  const inputWrapper = document.createElement("div");
-  inputWrapper.className = "agent-chat__composer-combobox";
-  const textarea = document.createElement("textarea");
-  inputWrapper.append(textarea);
-  composer.prepend(inputWrapper);
+  const details = query<HTMLDetailsElement>("details");
+  const trigger = query("summary");
+  const surface = query("[data-anchored-overlay]");
+  composer.insertAdjacentHTML(
+    "afterbegin",
+    '<div class="agent-chat__composer-combobox"><textarea></textarea></div>',
+  );
+  const textarea = query<HTMLTextAreaElement>("textarea");
   onTestFinished(installChatComposerPickerDismissal(document));
   onTestFinished(installTitleTooltips(document));
-  const focusComposer = (event: MouseEvent | PointerEvent) =>
-    focusComposerFromChrome(event, true, textarea);
+  const focusComposer = (event: MouseEvent) => focusComposerFromChrome(event, true, textarea);
   composer.addEventListener("pointerdown", focusComposer);
   composer.addEventListener("click", focusComposer);
-  onTestFinished(() => {
-    composer.removeEventListener("pointerdown", focusComposer);
-    composer.removeEventListener("click", focusComposer);
-  });
   textarea.focus();
   await page.elementLocator(trigger).click();
   await expect.poll(() => surface.matches(":popover-open")).toBe(true);
@@ -179,9 +162,7 @@ it("returns Escape to its trigger after pointer and keyboard reopening with titl
   await userEvent.keyboard("{Enter}");
   await expect.poll(() => surface.matches(":popover-open")).toBe(true);
   await userEvent.keyboard("{Tab}");
-  await expect
-    .poll(() => document.activeElement)
-    .toBe(composer.querySelector<HTMLInputElement>("input[type=range]")!);
+  await expect.poll(() => document.activeElement).toBe(input);
   await userEvent.keyboard("{Escape}");
   await expect.poll(() => details.open).toBe(false);
   await expect.poll(() => surface.matches(":popover-open")).toBe(false);
@@ -189,7 +170,6 @@ it("returns Escape to its trigger after pointer and keyboard reopening with titl
 });
 
 it("keeps inherited speed selectable", async () => {
-  document.documentElement.dataset.themeMode = "dark";
   const fastMode = speedState("ultrafast", ["default", "priority", "ultrafast"], true, true);
   const { onFastModeSelect } = await fixture(["low", "medium", "high"], "high", false, fastMode);
   for (const value of ["off", "on", "ultrafast"]) {
@@ -203,32 +183,27 @@ it("keeps speed names accessible without chip labels and only exposes entitled c
   const showSpeed = (mode: boolean | "ultrafast", tiers?: string[], supported = true) =>
     fixture(["low", "medium", "high"], "high", false, speedState(mode, tiers, supported));
   await showSpeed(false);
-  expect(summary().textContent?.trim()).toBe("High");
-  expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
+  expect(text(query("summary"))).toBe("High");
+  expect(speedOptions()).toHaveLength(2);
   expect(host!.textContent).not.toContain("higher usage");
   const { onFastModeSelect } = await showSpeed("ultrafast", ["priority", "ultrafast"]);
-  expect(summary().textContent?.trim()).toBe("High");
-  expect(summary().getAttribute("aria-label")).toContain("High · Ultrafast");
-  expect(summary().title).toBe("High · Ultrafast");
-  expect(
-    [...host!.querySelectorAll("[data-chat-speed-option]")].map((option) =>
-      option.textContent?.trim(),
-    ),
-  ).toEqual(["Standard", "Fast", "Ultrafast"]);
+  expect(text(query("summary"))).toBe("High");
+  expect(query("summary").getAttribute("aria-label")).toContain("High · Ultrafast");
+  expect(query("summary").title).toBe("High · Ultrafast");
+  expect(speedOptions().map(text)).toEqual(["Standard", "Fast", "Ultrafast"]);
   const ultra = speedOption("ultrafast");
   expect(ultra.getAttribute("aria-checked")).toBe("true");
   ultra.focus();
   ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
   expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
-  const standard = speedOption("off");
-  standard.click();
+  speedOption("off").click();
   expect(onFastModeSelect).toHaveBeenLastCalledWith("off", "effort-preview");
   await showSpeed("ultrafast", ["priority", "ultrafast"], false);
   expect(speedOption("ultrafast").disabled).toBe(true);
   expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
   const standardOnly = await showSpeed("ultrafast", ["default"], false);
   expect(speedOption("off").getAttribute("aria-checked")).toBe("true");
-  for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
+  for (const option of speedOptions()) {
     expect(option.disabled).toBe(true);
     option.click();
   }
@@ -236,8 +211,8 @@ it("keeps speed names accessible without chip labels and only exposes entitled c
   expect(standardOnly.input.disabled).toBe(false);
   expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
   await showSpeed("ultrafast");
+  expect(query("summary").getAttribute("aria-label")).toContain("Ultrafast");
   expect(speedOption("ultrafast").disabled).toBe(true);
-  expect(summary().getAttribute("aria-label")).toContain("Ultrafast");
   expect(speedOption("ultrafast").getAttribute("aria-checked")).toBe("true");
   expect(speedOption("off").getAttribute("tabindex")).toBe("0");
   expect(speedOption("ultrafast").getAttribute("tabindex")).toBe("-1");

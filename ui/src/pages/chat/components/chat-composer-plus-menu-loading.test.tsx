@@ -2,43 +2,44 @@
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { makeMenu } from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
-afterEach(() => {
-  cleanupSolid();
-  vi.doUnmock("./chat-composer-plus-menu-content.tsx");
+type MenuContent = typeof import("./chat-composer-plus-menu-content.tsx");
+const contentPath = "./chat-composer-plus-menu-content.tsx";
+const makeToggle = (label: string, checked: boolean, onChange: (checked: boolean) => void) => ({
+  value: "toggle",
+  label,
+  checked,
+  disabled: false,
+  onChange,
 });
+
+afterEach(() => vi.doUnmock(contentPath));
 
 function mountMenu() {
   const onChange = vi.fn();
-  const [menu, setMenu] = createSignal<ChatComposerPlusMenuProps>(
+  const [menu, setMenu] = createSignal(
     makeMenu({
-      rootToggles: [
-        { value: "toggle", label: "Original toggle", checked: false, disabled: false, onChange },
-      ],
+      rootToggles: [makeToggle("Original", false, onChange)],
       onOpenChange: (open) => setMenu((current) => ({ ...current, open })),
     }),
   );
-  const view = mountSolid(() => (
-    <>
-      <input aria-label="Other field" />
-      <ChatComposerPlusMenu menu={menu()} />
-    </>
-  ));
-  const trigger = view.container.querySelector<HTMLButtonElement>(
-    ".agent-chat__input-btn--attach",
-  )!;
+  const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
+  view.container.insertAdjacentHTML("afterbegin", '<input aria-label="Other field">');
+  const trigger = view.getByRole("button", { name: "Add attachment" });
   const panel = view.container.querySelector(".agent-chat__capability-menu-panel")!;
-  const toggle = (label = "Updated toggle") =>
+  const toggle = (label = "Updated") =>
     view.getByRole("menuitemcheckbox", { name: label, hidden: true });
   const isOpen = () => panel.matches(":popover-open");
   const expectTrigger = () =>
-    expect(view.container.querySelector(".agent-chat__input-btn--attach")).toBe(trigger);
-  return { ...view, setMenu, trigger, panel, onChange, toggle, isOpen, expectTrigger };
+    expect(view.getByRole("button", { name: "Add attachment" })).toBe(trigger);
+  const update = (patch: Partial<ChatComposerPlusMenuProps>) =>
+    setMenu((current) => ({ ...current, ...patch }));
+  return { ...view, update, trigger, onChange, toggle, isOpen, expectTrigger };
 }
 
 it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as const)(
@@ -46,96 +47,68 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
   async (mode) => {
     const ready = createDeferred();
     onTestFinished(() => ready.resolve());
-    let loads = 0;
-    vi.doMock("./chat-composer-plus-menu-content.tsx", async () => {
-      loads++;
-      await ready.promise;
-      return vi.importActual<typeof import("./chat-composer-plus-menu-content.tsx")>(
-        "./chat-composer-plus-menu-content.tsx",
-      );
-    });
-    const view = mountMenu();
-    view.trigger.focus();
-    if (mode === "pointer") {
-      view.trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-    } else {
-      view.trigger.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: mode === "last" ? "ArrowUp" : "ArrowDown",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    }
-    await waitForSolid(() => {
-      expect(view.isOpen()).toBe(true);
-      expect(loads).toBe(1);
-    });
-    expect(
-      view.getByRole("menuitem", { name: "Loading…", hidden: true }).hasAttribute("disabled"),
-    ).toBe(true);
+    const load = vi.fn(() => ready.promise.then(() => vi.importActual<MenuContent>(contentPath)));
+    vi.doMock(contentPath, load);
+    const { trigger, update, isOpen, toggle, getByRole, expectTrigger, onChange } = mountMenu();
+    trigger.focus();
+    trigger.dispatchEvent(
+      mode === "pointer"
+        ? new MouseEvent("click", { bubbles: true, detail: 1 })
+        : new KeyboardEvent("keydown", {
+            key: mode === "last" ? "ArrowUp" : "ArrowDown",
+            bubbles: true,
+            cancelable: true,
+          }),
+    );
+    await waitForSolid(() => expect([isOpen(), load.mock.calls.length]).toEqual([true, 1]));
+    const loading = getByRole("menuitem", { name: "Loading…", hidden: true });
+    expect(loading.hasAttribute("disabled")).toBe(true);
     const latestChange = vi.fn();
-    view.setMenu((current) => ({
-      ...current,
-      rootToggles: [
-        {
-          ...current.rootToggles![0],
-          label: "Updated toggle",
-          checked: true,
-          onChange: latestChange,
-        },
-      ],
-    }));
+    update({ rootToggles: [makeToggle("Updated", true, latestChange)] });
     flush();
-    const external = view.getByRole("textbox", { name: "Other field" });
+    const external = getByRole("textbox", { name: "Other field" });
     if (mode === "external") {
       external.focus();
     } else if (mode === "closed" || mode === "reopened") {
-      view.setMenu((current) => ({ ...current, open: false }));
-      await waitForSolid(() => expect(view.isOpen()).toBe(false));
+      update({ open: false });
+      await waitForSolid(() => expect(isOpen()).toBe(false));
       if (mode === "reopened") {
-        view.trigger.click();
-        await waitForSolid(() => expect(view.isOpen()).toBe(true));
+        trigger.click();
+        await waitForSolid(() => expect(isOpen()).toBe(true));
       }
     }
     ready.resolve();
-    await waitForSolid(() => expect(view.toggle()).toBeTruthy());
-    view.expectTrigger();
-    expect(loads).toBe(1);
+    await waitForSolid(() => expect(toggle()).toBeTruthy());
+    expectTrigger();
+    expect(load).toHaveBeenCalledOnce();
     if (mode === "closed") {
-      expect(view.isOpen()).toBe(false);
-    } else if (mode === "external") {
-      expect(document.activeElement).toBe(external);
-    } else if (mode === "pointer") {
-      expect(document.activeElement).toBe(view.trigger);
+      expect(isOpen()).toBe(false);
+    } else if (mode === "external" || mode === "pointer") {
+      expect(document.activeElement).toBe(mode === "external" ? external : trigger);
     } else {
       await waitForSolid(() =>
         expect(document.activeElement).toBe(
-          mode === "last"
-            ? view.toggle()
-            : view.getByRole("menuitem", { name: "Take photo", hidden: true }),
+          mode === "last" ? toggle() : getByRole("menuitem", { name: "Take photo", hidden: true }),
         ),
       );
-      view.toggle().click();
+      toggle().click();
       expect(latestChange).toHaveBeenCalledExactlyOnceWith(false);
-      expect(view.onChange).not.toHaveBeenCalled();
+      expect(onChange).not.toHaveBeenCalled();
     }
   },
 );
 
 it("keeps the menu open and retries a failed content load", async () => {
-  // mock-isolation: reject the chunk import itself to exercise the visible retry path.
-  vi.doMock("./chat-composer-plus-menu-content.tsx", () => {
-    throw new Error("Menu chunk could not be loaded");
+  vi.doMock(contentPath, () => {
+    throw new Error("Chunk failed");
   });
   const view = mountMenu();
   view.trigger.click();
-  await waitForSolid(() => expect(view.getByRole("alert")).toBeTruthy());
+  await waitForSolid(() => expect(view.getByRole("alert").textContent).toContain("Chunk failed"));
   expect(view.isOpen()).toBe(true);
-  expect(view.getByRole("alert").textContent).toContain("Menu chunk could not be loaded");
-  vi.doUnmock("./chat-composer-plus-menu-content.tsx");
+  vi.doUnmock(contentPath);
   view.getByRole("button", { name: "Retry" }).click();
-  await waitForSolid(() => expect(view.toggle("Original toggle")).toBeTruthy());
+  await waitForSolid(() => expect(view.toggle("Original")).toBeTruthy());
   view.expectTrigger();
   expect(view.isOpen()).toBe(true);
 });

@@ -42,31 +42,22 @@ const usage = (key: string, sessionId = key) => ({
 });
 function expectTokens(value: SessionSystemPromptReport, expected: Array<number | null>) {
   const categories = buildChatContextCategories(value, 50000);
-  expect(categories.map(({ id }) => id)).toEqual([
-    "messages",
-    "files",
-    "tools",
-    "skills",
-    "system",
-  ]);
-  expect(categories.map(({ tokens }) => tokens)).toEqual(expected);
+  expect(categories.map(({ id, tokens }) => [id, tokens])).toEqual(
+    ["messages", "files", "tools", "skills", "system"].map((id, i) => [id, expected[i]]),
+  );
+  expect(categories[1]?.groups?.[0]?.kind).toBe("other");
 }
 
 it("subtracts embedded prompt sections once, and leaves unmeasured and inconsistent sizes unknown", () => {
   expectTokens(report, [37000, 4000, 3000, 2000, 4000]);
   expect(buildChatContextCategories(report, 1000)[0]?.tokens).toBeNull();
-  const native: SessionSystemPromptReport = {
-    ...report,
-    injectedWorkspaceFiles: [
-      {
-        ...report.injectedWorkspaceFiles[0]!,
-        path: "/private/AGENTS.md",
-        injectionStatus: "native_unverified",
-        injectedChars: null,
-        truncated: null,
-      },
-    ],
-  };
+  const native = structuredClone(report);
+  Object.assign(native.injectedWorkspaceFiles[0]!, {
+    path: "/private/AGENTS.md",
+    injectionStatus: "native_unverified",
+    injectedChars: null,
+    truncated: null,
+  });
   expectTokens(native, [null, null, 3000, 2000, null]);
 });
 
@@ -77,9 +68,7 @@ it("retires a pending report on session replacement and rejects a report from an
   const request = createGatewayRequestMock((method, params, options) => {
     const firstRequest = requestIndex++ === 0;
     expect(method).toBe("sessions.usage");
-    expect(params).toMatchObject({
-      key: firstRequest ? "agent:main:first" : "agent:main:second",
-    });
+    expect(params).toMatchObject({ key: `agent:main:${firstRequest ? "first" : "second"}` });
     if (firstRequest) {
       signal = options?.signal;
       return first.promise;
@@ -87,11 +76,8 @@ it("retires a pending report on session replacement and rejects a report from an
     return usage("second", "retired");
   });
   const { gateway, publish } = createApplicationGateway();
-  publish({
-    ...gateway.snapshot,
-    phase: "connected",
-    client: createTestGatewayClient(request),
-  });
+  const client = createTestGatewayClient(request);
+  publish({ ...gateway.snapshot, phase: "connected", client });
   const [session, setSession] = createSignal<GatewaySessionRow>({
     key: "agent:main:first",
     kind: "direct",
@@ -114,32 +100,25 @@ it("retires a pending report on session replacement and rejects a report from an
 });
 
 it("groups duplicate filenames by producer origin and keeps deferred schemas outside usage", () => {
-  const grouped: SessionSystemPromptReport = {
-    ...report,
-    injectedWorkspaceFiles: [
-      {
-        ...report.injectedWorkspaceFiles[0]!,
-        origin: { kind: "agent-workspace", rootPath: "/private/workspace" },
-      },
-      {
-        ...workspaceFile("/project/AGENTS.md", 4000),
-        origin: { kind: "execution-project", rootPath: "/project" },
-      },
+  const grouped = structuredClone(report);
+  grouped.injectedWorkspaceFiles[0]!.origin = {
+    kind: "agent-workspace",
+    rootPath: "/private/workspace",
+  };
+  grouped.injectedWorkspaceFiles.push({
+    ...workspaceFile("/project/AGENTS.md", 4000),
+    origin: { kind: "execution-project", rootPath: "/project" },
+  });
+  grouped.tools.entries = [
+    { name: "exec", summaryChars: 400, schemaChars: 8000, source: "openclaw" },
+    { name: "read", summaryChars: 400, schemaChars: 4000, source: "mcp", serverName: "Docs" },
+  ];
+  grouped.tools.deferred = {
+    schemaChars: 40000,
+    entries: [
+      { name: "search", source: "mcp", serverName: "Docs", schemaChars: 40000 },
+      { name: "remote", source: "client", schemaChars: null },
     ],
-    tools: {
-      ...report.tools,
-      entries: [
-        { name: "exec", summaryChars: 400, schemaChars: 8000, source: "openclaw" },
-        { name: "read", summaryChars: 400, schemaChars: 4000, source: "mcp", serverName: "Docs" },
-      ],
-      deferred: {
-        schemaChars: 40000,
-        entries: [
-          { name: "search", source: "mcp", serverName: "Docs", schemaChars: 40000 },
-          { name: "remote", source: "client", schemaChars: null },
-        ],
-      },
-    },
   };
   const categories = buildChatContextCategories(grouped, 50000);
   const groups = (id: string) => categories.find((category) => category.id === id)?.groups;
@@ -158,8 +137,4 @@ it("groups duplicate filenames by producer origin and keeps deferred schemas out
     ["mcp", 10000],
     ["client", null],
   ]);
-  expect(
-    buildChatContextCategories(report, 50000).find((category) => category.id === "files")
-      ?.groups?.[0]?.kind,
-  ).toBe("other");
 });
