@@ -5,6 +5,7 @@ import { createDeliverySuite } from "./agent-runner-delivery-suite.test-support.
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 
 const { createFixture } = createDeliverySuite();
+const requestShaping = { thinking: "medium", thinkingClamp: "THINKING_CLAMP_DIAGNOSTIC" };
 
 describe.each(["queued", "native"] as const)("%s trace delivery", (lane) => {
   it.each([
@@ -22,10 +23,7 @@ describe.each(["queued", "native"] as const)("%s trace delivery", (lane) => {
         traceLevel: storedLevel,
         verboseLevel: "off",
       });
-      fixture.context.execution.result.meta!.requestShaping = {
-        thinking: "medium",
-        thinkingClamp: "THINKING_CLAMP_DIAGNOSTIC",
-      };
+      fixture.context.execution.result.meta!.requestShaping = { ...requestShaping };
       fixture.context.followupRun.prompt = "QUEUED_INPUT";
       fixture.context.followupRun.run.traceAuthorized = authorized;
       fixture.context.followupRun.run.traceLevelOverride = selected;
@@ -71,14 +69,11 @@ describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lan
       const fixture = await createFixture();
       const entry = fixture.context.activeSessionEntry!;
       entry.verboseLevel = initial;
-      fixture.context.resolvedVerboseLevel = override ?? initial;
-      fixture.context.followupRun.run.verboseLevel = override ?? initial;
+      fixture.context.resolvedVerboseLevel = override;
+      fixture.context.followupRun.run.verboseLevel = override;
       fixture.context.followupRun.run.verboseLevelOverride = override;
       fixture.context.followupRun.run.traceAuthorized = false;
-      fixture.context.execution.result.meta!.requestShaping = {
-        thinking: "medium",
-        thinkingClamp: "THINKING_CLAMP_DIAGNOSTIC",
-      };
+      fixture.context.execution.result.meta!.requestShaping = { ...requestShaping };
       await fixture.replace({
         ...entry,
         verboseLevel: live,

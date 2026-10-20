@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,15 +12,8 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
   return createQueueTestRun(
     { prompt: "test" },
     {
-      sessionId: "session-1",
-      agentId: "agent-1",
       config,
-      provider: "openai",
-      model: "gpt-4.1",
-      agentDir: "/tmp/agent",
       sessionKey: "agent:test:session",
-      sessionFile: "/tmp/session.json",
-      workspaceDir: "/tmp/workspace",
       skipProviderRuntimeHints: true,
       thinkingCatalog: [
         {
@@ -30,7 +23,6 @@ function makeRun(config: OpenClawConfig): FollowupRun["run"] {
           baseUrl: "https://api.openai.com/v1",
         },
       ],
-      timeoutMs: 60_000,
     },
   ).run;
 }
@@ -56,27 +48,25 @@ function providerConfig(
 
 afterEach(clearRuntimeConfigSnapshot);
 
-describe("buildEmbeddedRunExecutionParams runtime config", () => {
-  it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
-    const staleSnapshot = providerConfig({
-      source: "env",
-      provider: "default",
-      id: "OPENAI_API_KEY",
-    });
-    const resolvedRunConfig = providerConfig("resolved-runtime-key");
-    setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
-
-    const resolved = await resolveRun(makeRun(resolvedRunConfig));
-
-    expect(resolved.config).toBe(resolvedRunConfig);
+it("keeps an already-resolved run config instead of reverting to a stale runtime snapshot", async () => {
+  const staleSnapshot = providerConfig({
+    source: "env",
+    provider: "default",
+    id: "OPENAI_API_KEY",
   });
+  const resolvedRunConfig = providerConfig("resolved-runtime-key");
+  setRuntimeConfigSnapshot(staleSnapshot, staleSnapshot);
 
-  it("carries out-of-band tool bindings into the embedded run", async () => {
-    const run = makeRun({});
-    run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
+  const resolved = await resolveRun(makeRun(resolvedRunConfig));
 
-    const resolved = await resolveRun(run);
+  expect(resolved.config).toBe(resolvedRunConfig);
+});
 
-    expect(resolved.toolBindings).toEqual(run.toolBindings);
-  });
+it("carries out-of-band tool bindings into the embedded run", async () => {
+  const run = makeRun({});
+  run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
+
+  const resolved = await resolveRun(run);
+
+  expect(resolved.toolBindings).toEqual(run.toolBindings);
 });

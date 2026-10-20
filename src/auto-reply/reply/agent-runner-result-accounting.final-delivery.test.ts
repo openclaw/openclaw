@@ -26,6 +26,7 @@ import { applyPreparedReplyMedia } from "./reply-media-paths.js";
 
 const suite = createDeliverySuite();
 const { createFixture } = suite;
+const modelRef = { provider: diagnostic.provider, model: diagnostic.model };
 
 async function prepareLocalReply(
   fixture: Awaited<ReturnType<typeof createFixture>>,
@@ -92,8 +93,7 @@ async function prepareLocalReply(
   });
   const assistant = buildEmbeddedRunnerAssistant({
     content: [{ type: "text", text }],
-    provider: diagnostic.provider,
-    model: diagnostic.model,
+    ...modelRef,
   });
   const attempt = makeEmbeddedRunnerAttempt({
     sessionIdUsed: sessionId,
@@ -102,20 +102,12 @@ async function prepareLocalReply(
     currentAttemptCompletedAssistant: assistant,
     lastAssistantTextMessageIndex: 0,
     assistantTranscriptOwned: true,
-    ...(restartNotice
-      ? { lastToolError: { toolName: "exec", error: "Command interrupted by restart" } }
-      : {}),
   });
+  if (restartNotice) {
+    attempt.lastToolError = { toolName: "exec", error: "Command interrupted by restart" };
+  }
   const terminal = makeTerminalInput({
     attempt,
-    ...(restartNotice
-      ? {
-          terminalState: {
-            outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
-            signalOwnedInterruption: true,
-          },
-        }
-      : {}),
     runParams: {
       sessionId,
       sessionKey,
@@ -126,20 +118,22 @@ async function prepareLocalReply(
       authProfileStateMode: "read-only",
     },
   });
+  if (restartNotice) {
+    terminal.terminalState = {
+      outcome: { reason: "cancelled", status: "error", stopReason: "restart" },
+      signalOwnedInterruption: true,
+    };
+  }
   const prepared = prepareEmbeddedRunTerminal({
-    runParams: terminal.runParams,
-    attempt,
+    ...terminal,
+    ...modelRef,
     currentAttemptCompletedAssistant: assistant,
-    provider: diagnostic.provider,
-    model: diagnostic.model,
-    activeErrorContext: { provider: diagnostic.provider, model: diagnostic.model },
+    activeErrorContext: modelRef,
     authProfileStore: { version: 1, profiles: {} },
     sessionIdUsed: sessionId,
     outerContextTokenMeta: {},
     usageAccumulator: createUsageAccumulator(),
-    contextRecoveryState: terminal.contextRecoveryState,
     resolvedToolResultFormat: "markdown",
-    terminalState: terminal.terminalState,
     replyDeliveryState: facts.terminal,
     sourceReplyDeliveryState: facts.source,
   });
@@ -157,17 +151,14 @@ async function prepareLocalReply(
 
 it("publishes a prepared final only after its worker completion commits without host transactions", async () => {
   const fixture = await createFixture();
-  const payload = { text: "durable final" };
-  fixture.context.execution.result.payloads = [payload];
+  fixture.context.execution.result.payloads = [{ text: "durable final" }];
   const sql = observeHostDataSql();
   try {
     const result = await finalizeReplyAgentRun(fixture.context);
     expect(result).toMatchObject({ text: "durable final" });
-    expect(
-      sql.queries.filter((query) =>
-        /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
-      ),
-    ).toEqual([]);
+    expect(sql.queries.join("\n")).not.toMatch(
+      /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i,
+    );
     const final = Array.isArray(result) ? result[0] : result;
     const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
     expect(completion).toMatchObject({
@@ -220,12 +211,11 @@ it("keeps a committed local answer in history without a second final delivery in
     outputTokens: 8,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
-  expect(await sessionAccessor.loadTranscriptEvents(scope)).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        message: expect.objectContaining({ role: "assistant", content: "Committed local answer." }),
-      }),
-    ]),
+  const messages = (await sessionAccessor.loadTranscriptEvents(scope)).map(
+    (event) => event.message,
+  );
+  expect(messages).toContainEqual(
+    expect.objectContaining({ role: "assistant", content: "Committed local answer." }),
   );
 });
 
@@ -254,21 +244,23 @@ async function prepareCommittedSourceReplies(media: boolean) {
       ),
     );
   }
-  const replies = [
-    {
-      text: "Working on the requested change.",
-      sourceReplyFinal: false,
-      idempotencyKey: `${context.runId}:message-tool:progress`,
+  const replies: MessagingToolSourceReplyPayload[] = (
+    [
+      ["Working on the requested change.", false, "progress"],
+      ["The requested change is complete.", true, "final"],
+    ] as const
+  ).map(([text, sourceReplyFinal, phase]) => {
+    const reply: MessagingToolSourceReplyPayload = {
+      text,
+      sourceReplyFinal,
       transcriptOwner: true,
-    },
-    {
-      text: "The requested change is complete.",
-      sourceReplyFinal: true,
-      idempotencyKey: `${context.runId}:message-tool:final`,
-      transcriptOwner: true,
-      ...(media ? { mediaUrl: mediaPath } : {}),
-    },
-  ] satisfies MessagingToolSourceReplyPayload[];
+      idempotencyKey: `${context.runId}:message-tool:${phase}`,
+    };
+    if (media && sourceReplyFinal) {
+      reply.mediaUrl = mediaPath;
+    }
+    return reply;
+  });
   for (const reply of replies) {
     await persistInternalSourceReply({
       cfg: context.cfg,
@@ -319,26 +311,18 @@ it.each([false, true])(
 
 it("retains custody for an MCP Connect presentation added after the source reply was committed", async () => {
   const { fixture, scope, transcript } = await prepareCommittedSourceReplies(false);
+  const url = "https://auth.example/authorize?state=synthetic";
   fixture.context.execution.result.latestMcpConnectAction = {
     serverName: "calendar",
-    authorizationUrl: "https://auth.example/authorize?state=synthetic",
+    authorizationUrl: url,
   };
 
   const result = await finalizeReplyAgentRun(fixture.context);
 
   expect(result).toHaveLength(2);
   const final = Array.isArray(result) ? result[1] : undefined;
-  expect(final?.presentation?.blocks).toEqual([
-    {
-      type: "buttons",
-      buttons: [
-        {
-          label: "Connect calendar",
-          action: { type: "url", url: "https://auth.example/authorize?state=synthetic" },
-        },
-      ],
-    },
-  ]);
+  const button = { label: "Connect calendar", action: { type: "url", url } };
+  expect(final?.presentation?.blocks).toEqual([{ type: "buttons", buttons: [button] }]);
   expect(
     final && getReplyPayloadMetadata(final)?.sourceReplyTranscriptMirror?.transcriptOwner,
   ).toBe(true);
