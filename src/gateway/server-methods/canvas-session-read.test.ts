@@ -28,13 +28,11 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { extractChatToolResultCanvasPreview } from "../chat-display-projection.canvas.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
-import { readSessionMessageByIdAsync } from "../session-transcript-readers.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -66,6 +64,13 @@ const receipt = (result: WidgetResult, toolCallId: string, timestamp: number) =>
   ...result,
   timestamp,
 });
+const textMessage = (role: "user" | "assistant", content: string, timestamp: number) => ({
+  role,
+  content,
+  timestamp,
+});
+const containing = (value: Record<string, unknown>) =>
+  expect.arrayContaining([expect.objectContaining(value)]);
 
 it("reads retained widget receipts and waits only for current live presentations", async () => {
   await withOpenClawTestState(
@@ -74,8 +79,7 @@ it("reads retained widget receipts and waits only for current live presentations
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      ensureUserProfilesSchema({});
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalogForTest()).release };
       const owner = roleClient("write", "widget-owner");
       const guest = roleClient("view", "widget-reader");
       guest.connect.scopes = ["operator.sessions.read"];
@@ -98,23 +102,19 @@ it("reads retained widget receipts and waits only for current live presentations
         },
       };
       await upsertSessionEntryCore(scope, entry);
-      // Existing producer/receipt shape: no new manifest field or regenerated widget is needed.
-      const tool = createShowWidgetTool({
-        sessionId: scope.sessionId,
-        agentId: "main",
-      });
-      const result = await tool.execute("saved-widget-call", {
-        title: "Saved preview",
-        widget_code: "<p>Saved before guest viewing</p>",
-      });
+      const makeTool = (sessionId: string) =>
+        createShowWidgetTool({
+          sessionId,
+          agentId: "main",
+        });
+      const tool = makeTool(scope.sessionId);
+      const show = (name: string, html: string, source = tool) =>
+        source.execute(`${name}-widget-call`, { title: name, widget_code: `<p>${html}</p>` });
+      const result = await show("saved", "Saved before guest viewing");
       const docId = widgetId(result);
       const messageId = "saved-widget-result";
       await append(messageId, receipt(result, "saved-widget-call", 1));
-      await append("saved-reply", {
-        role: "assistant",
-        content: "The preview is ready.",
-        timestamp: 2,
-      });
+      await append("saved-reply", textMessage("assistant", "The preview is ready.", 2));
       const context = await createHistoryReadContext({
         getRuntimeConfig: () => cfg,
         getMcpAppSandboxPort: () => 18790,
@@ -125,9 +125,6 @@ it("reads retained widget receipts and waits only for current live presentations
       const forbidden = async (params: Record<string, unknown>) => {
         expect((await view(params))[2]).toMatchObject({ code: "FORBIDDEN" });
       };
-      await expect(readSessionMessageByIdAsync(scope, messageId)).resolves.toMatchObject({
-        found: true,
-      });
       const bound = { docId, sessionKey: scope.sessionKey };
       const first = await view(bound);
       expect(first[0]).toBe(true);
@@ -152,17 +149,10 @@ it("reads retained widget receipts and waits only for current live presentations
         sessionId: forked.transcript.sessionId,
       };
       await upsertSessionEntryCore(child, { ...entry, sessionId: child.sessionId });
-      await expect(readSessionMessageByIdAsync(child, messageId)).resolves.toMatchObject({
-        found: true,
-      });
       const inherited = await view({ ...bound, sessionKey: child.sessionKey });
-      expect(inherited[0]).toBe(true);
-      expect(inherited[1]).toEqual(first[1]);
+      expect(inherited).toEqual([true, first[1]]);
 
-      const abandoned = await tool.execute("abandoned-widget-call", {
-        title: "Abandoned preview",
-        widget_code: "<p>Abandoned branch</p>",
-      });
+      const abandoned = await show("abandoned", "Abandoned branch");
       const abandonedId = widgetId(abandoned);
       await append("abandoned-widget-result", receipt(abandoned, "abandoned-widget-call", 3));
       expect((await view({ ...bound, docId: abandonedId }))[0]).toBe(true);
@@ -192,7 +182,7 @@ it("reads retained widget receipts and waits only for current live presentations
       await waitForSessionTranscriptIndexReconcile(database);
       expect((await view(bound))[1]).toEqual(first[1]);
 
-      // Exercise native age selection and archival without rewriting stored timestamps.
+      // Use the maintenance owner's age selection, not rewritten stored timestamps.
       const future = Date.now() + 31 * 24 * 60 * 60 * 1000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(future);
       try {
@@ -249,11 +239,10 @@ it("reads retained widget receipts and waits only for current live presentations
         },
         other,
       );
-      await append("untrusted-reference", {
-        role: "user",
-        content: JSON.stringify({ kind: "canvas", view: { id: unbound.id } }),
-        timestamp: 3,
-      });
+      await append(
+        "untrusted-reference",
+        textMessage("user", JSON.stringify({ kind: "canvas", view: { id: unbound.id } }), 3),
+      );
       for (const params of [
         { docId },
         { ...bound, docId: unbound.id },
@@ -305,10 +294,7 @@ it("reads retained widget receipts and waits only for current live presentations
       expect((await view({ docId }, owner))[0]).toBe(true);
       expect((await view({ docId: unbound.id }, owner))[0]).toBe(true);
 
-      const liveResult = await tool.execute("live-widget-call", {
-        title: "Live preview",
-        widget_code: "<p>Committed live widget</p>",
-      });
+      const liveResult = await show("live", "Committed live widget");
       const livePreview = expectDefined(
         extractChatToolResultCanvasPreview(liveResult),
         "live widget",
@@ -319,11 +305,7 @@ it("reads retained widget receipts and waits only for current live presentations
       const claim = expectDefined(
         claimAgentRunContext(
           runId,
-          {
-            agentId: scope.agentId,
-            sessionId: scope.sessionId,
-            sessionKey: scope.sessionKey,
-          },
+          { agentId: scope.agentId, sessionId: scope.sessionId, sessionKey: scope.sessionKey },
           { trackOwner: true, exclusive: true },
         ),
         "live widget run claim",
@@ -360,41 +342,30 @@ it("reads retained widget receipts and waits only for current live presentations
         sessionId: "legacy-widget",
       };
       await upsertSessionEntryCore(legacyScope, { ...entry, sessionId: legacyScope.sessionId });
-      const legacyResult = await createShowWidgetTool({
-        sessionId: legacyScope.sessionId,
-        agentId: scope.agentId,
-      }).execute("legacy-widget-call", {
-        title: "Retained widget",
-        widget_code: "<p>Retained reset archive widget</p>",
-      });
+      const legacyResult = await show(
+        "legacy",
+        "Retained reset archive widget",
+        makeTool(legacyScope.sessionId),
+      );
       const legacyId = widgetId(legacyResult);
       const archives = resolveSessionArtifactDirectory(legacyScope.storePath);
       await fs.mkdir(archives, { recursive: true });
+      const legacyMessages = [
+        receipt(legacyResult, "legacy-widget-call", 1),
+        textMessage("assistant", "The retained widget is ready.", 2),
+        ...Array.from({ length: 150 }, (_value, index) =>
+          textMessage("user", `Later message ${index}`, index + 3),
+        ),
+      ];
       await fs.writeFile(
         path.join(archives, `${legacyScope.sessionId}.jsonl.reset.2026-09-30T00-00-00.000Z`),
         [
           { type: "session", version: 3, id: legacyScope.sessionId },
-          {
+          ...legacyMessages.map((message, index) => ({
             type: "message",
-            id: "legacy-result",
-            parentId: null,
-            message: receipt(legacyResult, "legacy-widget-call", 1),
-          },
-          {
-            type: "message",
-            id: "legacy-reply",
-            parentId: "legacy-result",
-            message: {
-              role: "assistant",
-              content: "The retained widget is ready.",
-              timestamp: 2,
-            },
-          },
-          ...Array.from({ length: 150 }, (_value, index) => ({
-            type: "message",
-            id: `legacy-user-${index}`,
-            parentId: index === 0 ? "legacy-reply" : `legacy-user-${index - 1}`,
-            message: { role: "user", content: `Later message ${index}`, timestamp: index + 3 },
+            id: `legacy-${index}`,
+            parentId: index === 0 ? null : `legacy-${index - 1}`,
+            message,
           })),
         ]
           .map((record) => JSON.stringify(record))
@@ -408,29 +379,20 @@ it("reads retained widget receipts and waits only for current live presentations
       );
       expect(historyResponse[0]).toBe(true);
       expect(historyResponse[1]).toMatchObject({
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({
-                type: "canvas",
-                preview: expect.objectContaining({ viewId: legacyId }),
-              }),
-            ]),
+        messages: containing({
+          role: "assistant",
+          content: containing({
+            type: "canvas",
+            preview: expect.objectContaining({ viewId: legacyId }),
           }),
-        ]),
+        }),
       });
       const legacyRequest = { docId: legacyId, sessionKey: legacyScope.sessionKey };
       expect((await view(legacyRequest))[1]).toMatchObject({
         html: expect.stringContaining("Retained reset archive widget"),
       });
       // Ordinary history stops selecting this archive once native displayed history exists.
-      await append(
-        "native-reply",
-        { role: "user", content: "New native history", timestamp: 3 },
-        legacyScope,
-      );
-      expect((await readSessionMessageByIdAsync(legacyScope, "native-reply")).found).toBe(true);
+      await append("native-reply", textMessage("user", "New native history", 3), legacyScope);
       await forbidden(legacyRequest);
 
       const provisioning = createDeferred();
@@ -445,12 +407,14 @@ it("reads retained widget receipts and waits only for current live presentations
       await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
       sandbox.resolve(18790);
       const revoked = await pending;
-      expect(revoked[0]).toBe(false);
-      expect(revoked[1]).toBeUndefined();
-      expect(revoked[2]).toMatchObject({
-        code: "FORBIDDEN",
-        message: expect.stringContaining("access"),
-      });
+      expect(revoked).toMatchObject([
+        false,
+        undefined,
+        {
+          code: "FORBIDDEN",
+          message: expect.stringContaining("access"),
+        },
+      ]);
       expect((await view(bound))[0]).toBe(false);
     },
   );

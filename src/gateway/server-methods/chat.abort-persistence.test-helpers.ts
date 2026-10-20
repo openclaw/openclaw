@@ -1,8 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
+import { isTextContentBlock } from "../../agents/content-blocks.js";
 
-export type TranscriptLine = {
-  message?: Record<string, unknown>;
-};
+export type TranscriptLine = { message?: Record<string, unknown> };
 
 export function collectMessagesWithIdempotencyKey(
   lines: TranscriptLine[],
@@ -30,13 +30,7 @@ export function collectAssistantRowsWithText(
       (message): message is Record<string, unknown> =>
         message?.role === "assistant" &&
         Array.isArray(message.content) &&
-        message.content.some(
-          (block) =>
-            typeof block === "object" &&
-            block !== null &&
-            (block as { type?: unknown }).type === "text" &&
-            (block as { text?: unknown }).text === text,
-        ),
+        message.content.some((block) => isTextContentBlock(block) && block.text === text),
     );
 }
 
@@ -63,11 +57,7 @@ export function expectAbortPayloadContainsRunIds(payload: unknown, runIds: strin
 }
 
 export function requireLastRespondCall(respond: ReturnType<typeof vi.fn>): unknown[] {
-  const call = respond.mock.calls.at(-1);
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call;
+  return expectDefined(respond.mock.calls.at(-1), "respond call");
 }
 
 export function expectPersistedAbortMessage(
@@ -79,8 +69,7 @@ export function expectPersistedAbortMessage(
     stopReason?: string;
   },
 ) {
-  const actual = expectRecord(message, "persisted abort message");
-  expect(actual).toMatchObject({
+  expect(expectRecord(message, "persisted abort message")).toMatchObject({
     idempotencyKey: expected.idempotencyKey,
     ...(expected.stopReason ? { stopReason: expected.stopReason } : {}),
     openclawAbort: { aborted: true, origin: expected.origin, runId: expected.runId },

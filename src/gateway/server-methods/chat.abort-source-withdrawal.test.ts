@@ -63,7 +63,6 @@ describe("chat.abort exact controller input withdrawal", () => {
       .spyOn(withdrawal, "discardSessionPendingInput")
       .mockImplementation(async (_scope, _runId, assertCurrent) => {
         assertCurrent();
-        // Duplicate admission cannot replace the source retained by the write.
         foreign = registerChatAbortController({
           target: captureSessionTarget({
             storeScope: "/synthetic/foreign-withdrawal/sessions.json",
@@ -85,10 +84,8 @@ describe("chat.abort exact controller input withdrawal", () => {
     try {
       await expect(withdraw(context, runId)).rejects.toThrow("Run changed before input removal");
       expect(discard).toHaveBeenCalledOnce();
-      expect(source.input.abortSignal.aborted).toBe(false);
-      expect(foreign).toBeDefined();
-      expect(foreign?.controller.signal.aborted).toBe(false);
-      expect(source.input.withdrawalHolds).toBe(0);
+      expect(source.input).toMatchObject({ abortSignal: { aborted: false }, withdrawalHolds: 0 });
+      expect(foreign).toMatchObject({ controller: { signal: { aborted: false } } });
     } finally {
       discard.mockRestore();
     }
@@ -123,8 +120,7 @@ describe("chat.abort exact controller input withdrawal", () => {
       );
       try {
         await entered.promise;
-        expect(input.input.withdrawalHolds).toBe(1);
-        expect(input.input.abortSignal.aborted).toBe(false);
+        expect(input.input).toMatchObject({ withdrawalHolds: 1, abortSignal: { aborted: false } });
         release.resolve();
         if (outcome === "rejected") {
           await expect(stopping).rejects.toThrow("write refused");

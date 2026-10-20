@@ -38,10 +38,7 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     { agentId: "main", sessionKey, storePath: database.path },
     { sessionId: "generated-race", updatedAt: Date.now() },
   );
-  const options = {
-    resolveSession: () => ({ agentId: "main", sessionKey }),
-    env,
-  };
+  const options = { resolveSession: () => ({ agentId: "main", sessionKey }), env };
   let arrivals = 0;
   const { promise: readersReady, resolve: releaseReaders } = createDeferred();
   const readCanvasDocument = async (docId: string) => {
@@ -83,19 +80,17 @@ it("serializes in-flight generated-name collisions and reuses both names after r
   const committedNames = (await Promise.all(widgets.map((widget) => put(invoke, widget)))).map(
     resolvedName,
   );
-  expect(new Set(committedNames).size).toBe(2);
-  expect(committedNames).toContain("2024");
-  expect(committedNames.some((name) => name === "2024-aaaaaaaa" || name === "2024-bbbbbbbb")).toBe(
-    true,
-  );
-  expect(
-    broadcast.mock.calls.map(([, event]) => (event as { widget?: string }).widget).filter(Boolean),
-  ).toEqual(expect.arrayContaining(committedNames));
+  expect(committedNames.toSorted()).toEqual(["2024", expect.stringMatching(/^2024-(a{8}|b{8})$/)]);
+  const expectBroadcast = (events: typeof broadcast) =>
+    expect(
+      events.mock.calls.map(([, event]) => (event as { widget?: string }).widget).filter(Boolean),
+    ).toEqual(expect.arrayContaining(committedNames));
+  expectBroadcast(broadcast);
 
   await closeDatabases();
   const reloaded = createBoardHarness(undefined, {}, new SqliteBoardStore(options));
-  const get = await reloaded.invoke("board.get", { sessionKey });
-  const snapshot = get.mock.calls[0]?.[1] as BoardSnapshot;
+  const snapshot = (await reloaded.invoke("board.get", { sessionKey })).mock
+    .calls[0]?.[1] as BoardSnapshot;
   expect(new Set(snapshot.widgets.map((widget) => widget.name))).toEqual(new Set(committedNames));
 
   const reloads = [];
@@ -103,9 +98,5 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     reloads.push(await put(reloaded.invoke, widget, true));
   }
   expect(new Set(reloads.map(resolvedName))).toEqual(new Set(committedNames));
-  expect(
-    reloaded.broadcast.mock.calls
-      .map(([, event]) => (event as { widget?: string }).widget)
-      .filter(Boolean),
-  ).toEqual(expect.arrayContaining(committedNames));
+  expectBroadcast(reloaded.broadcast);
 });
