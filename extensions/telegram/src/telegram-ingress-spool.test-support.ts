@@ -54,17 +54,15 @@ export async function writeTelegramSpooledUpdate(params: {
   return updateId;
 }
 
-function isValidUpdateId(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 function parsePendingRecord(
   record: ChannelIngressQueueRecord<TelegramSpooledUpdatePayload>,
 ): TelegramSpooledUpdate | null {
   const payload = record.payload;
   if (
     payload.version !== TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION ||
-    !isValidUpdateId(payload.updateId)
+    typeof payload.updateId !== "number" ||
+    !Number.isSafeInteger(payload.updateId) ||
+    payload.updateId < 0
   ) {
     return null;
   }
@@ -78,6 +76,15 @@ function parsePendingRecord(
   };
 }
 
+function parseRecords(records: ChannelIngressQueueRecord<TelegramSpooledUpdatePayload>[]) {
+  return records
+    .flatMap((record) => {
+      const update = parsePendingRecord(record);
+      return update ? [update] : [];
+    })
+    .toSorted((a, b) => a.updateId - b.updateId);
+}
+
 export async function listTelegramSpooledUpdates(params: {
   stateDir: string;
   accountId?: string;
@@ -87,12 +94,7 @@ export async function listTelegramSpooledUpdates(params: {
     limit: params.limit ?? 100,
     orderBy: "id",
   });
-  return records
-    .flatMap((record) => {
-      const update = parsePendingRecord(record);
-      return update ? [update] : [];
-    })
-    .toSorted((a, b) => a.updateId - b.updateId);
+  return parseRecords(records);
 }
 
 export async function listTelegramSpooledUpdateClaims(params: {
@@ -100,10 +102,5 @@ export async function listTelegramSpooledUpdateClaims(params: {
   accountId?: string;
 }): Promise<TelegramSpooledUpdate[]> {
   const claims = await openTelegramIngressQueue(params).listClaims();
-  return claims
-    .flatMap((claim) => {
-      const update = parsePendingRecord(claim);
-      return update ? [update] : [];
-    })
-    .toSorted((a, b) => a.updateId - b.updateId);
+  return parseRecords(claims);
 }

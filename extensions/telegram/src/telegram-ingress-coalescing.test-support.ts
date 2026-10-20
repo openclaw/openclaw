@@ -133,27 +133,36 @@ export function holdForwardWindow() {
   };
 }
 
-export function photoUpdate(params: { updateId: number; messageId: number; caption?: string }) {
+function messageUpdate<T extends object>(
+  { updateId, messageId }: { updateId: number; messageId: number },
+  content: T,
+) {
   return {
-    update_id: params.updateId,
+    update_id: updateId,
     message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
+      message_id: messageId,
+      date: 1_736_380_800 + messageId,
       chat: { id: 111, type: "private" as const, first_name: "Ada" },
       from: { id: 111, is_bot: false, first_name: "Ada" },
-      media_group_id: "album-115325",
-      ...(params.caption ? { caption: params.caption } : {}),
-      photo: [
-        {
-          file_id: `photo-${params.messageId}`,
-          file_unique_id: `unique-${params.messageId}`,
-          width: 100,
-          height: 100,
-          file_size: 4,
-        },
-      ],
+      ...content,
     },
   };
+}
+
+export function photoUpdate(params: { updateId: number; messageId: number; caption?: string }) {
+  return messageUpdate(params, {
+    media_group_id: "album-115325",
+    ...(params.caption ? { caption: params.caption } : {}),
+    photo: [
+      {
+        file_id: `photo-${params.messageId}`,
+        file_unique_id: `unique-${params.messageId}`,
+        width: 100,
+        height: 100,
+        file_size: 4,
+      },
+    ],
+  });
 }
 
 // forward_origin puts the entry on the forward debounce lane (1 s window).
@@ -164,42 +173,16 @@ const forwardOrigin = {
 };
 
 export function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      forward_origin: forwardOrigin,
-      text: params.text,
-    },
-  };
+  return messageUpdate(params, { text: params.text, forward_origin: forwardOrigin });
 }
 
 export function forwardedPhotoUpdate(params: { updateId: number; messageId: number }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      forward_origin: forwardOrigin,
-      photo: photoUpdate(params).message.photo,
-    },
-  };
+  return messageUpdate(params, {
+    forward_origin: forwardOrigin,
+    photo: photoUpdate(params).message.photo,
+  });
 }
 
 export function textUpdate(params: { updateId: number; messageId: number; text: string }) {
-  return {
-    update_id: params.updateId,
-    message: {
-      message_id: params.messageId,
-      date: 1_736_380_800 + params.messageId,
-      chat: { id: 111, type: "private" as const, first_name: "Ada" },
-      from: { id: 111, is_bot: false, first_name: "Ada" },
-      text: params.text,
-    },
-  };
+  return messageUpdate(params, { text: params.text });
 }
