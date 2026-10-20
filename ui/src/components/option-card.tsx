@@ -84,7 +84,8 @@ export function OptionCard(input: { props: OptionCardProps }) {
   // Arrow keys move the checked choice without answering; Space and Enter still answer.
   const onChoicesKeyDown = (event: KeyboardEvent) => {
     const values = options().map((option) => option.value);
-    const current = values.indexOf((event.target as HTMLElement).dataset.optionValue ?? "");
+    const target = [...choices].find((button) => button === event.target);
+    const current = target ? values.indexOf(target.dataset.optionValue ?? "") : -1;
     const step = ARROW_STEPS[event.key];
     const next =
       event.key === "Home"
