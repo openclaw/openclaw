@@ -24,17 +24,19 @@ describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) 
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const home = fs.realpathSync(tempDirs.make("crabbox-install-settlement-"));
       const bytes = Buffer.from("synthetic bootstrap archive");
+      const nodeBootstrap = createNodeBootstrapFixture({
+        url: "http://gateway.example.test/bootstrap",
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+      const workerBundle = {
+        ...createWorkerArchiveFixture(),
+        url: "http://gateway.example.test/worker",
+      };
       const setup = createCrabboxNodeRuntimeSetup({
         leaseId: "cbx_settlement",
-        nodeBootstrap: createNodeBootstrapFixture({
-          url: "http://gateway.example.test/bootstrap",
-          bytes: bytes.length,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-        }),
-        workerBundle: {
-          ...createWorkerArchiveFixture(),
-          url: "http://gateway.example.test/worker",
-        },
+        nodeBootstrap,
+        workerBundle,
         target: "windows/normal",
       });
       const encoded = setup.command.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/u)![1]!;
@@ -78,15 +80,6 @@ describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) 
       };
       const output: string[] = [];
       const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
-      const modules: Record<string, unknown> = {
-        "node:fs": {
-          ...fs,
-          existsSync: (file: string) => file.endsWith("npm-cli.js") || fs.existsSync(file),
-        },
-        "node:os": { homedir: () => home },
-        "node:child_process": { spawn, spawnSync },
-        "node:http": { request },
-      };
       const running = runInNewContext(Buffer.from(encoded, "base64").toString("utf8"), {
         Buffer,
         URL,
@@ -95,7 +88,24 @@ describe.each(["linux", "win32"])("%s bootstrap install settlement", (platform) 
         clearTimeout,
         process: processFixture,
         console: { error: (line: string) => output.push(line) },
-        require: (name: string) => (Object.hasOwn(modules, name) ? modules[name] : require(name)),
+        require: (name: string) => {
+          if (name === "node:fs") {
+            return {
+              ...fs,
+              existsSync: (file: string) => file.endsWith("npm-cli.js") || fs.existsSync(file),
+            };
+          }
+          if (name === "node:os") {
+            return { homedir: () => home };
+          }
+          if (name === "node:child_process") {
+            return { spawn, spawnSync };
+          }
+          if (name === "node:http") {
+            return { request };
+          }
+          return require(name);
+        },
       }) as Promise<void>;
       try {
         const [, workerRequest] = await Promise.all([spawned.promise, workerRequested.promise]);

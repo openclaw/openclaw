@@ -70,13 +70,7 @@ it("keys snapshots by resolved disk inputs while ignoring allocation policy", ()
 });
 
 it("pins the Linux warm-image profile key without setup secrets", () => {
-  const profile = parseCrabboxProfile({
-    ...PROFILE,
-    class: "tiny",
-    target: "linux",
-    warmImage: true,
-    desktop: false,
-  });
+  const profile = parseCrabboxProfile({ ...PROFILE, class: "tiny" });
   // Changing this value invalidates every user's warm images on update; change deliberately and explain why in the PR.
   expect(resolveCrabboxWarmImageProfileKey(profile)).toBe(
     "6b01b9af04cfd3441ea20fde45d9951b39cf4c2da9a5df3c62dd8a1929725254",
@@ -85,24 +79,16 @@ it("pins the Linux warm-image profile key without setup secrets", () => {
 
 it("accepts bounded store references for recipe setup without a profile setup command", () => {
   const setupSecrets = { npm_token: storeRef("NPM_TOKEN") };
-  expect(parseCrabboxProfile({ ...PROFILE, setupSecrets }).setupSecrets).toEqual(setupSecrets);
-  expect(resolveCrabboxProvisionProfile({ ...PROFILE, setupSecrets }, undefined)).toMatchObject({
+  const recipe = { ...PROFILE, setupSecrets };
+  const target = { machineClass: "standard", platform: "linux" };
+  expect(parseCrabboxProfile(recipe).setupSecrets).toEqual(setupSecrets);
+  expect(resolveCrabboxProvisionProfile(recipe, undefined)).toMatchObject({
     profile: { warmImage: true, setupSecrets },
   });
-  expect(resolveCrabboxPreparationTarget({ ...PROFILE, setupSecrets })).toMatchObject({
-    machineClass: "standard",
-    platform: "linux",
-  });
-  expect(
-    resolveCrabboxPreparationTarget({ ...PROFILE, warmImage: false, setupSecrets }),
-  ).toMatchObject({
-    machineClass: "standard",
-    platform: "linux",
-  });
+  expect(resolveCrabboxPreparationTarget(recipe)).toMatchObject(target);
+  expect(resolveCrabboxPreparationTarget({ ...recipe, warmImage: false })).toMatchObject(target);
   expect(resolveCrabboxPreparationTarget({ ...PROFILE, warmImage: false })).toBeUndefined();
-  expect(
-    resolveCrabboxPreparationTarget({ ...PROFILE, target: "macos", setupSecrets }),
-  ).toBeUndefined();
+  expect(resolveCrabboxPreparationTarget({ ...recipe, target: "macos" })).toBeUndefined();
 });
 
 it.each([
