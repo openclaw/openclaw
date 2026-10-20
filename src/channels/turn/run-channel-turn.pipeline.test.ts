@@ -141,7 +141,7 @@ describe("channel turn pipeline", () => {
         void resolve;
         rejectWithUnknown(nullRejection);
       });
-    }) as DispatchReplyWithBufferedBlockDispatcher;
+    }) as Dispatch;
 
     await expect(
       dispatchTestAssembledTurn({
