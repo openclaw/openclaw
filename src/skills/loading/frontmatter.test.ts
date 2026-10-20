@@ -78,14 +78,8 @@ describe("resolveSkillManifestMetadata install validation", () => {
     const frontmatter = parseSkillFrontmatter(`---
 name: create-payment-credential
 description: |
-  Gets secure, one-time-use payment credentials from a Link wallet so agents can complete purchases.
-allowed-tools:
-  - Bash(link-cli:*)
-  - Bash(npx:*)
-version: 0.0.1
+  Gets one-time-use payment credentials.
 metadata:
-  author: stripe
-  url: link.com/agents
   openclaw:
     homepage: https://link.com/agents
     requires:
@@ -97,13 +91,14 @@ metadata:
         bins: [link-cli]
 user-invocable: true
 ---
-# Creating Payment Credentials
 `);
 
     const metadata = resolveSkillManifestMetadata(frontmatter);
 
-    expect(frontmatter.name).toBe("create-payment-credential");
-    expect(frontmatter.description).toContain("one-time-use payment credentials");
+    expect(frontmatter).toMatchObject({
+      name: "create-payment-credential",
+      description: expect.stringContaining("one-time-use payment credentials"),
+    });
     expect(resolveSkillInvocationPolicy(frontmatter).userInvocable).toBe(true);
     expect(metadata).toEqual({
       homepage: "https://link.com/agents",
