@@ -24,16 +24,20 @@ it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }
   { outcomes: ["failed"], maxLines: 1, plan: true },
 ])("retires the quiet card after settlement: %j", async ({ outcomes, maxLines, plan }) => {
   onTestFinished(resetGeneratedMediaTaskActivityForTests);
-  const runs = outcomes.map((outcome, index) => ({
-    outcome,
-    handle: admitMediaHandle({
+  const lifecycle = createMediaGenerationTaskLifecycle("image");
+  const settlements = outcomes.map((outcome, index) => {
+    const handle = admitMediaHandle({
       taskId: `image-${index}`,
       runId: `tool:image_generate:${index}`,
       requesterSessionKey: sessionKey,
       requesterAgentId: "main",
       taskLabel: "wedding portrait",
-    }),
-  }));
+    });
+    return () =>
+      outcome === "delivered"
+        ? lifecycle.completeTaskRun({ handle, provider: "fixture", model: "fixture", count: 1 })
+        : lifecycle.failTaskRun({ handle, error: new Error("provider failed") });
+  });
   let adopted = false;
   await http.dispatchProgressTurn(
     async (options) => {
@@ -51,7 +55,6 @@ it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }
       );
     },
     {
-      mode: "progress",
       toolProgress: false,
       telegramCfg: maxLines
         ? { streaming: { mode: "progress", progress: { toolProgress: false, maxLines } } }
@@ -72,17 +75,10 @@ it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }
   const [cardId, ...others] = [...http.visibleMessages.keys()];
   assert(cardId !== undefined);
   expect(others).toEqual([]);
-  await expect
-    .poll(() => http.visibleMessages.get(cardId), { timeout: 5_000 })
-    .toContain(plan ? planStep : "Image generation: running");
-
-  const lifecycle = createMediaGenerationTaskLifecycle("image");
-  for (const { outcome, handle } of runs) {
-    if (outcome === "delivered") {
-      lifecycle.completeTaskRun({ handle, provider: "fixture", model: "fixture", count: 1 });
-    } else {
-      lifecycle.failTaskRun({ handle, error: new Error("provider failed") });
-    }
+  const pollCard = () => expect.poll(() => http.visibleMessages.get(cardId), { timeout: 5_000 });
+  await pollCard().toContain(plan ? planStep : "Image generation: running");
+  for (const settle of settlements) {
+    settle();
   }
   await vi.advanceTimersByTimeAsync(2_000);
   if (!outcomes.includes("failed")) {
@@ -90,9 +86,7 @@ it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }
     return;
   }
   // An undelivered result leaves the card as the chat's visible outcome.
-  await expect
-    .poll(() => http.visibleMessages.get(cardId), { timeout: 5_000 })
-    .toContain("Image generation: failed");
+  await pollCard().toContain("Image generation: failed");
   const card = http.visibleMessages.get(cardId);
   expect(card).not.toContain("running");
   if (outcomes.includes("delivered") && !maxLines) {

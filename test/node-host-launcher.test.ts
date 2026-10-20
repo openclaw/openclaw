@@ -225,6 +225,14 @@ function runProgram(
 }
 
 const requestUpdate = "await ready(); await restartAndExit();";
+const restartingRuntime = (onRepeat: string) => `
+if (fs.existsSync(process.env.TEST_ATTEMPT)) {
+  ${onRepeat}
+} else {
+  fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
+  ${requestUpdate}
+}
+`;
 const jsonLines = (stdout: string) =>
   stdout
     .trim()
@@ -381,14 +389,7 @@ setTimeout(async () => {
   it("keeps an authenticated candidate serving when its selector cannot be persisted", async () => {
     const f = await fixture();
     const previous = await f.release(
-      `
-if (fs.existsSync(process.env.TEST_ATTEMPT)) {
-  report('fallback-started');
-  process.exit(9);
-}
-fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
-${requestUpdate}
-`,
+      restartingRuntime("report('fallback-started'); process.exit(9);"),
       "2026.9.1",
     );
     const candidate = await f.release(`
@@ -471,13 +472,7 @@ if (process.env.TEST_SELECT_ONLY || version === process.env.TEST_VERSION) {
       "report({version,state:getManagedNodeHostStatePath() ?? null,argv:process.argv.slice(2)});";
     const body = `
 ${reportRuntime}
-if (fs.existsSync(process.env.TEST_ATTEMPT)) {
-  await ready();
-  await restartAndExit('old-runtime-serving', 3, 0);
-} else {
-  fs.writeFileSync(process.env.TEST_ATTEMPT, 'started');
-  ${requestUpdate}
-}
+${restartingRuntime("await ready(); await restartAndExit('old-runtime-serving', 3, 0);")}
 `;
     const f = await fixture(body);
     const previous = await f.release(body, "2026.9.1");

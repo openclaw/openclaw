@@ -1,6 +1,6 @@
 import type { LookupAddress } from "node:dns";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { MatrixClient } from "../extensions/matrix/test-api.js";
 import { withChannelReadAuthority } from "../src/shared/channel-read-authority.js";
 
@@ -19,90 +19,69 @@ const withAuthority = <T>(run: () => Promise<T>) => withChannelReadAuthority(() 
 
 class SdkCallbackMatrixClient extends MatrixClient {
   async runSdkDecryptionCallback(callback: () => Promise<void>): Promise<void> {
-    const event = this.client.getEventMapper({ decrypt: false })({
-      room_id: "!room:example.org",
-      event_id: "$encrypted",
-      sender: "@sender:example.org",
-      type: "m.room.encrypted",
-      origin_server_ts: 1,
-      content: { algorithm: "m.megolm.v1.aes-sha2", ciphertext: "fixture" },
-    });
-    // Mock only the SDK event's pending callback; execute the actual client owner.
+    const event = this.client.getEventMapper({ decrypt: false })({ type: "m.room.encrypted" });
     vi.spyOn(event, "isBeingDecrypted").mockReturnValue(true);
     vi.spyOn(event, "getDecryptionPromise").mockImplementation(callback);
     await this.client.decryptEventIfNeeded(event);
   }
 }
 
-beforeEach(() => {
-  lookup.mockReset().mockResolvedValue(DNS_ANSWER);
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-it.each([true, false])(
-  "honors nested B authority (closed=%s) in an SDK callback",
-  async (closeB) => {
-    const dnsStarted = createDeferred<void>();
-    const dnsResult = createDeferred<LookupAddress[]>();
-    const finishB = createDeferred<void>();
-    const requestReady = createDeferred<{
-      request: ReturnType<MatrixClient["getUserProfile"]>;
-    }>();
-    lookup.mockImplementationOnce(() => {
-      dnsStarted.resolve();
-      return dnsResult.promise;
-    });
-    const runtimeFetch = vi.fn<typeof fetch>(async () => Response.json(PROFILE));
-    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
-      Agent: function MockAgent() {},
-      EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-      ProxyAgent: function MockProxyAgent() {},
-      fetch: runtimeFetch,
-    });
-    const client = new SdkCallbackMatrixClient("http://127.0.0.1:8008", "fixture-token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-    let decryption: Promise<void> | undefined;
-    let nestedRequest: ReturnType<MatrixClient["getUserProfile"]> | undefined;
+it.each([true, false])("guards SDK callback scope: closed=%s", async (closeB) => {
+  lookup.mockReset().mockResolvedValue(DNS_ANSWER);
+  const dnsStarted = createDeferred<void>();
+  const dnsResult = createDeferred<LookupAddress[]>();
+  const finishB = createDeferred<void>();
+  lookup.mockImplementationOnce(() => {
+    dnsStarted.resolve();
+    return dnsResult.promise;
+  });
+  const runtimeFetch = vi.fn<typeof fetch>(async () => Response.json(PROFILE));
+  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
+    Agent: function MockAgent() {},
+    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
+    ProxyAgent: function MockProxyAgent() {},
+    fetch: runtimeFetch,
+  });
+  const client = new SdkCallbackMatrixClient("http://127.0.0.1:8008", "fixture-token", {
+    ssrfPolicy: { allowPrivateNetwork: true },
+  });
+  let decryption: Promise<void> | undefined;
+  let nestedRequest: ReturnType<MatrixClient["getUserProfile"]> | undefined;
 
-    try {
-      await withAuthority(async () => {
-        decryption = client.runSdkDecryptionCallback(() =>
-          withAuthority(async () => {
-            const request = client.getUserProfile("@nested:example.org");
-            nestedRequest = request;
-            await dnsStarted.promise;
-            requestReady.resolve({ request });
-            await finishB.promise;
-          }),
-        );
-        const { request } = await requestReady.promise;
-        if (closeB) {
-          finishB.resolve();
-          await decryption;
-        }
-
-        // Assert the transport promise outside B's final host fence. A and the
-        // generation remain live while DNS resumes, so neither can mask B's closure.
-        const result = closeB
-          ? expect(request).rejects.toThrow("Channel read authority is no longer active.")
-          : expect(request).resolves.toEqual(PROFILE);
-        dnsResult.resolve(DNS_ANSWER);
-        await result;
-        expect(runtimeFetch).toHaveBeenCalledTimes(closeB ? 0 : 1);
-
+  try {
+    await withAuthority(async () => {
+      decryption = client.runSdkDecryptionCallback(() =>
+        withAuthority(async () => {
+          nestedRequest = client.getUserProfile("@nested:example.org");
+          await finishB.promise;
+        }),
+      );
+      await dnsStarted.promise;
+      if (closeB) {
         finishB.resolve();
         await decryption;
-      });
-    } finally {
-      finishB.resolve();
+      }
+
+      // Resume DNS outside B's final fence while A and the generation remain live.
+      const result = closeB
+        ? expect(nestedRequest).rejects.toThrow("Channel read authority is no longer active.")
+        : expect(nestedRequest).resolves.toEqual(PROFILE);
       dnsResult.resolve(DNS_ANSWER);
-      await Promise.allSettled([decryption, nestedRequest]);
-      await client.stopWithoutPersist();
-    }
-  },
-);
+      await result;
+      expect(runtimeFetch).toHaveBeenCalledTimes(closeB ? 0 : 1);
+
+      finishB.resolve();
+      await decryption;
+    });
+  } finally {
+    finishB.resolve();
+    dnsResult.resolve(DNS_ANSWER);
+    await Promise.allSettled([decryption, nestedRequest]);
+    await client.stopWithoutPersist();
+  }
+});
