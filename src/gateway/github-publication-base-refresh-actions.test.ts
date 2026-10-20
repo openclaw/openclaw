@@ -93,7 +93,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   const upstream = path.join(path.dirname(cwd), "upstream");
   const upstreamGit = (...args: string[]) => git("-C", upstream, ...args);
   await git("clone", "--no-local", "--branch", "main", cwd, upstream);
-  await write(upstream, "artifact.txt", "upstream change\n");
+  await write(upstream, "artifact.txt", "upstream-v2\n");
   await write(upstream, ".gitignore", ".env.local\n.guest-cache\n");
   await upstreamGit("add", "-A");
   await upstreamGit("commit", "-m", "Advance selected base");
@@ -196,10 +196,10 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   const disposableCache = ".artifacts/build-all-cache/guest-generated.js";
   await fs.mkdir(path.dirname(path.join(projection, disposableCache)), { recursive: true });
   await write(projection, disposableCache, "disposable guest cache\n");
-  await write(projection, "artifact.txt", "guest saved change\n");
-  await write(projection, "guest.txt", "saved independent work\n");
-  await write(projection, ".guest-cache", "saved ignored guest work\n");
-  await fs.mkdir(path.join(projection, "empty-guest-directory"));
+  await write(projection, "artifact.txt", "guest-v1\n");
+  await write(projection, "guest.txt", "independent guest work\n");
+  await write(projection, ".guest-cache", "ignored guest work\n");
+  await fs.mkdir(path.join(projection, "initial-empty"));
   await fs.appendFile(path.join(projection, ".git/config"), "\n[credential]\nhelper = !false\n");
   const reviewTransferBytes: number[] = [];
   const sandbox = createSandboxTestContext({
@@ -321,8 +321,8 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   expect(contentFetches).toBe(1);
   expect(await missingContents()).toContain(`?${missingBlob}`);
   expect(await git("rev-parse", "HEAD")).toBe(beforeAdmission);
-  await expectFile(projection, "artifact.txt", "guest saved change\n");
-  await expectFile(projection, "guest.txt", "saved independent work\n");
+  await expectFile(projection, "artifact.txt", "guest-v1\n");
+  await expectFile(projection, "guest.txt", "independent guest work\n");
   cancelAfterScan = new AbortController();
   await expect(refresh({}, sandbox, cancelAfterScan.signal)).rejects.toThrow();
   expect(cancelAfterScan.signal.aborted).toBe(true);
@@ -348,8 +348,8 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   const stagedHead = await git("rev-parse", "HEAD");
   const stagedBaseline = await baseline();
   expect(stagedBaseline?.pending_ref).toBeNull();
-  await fs.appendFile(path.join(projection, ".guest-cache"), "saved after interruption\n");
-  await fs.mkdir(path.join(projection, "later-empty-guest-directory"));
+  await fs.appendFile(path.join(projection, ".guest-cache"), "post-interruption\n");
+  await fs.mkdir(path.join(projection, "later-empty"));
   await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   const advancedBaseline = await baseline();
   expect(advancedBaseline?.baseline_ref).not.toBe(stagedBaseline?.baseline_ref);
@@ -374,7 +374,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await expect(refresh()).rejects.toThrow("interrupted before refresh reservation");
   reservationInterruption.mockRestore();
   expect(await git("rev-parse", "MERGE_HEAD")).toBe(baseCommit);
-  await write(projection, "artifact.txt", "guest saved change after native preparation\n");
+  await write(projection, "artifact.txt", "guest-v2\n");
   await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
   // Fail after the real canonical receipt, before projection application; retry uses its retained payload.
   let interrupted = false;
@@ -405,7 +405,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   });
   const conflictedSource = await read(projection, "artifact.txt");
   expect(conflictedSource).toContain("<<<<<<<");
-  expect(conflictedSource).toContain("guest saved change after native preparation");
+  expect(conflictedSource).toContain("guest-v2");
   await expectFile(projection, "upstream.txt", "unrelated upstream file\n");
   await expectFile(projection, unchangedInput, "retained original input\n");
   await expect(fs.stat(path.join(cwd, disposableCache))).rejects.toMatchObject({
@@ -414,16 +414,10 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   for (const entryPath of upstreamInputs) {
     await expectFile(projection, entryPath, "upstream original input\n");
   }
-  await expectFile(projection, "guest.txt", "saved independent work\n");
-  await expectFile(
-    projection,
-    ".guest-cache",
-    "saved ignored guest work\nsaved after interruption\n",
-  );
-  expect((await fs.stat(path.join(projection, "empty-guest-directory"))).isDirectory()).toBe(true);
-  expect((await fs.stat(path.join(projection, "later-empty-guest-directory"))).isDirectory()).toBe(
-    true,
-  );
+  await expectFile(projection, "guest.txt", "independent guest work\n");
+  await expectFile(projection, ".guest-cache", "ignored guest work\npost-interruption\n");
+  expect((await fs.stat(path.join(projection, "initial-empty"))).isDirectory()).toBe(true);
+  expect((await fs.stat(path.join(projection, "later-empty"))).isDirectory()).toBe(true);
   expect(
     await git("for-each-ref", "--format=%(refname)", "refs/openclaw/workspace-base-refresh"),
   ).toBe("");
@@ -450,11 +444,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   await expect(refresh({ conflictsResolved: true, baseCommit })).rejects.toThrow(
     "Conflict markers",
   );
-  await write(
-    projection,
-    "artifact.txt",
-    "upstream change\nguest saved change after native preparation\n",
-  );
+  await write(projection, "artifact.txt", "upstream-v2\nguest-v2\n");
   expect(await refresh({ conflictsResolved: true, baseCommit })).toMatchObject({
     status: "refreshed",
     baseCommit,
@@ -464,8 +454,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   expect(await guestGit("rev-parse", "refs/openclaw/review-base")).toBe(baseCommit);
   // The canonical helper's local/base target captures this staged diff, not the old guest HEAD.
   const reviewPaths = (await guestGit("diff", "--cached", "--name-only", baseCommit)).split("\n");
-  expect(reviewPaths).toContain("artifact.txt");
-  expect(reviewPaths).toContain("guest.txt");
+  expect(reviewPaths).toEqual(expect.arrayContaining(["artifact.txt", "guest.txt"]));
   expect(reviewPaths).not.toContain("upstream.txt");
   expect(await guestGit("diff", "--name-only")).toBe("");
   const final = await f.coordinator.requestForSessionV2(f.request("resolved-draft", f.guest));
@@ -476,9 +465,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   for (const entryPath of upstreamInputs) {
     expect(await git("show", `HEAD:${entryPath}`)).toBe("upstream original input");
   }
-  expect(await git("show", "HEAD:artifact.txt")).toBe(
-    "upstream change\nguest saved change after native preparation",
-  );
+  expect(await git("show", "HEAD:artifact.txt")).toBe("upstream-v2\nguest-v2");
   await expectFile(cwd, ".env.local", "host-private-fixture");
   await git("checkout", "main");
   await write(cwd, "later-upstream.txt", "later upstream only\n");
@@ -569,7 +556,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
 
   await git("checkout", "main");
-  await write(cwd, "retry-upstream.txt", "upstream before interrupted import\n");
+  await write(cwd, "retry-upstream.txt", "import retry\n");
   await git("add", "retry-upstream.txt");
   await git("commit", "-m", "Advance before interrupted review import");
   baseCommit = await git("rev-parse", "HEAD");
@@ -588,9 +575,7 @@ it("recovers one guest integration, retains saved data and publishes the resolve
   importInterruption.mockRestore();
   expect(await refresh()).toMatchObject({ status: "current" });
   expect(reviewTransferBytes.at(-1)).toBeLessThanOrEqual(64);
-  expect(await guestGit("show", `${baseCommit}:retry-upstream.txt`)).toBe(
-    "upstream before interrupted import",
-  );
+  expect(await guestGit("show", `${baseCommit}:retry-upstream.txt`)).toBe("import retry");
   expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
   expect(contentFetches).toBe(3);
   expect(await missingContents(ancestorCommit)).not.toContain("?");

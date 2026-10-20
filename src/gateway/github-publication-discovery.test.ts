@@ -35,28 +35,6 @@ type WorkspaceBinding = Pick<
   "repositoryWorkspaceId" | "worktree"
 >;
 
-function projectionFixture(binding: WorkspaceBinding = { repositoryWorkspaceId: "workspace-1" }) {
-  let listener: SelectionListener | undefined;
-  const row = {
-    key: session.sessionKey,
-    agentId: session.agentId,
-    entry: { sessionId: session.sessionId, updatedAt: 1, ...binding },
-  };
-  const projection = {
-    onSelectionChange: (next: SelectionListener) => {
-      listener = next;
-    },
-  };
-  return {
-    projection,
-    observe: (observed: typeof row) => listener?.({ kind: "row", row: observed }),
-    rebind: (next: WorkspaceBinding = { repositoryWorkspaceId: "workspace-2" }) => {
-      row.entry = { sessionId: session.sessionId, updatedAt: 1, ...next };
-      listener?.({ kind: "row", row });
-    },
-  };
-}
-
 describe("GitHub publication discovery", () => {
   let clock: ReturnType<typeof createGatewaySchedulerClock>;
   let scheduler: ReturnType<typeof createTestGatewayScheduler>;
@@ -71,10 +49,25 @@ describe("GitHub publication discovery", () => {
   };
   const fact = (expected: PreparedFact = published) =>
     expect(readGitHubPublicationFact(session)).toEqual(expected);
-  const start = (binding: WorkspaceBinding = { repositoryWorkspaceId: "workspace-1" }) => {
-    const fixture = projectionFixture(binding);
-    owner = startGitHubPublicationDiscovery({ scheduler, projection: fixture.projection });
-    return fixture;
+  const start = () => {
+    let listener: SelectionListener | undefined;
+    owner = startGitHubPublicationDiscovery({
+      scheduler,
+      projection: {
+        onSelectionChange: (next) => {
+          listener = next;
+        },
+      },
+    });
+    return (
+      binding: WorkspaceBinding = { repositoryWorkspaceId: "workspace-2" },
+      key = session.sessionKey,
+      sessionId = session.sessionId,
+    ) =>
+      listener?.({
+        kind: "row",
+        row: { key, agentId: session.agentId, entry: { sessionId, updatedAt: 1, ...binding } },
+      });
   };
   const discover = async () => {
     readGitHubPublicationFact(session);
@@ -103,13 +96,9 @@ describe("GitHub publication discovery", () => {
   });
 
   it("does no discovery for a hydrated corpus until a session requests its publication hint", async () => {
-    const { observe } = start();
+    const rebind = start();
     for (let index = 0; index < 300; index++) {
-      observe({
-        key: `agent:main:idle-${index}`,
-        agentId: "main",
-        entry: { sessionId: `idle-${index}`, updatedAt: 1, repositoryWorkspaceId: "workspace-1" },
-      });
+      rebind({ repositoryWorkspaceId: "workspace-1" }, `agent:main:idle-${index}`, `idle-${index}`);
       await clock.wake();
     }
     expect(vi.mocked(prepareGitHubPublicationFact).mock.calls.length).toBe(0);
@@ -128,10 +117,8 @@ describe("GitHub publication discovery", () => {
       binding: { worktree: { id: "worktree-1", repoRoot: "/synthetic/repo", branch: "session-1" } },
     },
   ])("waits for demand after an unobserved row acquires a $kind binding", async ({ binding }) => {
-    const { rebind } = start({});
-    await clock.wake();
-    await clock.wake();
-    expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
+    fact({ available: false });
+    const rebind = start();
 
     rebind({});
     invalidateAll();
@@ -144,17 +131,19 @@ describe("GitHub publication discovery", () => {
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
 
     const gate = holdPreparation();
-    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
+    fact({ available: false });
     const preparing = clock.wake();
     expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
-    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
+    for (let turn = 0; turn < 5; turn++) {
+      fact({ available: false });
+    }
     gate.resolve(published);
     await preparing;
     expect(readGitHubPublicationFact(session)).toEqual(published);
   });
 
   it("revokes a removed binding before its queued preparation starts", async () => {
-    const { rebind } = start();
+    const rebind = start();
     readGitHubPublicationFact(session);
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
 
@@ -171,51 +160,40 @@ describe("GitHub publication discovery", () => {
     expect(readGitHubPublicationFact(session)).toEqual({ available: false });
   });
 
-  it("retires removed bindings without reviving them on identity or config changes", async () => {
-    const { rebind } = start();
-    await discover();
-
+  it.each(["removed", "rebound"])("discards in-flight results for %s bindings", async (binding) => {
+    const rebind = start();
+    if (binding === "removed") {
+      await discover();
+      clearNativeGitHubTokenCache();
+    } else {
+      readGitHubPublicationFact(session);
+    }
     const stale = holdPreparation();
-    clearNativeGitHubTokenCache();
     const oldRefresh = clock.wake();
-    const oldPreparation = vi.mocked(prepareGitHubPublicationFact).mock.calls[1]![0];
+    const oldPreparation = vi.mocked(prepareGitHubPublicationFact).mock.calls.at(-1)![0];
     expect(oldPreparation.assertCurrent?.()).toBe(true);
-    rebind({});
+    rebind(binding === "removed" ? {} : undefined);
     expect(oldPreparation.assertCurrent?.()).toBe(false);
-    invalidateAll();
-    await clock.wake();
-    expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2);
-
-    stale.resolve(published);
-    await oldRefresh;
-    expect(clock.armedAtMs).toBeNull();
-    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
-    rebind();
+    if (binding === "removed") {
+      invalidateAll();
+      await clock.wake();
+      expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(2);
+      stale.resolve(published);
+      await oldRefresh;
+      expect(clock.armedAtMs).toBeNull();
+      fact({ available: false });
+      rebind();
+    }
     const replacement = {
       ...published,
       github: { ...published.github, branch: "openclaw/rebound" },
     };
     vi.mocked(prepareGitHubPublicationFact).mockResolvedValueOnce(replacement);
     await clock.wake();
-    expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(3);
-    expect(readGitHubPublicationFact(session)).toEqual(replacement);
-  });
-
-  it("serves an unavailable fact immediately while background preparation is pending", async () => {
-    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
-    const gate = holdPreparation();
-    owner = startGitHubPublicationDiscovery({ scheduler });
-    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
-    const refresh = clock.wake();
-
-    for (let turn = 0; turn < 5; turn++) {
-      expect(readGitHubPublicationFact(session)).toEqual({ available: false });
-    }
-    expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
-
-    gate.resolve(published);
-    await refresh;
-    expect(readGitHubPublicationFact(session)).toEqual(published);
+    stale.resolve(published);
+    await oldRefresh;
+    expect(prepareGitHubPublicationFact).toHaveBeenCalledTimes(binding === "removed" ? 3 : 2);
+    fact(replacement);
   });
 
   it.each([
@@ -249,28 +227,6 @@ describe("GitHub publication discovery", () => {
       expect(clock.armedAtMs).toBeNull();
     },
   );
-
-  it("discards a late result after the session workspace binding changes", async () => {
-    const { rebind } = start();
-    const stale = holdPreparation();
-    readGitHubPublicationFact(session);
-    const oldRefresh = clock.wake();
-    const oldPreparation = vi.mocked(prepareGitHubPublicationFact).mock.calls[0]![0];
-    expect(oldPreparation.assertCurrent?.()).toBe(true);
-
-    rebind();
-    expect(oldPreparation.assertCurrent?.()).toBe(false);
-    const replacement = {
-      ...published,
-      github: { ...published.github, branch: "openclaw/rebound" },
-    };
-    vi.mocked(prepareGitHubPublicationFact).mockResolvedValueOnce(replacement);
-    await clock.wake();
-    stale.resolve(published);
-    await oldRefresh;
-
-    expect(readGitHubPublicationFact(session)).toEqual(replacement);
-  });
 
   it("retires published facts and pending refreshes when the owner stops", async () => {
     const gate = holdPreparation();

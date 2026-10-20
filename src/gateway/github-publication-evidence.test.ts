@@ -65,16 +65,12 @@ async function evidenceFixture() {
     sandbox: {
       ...sandbox,
       backend: {
-        runShellCommand: async (params) => {
+        runShellCommand: async ({ script, args = [], stdin, signal, allowFailure }) => {
           const result = await runCommandBuffered(
-            ["sh", "-c", params.script, "evidence-fixture", ...(params.args ?? [])],
-            {
-              input: params.stdin,
-              signal: params.signal,
-              timeoutMs: 10_000,
-            },
+            ["sh", "-c", script, "evidence-fixture", ...args],
+            { input: stdin, signal, timeoutMs: 10_000 },
           );
-          if (result.code !== 0 && !params.allowFailure) {
+          if (result.code !== 0 && !allowFailure) {
             throw new Error(result.stderr.toString());
           }
           return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
@@ -243,25 +239,21 @@ describe("workspace evidence through the guest tool and registered publication a
     expect(f.writes).toEqual([]);
   });
 
-  it("rechecks the real publisher selection after transport preparation before sending evidence", async () => {
+  it.each(["before", "after"])("rechecks publisher authority %s dispatch", async (dispatch) => {
     await writeConfigFile(f.config);
-    let deselected = false;
-    f.onLookup(async () => {
-      await f.deselectPublisher();
-      deselected = true;
-    });
-    await f.denyUpload("publisher changed");
-    expect(deselected).toBe(true);
-  });
-
-  it("warns about an uncertain write when publisher authority is lost after dispatch", async () => {
-    await writeConfigFile(f.config);
-    f.fetch.mockImplementationOnce(async () => {
-      await f.deselectPublisher();
-      return response({ url: f.url });
-    });
-    await expect(f.upload()).rejects.toThrow("GitHub may have created the attachment");
-    expect(f.fetch).toHaveBeenCalledOnce();
+    const deselect = vi.fn(async () => f.deselectPublisher());
+    if (dispatch === "before") {
+      f.onLookup(deselect);
+      await f.denyUpload("publisher changed");
+    } else {
+      f.fetch.mockImplementationOnce(async () => {
+        await deselect();
+        return response({ url: f.url });
+      });
+      await expect(f.upload()).rejects.toThrow("GitHub may have created the attachment");
+      expect(f.fetch).toHaveBeenCalledOnce();
+    }
+    expect(deselect).toHaveBeenCalledOnce();
   });
 
   it("denies evidence publication to an admitted shared-session participant who is not its creator", async () => {
@@ -296,22 +288,21 @@ describe("workspace evidence through the guest tool and registered publication a
     }
   });
 
-  it("rechecks PR head and the guest's current role after evidence preparation", async () => {
-    let reads = 0;
-    f.onRead(async () => {
-      if (++reads === 2) {
-        f.state.head.sha = "f".repeat(40);
-      }
-    });
-    await expect(f.upload()).rejects.toThrow("head changed");
-    f.state.head.sha = f.publication.headCommit;
-    reads = 0;
-    f.onRead(async () => {
-      if (++reads === 2) {
-        await f.revoke();
-      }
-    });
-    await f.denyUpload("Your operator role changed");
+  it("rechecks PR head and role after preparation", async () => {
+    for (const field of ["PR head", "role"]) {
+      let reads = 0;
+      f.onRead(async () => {
+        if (++reads === 2) {
+          if (field === "PR head") {
+            f.state.head.sha = "f".repeat(40);
+          } else {
+            await f.revoke();
+          }
+        }
+      });
+      await f.denyUpload(field === "PR head" ? "head changed" : "Your operator role changed");
+      f.state.head.sha = f.publication.headCommit;
+    }
   });
 
   it("retains session authority across the actual workspace byte read", async () => {

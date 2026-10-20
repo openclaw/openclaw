@@ -30,28 +30,28 @@ import type {
 
 const mocks = githubPublicationTestMocks();
 
-async function connectWithDeferredProfile(
-  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
-  profileId = f.guestProfile,
-) {
+async function createDeferredProfileFixture(foreign = false) {
+  const f = await createRequesterPublicationFixture(vi.fn(), "local");
+  if (!f.local) {
+    throw new Error("Expected a local publication fixture.");
+  }
+  const profileId = foreign
+    ? (await ensureCanonicalUserProfileForEmail("publication-foreign@example.test")).id
+    : f.guestProfile;
   const config = { ...f.config, gateway: { ...f.config.gateway, roles: undefined } };
   setRuntimeConfigSnapshot(config);
   const client = createOperatorWsClient({ connId: `deferred-${profileId}`, scopes: guestScopes });
   prepareGatewayConnectOperatorAccess(client);
   const handler = {
-    connId: client.connId,
     socket: { readyState: WEBSOCKET_OPEN_READY_STATE },
     connectionWork: new AbortController(),
     isClosed: () => false,
     getClient: () => client,
     buildRequestContext: () => ({}),
-    setCloseCause: vi.fn(),
-    close: vi.fn(),
   };
   const lifecycle = createGatewayConnectProfileLifecycle(
     { configSnapshot: config, handler } as unknown as GatewayConnectPhaseContext,
     {
-      role: "operator",
       authPolicy: captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" }),
     } as DeviceAuthorizedGatewayConnect,
   );
@@ -64,7 +64,7 @@ async function connectWithDeferredProfile(
       isLocalClient: true,
     }),
   );
-  return client;
+  return { ...f, client, workspace: f.local };
 }
 
 installGitHubPublicationTestHarness({
@@ -76,16 +76,8 @@ installGitHubPublicationTestHarness({
 it.each(["own", "foreign"] as const)(
   "allows a deferred operator's own session but rejects foreign sessions: %s",
   async (target) => {
-    const f = await createRequesterPublicationFixture(vi.fn(), "local");
-    if (!f.local) {
-      throw new Error("Expected a local publication fixture.");
-    }
-    const workspace = f.local;
-    const profileId =
-      target === "own"
-        ? f.guestProfile
-        : (await ensureCanonicalUserProfileForEmail("publication-foreign@example.test")).id;
-    const client = await connectWithDeferredProfile(f, profileId);
+    const f = await createDeferredProfileFixture(target === "foreign");
+    const { client, workspace } = f;
     const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
       typeof import("./session-utils-store-worker.js")
     >("./session-utils-store-worker.js");
@@ -128,10 +120,9 @@ it.each(["own", "foreign"] as const)(
 it.each(["kept", "revoked"] as const)(
   "rechecks a queued deferred-profile publication when access is %s before GitHub writes",
   async (access) => {
-    const f = await createRequesterPublicationFixture(vi.fn(), "local");
-    const client = await connectWithDeferredProfile(f);
+    const f = await createDeferredProfileFixture();
     const captured = await prepareGitHubPublicationRequesterV2(
-      { client, context: f.guestSource.context },
+      { client: f.client, context: f.guestSource.context },
       { sessionKey: f.session.sessionKey, agentId: "main" },
     );
     onTestFinished(captured.release);

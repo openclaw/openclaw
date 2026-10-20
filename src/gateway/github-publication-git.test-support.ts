@@ -35,14 +35,11 @@ export async function createRealPublicationWorkspace(params: {
     XDG_CONFIG_HOME: home,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_SYSTEM: os.devNull,
-  };
-  const env = {
-    ...process.env,
-    ...isolatedEnv,
-    GIT_AUTHOR_NAME: "Publication Test",
-    GIT_AUTHOR_EMAIL: "publication@example.test",
-    GIT_COMMITTER_NAME: "Publication Test",
-    GIT_COMMITTER_EMAIL: "publication@example.test",
+    GIT_DIR: undefined,
+    GIT_WORK_TREE: undefined,
+    GH_TOKEN: undefined,
+    GITHUB_TOKEN: undefined,
+    GH_CONFIG_DIR: undefined,
   };
   type CommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
   const local = async (argv: string[], options?: CommandOptions) =>
@@ -50,14 +47,13 @@ export async function createRealPublicationWorkspace(params: {
       cwd,
       ...options,
       env: {
-        ...env,
+        ...process.env,
+        GIT_AUTHOR_NAME: "Publication Test",
+        GIT_AUTHOR_EMAIL: "publication@example.test",
+        GIT_COMMITTER_NAME: "Publication Test",
+        GIT_COMMITTER_EMAIL: "publication@example.test",
         ...options?.env,
         ...isolatedEnv,
-        GIT_DIR: undefined,
-        GIT_WORK_TREE: undefined,
-        GH_TOKEN: undefined,
-        GITHUB_TOKEN: undefined,
-        GH_CONFIG_DIR: undefined,
       },
       timeoutMs: 10000,
       maxOutputBytes: 256 * 1024,
