@@ -11,10 +11,16 @@ vi.mock("./attachment-payload-store.ts", () => ({ releaseChatAttachmentPayload: 
 
 const releasePayload = vi.mocked(releaseChatAttachmentPayload);
 const presentToast = vi.mocked(showToast);
+let toasts: ToastOptions[];
 
 beforeEach(() => {
   releasePayload.mockClear();
   presentToast.mockReset();
+  toasts = [];
+  presentToast.mockImplementation((options) => {
+    toasts.push(options);
+    return true;
+  });
 });
 
 const labels = {
@@ -68,18 +74,12 @@ describe("browser annotation removal", () => {
     const first = annotation("first");
     const second = annotation("second");
     const state = createHost([ordinary, first, second]);
-    let toast: ToastOptions | undefined;
-    presentToast.mockImplementation((options) => {
-      toast = options;
-      return true;
-    });
-
     expect(removeBrowserAnnotationWithUndo(state.host, first, labels)).toBe(true);
     expect(state.attachments()).toEqual([ordinary, second]);
 
-    toast?.onDismiss?.("action");
-    toast?.onAction?.();
-    toast?.onAction?.();
+    toasts[0]?.onDismiss?.("action");
+    toasts[0]?.onAction?.();
+    toasts[0]?.onAction?.();
 
     expect(state.attachments()).toEqual([ordinary, first, second]);
     expect(state.host.focusRestoredAnnotation).toHaveBeenCalledOnce();
@@ -89,15 +89,10 @@ describe("browser annotation removal", () => {
   it("finalizes payload ownership once when Undo expires", () => {
     const target = annotation("target");
     const state = createHost([target]);
-    let toast: ToastOptions | undefined;
-    presentToast.mockImplementation((options) => {
-      toast = options;
-      return true;
-    });
     removeBrowserAnnotationWithUndo(state.host, target, labels);
 
-    toast?.onDismiss?.("timeout");
-    toast?.onDismiss?.("timeout");
+    toasts[0]?.onDismiss?.("timeout");
+    toasts[0]?.onDismiss?.("timeout");
 
     expect(releasePayload).toHaveBeenCalledOnce();
     expect(state.attachments()).toEqual([]);
@@ -106,11 +101,6 @@ describe("browser annotation removal", () => {
   it.each(["session", "composer owner"])("never restores into a replacement %s", (replacement) => {
     const target = annotation("target");
     const state = createHost([target]);
-    let toast: ToastOptions | undefined;
-    presentToast.mockImplementation((options) => {
-      toast = options;
-      return true;
-    });
     removeBrowserAnnotationWithUndo(state.host, target, labels);
     if (replacement === "session") {
       state.switchSession("agent:other");
@@ -118,8 +108,8 @@ describe("browser annotation removal", () => {
       state.replaceOwner();
     }
 
-    toast?.onDismiss?.("action");
-    toast?.onAction?.();
+    toasts[0]?.onDismiss?.("action");
+    toasts[0]?.onAction?.();
 
     expect(state.attachments()).toEqual([]);
     expect(releasePayload).toHaveBeenCalledOnce();
@@ -128,17 +118,7 @@ describe("browser annotation removal", () => {
 
   it("releases instead of exceeding the bound when Undo follows a replacement", () => {
     const target = annotation("target");
-    const state = createHost([
-      target,
-      annotation("second"),
-      annotation("third"),
-      annotation("fourth"),
-    ]);
-    const toasts: ToastOptions[] = [];
-    presentToast.mockImplementation((options) => {
-      toasts.push(options);
-      return true;
-    });
+    const state = createHost([target, ...["second", "third", "fourth"].map(annotation)]);
     removeBrowserAnnotationWithUndo(state.host, target, labels);
     state.host.setAttachments([...state.attachments(), annotation("replacement")]);
 
