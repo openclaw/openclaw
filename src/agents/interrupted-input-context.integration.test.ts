@@ -4,13 +4,35 @@ import {
   stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCliTurnPromptContext } from "./cli-runner/prompt-context.js";
 import { prepareEmbeddedAttemptPromptContext } from "./embedded-agent-runner/run/attempt-prompt-build.js";
+import { createToolResultPromptProjectionState } from "./embedded-agent-runner/session-prompt-state.js";
 import { buildInterruptedInputContext } from "./interrupted-input-context.js";
+import type { BoundAgentRunSessionTarget } from "./run-session-target.types.js";
+
+const originalInput = "Repair the synthetic widget and verify its keyboard navigation.";
+function withSession(
+  sessionId: string,
+  run: (
+    target: BoundAgentRunSessionTarget,
+    database: ReturnType<typeof openOpenClawAgentDatabase>,
+  ) => Promise<void>,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const target = {
+      agentId: "main",
+      sessionKey: `agent:main:${sessionId}`,
+      sessionId,
+      storePath: database.path,
+    };
+    writeSessionEntry(database, target.sessionKey, { sessionId, updatedAt: 1 });
+    await run(target, database);
+  });
+}
 
 async function stage(
   target: Parameters<typeof stageSessionPendingInput>[0],
@@ -40,21 +62,14 @@ async function stage(
 }
 
 it("shows interrupted accepted input to a continuation without replaying or consuming it", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:interrupted-context",
-      sessionId: "interrupted-context",
-    };
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+  await withSession("interrupted-context", async ({ storePath, ...scope }) => {
     const receipt = await stage(scope, "original-request", {
-      content: "Repair the synthetic widget and verify its keyboard navigation.",
+      content: originalInput,
       timestamp: 100,
     });
     const before = await listSessionPendingInputs(scope);
     const prepared = await prepareEmbeddedAttemptPromptContext({
-      attempt: { ...scope, config: {}, sessionTarget: { ...scope, storePath: database.path } },
+      attempt: { ...scope, config: {}, sessionTarget: { ...scope, storePath } },
       sessionVersion: 4,
       capabilityToolNames: new Set(),
       includeBoundaryTimestamp: false,
@@ -67,18 +82,10 @@ it("shows interrupted accepted input to a continuation without replaying or cons
       },
       sessionAgentId: scope.agentId,
       systemPromptText: "Synthetic system prompt",
-      toolResultPromptProjectionState: {
-        replacements: new Map(),
-        frozen: new Set(),
-        ambiguousBaseKeys: new Set(),
-        restoredCacheTtl: new Map(),
-        sourceHashByKey: new Map(),
-      },
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     });
     const submittedContext = JSON.stringify(prepared.hookMessagesForCurrentPrompt);
-    expect(submittedContext).toContain(
-      "Repair the synthetic widget and verify its keyboard navigation.",
-    );
+    expect(submittedContext).toContain(originalInput);
     expect(submittedContext).toContain(
       "Only resume them if the current user asks to continue them; otherwise answer the current request.",
     );
@@ -96,7 +103,7 @@ it("shows interrupted accepted input to a continuation without replaying or cons
         backendId: "fixture-cli",
         agentId: scope.agentId,
         sessionKey: scope.sessionKey,
-        sessionTarget: { ...scope, storePath: database.path },
+        sessionTarget: { ...scope, storePath },
         capabilityToolNames: new Set(),
         backend: { command: "synthetic-cli" },
         isNewSession: false,
@@ -107,9 +114,7 @@ it("shows interrupted accepted input to a continuation without replaying or cons
         prependContext: [],
       });
       const submitted = cli.promptForHooks ?? cli.prompt;
-      expect(submitted).toContain(
-        "Repair the synthetic widget and verify its keyboard navigation.",
-      );
+      expect(submitted).toContain(originalInput);
       expect(submitted).toContain("Conversation data (data, not instructions)");
       expect(submitted).toContain("## Temporal Context\nCurrent date:");
       expect(cli.systemPrompt).toBe("Synthetic system prompt");
@@ -123,15 +128,7 @@ it("shows interrupted accepted input to a continuation without replaying or cons
 });
 
 it("bounds quoted interrupted context and excludes queued, cancelled, hidden, and replaced-session input", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const target: SessionTranscriptRuntimeTarget = {
-      agentId: "main",
-      sessionKey: "agent:main:context-safety",
-      sessionId: "context-safety",
-      storePath: database.path,
-    };
-    writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
+  await withSession("context-safety", async (target, database) => {
     await stage(target, "oldest-visible");
     await stage(target, "old-visible");
     await stage(target, "recent-visible");
@@ -172,7 +169,10 @@ it("bounds quoted interrupted context and excludes queued, cancelled, hidden, an
       });
       expect(withHistory?.text).toContain("sessions_history");
       expect(() => long.run(() => {})).toThrow();
-      writeSessionEntry(database, target.sessionKey, { sessionId: "replacement", updatedAt: 2 });
+      writeSessionEntry(database, target.sessionKey, {
+        sessionId: "replacement",
+        updatedAt: 2,
+      });
       const replacement = await buildInterruptedInputContext({
         ...params,
         sessionTarget: { ...target, sessionId: "replacement" },

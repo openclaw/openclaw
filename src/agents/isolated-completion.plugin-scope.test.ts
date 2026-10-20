@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as mocks,
@@ -42,20 +42,28 @@ function writeManifest(plugin: ReturnType<typeof writePlugin>, metadata: object)
   writeFileSync(path.join(plugin.dir, "openclaw.plugin.json"), JSON.stringify(manifest));
 }
 
+function unloadedPlugin(id: string) {
+  return writePlugin({
+    id,
+    body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
+      throw new Error("Prompt-only inference must not load ${id}");`,
+  });
+}
+
+function useHarness(text: string) {
+  registerIsolatedHarness({
+    runIsolatedCompletionV2: async () => ({
+      assistant: isolatedAssistant([{ type: "text", text }]),
+    }),
+  });
+}
+
 it("completes without loading configured context/memory or unrelated startup plugins", async () => {
   useNoBundledPlugins();
-  const engine = writePlugin({
-    id: "expensive-engine",
-    body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
-      throw new Error("Prompt-only inference must not load the configured engine");`,
-  });
+  const engine = unloadedPlugin("expensive-engine");
   // Large configured packages must stay outside capture, regardless of their contents.
   writeFileSync(path.join(engine.dir, "unused-runtime-data.bin"), Buffer.alloc(1024 * 1024));
-  const memory = writePlugin({
-    id: "expensive-memory",
-    body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
-      throw new Error("Prompt-only inference must not load the configured memory plugin");`,
-  });
+  const memory = unloadedPlugin("expensive-memory");
   writeManifest(memory, { kind: "memory" });
   const provider = writePlugin({
     id: "openai",
@@ -112,11 +120,7 @@ it("completes without loading configured context/memory or unrelated startup plu
       },
     };
   });
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "Gateway log rotation" }]),
-    })),
-  });
+  useHarness("Gateway log rotation");
   await expect(runIsolatedCompletion({ ...isolatedRequest(), config })).resolves.toMatchObject({
     text: "Gateway log rotation",
   });
@@ -142,11 +146,7 @@ it.each(["cli", "harness"] as const)("reports the %s owner the run dispatches to
     cli ? { provider: "claude-cli" } : undefined,
   );
   mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
-  registerIsolatedHarness({
-    runIsolatedCompletionV2: vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
-    })),
-  });
+  useHarness("done");
   const request = cli
     ? {
         ...isolatedRequest(),

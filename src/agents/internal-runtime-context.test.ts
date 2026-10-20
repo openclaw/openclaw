@@ -118,8 +118,6 @@ describe("internal runtime context codec", () => {
 
       const stripped = stripInternalRuntimeContext(wrapped);
       expect(stripped).toBe(visible);
-      expect(stripped).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-      expect(stripped).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
     }
   });
 });
