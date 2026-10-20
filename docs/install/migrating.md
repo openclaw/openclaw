@@ -20,6 +20,9 @@ Bundled migration providers bring instructions, MCP servers, skills, model confi
   <Card title="Migrating from Hermes" href="/install/migrating-hermes" icon="feather">
     Import Hermes config, providers, MCP servers, memory, skills, and supported `.env` keys.
   </Card>
+  <Card title="Migrating from Grok Bot" href="/install/migrating-grok" icon="robot">
+    Import owned agents, icons, memory, skills, supported automations, MCP connections, and reusable credentials.
+  </Card>
 </CardGroup>
 
 The CLI entry point is [`openclaw migrate`](/cli/migrate). Onboarding can also offer migration when it detects a known source (`openclaw onboard --flow import`).

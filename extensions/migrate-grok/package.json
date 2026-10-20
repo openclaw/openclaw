@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/migrate-grok",
+  "version": "2026.10.5",
+  "private": true,
+  "description": "Grok Bot to OpenClaw migration provider",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": { "openclaw": ">=2026.10.5" },
+  "peerDependenciesMeta": { "openclaw": { "optional": true } },
+  "openclaw": { "extensions": ["./index.ts"] }
+}

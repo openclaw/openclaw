@@ -8,7 +8,7 @@ title: "Migrate"
 
 # `openclaw migrate`
 
-Import state from another agent system through a plugin-owned migration provider. Bundled providers cover Claude, Codex CLI, and [Hermes](/install/migrating-hermes). Plugins can register additional providers.
+Import state from another agent system through a plugin-owned migration provider. Bundled providers cover Claude, Codex CLI, [Grok Bot](/install/migrating-grok), and [Hermes](/install/migrating-hermes). Plugins can register additional providers.
 
 <Tip>
 For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-claude) and [Migrating from Hermes](/install/migrating-hermes). The [migration hub](/install/migrating) lists all paths.
@@ -224,6 +224,28 @@ Migration never writes `plugins["*"]` and never stores local marketplace cache p
 Skipped plugins are not written to target config. Source-side subscription failures are reported on manual items with typed reasons: `codex_subscription_required`, `codex_account_unavailable`, `plugin_disabled`, or `plugin_read_unavailable`. With `--verify-plugin-apps`, source app-inventory failures can also appear as `app_inaccessible`, `app_disabled`, `app_missing`, or `app_inventory_unavailable`. Target-side auth-required installs are reported on the affected plugin item with `status: "skipped"`, `reason: "auth_required"`, and sanitized app identifiers. Their explicit config entries are written disabled until you reauthorize and enable them. Other install failures are item-scoped `error` results.
 
 If Codex app-server plugin inventory is unavailable during planning, migration falls back to cached bundle advisory items instead of failing the whole migration.
+
+## Grok Bot provider
+
+The bundled Grok Bot provider combines local desktop settings with authenticated
+reads of owned agents. Use `--from <path>` for another application data directory
+or an offline snapshot, or supply a Grok recipe or marketplace/share URL.
+
+```bash
+openclaw migrate grok --dry-run
+openclaw migrate apply grok
+openclaw migrate grok --from https://x.ai/bot/marketplace/bots/stalk-bot --dry-run
+```
+
+It imports native agents, identity/icons, instructions, available memory, skills,
+timezone, compatible MCP configuration, supported cron schedules, and reusable
+API keys with credential consent. Missing cloud memory, unsupported Grok plugin
+behavior, and OAuth reconnects are reported explicitly. This is a one-time move;
+a marketplace recipe supplies one bot rather than an entire account.
+
+See [Migrating from Grok Bot](/install/migrating-grok) for source formats and
+coverage. Source discovery is passive; planning may use Grok sign-in credentials
+to read hosted content, separately from consent to copy destination credentials.
 
 ## Hermes provider
 
