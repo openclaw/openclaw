@@ -104,84 +104,48 @@ it("retires a terminal callback when another completion replaces its session-eff
   }
 });
 
-it.each(["keep", "delete"] as const)(
-  "announces an explicitly owned raw child and wakes its requester during %s cleanup",
-  async (cleanup) => {
-    const entry = createRunEntry({
-      childSessionKey: "global",
-      childAgentId: "worker",
-      expectsCompletionMessage: true,
-      cleanup,
-    });
-    const wake = vi.fn(async () => false);
-    const { controller, cleanupBrowser, complete, read } = fixture({
-      entry,
-      callGateway: vi.fn(),
-      maybeWakeRequesterAfterAllChildrenSettled: wake,
-    });
-    const settleRoots = observeRootWork();
-
-    try {
-      await complete({ endedAt: Date.now() });
-    } finally {
-      await settleRoots();
-    }
-
-    expect(controller.options.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ childSessionKey: "global", childAgentId: "worker", cleanup }),
-    );
-    expect(wake).toHaveBeenCalledOnce();
-    expect(controller.options.notifyContextEngineSubagentEnded).toHaveBeenCalledOnce();
-    for (const reason of ["subagent-run-complete", "subagent-run-cleanup"]) {
-      expect(retireSessionMcpRuntime).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: "session-id", reason }),
-      );
-    }
-    expect(read()).toMatchObject({
-      delivery: { status: "delivered" },
-      requesterSettleWake: { status: "pending" },
-      browserCleanupDispatchedAt: expect.any(Number),
-      cleanupCompletedAt: expect.any(Number),
-    });
-    expect(read().requesterSettleWake?.retireAfterSettle).toBe(
-      cleanup === "delete" ? true : undefined,
-    );
-    expect(cleanupBrowser).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ sessionKeys: ["agent:worker:global"] }),
-    );
-  },
-);
-
-it.each(["quiet", "suppressed"] as const)(
-  "publishes %s delivery cleanup with cleanup completion before waking the requester",
+it.each(["keep", "delete", "quiet", "suppressed"] as const)(
+  "publishes %s cleanup before waking the requester",
   async (mode) => {
+    const delivering = mode === "keep" || mode === "delete";
     const suppressed = mode === "suppressed";
-    const entry = createRunEntry({
-      expectsCompletionMessage: suppressed,
-      suppressCompletionDelivery: suppressed || undefined,
-      wakeOnDescendantSettle: true,
-      endedAt: 4_000,
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      outcome: { status: "ok" },
-      delivery: {
-        status: "pending",
-        disposition: suppressed ? "intentional_non_delivery" : undefined,
-        createdAt: 3_000,
-        attemptCount: 2,
-        nextAttemptAt: 5_000,
-      },
-    });
+    const entry = createRunEntry(
+      delivering
+        ? {
+            childSessionKey: "global",
+            childAgentId: "worker",
+            expectsCompletionMessage: true,
+            cleanup: mode,
+          }
+        : {
+            expectsCompletionMessage: suppressed,
+            suppressCompletionDelivery: suppressed || undefined,
+            wakeOnDescendantSettle: true,
+            endedAt: 4_000,
+            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+            outcome: { status: "ok" },
+            delivery: {
+              status: "pending",
+              disposition: suppressed ? "intentional_non_delivery" : undefined,
+              createdAt: 3_000,
+              attemptCount: 2,
+              nextAttemptAt: 5_000,
+            },
+          },
+    );
     const writes: SubagentRunRecord[] = [];
     const wake = vi.fn(async () => {
-      expect(readLifecycleRun(entry)).toMatchObject({
-        cleanupCompletedAt: expect.any(Number),
-        delivery: { status: "not_required" },
-        requesterSettleWake: { status: "pending" },
-      });
-      expect(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
+      if (!delivering) {
+        expect(readLifecycleRun(entry)).toMatchObject({
+          cleanupCompletedAt: expect.any(Number),
+          delivery: { status: "not_required" },
+          requesterSettleWake: { status: "pending" },
+        });
+        expect(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
+      }
       return false;
     });
-    const { controller } = fixture({
+    const { controller, cleanupBrowser, complete, read } = fixture({
       entry,
       callGateway: vi.fn(),
       maybeWakeRequesterAfterAllChildrenSettled: wake,
@@ -194,18 +158,50 @@ it.each(["quiet", "suppressed"] as const)(
     });
     const settleRoots = observeRootWork();
     try {
-      expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+      if (delivering) {
+        await complete({ endedAt: Date.now() });
+      } else {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+      }
     } finally {
       await settleRoots();
     }
 
+    const completed = read();
+    expect(wake).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+    expect(completed.cleanupCompletedAt).toBeTypeOf("number");
+    if (delivering) {
+      expect(controller.options.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childSessionKey: "global",
+          childAgentId: "worker",
+          cleanup: mode,
+        }),
+      );
+      expect(controller.options.notifyContextEngineSubagentEnded).toHaveBeenCalledOnce();
+      for (const reason of ["subagent-run-complete", "subagent-run-cleanup"]) {
+        expect(retireSessionMcpRuntime).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: "session-id", reason }),
+        );
+      }
+      expect(completed).toMatchObject({
+        delivery: { status: "delivered" },
+        requesterSettleWake: { status: "pending" },
+        browserCleanupDispatchedAt: expect.any(Number),
+      });
+      expect(completed.requesterSettleWake?.retireAfterSettle).toBe(
+        mode === "delete" ? true : undefined,
+      );
+      expect(cleanupBrowser).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKeys: ["agent:worker:global"] }),
+      );
+      return;
+    }
     for (const row of writes) {
       if (row.delivery?.attemptCount === undefined) {
         expect(row.cleanupCompletedAt).toBeTypeOf("number");
       }
     }
-    const completed = readLifecycleRun(entry);
-    expect(completed.cleanupCompletedAt).toBeTypeOf("number");
     expect([completed.suppressCompletionDelivery, completed.wakeOnDescendantSettle]).toEqual([
       undefined,
       undefined,
@@ -214,7 +210,6 @@ it.each(["quiet", "suppressed"] as const)(
       status: "not_required",
       ...(suppressed ? { disposition: "intentional_non_delivery" } : {}),
     });
-    expect(wake).toHaveBeenCalledTimes(suppressed ? 0 : 1);
     expect(controller.options.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   },
 );

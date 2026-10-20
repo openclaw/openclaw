@@ -101,14 +101,16 @@ export function registerTerminalStateSignalAuthorityTests({
           };
         }
         const runs = new Map<string, SubagentRunRecord>();
-        await mutateSubagentRuns(
-          [entry.runId],
-          () => ({
-            value: undefined,
-            postimages: new Map([[entry.runId, entry]]),
-          }),
-          { runs },
-        );
+        const write = (update: (current: SubagentRunRecord | undefined) => SubagentRunRecord) =>
+          mutateSubagentRuns(
+            [entry.runId],
+            (rows) => ({
+              value: undefined,
+              postimages: new Map([[entry.runId, update(rows.get(entry.runId))]]),
+            }),
+            { runs },
+          );
+        await write(() => entry);
         let sessionCurrent = true;
         controller = createLifecycleController({ entry, runs, realWorker: true });
         let observed = false;
@@ -120,20 +122,15 @@ export function registerTerminalStateSignalAuthorityTests({
             observed = true;
             changeNativeEntry?.();
             if (serializedSuccessor) {
-              successorWrite = mutateSubagentRuns(
-                [entry.runId],
-                (rows) => {
-                  const current = expectDefined(rows.get(entry.runId), "admitted run");
-                  const draft = structuredClone(current);
-                  if (change === "provisional kill") {
-                    draft.killReconciliation = { killedAt: 4_001 };
-                  } else {
-                    draft.execution.outcome = { status: "error", error: "corrected outcome" };
-                  }
-                  return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
-                },
-                { runs },
-              );
+              successorWrite = write((current) => {
+                const draft = structuredClone(expectDefined(current, "admitted run"));
+                if (change === "provisional kill") {
+                  draft.killReconciliation = { killedAt: 4_001 };
+                } else {
+                  draft.execution.outcome = { status: "error", error: "corrected outcome" };
+                }
+                return draft;
+              });
               void successorWrite.catch(() => {});
             } else if (change === "newer session run") {
               const successor = createRunEntry({
