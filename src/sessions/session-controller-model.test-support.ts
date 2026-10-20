@@ -55,8 +55,7 @@ export function stepPilot(
     case "finish":
       return state.phase === "running" ? update({ phase: "finishing" }) : unchanged;
     case "stop":
-      // This is exact-parent cancellation only. A command stop is NOT modeled as
-      // a no-op: queues, children and hooks retain their separate command owner.
+      // Command-level queues, children and hooks have a separate cancellation owner.
       return state.phase === "preparing" || state.phase === "running"
         ? update({ phase: "terminal", cancelled: true }, [{ type: "cancel" }])
         : unchanged;
@@ -82,9 +81,7 @@ export function stepPilot(
       if (state.inputs[event.input.id]) {
         return unchanged;
       }
-      // V2 admits during automatic compaction; no blanket compacting/busy gate.
-      // freezeAbort commits cancellation policy, not a fabricated backend capability.
-      // Real attempt settlement closes its sink separately; exercise both orders.
+      // Compaction does not close V2 injection; actual attempt settlement does.
       const targetAvailable =
         state.slot &&
         (state.phase === "running" || state.phase === "finishing") &&
@@ -94,10 +91,7 @@ export function stepPilot(
         targetAvailable && !state.live ? "failed" : allowed ? "offered" : "rejected";
       return update(
         {
-          inputs: {
-            ...state.inputs,
-            [event.input.id]: { generation: state.generation, custody },
-          },
+          inputs: { ...state.inputs, [event.input.id]: { generation: state.generation, custody } },
         },
         allowed
           ? [{ type: "inject", input: event.input }]
@@ -174,7 +168,6 @@ export function modelParentMailbox(inputs: readonly PilotParentInput[]): PilotPa
   });
 }
 
-/** Seed is printed with the complete event prefix on failure; no external property-test dependency. */
 export function pilotRandom(seed: number): (bound: number) => number {
   let value = (seed ^ 0x9e3779b9) >>> 0;
   return (bound) => {
@@ -186,7 +179,6 @@ export function pilotRandom(seed: number): (bound: number) => number {
   };
 }
 
-/** State-aware bounded interleavings; output itself is a standalone replay corpus. */
 export function generatePilotSequence(seed: number, length = 48): PilotEvent[] {
   const random = pilotRandom(seed);
   const events: PilotEvent[] = [];

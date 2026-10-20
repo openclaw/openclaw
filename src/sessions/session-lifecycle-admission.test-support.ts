@@ -1,28 +1,15 @@
 import { vi } from "vitest";
-import { captureSessionTarget } from "./session-controller.lifecycle.js";
 import * as sessionLifecycle from "./session-controller.lifecycle.js";
-import {
-  registerRpcSource,
-  type RpcSourceIdentity,
-  type RpcSourceRef,
-} from "./session-controller.rpc-sources.js";
-import {
-  rpcSourceRemovalByRef,
-  rpcSourcesByRunId,
-  sessionControllerEntriesByAlias,
-  sessionControllerEntriesByStore,
-  sessionControllers,
-} from "./session-controller.storage.js";
+import * as rpc from "./session-controller.rpc-sources.js";
+import * as storage from "./session-controller.storage.js";
 
+type InterruptionParams = Parameters<typeof sessionLifecycle.startSessionControllerInterruption>[0];
 export function observeSessionWorkAdmissionDrain(
-  afterDrain: (
-    params: Parameters<typeof sessionLifecycle.startSessionControllerInterruption>[0],
-    released: boolean,
-  ) => Promise<void> | void,
+  afterDrain: (params: InterruptionParams, released: boolean) => Promise<void> | void,
 ): () => void {
   const startInterruption = sessionLifecycle.startSessionControllerInterruption;
   const waitForRelease = sessionLifecycle.waitForSessionControllerSettlement;
-  const interruptions = new WeakMap<Promise<void>, Parameters<typeof startInterruption>[0]>();
+  const interruptions = new WeakMap<Promise<void>, InterruptionParams>();
   const start = vi
     .spyOn(sessionLifecycle, "startSessionControllerInterruption")
     .mockImplementation((params) => {
@@ -74,8 +61,8 @@ export async function runExclusiveSessionLifecycle<T>(params: {
 
 /** Rebinds a fixture through controller-owned target and operation identity. */
 export function setRpcSourceIdentityForTest(
-  source: RpcSourceRef,
-  { sessionKey, agentId, sessionId }: Partial<RpcSourceIdentity>,
+  source: rpc.RpcSourceRef,
+  { sessionKey, agentId, sessionId }: Partial<rpc.RpcSourceIdentity>,
 ): void {
   const current = source.input.target;
   if (!current) {
@@ -89,7 +76,7 @@ export function setRpcSourceIdentityForTest(
       source.input.claim,
     );
   }
-  source.input.target = captureSessionTarget({
+  source.input.target = sessionLifecycle.captureSessionTarget({
     storeScope: current.storeScope,
     sessionKey: sessionKey ?? current.sessionKey,
     incarnation: sessionId ?? source.input.sourceSessionId ?? current.incarnation,
@@ -101,9 +88,8 @@ export function setRpcSourceIdentityForTest(
   }
 }
 
-/** Updates an unclaimed fixture's terminal presentation. */
 export function setRpcSourceTerminalProjectionForTest(
-  source: RpcSourceRef,
+  source: rpc.RpcSourceRef,
   terminal: boolean,
 ): void {
   source.adapter.projectSessionTerminalPending = terminal;
@@ -112,91 +98,73 @@ export function setRpcSourceTerminalProjectionForTest(
 
 /** Drops test-owned controller singletons after their operations have been completed. */
 export function resetSessionControllerStateForTest(): void {
-  rpcSourcesByRunId.clear();
-  sessionControllers.clear();
-  sessionControllerEntriesByAlias.clear();
-  sessionControllerEntriesByStore.clear();
+  storage.rpcSourcesByRunId.clear();
+  storage.sessionControllers.clear();
+  storage.sessionControllerEntriesByAlias.clear();
+  storage.sessionControllerEntriesByStore.clear();
 }
 
 // Bind the fixture's protocol ID before using the controller's registration owner.
-function registerFixtureRpcSource(runId: string, source: RpcSourceRef): void {
+function registerFixtureRpcSource(runId: string, source: rpc.RpcSourceRef): void {
   if (source.input.protocolRunId !== undefined && source.input.protocolRunId !== runId) {
     throw new Error("Fixture RPC source protocol ID does not match its index key");
   }
   source.input.protocolRunId = runId;
-  registerRpcSource(runId, source);
+  rpc.registerRpcSource(runId, source);
 }
 
-// Only the map operations used by fixtures; the production registry remains the owner.
-class RpcSourceTestMap {
-  get size(): number {
-    return rpcSourcesByRunId.size;
-  }
+function uniqueRpcSource(runId: string): rpc.RpcSourceRef | undefined {
+  const sources = storage.rpcSourcesByRunId.get(runId);
+  return sources?.size === 1 ? sources.values().next().value : undefined;
+}
 
-  clear(): void {
-    rpcSourcesByRunId.clear();
-  }
+function rpcSnapshot(): Map<string, rpc.RpcSourceRef> {
+  return new Map(
+    [...storage.rpcSourcesByRunId.keys()].flatMap((runId) => {
+      const source = uniqueRpcSource(runId);
+      return source ? [[runId, source] as const] : [];
+    }),
+  );
+}
 
-  delete(runId: string): boolean {
-    return rpcSourcesByRunId.delete(runId);
-  }
-
-  entries(): MapIterator<[string, RpcSourceRef]> {
-    return new Map(this.uniqueEntries()).entries();
-  }
-
-  get(runId: string): RpcSourceRef | undefined {
-    const sources = rpcSourcesByRunId.get(runId);
-    return sources?.size === 1 ? sources.values().next().value : undefined;
-  }
-
-  has(runId: string): boolean {
-    return (rpcSourcesByRunId.get(runId)?.size ?? 0) > 0;
-  }
-
-  set(runId: string, source: RpcSourceRef): this {
-    if (rpcSourcesByRunId.get(runId)?.has(source)) {
-      return this;
-    }
-    rpcSourcesByRunId.delete(runId);
-    registerFixtureRpcSource(runId, source);
-    return this;
-  }
-
-  values(): MapIterator<RpcSourceRef> {
-    return new Map(this.uniqueEntries()).values();
-  }
-
-  [Symbol.iterator](): MapIterator<[string, RpcSourceRef]> {
+// The production registry owns correlation; fixtures expose only unambiguous IDs.
+export const rpcSourceTesting = {
+  get size() {
+    return storage.rpcSourcesByRunId.size;
+  },
+  clear: () => storage.rpcSourcesByRunId.clear(),
+  delete: (runId: string) => storage.rpcSourcesByRunId.delete(runId),
+  get: uniqueRpcSource,
+  has: (runId: string) => (storage.rpcSourcesByRunId.get(runId)?.size ?? 0) > 0,
+  entries: () => rpcSnapshot().entries(),
+  values: () => rpcSnapshot().values(),
+  [Symbol.iterator]() {
     return this.entries();
-  }
-
-  /** Legacy test fixtures only observe unambiguous protocol IDs. */
-  private uniqueEntries(): Array<[string, RpcSourceRef]> {
-    return [...rpcSourcesByRunId].flatMap(([runId, sources]) => {
-      const source = sources.size === 1 ? sources.values().next().value : undefined;
-      return source ? [[runId, source]] : [];
-    });
-  }
-  deleteExpected(runId: string, expected: RpcSourceRef): boolean {
-    const sources = rpcSourcesByRunId.get(runId);
+  },
+  set(runId: string, source: rpc.RpcSourceRef) {
+    if (!storage.rpcSourcesByRunId.get(runId)?.has(source)) {
+      storage.rpcSourcesByRunId.delete(runId);
+      registerFixtureRpcSource(runId, source);
+    }
+    return this;
+  },
+  deleteExpected(runId: string, expected: rpc.RpcSourceRef): boolean {
+    const sources = storage.rpcSourcesByRunId.get(runId);
     if (!sources?.delete(expected)) {
       return false;
     }
     if (sources.size === 0) {
-      rpcSourcesByRunId.delete(runId);
+      storage.rpcSourcesByRunId.delete(runId);
     }
-    const onRemoved = rpcSourceRemovalByRef.get(expected);
-    rpcSourceRemovalByRef.delete(expected);
+    const onRemoved = storage.rpcSourceRemovalByRef.get(expected);
+    storage.rpcSourceRemovalByRef.delete(expected);
     onRemoved?.();
     return true;
-  }
-  reset(entries: Iterable<readonly [string, RpcSourceRef]> = []): void {
-    rpcSourcesByRunId.clear();
+  },
+  reset(entries: Iterable<readonly [string, rpc.RpcSourceRef]> = []): void {
+    storage.rpcSourcesByRunId.clear();
     for (const [runId, ref] of entries) {
       registerFixtureRpcSource(runId, ref);
     }
-  }
-}
-
-export const rpcSourceTesting = new RpcSourceTestMap();
+  },
+};
