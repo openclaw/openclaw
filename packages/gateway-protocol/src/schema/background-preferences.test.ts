@@ -15,6 +15,18 @@ import {
   UsersBackgroundUploadParamsSchema,
 } from "./users-background.js";
 
+function expectWirePreference(preference: unknown, valid: boolean) {
+  const expected = { expectedAssetId: null, expectedPreference: preference };
+  expect(Value.Check(BackgroundPreferenceSchema, preference)).toBe(valid);
+  expect(Value.Check(UsersBackgroundRemoveParamsSchema, expected)).toBe(valid);
+  expect(Value.Check(UsersBackgroundUploadParamsSchema, { ...expected, imageBase64: "aW1n" })).toBe(
+    valid,
+  );
+  expect(Value.Check(UsersBackgroundResultSchema, { status: "ok", asset: null, preference })).toBe(
+    valid,
+  );
+}
+
 describe("background presentation preferences", () => {
   it.each(["faded", "full-bleed"] as const)(
     "preserves explicit %s through appearance normalization and wire snapshots",
@@ -24,16 +36,8 @@ describe("background presentation preferences", () => {
       expect(normalizeUiAppearancePreference("ui.background", preference)).toStrictEqual(
         preference,
       );
-      expect(Value.Check(BackgroundPreferenceSchema, preference)).toBe(true);
       expect(Value.Decode(BackgroundPreferenceSchema, preference)).toStrictEqual(preference);
-      const expected = { expectedAssetId: null, expectedPreference: preference };
-      expect(Value.Check(UsersBackgroundRemoveParamsSchema, expected)).toBe(true);
-      expect(
-        Value.Check(UsersBackgroundUploadParamsSchema, { ...expected, imageBase64: "aW1n" }),
-      ).toBe(true);
-      expect(
-        Value.Check(UsersBackgroundResultSchema, { status: "ok", asset: null, preference }),
-      ).toBe(true);
+      expectWirePreference(preference, true);
     },
   );
 
@@ -53,23 +57,7 @@ describe("background presentation preferences", () => {
     const preference = { ...DEFAULT_BACKGROUND_PREFERENCE, presentation };
     expect(normalizeBackgroundPreference(preference)).toBeUndefined();
     expect(normalizeUiAppearancePreference("ui.background", preference)).toBeUndefined();
-    expect(Value.Check(BackgroundPreferenceSchema, preference)).toBe(false);
-    expect(
-      Value.Check(UsersBackgroundRemoveParamsSchema, {
-        expectedAssetId: null,
-        expectedPreference: preference,
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(UsersBackgroundUploadParamsSchema, {
-        expectedAssetId: null,
-        expectedPreference: preference,
-        imageBase64: "aW1n",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(UsersBackgroundResultSchema, { status: "ok", asset: null, preference }),
-    ).toBe(false);
+    expectWirePreference(preference, false);
   });
 
   it("does not silently normalize a specified undefined mode into an omitted mode", () => {

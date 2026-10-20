@@ -12,10 +12,7 @@ describe("node protocol schemas", () => {
   const minimalStats = { cpuCount: 1, memoryTotalBytes: 0, memoryFreeBytes: 0 };
 
   it("publishes the closed node invoke cancellation payload", () => {
-    const payload: NodeInvokeCancelEvent = {
-      invokeId: "invoke-1",
-      nodeId: "node-1",
-    };
+    const payload: NodeInvokeCancelEvent = { invokeId: "invoke-1", nodeId: "node-1" };
 
     expect(ProtocolSchemas.NodeInvokeCancelEvent).toBe(NodeInvokeCancelEventSchema);
     expect(Value.Check(NodeInvokeCancelEventSchema, payload)).toBe(true);
@@ -79,32 +76,11 @@ describe("node protocol schemas", () => {
   });
 
   it("accepts bounded progress chunks and rejects extra fields", () => {
+    const progress = { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "stdout line" };
+    expect(validateNodeInvokeProgressParams(progress)).toBe(true);
     expect(
-      validateNodeInvokeProgressParams({
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "stdout line",
-      }),
-    ).toBe(true);
-
-    expect(
-      validateNodeInvokeProgressParams({
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "x".repeat(16 * 1024 + 1),
-      }),
+      validateNodeInvokeProgressParams({ ...progress, chunk: "x".repeat(16 * 1024 + 1) }),
     ).toBe(false);
-
-    expect(
-      validateNodeInvokeProgressParams({
-        invokeId: "invoke-1",
-        nodeId: "node-1",
-        seq: 0,
-        chunk: "stdout line",
-        extra: "not allowed",
-      }),
-    ).toBe(false);
+    expect(validateNodeInvokeProgressParams({ ...progress, extra: "not allowed" })).toBe(false);
   });
 });

@@ -13,40 +13,31 @@ import {
 
 describe("human mention protocol", () => {
   it.each([
-    {
-      method: "chat.send",
-      validate: validateChatSendParams,
-      target: { sessionKey: "agent:main:main" },
+    ["chat.send", validateChatSendParams, { sessionKey: "agent:main:main" }],
+    ["sessions.create", validateSessionsCreateParams, { agentId: "main" }],
+    ["sessions.send", validateSessionsSendParams, { key: "agent:main:main" }],
+  ] as const)(
+    "preserves optional bounded mention annotations on %s",
+    (_method, validate, target) => {
+      const base = { ...target, message: "🙂 @Ada", idempotencyKey: "run-mentions" };
+      const mention = { profileId: "profile-ada", start: 3, end: 7 };
+      for (const params of [base, { ...base, mentions: [] }, { ...base, mentions: [mention] }]) {
+        expect(validate(params)).toBe(true);
+      }
+      for (const mentions of [
+        ["profile-ada"],
+        [{ ...mention, profileId: "" }],
+        [{ ...mention, profileId: "x".repeat(257) }],
+        [{ ...mention, start: -1 }],
+        [{ ...mention, start: 3.5 }],
+        [{ ...mention, end: 0 }],
+        [{ ...mention, senderProfileId: "forged-sender" }],
+        Array.from({ length: 11 }, () => mention),
+      ]) {
+        expect(validate({ ...base, mentions })).toBe(false);
+      }
     },
-    {
-      method: "sessions.create",
-      validate: validateSessionsCreateParams,
-      target: { agentId: "main" },
-    },
-    {
-      method: "sessions.send",
-      validate: validateSessionsSendParams,
-      target: { key: "agent:main:main" },
-    },
-  ])("preserves optional bounded mention annotations on $method", ({ validate, target }) => {
-    const base = { ...target, message: "🙂 @Ada", idempotencyKey: "run-mentions" };
-    const mention = { profileId: "profile-ada", start: 3, end: 7 };
-    for (const params of [base, { ...base, mentions: [] }, { ...base, mentions: [mention] }]) {
-      expect(validate(params)).toBe(true);
-    }
-    for (const mentions of [
-      ["profile-ada"],
-      [{ ...mention, profileId: "" }],
-      [{ ...mention, profileId: "x".repeat(257) }],
-      [{ ...mention, start: -1 }],
-      [{ ...mention, start: 3.5 }],
-      [{ ...mention, end: 0 }],
-      [{ ...mention, senderProfileId: "forged-sender" }],
-      Array.from({ length: 11 }, () => mention),
-    ]) {
-      expect(validate({ ...base, mentions })).toBe(false);
-    }
-  });
+  );
 
   it("requires exactly one existing or prospective session context for the directory", () => {
     for (const params of [
@@ -73,19 +64,12 @@ describe("human mention protocol", () => {
 
   it("keeps directory results bounded and free of private profile fields", () => {
     const user = { profileId: "profile-ada", displayName: "Ada", online: false };
-    expect(validateUsersMentionableResult({ users: [user], truncated: false })).toBe(true);
-    expect(
-      validateUsersMentionableResult({
-        users: [{ ...user, emails: ["ada@example.com"] }],
-        truncated: false,
-      }),
-    ).toBe(false);
-    expect(
-      validateUsersMentionableResult({
-        users: Array.from({ length: 101 }, () => user),
-        truncated: true,
-      }),
-    ).toBe(false);
+    const result = { users: [user], truncated: false };
+    expect(validateUsersMentionableResult(result)).toBe(true);
+    const privateUser = { ...user, emails: ["ada@example.com"] };
+    expect(validateUsersMentionableResult({ ...result, users: [privateUser] })).toBe(false);
+    const users = Array.from({ length: 101 }, () => user);
+    expect(validateUsersMentionableResult({ users, truncated: true })).toBe(false);
   });
 
   it("permits self-only list and bounded explicit dismissals without a recipient selector", () => {
@@ -118,12 +102,12 @@ describe("human mention protocol", () => {
       expiresAt: 60_001,
     };
     expect(validateMentionsListResult({ ...version, items: [item] })).toBe(true);
-    expect(
-      validateMentionsListResult({ ...version, items: [{ ...item, excerpt: "x".repeat(281) }] }),
-    ).toBe(false);
-    expect(
-      validateMentionsListResult({ ...version, items: Array.from({ length: 101 }, () => item) }),
-    ).toBe(false);
+    for (const items of [
+      [{ ...item, excerpt: "x".repeat(281) }],
+      Array.from({ length: 101 }, () => item),
+    ]) {
+      expect(validateMentionsListResult({ ...version, items })).toBe(false);
+    }
     expect(validateMentionsChangedEvent(version)).toBe(true);
     expect(validateMentionsChangedEvent({ ...version, item })).toBe(false);
     expect(validateMentionsChangedEvent({ ...version, revision: -1 })).toBe(false);
