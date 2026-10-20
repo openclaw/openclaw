@@ -1,4 +1,3 @@
-// Register service command tests cover daemon service subcommand registration.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isVerbose, setVerbose } from "../../globals.js";
@@ -45,8 +44,8 @@ vi.mock("./lifecycle.runtime.js", () => ({
   runDaemonUninstall: (opts: unknown) => runDaemonUninstall(opts),
 }));
 
-function createGatewayParentLikeCommand(program?: Command) {
-  const gateway = program ? program.command("gateway") : new Command().name("gateway");
+function createGatewayParentLikeCommand() {
+  const gateway = new Command().name("gateway");
   // Mirror overlapping root gateway options that conflict with service subcommand options.
   gateway.option("--port <port>", "Port for the gateway WebSocket");
   gateway.option("--token <token>", "Gateway token");
@@ -77,6 +76,24 @@ function setRestartRouteEnv(env: Record<string, string | undefined>) {
   }
 }
 
+async function parseStartup(program: Command, argv: string[]) {
+  const previousArgv = process.argv;
+  const previousTitle = process.title;
+  const previousVerbose = isVerbose();
+  const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+  process.argv = argv;
+  try {
+    await withConsoleLogsRoutedToStderrForJson(argv, () => program.parseAsync(argv), {
+      restoreChanges: true,
+    });
+  } finally {
+    process.argv = previousArgv;
+    process.title = previousTitle;
+    setVerbose(previousVerbose);
+    startupEnv.restore();
+  }
+}
+
 describe("addGatewayServiceCommands", () => {
   let restartRouteEnvSnapshot: ReturnType<typeof captureEnv>;
 
@@ -97,41 +114,22 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([{ parent: "daemon", option: "--restore-service-cli" }])(
-    "defers $parent install startup until $option is checked",
-    async ({ parent, option }) => {
-      const program = new Command().name("openclaw");
-      addGatewayServiceCommands(program.command(parent));
-      registerPreActionHooks(program, "9.9.9-test");
-      const previousArgv = process.argv;
-      const previousTitle = process.title;
-      const previousVerbose = isVerbose();
-      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
-      process.argv = [
-        "node",
-        "openclaw",
-        parent,
-        "install",
-        "--json",
-        option,
-        JSON.stringify({ revision: "observed-pin", definition: null }),
-      ];
-      try {
-        await withConsoleLogsRoutedToStderrForJson(
-          process.argv,
-          () => program.parseAsync(process.argv),
-          { restoreChanges: true },
-        );
-      } finally {
-        process.argv = previousArgv;
-        process.title = previousTitle;
-        setVerbose(previousVerbose);
-        startupEnv.restore();
-      }
-      expect(ensureConfigReady).not.toHaveBeenCalled();
-      expect(runDaemonInstall).toHaveBeenCalledOnce();
-    },
-  );
+  it("defers daemon install startup until --restore-service-cli is checked", async () => {
+    const program = new Command().name("openclaw");
+    addGatewayServiceCommands(program.command("daemon"));
+    registerPreActionHooks(program, "9.9.9-test");
+    await parseStartup(program, [
+      "node",
+      "openclaw",
+      "daemon",
+      "install",
+      "--json",
+      "--restore-service-cli",
+      JSON.stringify({ revision: "observed-pin", definition: null }),
+    ]);
+    expect(ensureConfigReady).not.toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { parent: "gateway", action: "install" },
@@ -142,24 +140,9 @@ describe("addGatewayServiceCommands", () => {
       const program = new Command().name("openclaw").enablePositionalOptions();
       addGatewayServiceCommands(program.command(parent));
       registerPreActionHooks(program, "9.9.9-test");
-      const previousArgv = process.argv;
-      const previousTitle = process.title;
-      const previousVerbose = isVerbose();
-      const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
-      process.argv = ["node", "openclaw", parent, action, "--update-executor", "check"];
+      const argv = ["node", "openclaw", parent, action, "--update-executor", "check"];
       const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-      try {
-        await withConsoleLogsRoutedToStderrForJson(
-          process.argv,
-          () => program.parseAsync(process.argv),
-          { restoreChanges: true },
-        );
-      } finally {
-        process.argv = previousArgv;
-        process.title = previousTitle;
-        setVerbose(previousVerbose);
-        startupEnv.restore();
-      }
+      await parseStartup(program, argv);
       expect(output.mock.calls.map(([chunk]) => String(chunk)).join("")).toBe(
         JSON.stringify({
           updateExecutor: "root-spawner-v1",
@@ -180,21 +163,17 @@ describe("addGatewayServiceCommands", () => {
   it.each([
     {
       name: "uses safe restart for a plain Windows Gateway service restart",
-      platform: "win32" as const,
-      env: gatewayServiceEnv,
       argv: ["restart", "--json"],
       expected: { safe: true, json: true },
     },
     {
       name: "keeps a plain restart non-safe outside a service process",
-      platform: "win32" as const,
       env: {},
       argv: ["restart"],
       expected: { safe: false },
     },
     {
       name: "keeps a plain restart non-safe inside a node service",
-      platform: "win32" as const,
       env: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "node" },
       argv: ["restart"],
       expected: { safe: false },
@@ -202,62 +181,49 @@ describe("addGatewayServiceCommands", () => {
     {
       name: "keeps a plain Gateway service restart non-safe outside Windows",
       platform: "linux" as const,
-      env: gatewayServiceEnv,
       argv: ["restart"],
       expected: { safe: false },
     },
     {
       name: "honors normalized external supervisor mode before routing",
-      platform: "win32" as const,
       env: { ...gatewayServiceEnv, OPENCLAW_SUPERVISOR_MODE: "  ExTeRnAl  " },
       argv: ["restart"],
       expected: { safe: false },
     },
     {
       name: "preserves explicit safe restart under external supervision",
-      platform: "win32" as const,
       env: { ...gatewayServiceEnv, OPENCLAW_SUPERVISOR_MODE: "external" },
       argv: ["restart", "--safe"],
       expected: { safe: true },
     },
     {
       name: "preserves leaf force instead of adding implicit safe mode",
-      platform: "win32" as const,
-      env: gatewayServiceEnv,
       argv: ["restart", "--force"],
       expected: { safe: false, force: true },
     },
     {
       name: "preserves inherited force instead of adding implicit safe mode",
-      platform: "win32" as const,
-      env: gatewayServiceEnv,
       argv: ["--force", "restart"],
       expected: { safe: false, force: true },
     },
     {
       name: "preserves wait instead of adding implicit safe mode",
-      platform: "win32" as const,
-      env: gatewayServiceEnv,
       argv: ["restart", "--wait", "30s"],
       expected: { safe: false, wait: "30s" },
     },
     {
       name: "preserves definition control instead of adding implicit safe mode",
-      platform: "win32" as const,
-      env: gatewayServiceEnv,
       argv: ["restart", "--preserve-definition"],
       expected: { safe: false, preserveDefinition: true },
     },
     {
       name: "preserves skip-deferral validation instead of adding implicit safe mode",
-      platform: "win32" as const,
-      env: gatewayServiceEnv,
       argv: ["restart", "--skip-deferral"],
       expected: { safe: false, skipDeferral: true },
     },
   ])("$name", async ({ platform, env, argv, expected }) => {
-    mockProcessPlatform(platform);
-    setRestartRouteEnv(env);
+    mockProcessPlatform(platform ?? "win32");
+    setRestartRouteEnv(env ?? gatewayServiceEnv);
     const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
 
     await gateway.parseAsync(argv, { from: "user" });
@@ -265,24 +231,12 @@ describe("addGatewayServiceCommands", () => {
     expect(expectSingleDaemonCall(runDaemonRestart)).toMatchObject(expected);
   });
 
-  it.each([{ name: "daemon", timeout: "200" }])(
-    "preserves $name status timeout $timeout without inventing an explicit value",
-    async ({ name, timeout }) => {
-      const program = new Command().enablePositionalOptions().exitOverride();
-      if (name === "daemon") {
-        registerDaemonCli(program);
-      } else {
-        createGatewayParentLikeCommand(program);
-      }
-
-      await program.parseAsync(
-        [name, "status", ...(timeout === undefined ? [] : ["--timeout", timeout])],
-        { from: "user" },
-      );
-
-      expect(expectSingleDaemonCall(runDaemonStatus).rpc).toHaveProperty("timeout", timeout);
-    },
-  );
+  it("preserves daemon status timeout without inventing an explicit value", async () => {
+    const program = new Command().enablePositionalOptions().exitOverride();
+    registerDaemonCli(program);
+    await program.parseAsync(["daemon", "status", "--timeout", "200"], { from: "user" });
+    expect(expectSingleDaemonCall(runDaemonStatus).rpc).toHaveProperty("timeout", "200");
+  });
 
   it("inherits an explicit parent port instead of a status leaf default", async () => {
     const gateway = createGatewayParentLikeCommand().enablePositionalOptions();

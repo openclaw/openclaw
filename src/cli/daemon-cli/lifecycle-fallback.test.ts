@@ -98,6 +98,12 @@ vi.mock("../terminal-interactivity.js", () => ({
 
 const { runDaemonRestart, runDaemonStop } = await import("./lifecycle.js");
 
+async function stopWhenNotLoaded(params: {
+  onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
+}) {
+  return params.onNotLoaded?.({ stdout: process.stdout });
+}
+
 describe("Gateway lifecycle fallback inspection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -120,11 +126,7 @@ describe("Gateway lifecycle fallback inspection", () => {
         service.readCommand.mockRejectedValueOnce(cleanupError);
       }
       if (inspection !== "restart command") {
-        runServiceStop.mockImplementationOnce(
-          async (params: {
-            onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-          }) => await params.onNotLoaded?.({ stdout: process.stdout }),
-        );
+        runServiceStop.mockImplementationOnce(stopWhenNotLoaded);
       }
       try {
         await expect(
@@ -147,11 +149,7 @@ describe("Gateway lifecycle fallback inspection", () => {
     readActiveGatewayLockIdentity.mockResolvedValueOnce(undefined);
     service.readCommand.mockRejectedValueOnce(new Error("inspection failed"));
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([4200]);
-    runServiceStop.mockImplementationOnce(
-      async (params: {
-        onNotLoaded?: (ctx: { stdout: NodeJS.WritableStream }) => Promise<unknown>;
-      }) => await params.onNotLoaded?.({ stdout: process.stdout }),
-    );
+    runServiceStop.mockImplementationOnce(stopWhenNotLoaded);
 
     await expect(runDaemonStop({ json: true })).resolves.toEqual(
       expect.objectContaining({ result: "stopped" }),

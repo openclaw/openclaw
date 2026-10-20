@@ -32,21 +32,22 @@ async function withIsolatedLifecycleState(
   });
 }
 
+async function writeJson(file: string, value: unknown) {
+  await fs.writeFile(file, JSON.stringify(value));
+}
+
 describe("getServiceActionPreflightFailure", () => {
   it("reports an unresolved candidate database without opening fallback state before restart", async () => {
     await withIsolatedLifecycleState(async ({ configPath }) => {
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          database: {
-            engine: "postgres",
-            postgres: {
-              connection: { source: "env", provider: "default", id: "MISSING_RESTART_DSN" },
-            },
+      await writeJson(configPath, {
+        database: {
+          engine: "postgres",
+          postgres: {
+            connection: { source: "env", provider: "default", id: "MISSING_RESTART_DSN" },
           },
-          plugins: { enabled: false },
-        }),
-      );
+        },
+        plugins: { enabled: false },
+      });
       delete process.env.MISSING_RESTART_DSN;
       resetDatabaseEngineSelectionForTest();
       expect(await getServiceActionPreflightFailure("restart")).toMatchObject({
@@ -55,9 +56,6 @@ describe("getServiceActionPreflightFailure", () => {
     });
   });
 
-  // A retired credential file no longer blocks the service: the Gateway boots and
-  // marks that auth owner configured-unavailable, so one stale file cannot keep
-  // every other channel and provider offline.
   it.each(["start", "stop"] as const)(
     "allows %s when a legacy credential file exists",
     async (action) => {
@@ -74,26 +72,20 @@ describe("getServiceActionPreflightFailure", () => {
       const pluginRoot = path.join(path.dirname(configPath), "migration-fixture");
       await fs.mkdir(pluginRoot);
       await fs.writeFile(path.join(pluginRoot, "index.js"), "export default {};\n");
-      await fs.writeFile(
-        path.join(pluginRoot, "package.json"),
-        JSON.stringify({
-          name: "migration-fixture",
-          version: "2.0.0",
-          openclaw: { extensions: ["./index.js"] },
-        }),
-      );
-      await fs.writeFile(
-        path.join(pluginRoot, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "migration-fixture",
-          configSchema: {
-            type: "object",
-            required: ["current"],
-            properties: { current: { type: "boolean" } },
-            additionalProperties: false,
-          },
-        }),
-      );
+      await writeJson(path.join(pluginRoot, "package.json"), {
+        name: "migration-fixture",
+        version: "2.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      });
+      await writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+        id: "migration-fixture",
+        configSchema: {
+          type: "object",
+          required: ["current"],
+          properties: { current: { type: "boolean" } },
+          additionalProperties: false,
+        },
+      });
       const config = {
         plugins: {
           allow: ["migration-fixture"],
@@ -101,7 +93,7 @@ describe("getServiceActionPreflightFailure", () => {
           entries: { "migration-fixture": { enabled: true, config: { legacy: true } } },
         },
       };
-      await fs.writeFile(configPath, JSON.stringify(config));
+      await writeJson(configPath, config);
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot({ observe: false });
       expect(snapshot.valid).toBe(false);
@@ -113,10 +105,7 @@ describe("getServiceActionPreflightFailure", () => {
       expect(await getServiceActionPreflightFailure("stop")).toBeNull();
       expect(await getServiceActionPreflightFailure("uninstall")).toBeNull();
 
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ ...config, meta: { lastTouchedVersion: "9999.1.1" } }),
-      );
+      await writeJson(configPath, { ...config, meta: { lastTouchedVersion: "9999.1.1" } });
       resetConfigRuntimeState();
       expect((await getServiceActionPreflightFailure("stop"))?.message).toContain(
         "Config was last written by OpenClaw 9999.1.1",

@@ -1,4 +1,3 @@
-// Safe gateway restart tests cover operator-facing acknowledgement copy.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayCli = vi.hoisted(() => vi.fn());
@@ -38,6 +37,7 @@ vi.mock("./lifecycle-audit.js", () => ({
 
 describe("runSafeGatewayRestart", () => {
   beforeEach(() => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     callGatewayCli.mockReset();
     appendGatewayLifecycleAudit.mockReset();
     refreshLegacySystemdServiceMetadata.mockReset().mockResolvedValue(false);
@@ -48,7 +48,6 @@ describe("runSafeGatewayRestart", () => {
   });
 
   it("keeps skip-deferral RPC behavior when bounded metadata cleanup fails", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const { runSafeGatewayRestart } = await import("./lifecycle-safe-restart.js");
     refreshLegacySystemdServiceMetadata.mockRejectedValueOnce(
       new Error("systemd cleanup timed out"),
@@ -93,7 +92,6 @@ describe("runSafeGatewayRestart", () => {
   });
 
   it("keeps the RPC restart while skipping ineligible service mutation", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     resolveGatewayServiceMutationError.mockReturnValueOnce(
       new Error("gateway lifecycle is managed by an external supervisor"),
     );

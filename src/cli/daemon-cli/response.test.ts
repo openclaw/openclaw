@@ -36,22 +36,15 @@ describe("daemon output contract", () => {
     context.emit({ ok: true, message: "machine-only detail", hints });
 
     expect(log).not.toHaveBeenCalled();
-    expect(writeJson.mock.calls).toEqual(
-      json
-        ? [
-            [
-              {
-                action: "install",
-                ok: true,
-                message: "machine-only detail",
-                hints,
-                hintItems,
-                warnings: ["", "repeat", "repeat"],
-              },
-            ],
-          ]
-        : [],
-    );
+    const payload = {
+      action: "install",
+      ok: true,
+      message: "machine-only detail",
+      hints,
+      hintItems,
+      warnings: ["", "repeat", "repeat"],
+    };
+    expect(writeJson.mock.calls).toEqual(json ? [[payload]] : []);
     expect(context.warnings).toEqual(["", "repeat", "repeat"]);
   });
 });
@@ -141,15 +134,14 @@ describe("daemon output contract", () => {
   it.each([false, true])("emits failure and ordered hints before exit (json=%s)", (json) => {
     const events: unknown[][] = [];
     const failure = new Error("fixture exit");
-    vi.spyOn(defaultRuntime, "log").mockImplementation((...args) => {
-      events.push(["log", ...args]);
-    });
-    vi.spyOn(defaultRuntime, "error").mockImplementation((...args) => {
-      events.push(["error", ...args]);
-    });
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
-      events.push(["json", value]);
-    });
+    const record =
+      (kind: string) =>
+      (...args: unknown[]) => {
+        events.push([kind, ...args]);
+      };
+    vi.spyOn(defaultRuntime, "log").mockImplementation(record("log"));
+    vi.spyOn(defaultRuntime, "error").mockImplementation(record("error"));
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(record("json"));
     vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
       events.push(["exit", code]);
       throw failure;
@@ -161,24 +153,22 @@ describe("daemon output contract", () => {
       context.fail("not healthy", ["inspect", "retry"], "restart-health-failed"),
     ).toThrow(failure);
 
+    const payload = {
+      action: "restart",
+      ok: false,
+      error: "not healthy",
+      hints: ["inspect", "retry"],
+      result: "restart-health-failed",
+      hintItems: [
+        { kind: "generic", text: "inspect" },
+        { kind: "generic", text: "retry" },
+      ],
+      warnings: ["first", "", "first"],
+    };
     expect(events).toEqual(
       json
         ? [
-            [
-              "json",
-              {
-                action: "restart",
-                ok: false,
-                error: "not healthy",
-                hints: ["inspect", "retry"],
-                result: "restart-health-failed",
-                hintItems: [
-                  { kind: "generic", text: "inspect" },
-                  { kind: "generic", text: "retry" },
-                ],
-                warnings: ["first", "", "first"],
-              },
-            ],
+            ["json", payload],
             ["exit", 1],
           ]
         : [
