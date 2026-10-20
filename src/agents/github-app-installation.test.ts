@@ -11,6 +11,21 @@ import {
   prepareGitHubToolEnvironment,
 } from "./github-tool-identity.js";
 
+const installationWarn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      if (subsystem !== "agents/github-app-installation") {
+        return logger;
+      }
+      return { ...logger, warn: installationWarn };
+    },
+  };
+});
+
 const key = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
   type: "pkcs8",
   format: "pem",
@@ -147,6 +162,56 @@ describe("selected GitHub App issuer", () => {
       await expect(issued.readToken()).rejects.toThrow();
     },
   );
+
+  it("gives each GitHub App request its own deadline", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    await prepareGitHubAppInstallation({
+      selection: selection(),
+      host,
+      apiBaseUrl,
+      assertCurrent: () => {},
+    });
+    const tenSecond = timeout.mock.results.flatMap((result, index) =>
+      timeout.mock.calls[index]?.[0] === 10_000 ? [result.value as AbortSignal] : [],
+    );
+    expect(tenSecond).toHaveLength(5);
+    expect(new Set(tenSecond).size).toBe(5);
+    expect(fetcher.mock.calls.map(([, init]) => init.signal)).toEqual(tenSecond);
+    expect(tenSecond.every((signal) => !signal.aborted)).toBe(true);
+  });
+
+  it("warns when the mint body ends before the token can be read", async () => {
+    installationWarn.mockClear();
+    const original = fetcher.getMockImplementation();
+    fetcher.mockImplementation(async (url: string, init: RequestInit) => {
+      if (url.endsWith("/access_tokens")) {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("body cut off"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (!original) {
+        throw new Error("missing fetch implementation");
+      }
+      return original(url, init);
+    });
+    await expect(
+      prepareGitHubAppInstallation({
+        selection: selection(),
+        host,
+        apiBaseUrl,
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("could not be verified");
+    expect(fetcher.mock.calls.some(([, init]) => init.method === "DELETE")).toBe(false);
+    expect(installationWarn).toHaveBeenCalledWith(
+      "GitHub App installation token response ended before the token could be read; it stays valid until expiry",
+    );
+  });
 
   it("checks authority after issuance and revokes a token that cannot be admitted", async () => {
     let current = true;

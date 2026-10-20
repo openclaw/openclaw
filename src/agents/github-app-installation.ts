@@ -4,6 +4,7 @@ import { z } from "zod";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GitHubAppSelection } from "./github-credential-reader.js";
 import { GitHubIdentityError } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
@@ -73,6 +74,8 @@ export function readGitHubAppInstallationMetadata(
     ? record.value
     : undefined;
 }
+
+const log = createSubsystemLogger("agents/github-app-installation");
 
 function failure(): GitHubIdentityError {
   return new GitHubIdentityError("unverified");
@@ -182,7 +185,9 @@ async function issueGitHubAppInstallation(params: {
   }
   registerSecretValueForRedaction(key);
   let issuedToken: string | undefined;
-  const signal = AbortSignal.timeout(10_000);
+  // Set once the mint responds 200. GitHub may already have issued the token
+  // before the body is readable, and revocation needs that token.
+  let mintAcceptedWithoutToken = false;
   const request = async <T>(
     endpoint: string,
     bearer: string,
@@ -190,6 +195,9 @@ async function issueGitHubAppInstallation(params: {
     body?: unknown,
   ): Promise<T> => {
     assertCurrent();
+    // Each call gets its own deadline. One shared signal let two slow
+    // verification reads consume the mint's budget.
+    const signal = AbortSignal.timeout(10_000);
     const response = await fetch(`${apiBaseUrl}${endpoint}`, {
       method: body === undefined ? "GET" : "POST",
       redirect: "error",
@@ -206,12 +214,16 @@ async function issueGitHubAppInstallation(params: {
       void response.body?.cancel().catch(() => {});
       throw failure();
     }
+    if (body !== undefined) {
+      mintAcceptedWithoutToken = true;
+    }
     const bytes = await readResponseWithLimit(response, 256 * 1024, { signal });
     const raw: unknown = JSON.parse(bytes.toString("utf8"));
     if (body !== undefined) {
       const token = z.object({ token: tokenSchema.shape.token }).safeParse(raw);
       if (token.success) {
         issuedToken = token.data.token;
+        mintAcceptedWithoutToken = false;
         registerSecretValueForRedaction(issuedToken);
       }
     }
@@ -326,6 +338,10 @@ async function issueGitHubAppInstallation(params: {
           void response.body?.cancel().catch(() => {});
         },
         () => {},
+      );
+    } else if (mintAcceptedWithoutToken) {
+      log.warn(
+        "GitHub App installation token response ended before the token could be read; it stays valid until expiry",
       );
     }
     assertCurrent();
