@@ -141,6 +141,53 @@ function sessionState(scope: "window" | "desktop") {
   });
 }
 
+const initializeResult = {
+  protocolVersion: "2025-06-18",
+  capabilities: { tools: {} },
+  serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
+};
+
+function createSessionEndpoint(
+  handle: Parameters<typeof createFakeEndpoint>[0],
+  initialize: object = { protocolVersion: "2025-06-18" },
+  scope: "window" | "desktop" = "window",
+) {
+  return createFakeEndpoint((request, fake) => {
+    if (request.method === "initialize") {
+      fake.respond(request, initialize);
+    } else if (request.method === "tools/call" && request.params?.name === "start_session") {
+      fake.respond(request, sessionState(scope));
+    } else {
+      handle(request, fake);
+    }
+  });
+}
+
+function managedDriver(options: Parameters<typeof createCuaMcpDriver>[0]) {
+  const driver = createCuaMcpDriver(options);
+  onTestFinished(() => driver.dispose());
+  return driver;
+}
+
+function toolCalls(endpoint: FakeEndpoint, name: string) {
+  return endpoint.requests.filter(
+    (request) => request.method === "tools/call" && request.params?.name === name,
+  );
+}
+
+function replyWith(results: Record<string, unknown>) {
+  return (request: RpcRequest, fake: FakeEndpoint) => {
+    const name = request.params?.name;
+    if (request.method === "tools/call" && name && Object.hasOwn(results, name)) {
+      fake.respond(request, results[name]);
+    }
+  };
+}
+
+function frame(id: number | undefined, result: unknown) {
+  return `${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`;
+}
+
 describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
   it.each([
     {
@@ -170,37 +217,15 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       error: "COMPUTER_REFUSED_permission_denied",
     },
   ])("preserves $outcome through computer.act", async ({ structured, isError, error }) => {
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.22.2" },
-        });
-      } else if (request.method === "tools/call") {
-        switch (request.params?.name) {
-          case "start_session":
-            fake.respond(request, sessionState("window"));
-            break;
-          case "list_windows":
-            fake.respond(request, toolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
-            break;
-          case "bring_to_front":
-            fake.respond(request, {
-              ...toolResult({ pid: 4242, window_id: 99, ...structured }),
-              isError,
-            });
-            break;
-          case "end_session":
-            fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
-            break;
-          default:
-            break;
-        }
-      }
-    });
-    const driver = createCuaMcpDriver({ ...endpoint, env: process.env });
-    onTestFinished(() => driver.dispose());
+    const endpoint = await createSessionEndpoint(
+      replyWith({
+        list_windows: toolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows),
+        bring_to_front: { ...toolResult({ pid: 4242, window_id: 99, ...structured }), isError },
+        end_session: toolResult({ session: "openclaw-test", active: false }),
+      }),
+      { ...initializeResult, serverInfo: { name: "fake-cua-driver", version: "0.22.2" } },
+    );
+    const driver = managedDriver({ ...endpoint, env: process.env });
     const computer = await execution(driver, "darwin");
     const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
       details: { windows: Array<{ windowRef: string }> };
@@ -219,68 +244,35 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
   });
 
   it("initializes the bundled proxy and translates tool results through CuaDriverSession", async () => {
-    let closed = false;
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
-        });
-        return;
-      }
-      if (request.method !== "tools/call") {
-        return;
-      }
-      switch (request.params?.name) {
-        case "start_session":
-          fake.respond(request, sessionState("desktop"));
-          break;
-        case "get_desktop_state":
-          fake.respond(
-            request,
-            toolResult(
-              {
-                platform: "macos",
-                display: "primary",
-                screenshot_width: 200,
-                screenshot_height: 100,
-                screen_width: 100,
-                screen_height: 50,
-                scale_factor: 2,
-              },
-              true,
-            ),
-          );
-          break;
-        case "get_cursor_position":
-          fake.respond(request, toolResult({ x: 11, y: 12, source: "core_graphics" }));
-          break;
-        case "click":
-          fake.respond(
-            request,
-            toolResult({
-              effect: "confirmed",
-              route: "accessibility",
-              delivery: { mode: "background", delivered_count: 1 },
-              evidence: [{ kind: "value_readback" }],
-            }),
-          );
-          break;
-        case "list_windows":
-          fake.respond(request, toolResult({ windows: [] }));
-          break;
-        case "get_session_state":
-          fake.respond(request, sessionState("desktop"));
-          break;
-        case "end_session":
-          fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
-          break;
-        default:
-          break;
-      }
-    });
-    const driver = createCuaMcpDriver({
+    const endpoint = await createSessionEndpoint(
+      replyWith({
+        get_desktop_state: toolResult(
+          {
+            platform: "macos",
+            display: "primary",
+            screenshot_width: 200,
+            screenshot_height: 100,
+            screen_width: 100,
+            screen_height: 50,
+            scale_factor: 2,
+          },
+          true,
+        ),
+        get_cursor_position: toolResult({ x: 11, y: 12, source: "core_graphics" }),
+        click: toolResult({
+          effect: "confirmed",
+          route: "accessibility",
+          delivery: { mode: "background", delivered_count: 1 },
+          evidence: [{ kind: "value_readback" }],
+        }),
+        list_windows: toolResult({ windows: [] }),
+        get_session_state: sessionState("desktop"),
+        end_session: toolResult({ session: "openclaw-test", active: false }),
+      }),
+      initializeResult,
+      "desktop",
+    );
+    const driver = managedDriver({
       ...endpoint,
       env: {
         ...process.env,
@@ -289,7 +281,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS: "1",
       },
     });
-    onTestFinished(() => driver.dispose());
 
     const desktop = await driver.getDesktopState();
     expect(driver.isAvailable()).toBe(true);
@@ -326,48 +317,23 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         clientInfo: { name: "openclaw-cua-computer", version: "1" },
       },
     });
-    const startCalls = endpoint.requests.filter(
-      (request) => request.method === "tools/call" && request.params?.name === "start_session",
-    );
+    const startCalls = toolCalls(endpoint, "start_session");
     expect(startCalls).toHaveLength(1);
     expect(startCalls[0]?.params?.arguments).not.toHaveProperty("capture_scope");
     const session = startCalls[0]?.params?.arguments?.session;
     expect(session).toEqual(expect.stringMatching(/^openclaw-/));
+    expect(toolCalls(endpoint, "get_session_state")[0]?.params?.arguments?.session).toBe(session);
     expect(
-      endpoint.requests.find(
-        (request) =>
-          request.method === "tools/call" && request.params?.name === "get_session_state",
-      )?.params?.arguments?.session,
-    ).toBe(session);
-    expect(
-      endpoint.requests
-        .filter(
-          (request) => request.method === "tools/call" && request.params?.name === "list_windows",
-        )
-        .map((request) => request.params?.arguments?.session),
+      toolCalls(endpoint, "list_windows").map((call) => call.params?.arguments?.session),
     ).toEqual([session, session]);
-    expect(
-      endpoint.requests.find(
-        (request) =>
-          request.method === "tools/call" && request.params?.name === "get_cursor_position",
-      )?.params?.arguments,
-    ).toEqual({ session });
+    expect(toolCalls(endpoint, "get_cursor_position")[0]?.params?.arguments).toEqual({ session });
 
     await driver.dispose();
-    await vi.waitFor(() => {
-      closed = endpoint.requests.some(
-        (request) => request.method === "tools/call" && request.params?.name === "end_session",
-      );
-      expect(closed).toBe(true);
-    });
+    await vi.waitFor(() => expect(toolCalls(endpoint, "end_session").length > 0).toBe(true));
     expect(endpoint.requests.map((request) => request.method)).toContain(
       "notifications/initialized",
     );
-    expect(
-      endpoint.requests.find(
-        (request) => request.method === "tools/call" && request.params?.name === "click",
-      )?.params?.arguments,
-    ).toMatchObject({
+    expect(toolCalls(endpoint, "click")[0]?.params?.arguments).toMatchObject({
       x: 20,
       y: 30,
       button: "left",
@@ -378,16 +344,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
     const held: RpcRequest[] = [];
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
-        });
-      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.method === "tools/call" && request.params?.name === "list_windows") {
         held.push(request);
         if (held.length !== 2) {
           return;
@@ -398,7 +356,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
           throw new Error("fixture did not receive both tagged requests");
         }
         const framed = Buffer.from(
-          `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
+          frame(secondRequest.id, toolResult({ marker: "second", text: "β雪" })) +
+            "\n" +
+            frame(firstRequest.id, toolResult({ marker: "first" })),
         );
         const split = framed.indexOf(Buffer.from("雪")) + 1;
         expect(split).toBeGreaterThan(0);
@@ -408,9 +368,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       } else if (request.method === "tools/call" && request.params?.name === "end_session") {
         fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
       }
-    });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    }, initializeResult);
+    const driver = managedDriver(endpoint);
     const settlement: string[] = [];
     const firstCall = driver.callTool("list_windows", { marker: "first" }).then((result) => {
       settlement.push("first");
@@ -429,12 +388,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("retains completed responses before a later fatal frame and ignores unknown numeric IDs", async () => {
     const held: RpcRequest[] = [];
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
-      } else if (request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.params?.name === "list_windows") {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.params?.name === "list_windows") {
         held.push(request);
         if (held.length === 2) {
           const first = held[0];
@@ -444,26 +399,16 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
           }
           fake.writeRaw(
             first,
-            JSON.stringify({ jsonrpc: "2.0", id: -5, result: {} }) +
-              "\n\n" +
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: first.id,
-                result: toolResult({ marker: "completed" }),
-              }) +
-              "\nnot-json\n" +
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: second.id,
-                result: toolResult({ marker: "too-late" }),
-              }) +
-              "\n",
+            frame(-5, {}) +
+              "\n" +
+              frame(first.id, toolResult({ marker: "completed" })) +
+              "not-json\n" +
+              frame(second.id, toolResult({ marker: "too-late" })),
           );
         }
       }
     });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     const results = await Promise.allSettled([
       driver.callTool("list_windows", {}),
       driver.callTool("list_windows", {}),
@@ -490,12 +435,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
   });
 
   it("keeps JSON-RPC request errors local and preserves their CUA error text", async () => {
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
-      } else if (request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.params?.arguments?.fail) {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.params?.arguments?.fail) {
         fake.writeRaw(
           request,
           JSON.stringify({
@@ -508,8 +449,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         fake.respond(request, toolResult({ windows: [] }));
       }
     });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     await expect(driver.callTool("list_windows", { fail: true })).rejects.toThrow(
       "COMPUTER_DRIVER_ERROR: CUA MCP request failed: MCP error -32000: fixture refusal",
     );
@@ -519,19 +459,14 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("preserves the CUA stopping error for pending calls during disposal", async () => {
     let held = false;
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
-      } else if (request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.params?.arguments?.hold) {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.params?.arguments?.hold) {
         held = true;
       } else if (request.method === "tools/call") {
         fake.respond(request, toolResult({ windows: [] }));
       }
     });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     await driver.callTool("list_windows", {});
     const pending = driver
       .callTool("list_windows", { hold: true })
@@ -545,19 +480,14 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("accepts a CUA screenshot larger than the default MCP buffer", async () => {
     const image = "A".repeat(11 * 1024 * 1024);
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
-      } else if (request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.params?.name === "get_desktop_state") {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.params?.name === "get_desktop_state") {
         fake.respond(request, { content: [{ type: "image", data: image, mimeType: "image/png" }] });
       } else if (request.params?.name === "end_session") {
         fake.respond(request, toolResult({ active: false }));
       }
     });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     const result = await driver.getDesktopState();
     const actual = result.images[0]?.dataBase64;
     if (typeof actual !== "string") {
@@ -577,19 +507,14 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       yield Buffer.from([0x20]);
     }
     let streaming: Promise<void> | undefined;
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
-      } else if (request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.params?.name === "get_desktop_state") {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.params?.name === "get_desktop_state") {
         streaming = fake.writeRawStream(request, overflowChunks());
         // Observe producer errors until the test checks them after the expected proxy retirement.
         void streaming.catch(() => {});
       }
     });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     await expect(driver.getDesktopState()).rejects.toThrow(
       "COMPUTER_DRIVER_ERROR: CUA MCP response exceeded the line-size limit",
     );
@@ -613,8 +538,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       }
     });
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     try {
       await expect(driver.getDesktopState()).rejects.toThrow(
         "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP initialize timed out after 10000ms",
@@ -632,19 +556,14 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("makes a request timeout fatal without sending SDK cancellation notifications", async () => {
     const held: RpcRequest[] = [];
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, { protocolVersion: "2025-06-18" });
-      } else if (request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.params?.arguments?.hold) {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.params?.arguments?.hold) {
         held.push(request);
       } else if (request.method === "tools/call") {
         fake.respond(request, toolResult({ windows: [] }));
       }
     });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    const driver = managedDriver(endpoint);
     await driver.callTool("list_windows", {});
     vi.useFakeTimers();
     try {
@@ -674,23 +593,14 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
   it("bounds pending calls and tears down the proxy on cancellation", async () => {
     const held: RpcRequest[] = [];
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.respond(request, {
-          protocolVersion: "2025-06-18",
-          capabilities: { tools: {} },
-          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
-        });
-      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
-        fake.respond(request, sessionState("window"));
-      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
+    const endpoint = await createSessionEndpoint((request, fake) => {
+      if (request.method === "tools/call" && request.params?.name === "list_windows") {
         held.push(request);
       } else if (request.method === "tools/call" && request.params?.name === "end_session") {
         fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
       }
-    });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
+    }, initializeResult);
+    const driver = managedDriver(endpoint);
     const calls = Array.from({ length: 65 }, () => driver.callTool("list_windows", {}));
     await expect(calls[64]).rejects.toThrow("too many pending requests");
     expect(driver.isAvailable()).toBe(true);

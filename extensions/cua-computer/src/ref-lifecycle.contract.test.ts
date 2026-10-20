@@ -13,62 +13,45 @@ import {
   type CuaFrameState,
 } from "./frame.js";
 
-type RefLifecycleCase = {
-  id: string;
-  scenario:
-    | "fresh_window"
-    | "fresh_element"
-    | "window_moved"
-    | "generation_rotation"
-    | "in_flight_generation_change"
-    | "superseded_observation"
-    | "unrelated_discovery"
-    | "unknown_ref";
-  expected: "valid" | "stale";
-};
-
-type RefLifecycleContract = {
-  staleErrorCode: string;
-  cases: RefLifecycleCase[];
-};
-
 const contract = JSON.parse(
   readFileSync(
     new URL("../../../test/fixtures/computer-ref-lifecycle-contract.json", import.meta.url),
     "utf8",
   ),
-) as RefLifecycleContract;
+) as {
+  staleErrorCode: string;
+  cases: Array<{
+    id: string;
+    scenario: keyof ReturnType<typeof lifecycleCases>;
+    expected: "valid" | "stale";
+  }>;
+};
 
-async function runCase(testCase: RefLifecycleCase): Promise<void> {
+function lifecycleCases() {
   const state: CuaFrameState = { generation: "generation-1" };
   const windowRef = issueWindowRef(state, { pid: 100, windowId: 10 });
   const observation = issueObservation(state, windowRef);
   const elementRef = issueElementRef(observation, { elementIndex: 0 });
 
-  switch (testCase.scenario) {
-    case "fresh_window":
+  return {
+    fresh_window() {
       resolveWindowRef(state, windowRef);
-      return;
-    case "fresh_element":
+    },
+    fresh_element() {
       resolveElementRef(resolveObservation(state, observation.id, windowRef), elementRef);
-      return;
-    case "window_moved": {
-      // A moved window is rediscovered under the same stable identity, so the
-      // ref survives and still resolves to the live window. CUA stores only that
-      // identity, so the refreshed target is the identity itself.
+    },
+    window_moved() {
+      // Rediscovery retains the stable identity even after the window moves.
       const moved = { pid: 100, windowId: 10 };
       expect(issueWindowRef(state, moved)).toBe(windowRef);
       expect(resolveWindowRef(state, windowRef)).toEqual(moved);
-      return;
-    }
-    case "generation_rotation":
+    },
+    generation_rotation() {
       adoptGeneration(state, "generation-2");
       resolveWindowRef(state, windowRef);
-      return;
-    case "in_flight_generation_change": {
-      // The production path is callWindowTool: it snapshots the driver
-      // generation, awaits the driver call, then detects rotation. Asserting a
-      // pre-call guard instead would leave that post-await check unprotected.
+    },
+    async in_flight_generation_change() {
+      // Exercise the post-await generation guard, not just pre-call validation.
       const session = driver();
       session.callTool.mockImplementationOnce(async () => {
         session.setGeneration("execution-2");
@@ -80,30 +63,29 @@ async function runCase(testCase: RefLifecycleCase): Promise<void> {
         "get_window_state",
         {},
       );
-      return;
-    }
-    case "superseded_observation":
+    },
+    superseded_observation() {
       issueObservation(state, windowRef);
       resolveObservation(state, observation.id, windowRef);
-      return;
-    case "unrelated_discovery":
+    },
+    unrelated_discovery() {
       issueWindowRef(state, { pid: 200, windowId: 20 });
       resolveWindowRef(state, windowRef);
-      return;
-    case "unknown_ref":
+    },
+    unknown_ref() {
       resolveWindowRef(state, "cua:v2:window:unknown");
-  }
+    },
+  };
 }
 
 describe("Computer Use ref lifecycle contract", () => {
   for (const testCase of contract.cases) {
     it(testCase.id, async () => {
+      const runCase = async () => lifecycleCases()[testCase.scenario]();
       if (testCase.expected === "valid") {
-        await expect(runCase(testCase)).resolves.toBeUndefined();
+        await expect(runCase()).resolves.toBeUndefined();
       } else {
-        await expect(runCase(testCase)).rejects.toThrow(
-          new RegExp(`^${contract.staleErrorCode}:`, "u"),
-        );
+        await expect(runCase()).rejects.toThrow(new RegExp(`^${contract.staleErrorCode}:`, "u"));
       }
     });
   }
