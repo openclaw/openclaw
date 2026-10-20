@@ -287,9 +287,23 @@ export class RelayOwnerClient {
     if (this.retirementAcknowledged) {
       return Promise.resolve();
     }
-    return (this.closing ??= this.request("close").then(() => {
+    if (this.closing) {
+      return this.closing;
+    }
+    if (this.closed || this.ws.readyState !== 1) {
+      this.invalidate("Relay owner connection lost");
+      return Promise.resolve();
+    }
+    const closing = this.request("close").then(() => {
       this.closed = true;
       this.ws.close();
-    }));
+    });
+    this.closing = closing.catch((error: unknown) => {
+      if (this.closed || this.ws.readyState !== 1) {
+        return;
+      }
+      throw error;
+    });
+    return this.closing;
   }
 }

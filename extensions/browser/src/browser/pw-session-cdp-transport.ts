@@ -257,7 +257,37 @@ export async function connectOverCdpTransport(
       onclose: (reason?: string) =>
         scheduleTransportClosed(closingReason ?? reason ?? "CDP socket closed"),
     });
-    return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
+    const browserPromise = getPlaywrightCore().chromium.connectOverCDP(transport, {
+      timeout: opts.timeout,
+    });
+    if (opts.timeout <= 0) {
+      return await browserPromise;
+    }
+    let timedOut = false;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        closeTransportSocket();
+        reject(new Error(`Timeout ${opts.timeout}ms exceeded`));
+      }, opts.timeout);
+      timer.unref?.();
+    });
+    void browserPromise.then(
+      (browser) => {
+        if (timedOut) {
+          void browser.close().catch(() => {});
+        }
+      },
+      () => {},
+    );
+    try {
+      return await Promise.race([browserPromise, timeout]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   } catch (error) {
     normalizer?.clear();
     wire.close();
