@@ -8,6 +8,10 @@ import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.t
 import { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
+const popupSelector = "openclaw-catalog-session-menu";
+const expectState = (view: ReturnType<typeof mountSolid>, state: string) =>
+  waitForSolid(() => expect(view.container.querySelector("output")?.textContent).toBe(state));
+
 const request: CatalogSessionMenuRequest = {
   key: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
   agentId: "main",
@@ -76,7 +80,7 @@ describe("sidebar catalog menu", () => {
     expect(owner.isOpen()).toBe(false);
     await waitForSolid(() => {
       expect(view.container.querySelector("output")?.textContent).toBe("closed");
-      expect(view.container.querySelector("openclaw-catalog-session-menu")).toBeNull();
+      expect(view.container.querySelector(popupSelector)).toBeNull();
     });
   });
 
@@ -84,18 +88,12 @@ describe("sidebar catalog menu", () => {
     const { owner, mount } = fixture();
     const first = mount();
     owner.open(request, 10, 20);
-    await waitForSolid(() =>
-      expect(first.container.querySelector("output")?.textContent).toBe("open"),
-    );
+    await expectState(first, "open");
     first.unmount();
     const replacement = mount();
-    await waitForSolid(() =>
-      expect(replacement.container.querySelector("output")?.textContent).toBe("open"),
-    );
+    await expectState(replacement, "open");
     owner.close();
-    await waitForSolid(() =>
-      expect(replacement.container.querySelector("output")?.textContent).toBe("closed"),
-    );
+    await expectState(replacement, "closed");
   });
 
   it("retargets an adopted row without remounting its open popup", async () => {
@@ -105,13 +103,11 @@ describe("sidebar catalog menu", () => {
     const { owner, mount } = fixture();
     const view = mount();
     owner.open(request, 10, 20, original);
-    await waitForSolid(() =>
-      expect(view.container.querySelector("openclaw-catalog-session-menu")).not.toBeNull(),
-    );
-    const popup = view.container.querySelector("openclaw-catalog-session-menu")!;
+    await waitForSolid(() => expect(view.container.querySelector(popupSelector)).not.toBeNull());
+    const popup = view.container.querySelector(popupSelector)!;
     original.remove();
     owner.retargetTrigger(request.key, replacement);
     await waitForSolid(() => expect(popup.trigger).toBe(replacement));
-    expect(view.container.querySelector("openclaw-catalog-session-menu")).toBe(popup);
+    expect(view.container.querySelector(popupSelector)).toBe(popup);
   });
 });

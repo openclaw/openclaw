@@ -23,9 +23,14 @@ import "./app-sidebar.tsx";
 
 const viewer = { type: "human" as const, id: "viewer", label: "Viewer" };
 
-async function mountOwnerQuery(
+async function withOwnerQuery(
   rows: GatewaySessionRow[],
   owners: NonNullable<SessionsListResult["owners"]>,
+  check: (fixture: {
+    sidebar: Awaited<ReturnType<typeof createSidebarElement>>;
+    requests: Record<string, unknown>[];
+    settle: () => Promise<void>;
+  }) => Promise<void>,
 ) {
   const requests: Record<string, unknown>[] = [];
   const overflow = createDeferred<SessionsListResult>();
@@ -46,8 +51,7 @@ async function mountOwnerQuery(
       }
       if (params?.source === "sidebar") {
         requests.push(params);
-        // Stop a broken response/render cycle at the test's transport boundary,
-        // so the request-count assertion can report it without starving the runner.
+        // Bound a broken render loop so request assertions can report it.
         if (requests.length > 8) {
           queueMicrotask(() => stop());
           return overflow.promise;
@@ -89,21 +93,17 @@ async function mountOwnerQuery(
 
   const settle = async () => {
     await settleLitElement(sidebar);
-    // Drain completed transport promises through the real render lifecycle.
-    // The response budget above bounds the defective microtask feedback loop.
+    // Drain transport promises through the real render lifecycle.
     await nextTurn();
     await settleLitElement(sidebar);
   };
-  return {
-    sidebar,
-    requests,
-    settle,
-    async dispose() {
-      stop();
-      overflow.resolve(sessionsResult([], 1));
-      await settle();
-    },
-  };
+  try {
+    await check({ sidebar, requests, settle });
+  } finally {
+    stop();
+    overflow.resolve(sessionsResult([], 1));
+    await settle();
+  }
 }
 
 function ownSession(): GatewaySessionRow {
@@ -128,8 +128,7 @@ it.each(["visible", "bounded"])(
         participants === "visible" ? [{ identity: { type: "agent", id: "research" } }] : [],
       participantCount: 1,
     };
-    const fixture = await mountOwnerQuery([ownSession(), legacy], [viewer]);
-    try {
+    await withOwnerQuery([ownSession(), legacy], [viewer], async (fixture) => {
       await fixture.settle();
       expect(fixture.requests).toHaveLength(1);
       expect(fixture.requests[0]?.ownerId).toBeUndefined();
@@ -137,46 +136,39 @@ it.each(["visible", "bounded"])(
       expect(
         fixture.sidebar.querySelector('[data-session-key="agent:main:legacy"]'),
       ).not.toBeNull();
-    } finally {
-      await fixture.dispose();
-    }
+    });
   },
 );
 
 it("settles with multiple owners and keeps an explicitly selected owner's empty list", async () => {
-  const fixture = await mountOwnerQuery(
+  await withOwnerQuery(
     [ownSession()],
     [viewer, { type: "human", id: "other", label: "Other" }],
-  );
-  try {
-    await fixture.settle();
-    expect(fixture.requests.length).toBeLessThanOrEqual(2);
-    expect(fixture.requests.at(-1)?.ownerId).toBe("viewer");
-    expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
+    async (fixture) => {
+      await fixture.settle();
+      expect(fixture.requests.length).toBeLessThanOrEqual(2);
+      expect(fixture.requests.at(-1)?.ownerId).toBe("viewer");
+      expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
 
-    await fixture.sidebar.sidebarMenus.preloadMenuRenderer();
-    await selectSessionMenuValue(fixture.sidebar, "owner:other");
-    await fixture.settle();
-    expect(fixture.requests.at(-1)?.ownerId).toBe("other");
-    expect(fixture.requests.length).toBeLessThanOrEqual(3);
-    expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
-    expect(fixture.sidebar.querySelector("#sidebar-session-owner-title")?.textContent).toContain(
-      "Other",
-    );
-  } finally {
-    await fixture.dispose();
-  }
+      await fixture.sidebar.sidebarMenus.preloadMenuRenderer();
+      await selectSessionMenuValue(fixture.sidebar, "owner:other");
+      await fixture.settle();
+      expect(fixture.requests.at(-1)?.ownerId).toBe("other");
+      expect(fixture.requests.length).toBeLessThanOrEqual(3);
+      expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
+      expect(fixture.sidebar.querySelector("#sidebar-session-owner-title")?.textContent).toContain(
+        "Other",
+      );
+    },
+  );
 });
 
 it("does not include an agent's sessions when its ID equals the signed-in human's ID", async () => {
   const agent = { type: "agent" as const, id: viewer.id, label: "Agent" };
-  const fixture = await mountOwnerQuery([{ ...ownSession(), owner: { actor: agent } }], [agent]);
-  try {
+  await withOwnerQuery([{ ...ownSession(), owner: { actor: agent } }], [agent], async (fixture) => {
     await fixture.settle();
     expect(fixture.requests.length).toBeLessThanOrEqual(2);
     expect(fixture.requests.at(-1)?.ownerId).toBe("viewer");
     expect(fixture.sidebar.querySelector('[data-session-key="agent:main:mine"]')).toBeNull();
-  } finally {
-    await fixture.dispose();
-  }
+  });
 });

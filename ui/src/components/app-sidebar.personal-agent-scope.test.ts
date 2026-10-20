@@ -21,42 +21,38 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.tsx";
 
+function session(
+  key: string,
+  ownerId: string,
+  extra: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
+  return {
+    key,
+    agentId: key.split(":")[1],
+    kind: "direct",
+    owner: { actor: { type: "human", id: ownerId } },
+    ...extra,
+  };
+}
+
 it("keeps selected owners across agents and resumes the selected agent's own conversation", async () => {
   const rows: GatewaySessionRow[] = [
-    {
-      key: "agent:main:mine",
-      agentId: "main",
-      kind: "direct",
-      label: "My working session",
-      owner: { actor: { type: "human", id: "viewer" } },
-    },
-    {
-      key: "agent:research:shared",
-      agentId: "research",
-      kind: "direct",
+    session("agent:main:mine", "viewer", { label: "My working session" }),
+    session("agent:research:shared", "other", {
       label: "Another user's shared session",
       updatedAt: 3000,
       unread: true,
-      owner: { actor: { type: "human", id: "other" } },
-    },
-    {
-      key: "agent:research:dashboard:00000002-0000-4000-8000-000000000000",
-      agentId: "research",
-      kind: "direct",
+    }),
+    session("agent:research:dashboard:00000002-0000-4000-8000-000000000000", "viewer", {
       label: "My research session",
       updatedAt: 2000,
       unread: true,
-      owner: { actor: { type: "human", id: "viewer" } },
-    },
-    {
-      key: "agent:research:main",
-      agentId: "research",
-      kind: "direct",
+    }),
+    session("agent:research:main", "viewer", {
       updatedAt: 1000,
       hasActiveRun: true,
       status: "running",
-      owner: { actor: { type: "human", id: "viewer" } },
-    },
+    }),
   ];
   const gateway = createGatewayHarness(
     createTestGatewayClient(async (method, raw) => {
@@ -97,14 +93,19 @@ it("keeps selected owners across agents and resumes the selected agent's own con
   sidebar.sidebarAgentsMode = "chip";
   provider.append(sidebar.hostElement);
   document.body.append(provider);
+  const visit = async (row: GatewaySessionRow, refresh = true) => {
+    bindChatPageSession(context, row.key);
+    sidebar.sessionKey = row.key;
+    await settleLitElement(sidebar);
+    if (refresh) {
+      await sidebar.sessionData.refreshSidebarSessions();
+      await settleLitElement(sidebar);
+    }
+  };
   try {
     sidebar.connected = true;
     for (const row of [rows[1]!, rows[0]!, rows[1]!]) {
-      bindChatPageSession(context, row.key);
-      sidebar.sessionKey = row.key;
-      await settleLitElement(sidebar);
-      await sidebar.sessionData.refreshSidebarSessions();
-      await settleLitElement(sidebar);
+      await visit(row);
 
       expect(sidebar.sidebarSessionOwnerFilter()).toEqual({
         ownerId: "viewer",
@@ -117,14 +118,9 @@ it("keeps selected owners across agents and resumes the selected agent's own con
       expect(sidebar.querySelector(`[data-session-key="${rows[2]!.key}"]`)).not.toBeNull();
     }
 
-    bindChatPageSession(context, rows[0]!.key);
-    sidebar.sessionKey = rows[0]!.key;
-    await settleLitElement(sidebar);
-    await sidebar.sessionData.refreshSidebarSessions();
-    await settleLitElement(sidebar);
+    await visit(rows[0]!);
 
-    // A named owner has the same cross-agent scope as My sessions, even while
-    // the open conversation belongs to an agent where that owner has no rows.
+    // Named owners retain cross-agent scope even when the open agent has no rows.
     await sidebar.sidebarMenus.preloadMenuRenderer();
     await selectSessionMenuValue(sidebar, "status:all");
     await selectSessionMenuValue(sidebar, "owner:other");
@@ -153,18 +149,12 @@ it("keeps selected owners across agents and resumes the selected agent's own con
       ),
     );
 
-    bindChatPageSession(context, rows[2]!.key);
-    sidebar.sessionKey = rows[2]!.key;
-    await settleLitElement(sidebar);
+    await visit(rows[2]!, false);
     const home = sidebar.querySelector<HTMLElement>(".sidebar-footer-bar__home")!;
     expect.soft(home.querySelector('[aria-label="Active run"]')).not.toBeNull();
 
     rows[2]!.unread = false;
-    bindChatPageSession(context, rows[0]!.key);
-    sidebar.sessionKey = rows[0]!.key;
-    await settleLitElement(sidebar);
-    await sidebar.sessionData.refreshSidebarSessions();
-    await settleLitElement(sidebar);
+    await visit(rows[0]!);
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
     await settleLitElement(sidebar);
     expect(

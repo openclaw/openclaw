@@ -12,29 +12,44 @@ import { AgentRowChip } from "./agent-row-chip.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
-it("uses loaded agent names and avatars, preserving default and unknown ownership without requests", async () => {
-  const request = vi.fn(async () => ({}));
-  const context = createContext(
+function rosterContext(
+  agents: NonNullable<Parameters<typeof createContext>[2]>["agents"],
+  request = vi.fn(async () => ({})),
+) {
+  return createContext(
     createGateway(createTestGatewayClient(request)),
     createSessions("research", []),
     {
-      defaultId: "main",
+      defaultId: agents[0]!.id,
       mainKey: "main",
       scope: "per-sender",
-      agents: [
-        { id: "main", name: "Home agent", identity: { emoji: "🏡" } },
-        { id: "research", name: "Research", identity: { emoji: "🔬" } },
-      ],
+      agents,
     },
   );
-  const { container: provider } = mountSolid(
-    () =>
-      [undefined, "research", "retired"].map((agentId) =>
-        createComponent(AgentRowChip, { agentId }),
-      ),
-    { wrapper: createSolidApplicationContextProvider(context).wrapper },
-  );
+}
+function mountChip(
+  context: ReturnType<typeof createContext>,
+  view: Parameters<typeof mountSolid>[0],
+) {
+  const { container } = mountSolid(view, {
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
+  });
   flush();
+  return container;
+}
+
+it("uses loaded agent names and avatars, preserving default and unknown ownership without requests", async () => {
+  const request = vi.fn(async () => ({}));
+  const context = rosterContext(
+    [
+      { id: "main", name: "Home agent", identity: { emoji: "🏡" } },
+      { id: "research", name: "Research", identity: { emoji: "🔬" } },
+    ],
+    request,
+  );
+  const provider = mountChip(context, () =>
+    [undefined, "research", "retired"].map((agentId) => createComponent(AgentRowChip, { agentId })),
+  );
   expect(
     [...provider.querySelectorAll(".agent-row-chip__name")].map((chip) => chip.textContent),
   ).toEqual(["Home agent", "Research", "retired"]);
@@ -71,11 +86,7 @@ it("updates a mounted chip when the identity owner publishes", async () => {
   const gateway = createGateway(client);
   const identities = createAgentIdentityCapability(gateway);
   const context = createContext(gateway, createSessions("research", []), null, [], identities);
-  const { container: provider } = mountSolid(
-    () => createComponent(AgentRowChip, { agentId: "research" }),
-    { wrapper: createSolidApplicationContextProvider(context).wrapper },
-  );
-  flush();
+  const provider = mountChip(context, () => createComponent(AgentRowChip, { agentId: "research" }));
   const chip = provider.querySelector("openclaw-agent-row-chip");
   expect(provider.querySelector(".agent-row-chip__name")?.textContent).toBe("research");
 
@@ -90,27 +101,15 @@ it("updates a mounted chip when the identity owner publishes", async () => {
 });
 
 it("leaves retained chip DOM untouched when only the parent's loading state changes", () => {
-  const context = createContext(
-    createGateway(createTestGatewayClient(async () => ({}))),
-    createSessions("research", []),
-    {
-      defaultId: "research",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "research", name: "Research", identity: { emoji: "🔬" } }],
-    },
-  );
+  const context = rosterContext([{ id: "research", name: "Research", identity: { emoji: "🔬" } }]);
   const [parent, setParent] = createSignal({ agentId: "research", loading: false });
-  const { container } = mountSolid(
-    () =>
-      createComponent(AgentRowChip, {
-        get agentId() {
-          return parent().agentId;
-        },
-      }),
-    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  const container = mountChip(context, () =>
+    createComponent(AgentRowChip, {
+      get agentId() {
+        return parent().agentId;
+      },
+    }),
   );
-  flush();
   const observer = new MutationObserver(() => undefined);
   observer.observe(container, {
     attributes: true,
