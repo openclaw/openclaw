@@ -3,14 +3,7 @@ import { resolveAdvertisedLanHostCore } from "./advertised-lan-host.js";
 import type { NetworkInterfacesSnapshot } from "./network-interfaces.js";
 
 function ipv4(address: string, family: "IPv4" | 4 = "IPv4") {
-  return {
-    address,
-    family,
-    internal: false,
-    netmask: "255.255.255.0",
-    mac: "00:00:00:00:00:00",
-    cidr: `${address}/24`,
-  };
+  return { address, family, internal: false };
 }
 function interfacePair(
   first: string,

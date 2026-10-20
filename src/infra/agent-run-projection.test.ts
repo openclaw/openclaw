@@ -26,11 +26,7 @@ it("enumerates active session keys only for their encoded owner and current life
     { ...active, sessionKey: "unscoped" },
     { ...active, sessionId: "agent:main:id-only" },
     { ...active, sessionKey: "agent:main:hidden", projectSessionActive: false },
-    {
-      ...active,
-      sessionKey: "agent:main:previous-generation",
-      lifecycleGeneration: "previous",
-    },
+    { ...active, sessionKey: "agent:main:previous", lifecycleGeneration: "previous" },
   ]);
   expect([...iterateProjectedAgentRunSessionKeys(index)]).toEqual([
     "agent:main:running",
@@ -40,10 +36,12 @@ it("enumerates active session keys only for their encoded owner and current life
 });
 
 it("resolves progress across aliases and session IDs within the selected agent", () => {
+  const incident = "incident:AbC";
+  const waiting = "agent:ops:waiting";
   const index = projection([
-    { ...active, agentId: "ops", sessionKey: "incident:AbC", capacityWaits },
-    { agentId: "ops", sessionKey: "agent:ops:waiting", capacityWaits },
-    { ...active, agentId: "other", sessionKey: "incident:AbC" },
+    { ...active, agentId: "ops", sessionKey: incident, capacityWaits },
+    { agentId: "ops", sessionKey: waiting, capacityWaits },
+    { ...active, agentId: "other", sessionKey: incident },
     { ...active, agentId: "ops", sessionId: "running-id" },
     { sessionKey: "legacy", projectSessionActive: true },
   ]);
@@ -51,30 +49,24 @@ it("resolves progress across aliases and session IDs within the selected agent",
     params: Omit<Parameters<typeof resolveProjectedAgentRunProgressState>[0], "index">,
   ) => resolveProjectedAgentRunProgressState({ ...params, index });
 
-  expect(state({ sessionKeys: ["incident:AbC"], agentId: " OPS " })).toBe("queued");
+  expect(state({ sessionKeys: [incident], agentId: " OPS " })).toBe("queued");
   expect(state({ sessionKeys: ["incident:abc"], agentId: "ops" })).toBeUndefined();
-  expect(state({ sessionKeys: ["incident:AbC"], defaultAgentId: "ops" })).toBe("queued");
-  expect(state({ sessionKeys: ["incident:AbC"] })).toBeUndefined();
-  expect(state({ sessionKeys: ["incident:AbC", "agent:other:any", "agent:ops:waiting"] })).toBe(
-    "running",
-  );
-  expect(state({ sessionKeys: ["incident:AbC", "agent:ops:waiting", "agent:other:any"] })).toBe(
-    "queued",
-  );
-  expect(
-    state({ sessionKeys: ["agent:ops:waiting"], agentId: "", defaultAgentId: "ops" }),
-  ).toBeUndefined();
-  expect(state({ sessionKeys: ["agent:ops:waiting"] })).toBe("capacity-wait");
+  expect(state({ sessionKeys: [incident], defaultAgentId: "ops" })).toBe("queued");
+  expect(state({ sessionKeys: [incident] })).toBeUndefined();
+  expect(state({ sessionKeys: [incident, "agent:other:any", waiting] })).toBe("running");
+  expect(state({ sessionKeys: [incident, waiting, "agent:other:any"] })).toBe("queued");
+  expect(state({ sessionKeys: [waiting], agentId: "", defaultAgentId: "ops" })).toBeUndefined();
+  expect(state({ sessionKeys: [waiting] })).toBe("capacity-wait");
   expect(state({ sessionKeys: ["legacy"], agentId: "OPS", defaultAgentId: "ops" })).toBe("running");
   expect(
     state({ sessionKeys: ["legacy"], agentId: "other", defaultAgentId: "ops" }),
   ).toBeUndefined();
   for (const sessionKeys of [
-    ["legacy", "agent:ops:waiting"],
-    ["agent:ops:waiting", "legacy"],
+    ["legacy", waiting],
+    [waiting, "legacy"],
   ]) {
     expect(state({ sessionKeys, defaultAgentId: "ops" })).toBe("running");
   }
-  expect(state({ sessionKeys: ["agent:ops:waiting"], sessionId: "running-id" })).toBe("running");
+  expect(state({ sessionKeys: [waiting], sessionId: "running-id" })).toBe("running");
   expect(state({ sessionKeys: [], sessionId: "running-id", agentId: "other" })).toBeUndefined();
 });

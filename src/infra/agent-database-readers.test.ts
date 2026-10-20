@@ -3,9 +3,9 @@ import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { describe, expect, it, vi } from "vitest";
 import { reviveAgentDatabases } from "../state/openclaw-agent-db-readers.js";
 import {
-  applyAgentDatabaseReaderRequest,
-  decodeAgentDatabaseReaderRequest,
-  encodeAgentDatabaseReaderRequest,
+  applyAgentDatabaseReaderRequest as applyRequest,
+  decodeAgentDatabaseReaderRequest as decodeRequest,
+  encodeAgentDatabaseReaderRequest as encodeRequest,
   captureDeletedAgentDatabaseFences,
   isDeletedAgentDatabasePath,
   matchesAgentDatabaseReadCandidatePath,
@@ -16,19 +16,14 @@ import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 
 const agentDir = path.resolve("/state/agents/alpha/agent");
 const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-const close = {
-  kind: "close",
-  candidates: [{ path: databasePath }],
-  deleted: false,
-} satisfies AgentDatabaseReaderRequest;
-const decode = (value: unknown) => decodeAgentDatabaseReaderRequest(JSON.stringify(value));
+const candidates = [{ path: databasePath }];
+const close = { kind: "close", candidates, deleted: false } satisfies AgentDatabaseReaderRequest;
+const decode = (value: unknown) => decodeRequest(JSON.stringify(value));
 function expectRoundTrip(request: AgentDatabaseReaderRequest) {
-  expect(decodeAgentDatabaseReaderRequest(encodeAgentDatabaseReaderRequest(request))).toEqual(
-    request,
-  );
+  expect(decodeRequest(encodeRequest(request))).toEqual(request);
 }
 function deleteDatabase(pathname = databasePath, agentId = "alpha") {
-  return applyAgentDatabaseReaderRequest({
+  return applyRequest({
     kind: "close",
     candidates: [{ path: pathname }],
     deleted: true,
@@ -53,26 +48,18 @@ describe("agent database reader requests", () => {
 
   it("round-trips close, deletion, and revive requests and rejects foreign keys", () => {
     expectRoundTrip(close);
-    const retained = { ...close, retainedPaths: [databasePath] };
-    expectRoundTrip(retained);
+    expectRoundTrip({ ...close, retainedPaths: [databasePath] });
     const deleted = { ...close, deleted: true as const, agentId: "alpha" };
     expectRoundTrip(deleted);
     expect(
-      decode({
-        deleted: close.candidates,
-        agentId: "alpha",
-        retainedPaths: [databasePath],
-      }),
+      decode({ deleted: candidates, agentId: "alpha", retainedPaths: [databasePath] }),
     ).toEqual(deleted);
-    expect(decode({ candidates: close.candidates, retainedPaths: [1] })).toBeUndefined();
+    expect(decode({ candidates, retainedPaths: [1] })).toBeUndefined();
     expectRoundTrip({ kind: "revive", agentIds: ["alpha"] });
-    expect(decode([{ path: databasePath, scope: "sibling-family" }])).toEqual({
-      kind: "close",
-      candidates: [{ path: databasePath, scope: "sibling-family" }],
-      deleted: false,
-    });
-    expect(decodeAgentDatabaseReaderRequest(undefined)).toBeUndefined();
-    expect(decodeAgentDatabaseReaderRequest("state:identity")).toBeUndefined();
+    const siblings = [{ path: databasePath, scope: "sibling-family" as const }];
+    expect(decode(siblings)).toEqual({ ...close, candidates: siblings });
+    expect(decodeRequest(undefined)).toBeUndefined();
+    expect(decodeRequest("state:identity")).toBeUndefined();
     expect(decode({ other: [] })).toBeUndefined();
     expect(decode([{ path: 1 }])).toBeUndefined();
     expect(decode({ deleted: [{ path: databasePath }] })).toBeUndefined();
@@ -93,11 +80,11 @@ describe("agent database reader requests", () => {
           return completion.operation;
         }),
     });
-    const unregister = registerAgentDatabaseReaderCloser((candidates) => {
-      seen.push(candidates.map((candidate) => candidate.path));
+    const unregister = registerAgentDatabaseReaderCloser((selected) => {
+      seen.push(selected.map((candidate) => candidate.path));
     });
     try {
-      await applyAgentDatabaseReaderRequest(close);
+      await applyRequest(close);
       expect(isDeletedAgentDatabasePath(databasePath)).toBe(false);
 
       await deleteDatabase();
@@ -110,7 +97,7 @@ describe("agent database reader requests", () => {
       const survivor = `${external}.survivor.sqlite`;
       await deleteDatabase(external);
       await deleteDatabase(survivor, "alpha-other");
-      await applyAgentDatabaseReaderRequest({ kind: "revive", agentIds: ["beta"] });
+      await applyRequest({ kind: "revive", agentIds: ["beta"] });
       expect(isDeletedAgentDatabasePath(databasePath)).toBe(true);
       await expect(reviveAgentDatabases(["alpha"])).rejects.toThrow("worker close failed");
       expect(captureDeletedAgentDatabaseFences()).toEqual([[survivor, "alpha-other"]]);
@@ -142,7 +129,7 @@ describe("agent database reader requests", () => {
       calls.push("healthy");
     });
     try {
-      await expect(applyAgentDatabaseReaderRequest(close)).rejects.toThrow("reader close failed");
+      await expect(applyRequest(close)).rejects.toThrow("reader close failed");
       expect(calls).toEqual(["failing", "healthy"]);
     } finally {
       unregisterFailing();
