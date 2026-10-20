@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
@@ -108,10 +108,8 @@ beforeAll(async () => {
   await write(source, "pnpm-lock.yaml", secondLock);
   await git(source, "commit", "--quiet", "-am", "lockfile update");
   changedCommit = await git(source, "rev-parse", "HEAD");
-  for (const pattern of ["node_modules/*", ""]) {
-    await write(source, ".gitignore", `${pattern}\n.env*\n.npmrc\nbuild/\n`);
-    await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
-  }
+  await write(source, ".gitignore", "\n.env*\n.npmrc\nbuild/\n");
+  await git(source, "commit", "--quiet", "-am", "dependency ignore variant");
   const remote = path.join(root, "origin.git");
   await git(root, "clone", "--quiet", "--bare", source, remote);
   await git(source, "remote", "add", "origin", remote);
@@ -160,18 +158,14 @@ async function fixture(signal: AbortSignal) {
   };
 }
 
-it("shares one installed generation across independent checkouts and replaces it after a lockfile commit", async ({
-  signal,
-}) => {
+it("isolates dependency clones and rebuilds after lockfile changes", async ({ signal }) => {
   const clone = await fixture(signal);
   const first = await clone("first");
   expect(await read(first, dependencyFile)).toBe(firstLock);
   const template = (await listTemplatesAsync(env)).find(
     (record) => record.worktreeRoot === path.join(path.dirname(first), "templates"),
   );
-  if (!template) {
-    throw new Error("Template was not reserved");
-  }
+  assert(template, "Template was not reserved");
   const indexPath = path.join(template.path, ".git", "index");
   const originalIndex = await fs.readFile(indexPath);
   // Warm validation must not refresh an index that another reader can be cloning.
@@ -194,9 +188,7 @@ it("shares one installed generation across independent checkouts and replaces it
   expect(templates).toMatchObject([{ status: "ready" }]);
 });
 
-it("retains only installed node_modules and never copies source credentials", async ({
-  signal,
-}) => {
+it("retains dependencies without credentials or install debris", async ({ signal }) => {
   mocks.install.mockImplementation(async ({ directory }) => {
     await expectMissing(directory, ".env.local", ".npmrc");
     return installFiles(directory, {
@@ -287,7 +279,9 @@ function holdInstall() {
     params.signal.throwIfAborted();
     return await install(params);
   });
-  return { started, release };
+  const waitForStart = (preparation: Promise<void>) =>
+    awaitGateBeforeSettlement(started.promise, preparation, "Background install did not start");
+  return { waitForStart, release };
 }
 
 it.each(["default", "agent-override"] as const)(
@@ -309,18 +303,12 @@ it.each(["default", "agent-override"] as const)(
   },
 );
 
-it("lets the first checkout join background preparation through the existing allocation owner", async ({
-  signal,
-}) => {
+it("joins background preparation through the allocation owner", async ({ signal }) => {
   const warmed = prewarmFixture();
-  const { started, release } = holdInstall();
+  const { waitForStart, release } = holdInstall();
   const preparation = warmed.prepare(signal);
   try {
-    await awaitGateBeforeSettlement(
-      started.promise,
-      preparation,
-      "Background install did not start",
-    );
+    await waitForStart(preparation);
     const templateRoot = path.join(warmed.state, "worktree-projections");
     const destination = path.join(templateRoot, "first-session");
     const selectedCommit = await git(source, "rev-parse", "HEAD");
@@ -357,17 +345,13 @@ it.each(["shutdown", "config"])(
   async (reason) => {
     const warmed = prewarmFixture();
     const controller = new AbortController();
-    const { started, release } = holdInstall();
+    const { waitForStart, release } = holdInstall();
     let settled = false;
     const preparation = warmed.prepare(controller.signal).then(() => {
       settled = true;
     });
     try {
-      const signal = await awaitGateBeforeSettlement(
-        started.promise,
-        preparation,
-        "Background install did not start",
-      );
+      const signal = await waitForStart(preparation);
       if (reason === "shutdown") {
         controller.abort();
       } else {

@@ -3,6 +3,7 @@ import { createPluginRecord } from "../../plugins/loader-records.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createOwnershipHarness } from "../../plugins/registry-ownership.test-support.js";
 import { resolveNodeBootstrapPlugins } from "./node-bootstrap-plugins.js";
 
 function createBootstrapRegistry() {
@@ -21,23 +22,16 @@ function createBootstrapRegistry() {
     byPluginId.set(id, metadata);
     return { metadata, record };
   };
-  const addHarness = (id: string, commands: string[]) =>
+  const addHarness = (id: string, commands: string[]) => {
+    const devicePlacement = { requiredNodeCommands: commands, consumesWorkerSlot: false };
     registry.agentHarnesses.push({
       pluginId: id,
       source: `/source/extensions/${id}/index.ts`,
-      harness: {
-        id,
-        label: id,
-        cloudPlacement: {
-          mode: "remote-exec",
-          devicePlacement: { requiredNodeCommands: commands, consumesWorkerSlot: false },
-        },
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("not used");
-        },
-      },
+      harness: createOwnershipHarness(id, {
+        cloudPlacement: { mode: "remote-exec", devicePlacement },
+      }),
     });
+  };
   const addCommand = (pluginId: string, command: string) =>
     registry.nodeHostCommands.push({
       pluginId,
@@ -47,7 +41,7 @@ function createBootstrapRegistry() {
   return { registry, metadata: { byPluginId }, addPlugin, addHarness, addCommand };
 }
 
-it("packages only the deterministic union of required command owners", () => {
+it("packages the deterministic union of available command owners", () => {
   const fixture = createBootstrapRegistry();
   fixture.addPlugin("harness");
   fixture.addPlugin("native-b", {
@@ -62,22 +56,15 @@ it("packages only the deterministic union of required command owners", () => {
   fixture.addCommand("native-a", "native.a");
   fixture.addCommand("native-b", "native.b");
   fixture.addCommand("unrelated", "unrelated.command");
+  const { record } = fixture.addPlugin("disabled-harness");
+  Object.assign(record, { enabled: false, status: "disabled" });
+  fixture.addHarness("disabled-harness", ["missing.command"]);
 
   expect(resolveNodeBootstrapPlugins({ ...fixture, executionMode: "remote-exec" })).toEqual([
     { id: "native-a", root: "/source/extensions/native-a" },
     { id: "native-b", root: "/installed/node_modules/@example/native-b" },
   ]);
   expect(resolveNodeBootstrapPlugins({ ...fixture, executionMode: "worker-turn" })).toEqual([]);
-});
-
-it("ignores unavailable harnesses instead of installing their command dependencies", () => {
-  const fixture = createBootstrapRegistry();
-  const { record } = fixture.addPlugin("disabled-harness");
-  record.enabled = false;
-  record.status = "disabled";
-  fixture.addHarness("disabled-harness", ["missing.command"]);
-
-  expect(resolveNodeBootstrapPlugins({ ...fixture, executionMode: "remote-exec" })).toEqual([]);
 });
 
 it.each([

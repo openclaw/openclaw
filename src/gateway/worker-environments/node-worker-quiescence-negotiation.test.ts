@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import {
   parseNodeWorkerWorkspaceExecInput,
@@ -24,9 +24,7 @@ it.each([
   const record = environment();
   const nodeTransport = transport();
   const [node] = await nodeTransport.listCurrentNodes();
-  if (!node) {
-    throw new Error("missing fixture node");
-  }
+  assert(node, "missing fixture node");
   const native = mode.startsWith("native");
   let supported = native;
   let abandon = mode.startsWith("native-abandoned");
@@ -42,9 +40,7 @@ it.each([
         ...(supported ? { workspaceQuiescence: 1 as const } : {}),
       },
     };
-    if (upgradeOnRead) {
-      supported = true;
-    }
+    supported ||= upgradeOnRead;
     return current;
   };
   const requests: NodeWorkerWorkspaceExecInput[] = [];
@@ -128,9 +124,8 @@ it.each([
       native ? ["acquire", "renew"] : [undefined, undefined],
     );
     expect(requests[1]?.nativeProcessOwner).toBe(mode === "legacy" ? undefined : true);
-    for (const input of [requests[0], requests[2]]) {
-      expect(input).not.toHaveProperty("nativeProcessOwner");
-    }
+    expect(requests[0]).not.toHaveProperty("nativeProcessOwner");
+    expect(requests[2]).not.toHaveProperty("nativeProcessOwner");
     if (!native) {
       expect(requests[0]?.argv.slice(0, 2)).toEqual(["node", "-e"]);
       expect(requests[2]?.argv).toContain(legacyNonce);
