@@ -7,8 +7,7 @@ const modelState = (index: number, terminalHealth?: "done" | "failed") =>
   observerState({
     sessionKey: `agent:main:session-${index}`,
     lastActivityAt: index,
-    finalPending: terminalHealth !== undefined,
-    ...(terminalHealth ? { terminalHealth } : {}),
+    ...(terminalHealth ? { terminalHealth, finalPending: true } : {}),
   });
 
 let states: Map<string, SessionObserverState>;

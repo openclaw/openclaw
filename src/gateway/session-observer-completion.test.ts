@@ -21,6 +21,25 @@ afterEach(() => {
   resetSecretRedactionRegistryForTest();
 });
 
+function completionAfter(delay?: number) {
+  const reply = modelMessage({
+    headline: "Reviewing the implementation",
+    assessment: "The work is progressing steadily.",
+    health: "on-track",
+  });
+  return vi.fn(
+    (params: { abortSignal?: AbortSignal }) =>
+      new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
+        params.abortSignal!.addEventListener("abort", () => reject(new Error("aborted")), {
+          once: true,
+        });
+        if (delay !== undefined) {
+          setTimeout(() => resolve(reply), delay);
+        }
+      }),
+  );
+}
+
 it("reports a redacted, collapsed, bounded prefix of the last of two rejected replies", async () => {
   const password = `synthetic-${"x".repeat(200)}-credential`;
   const registered = `registered-${"q".repeat(200)}-fixture`;
@@ -58,20 +77,7 @@ it("reports a redacted, collapsed, bounded prefix of the last of two rejected re
 it("publishes a digest from a utility model that answers after 15s", async () => {
   vi.setSystemTime(0);
   // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
-  const reply = modelMessage({
-    headline: "Reviewing the implementation",
-    assessment: "The work is progressing steadily.",
-    health: "on-track",
-  });
-  const completeModel = vi.fn(
-    (params: { timeoutMs?: number; abortSignal?: AbortSignal }) =>
-      new Promise((resolve, reject) => {
-        params.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
-          once: true,
-        });
-        setTimeout(() => resolve(reply), 15_000);
-      }),
-  );
+  const completeModel = completionAfter(15_000);
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
 
@@ -92,13 +98,7 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
 
 it("aborts stuck completions at the cap and disables the run after two failures", async () => {
   vi.setSystemTime(0);
-  const completeModel = vi.fn(
-    (params: { abortSignal?: AbortSignal }) =>
-      new Promise<never>((_resolve, reject) => {
-        const signal = params.abortSignal!;
-        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-      }),
-  );
+  const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);

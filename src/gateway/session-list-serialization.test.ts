@@ -26,7 +26,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -56,6 +55,16 @@ function readList(
   acceptsSerializedJson = true,
 ) {
   return listSessions({ context, client, request, acceptsSerializedJson });
+}
+
+function expectAbsent(row: unknown, fields: readonly string[]) {
+  for (const field of fields) {
+    expect(row).not.toHaveProperty(field);
+  }
+}
+
+function wire(payload: unknown, id = "list") {
+  return serializeGatewayFrame({ type: "res", id, ok: true, payload }).toString();
 }
 
 async function withListReader(
@@ -110,6 +119,14 @@ it("packs equal fields by their recipient rows without changing the input or wir
     rowsRevision,
     rowsUnchanged: true,
   });
+  expect(rows).toEqual(original);
+  expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
+  // A changed page must not reuse the previous page's recipient groups or fact indexes.
+  const changed = { ...rows[1]!, pinned: true, label: "Changed" };
+  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+    const next = shareSidebarSessionRows(page);
+    expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+  }
   expect(packed).toEqual({
     sessions: [
       {
@@ -130,25 +147,12 @@ it("packs equal fields by their recipient rows without changing the input or wir
     ],
     sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
   });
-  expect(rows).toEqual(original);
-  expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
-  // A changed page must not reuse the previous page's recipient groups or fact indexes.
-  const changed = { ...rows[1]!, pinned: true, label: "Changed" };
-  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
-    const next = shareSidebarSessionRows(page);
-    expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
-  }
-  expect(packed.sessions[0]!.sharedFacts).toEqual([0, 1]);
-  expect(packed.sharedFacts).toEqual([
-    { label: "Shared", origin: { provider: "fixture" } },
-    { pinned: false },
-  ]);
 });
 
 it.each(["sidebar", "dashboard"] as const)(
   "keeps %s display facts while bounding the wire payload",
-  async (mode) => {
-    await withListReader(
+  (mode) =>
+    withListReader(
       mode === "sidebar" ? "sidebar-reader" : "gallery-reader",
       async ({ context, client }) => {
         const sidebar = mode === "sidebar";
@@ -251,9 +255,7 @@ it.each(["sidebar", "dashboard"] as const)(
               compact.sessions[i]!.createdActor,
               compact.sessions[i]!.expandedParticipants,
             ]);
-            for (const field of ["model", "totalTokens", "sharedFacts"]) {
-              expect(row).not.toHaveProperty(field);
-            }
+            expectAbsent(row, ["model", "totalTokens", "sharedFacts"]);
           }
           expect(result.sessions[0]).not.toHaveProperty("createdActor");
           expect(result.sharedFacts).toBeDefined();
@@ -279,7 +281,7 @@ it.each(["sidebar", "dashboard"] as const)(
             boardFace: "dashboard",
             hasBoard: true,
           });
-          for (const field of [
+          expectAbsent(result.sessions[0], [
             "model",
             "modelProvider",
             "inputTokens",
@@ -287,28 +289,23 @@ it.each(["sidebar", "dashboard"] as const)(
             "totalTokens",
             "permissionMode",
             "participants",
-          ]) {
-            expect(result.sessions[0]).not.toHaveProperty(field);
-          }
+          ]);
           expect(compact.sessions[0]).toMatchObject({
             model: "test-model",
             totalTokens: 1500,
             permissionMode: "full",
           });
           expect((await read("compact")).sessions).toEqual(compact.sessions);
-          const wire = (payload: unknown) =>
-            serializeGatewayFrame({ type: "res", id: "gallery", ok: true, payload }).toString();
-          expect(Buffer.byteLength(wire(result))).toBeLessThan(
-            Buffer.byteLength(wire(compact)) * 0.75,
+          expect(Buffer.byteLength(wire(result, "gallery"))).toBeLessThan(
+            Buffer.byteLength(wire(compact, "gallery")) * 0.75,
           );
         }
       },
-    );
-  },
+    ),
 );
 
-it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
-  await withListReader("page-reader", async ({ context, client }) => {
+it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", () =>
+  withListReader("page-reader", async ({ context, client }) => {
     const keys = ["agent:main:off-page", "agent:main:selected-page"];
     for (const [index, sessionKey] of keys.entries()) {
       writeListEntry(sessionKey, {
@@ -324,19 +321,20 @@ it("keeps a sidebar page revision across off-page facts and replaces it for sele
     expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
     sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
     const unchanged = await read(first.rowsRevision);
-    expect(unchanged.rowsRevision).toBe(first.rowsRevision);
-    expect(unchanged.rowsUnchanged).toBe(true);
-    expect(unchanged.sessions).toEqual([]);
+    expect(unchanged).toMatchObject({
+      rowsRevision: first.rowsRevision,
+      rowsUnchanged: true,
+      sessions: [],
+    });
     sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
     const changed = await read(first.rowsRevision);
     expect(changed.rowsRevision).not.toBe(first.rowsRevision);
     expect(changed.rowsUnchanged).toBeUndefined();
     expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
-  });
-});
+  }));
 
-it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
-  await withListReader("cold-alice", async ({ context, client: alice }) => {
+it("coalesces cold sidebar selection across row slices only for the same principal and filter", () =>
+  withListReader("cold-alice", async ({ context, client: alice }) => {
     const bob = roleClient("view", "cold-bob");
     prepareGatewayRecipientProfile(bob);
     const rows = 130;
@@ -373,8 +371,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       expect(other.owners).not.toBe(results[0]!.owners);
       expect((await read(alice, 1)).sessions).toHaveLength(1);
     });
-  });
-});
+  }));
 
 it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {
   const start = 1_800_000_000_000;
@@ -396,15 +393,21 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     replaceSessionEntrySync(scope, entry);
     const read = (index: number, compact = true) =>
       readList(context, clients[index]!, compact ? { rowMode: "compact" } : {});
+    const expectAt = async (elapsed: number, fields: object, index = 0, soft = false) => {
+      clock.mockReturnValue(start + elapsed);
+      (soft ? expect.soft : expect)((await read(index)).sessions[0]).toMatchObject({
+        ...fields,
+        snapshotAt: start + elapsed,
+      });
+    };
     // Admission work is not part of response encoding.
     await read(0, false);
     const stringify = vi.spyOn(JSON, "stringify");
     const first = await read(0, false);
-    const frame = (payload: unknown) => ({ type: "res", id: "list", ok: true, payload });
-    const firstWire = serializeGatewayFrame(frame(first)).toString();
+    const firstWire = wire(first);
     clock.mockReturnValue(start + 1);
     const second = await read(1, false);
-    const secondWire = serializeGatewayFrame(frame(second)).toString();
+    const secondWire = wire(second);
     const rowTraversals = stringify.mock.calls.reduce((count, [value]) => {
       if (value && typeof value === "object" && "key" in value && value.key === scope.sessionKey) {
         return count + 1;
@@ -465,17 +468,13 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     expect(first.sessions[0]).toMatchObject({ snapshotAt: start, agentStatus: entry.agentStatus });
     const compact = await read(0);
     expect(compact.sessions[0]).toMatchObject({ rowMode: "compact", label: "Original label" });
-    for (const field of SESSION_ROW_DETAIL_FIELDS) {
-      expect(compact.sessions[0]).not.toHaveProperty(field);
-    }
+    expectAbsent(compact.sessions[0], SESSION_ROW_DETAIL_FIELDS);
     expect((await read(0, false)).sessions[0]).toHaveProperty("toolOverrides", entry.toolOverrides);
     clock.mockReturnValue(start + 101);
     expect((await read(0)).sessions[0]?.agentStatus).toBeUndefined();
     replaceSessionEntrySync(scope, { ...entry, label: "Published label" });
     const changed = await read(1);
-    expect(
-      JSON.parse(serializeGatewayFrame(frame(changed)).toString()).payload.sessions[0],
-    ).toMatchObject({
+    expect(JSON.parse(wire(changed)).payload.sessions[0]).toMatchObject({
       label: "Published label",
       permissionModePending: false,
       hasActiveRun: false,
@@ -483,19 +482,11 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     });
     const finishPermissionChange = beginSessionPermissionChange(entry.sessionId);
     try {
-      clock.mockReturnValue(start + 102);
-      expect((await read(0)).sessions[0]).toMatchObject({
-        permissionModePending: true,
-        snapshotAt: start + 102,
-      });
+      await expectAt(102, { permissionModePending: true });
     } finally {
       finishPermissionChange();
     }
-    clock.mockReturnValue(start + 103);
-    expect.soft((await read(1)).sessions[0]).toMatchObject({
-      permissionModePending: false,
-      snapshotAt: start + 103,
-    });
+    await expectAt(103, { permissionModePending: false }, 1, true);
     clock.mockReturnValue(start + 104);
     const readActive = () => readList(context, clients[0]!, { activeOnly: true });
     expect((await readActive()).sessions).toHaveLength(0);
@@ -512,22 +503,14 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     const releaseRun = await claimRpcSourceForTest(run.entry);
     try {
       expect((await readActive()).sessions).toHaveLength(1);
-      expect((await read(0)).sessions[0]).toMatchObject({
-        hasActiveRun: true,
-        activeRunIds: ["serialization-run"],
-        snapshotAt: start + 104,
-      });
+      await expectAt(104, { hasActiveRun: true, activeRunIds: ["serialization-run"] });
     } finally {
       releaseRun();
       run.cleanup();
     }
     clock.mockReturnValue(start + 105);
     expect((await readActive()).sessions).toHaveLength(0);
-    expect.soft((await read(1)).sessions[0]).toMatchObject({
-      hasActiveRun: false,
-      activeRunIds: [],
-      snapshotAt: start + 105,
-    });
+    await expectAt(105, { hasActiveRun: false, activeRunIds: [] }, 1, true);
     replaceSessionEntrySync(scope, {
       ...entry,
       totalTokens: 20,
@@ -546,15 +529,13 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         continuationTurns: 0,
       },
     });
-    expect((await read(0)).sessions[0]?.goal).toMatchObject({
-      status: "budget_limited",
-      budgetLimitedAt: start + 105,
-    });
-    clock.mockReturnValue(start + 106);
-    expect((await read(1)).sessions[0]?.goal).toMatchObject({
-      status: "budget_limited",
-      budgetLimitedAt: start + 106,
-    });
+    for (const [index, elapsed] of [105, 106].entries()) {
+      clock.mockReturnValue(start + elapsed);
+      expect((await read(index)).sessions[0]?.goal).toMatchObject({
+        status: "budget_limited",
+        budgetLimitedAt: start + elapsed,
+      });
+    }
     const childKey = "agent:main:subagent:serialization-runtime";
     replaceSessionEntrySync(
       { agentId: scope.agentId, sessionKey: childKey },
@@ -606,8 +587,8 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
   });
 });
 
-it("refreshes shared socket selection when the same viewer changes roles", async () => {
-  await withListReader("selection-viewer", async ({ context, client }) => {
+it("refreshes shared socket selection when the same viewer changes roles", () =>
+  withListReader("selection-viewer", async ({ context, client }) => {
     const profileId = client.authenticatedUserProfile!.profileId;
     for (const [suffix, creator] of [
       ["owned", profileId],
@@ -625,11 +606,10 @@ it("refreshes shared socket selection when the same viewer changes roles", async
     expect((await read()).sessions.map((row) => row.key)).toEqual(["agent:main:selection-owned"]);
     setUserProfileRole(profileId, "view");
     expect((await read()).totalCount).toBe(2);
-  });
-});
+  }));
 
-it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
-  await withListReader("reader-a", async ({ context, client: firstClient }) => {
+it("retains each embedded reader's identity when their shared row presentation is identical", () =>
+  withListReader("reader-a", async ({ context, client: firstClient }) => {
     const clients = [firstClient, roleClient("view", "reader-b")];
     for (const recipient of clients) {
       prepareGatewayRecipientProfile(recipient);
@@ -651,16 +631,10 @@ it("retains each embedded reader's identity when their shared row presentation i
       true,
       false,
     ]);
-  });
-});
+  }));
 
-it("omits swarm detail reads from sidebar and dashboard pages while authorizing compact members", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
-    const context = requestContext(rolePolicyConfig());
-    const client = roleClient("view", "swarm-list-reader");
+it("omits swarm detail reads from sidebar and dashboard pages while authorizing compact members", () =>
+  withListReader("swarm-list-reader", async ({ context, client }) => {
     const creator = ensureProfileForEmail("swarm-list-owner@example.test");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     prepareGatewayRecipientProfile(client);
@@ -729,5 +703,4 @@ it("omits swarm detail reads from sidebar and dashboard pages while authorizing 
         subagentRuns.delete(`swarm-list-${index}`);
       }
     }
-  });
-});
+  }));

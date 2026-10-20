@@ -36,56 +36,54 @@ test.each(["by-id", "count"] as const)(
     expect(persisted.appendedCount).toBe(1);
 
     const { ws } = await openClient({ scopes: ["operator.read"] });
-    try {
-      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: "main" });
-      expect(subscribeRes).toMatchObject({ ok: true, payload: { key: target.sessionKey } });
-      const waitForEvent = (event: string) =>
-        waitForSessionEvent(ws, event, { sessionKey: target.sessionKey });
-      const update = {
-        target,
-        message: {
-          ...transcriptMessage,
-          ...(read === "by-id" ? { content: [{ type: "text", text: "stale queued prompt" }] } : {}),
-        },
-        ...(read === "by-id" ? { messageId: "msg-selected" } : {}),
-      };
-      {
-        using _ = vi
-          .spyOn(historyWorker, "readSessionHistoryPageInWorker")
-          .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
-        const changed = waitForEvent("sessions.changed");
-        emitSessionTranscriptUpdate(update);
-        const invalidation = await changed;
-        expect(invalidation.payload).toMatchObject({
-          sessionKey: target.sessionKey,
-          phase: "message",
-        });
-        expect(invalidation.payload).not.toHaveProperty("message");
-        expect(invalidation.payload).not.toHaveProperty("messageSeq");
-      }
-
-      const nextMessage = waitForEvent("session.message");
+    await using cleanup = { [Symbol.asyncDispose]: () => closeGatewayTestWebSocket(ws) };
+    void cleanup;
+    const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: "main" });
+    expect(subscribeRes).toMatchObject({ ok: true, payload: { key: target.sessionKey } });
+    const waitForEvent = (event: string) =>
+      waitForSessionEvent(ws, event, { sessionKey: target.sessionKey });
+    const update = {
+      target,
+      message: {
+        ...transcriptMessage,
+        ...(read === "by-id" ? { content: [{ type: "text", text: "stale queued prompt" }] } : {}),
+      },
+      ...(read === "by-id" ? { messageId: "msg-selected" } : {}),
+    };
+    {
+      using _ = vi
+        .spyOn(historyWorker, "readSessionHistoryPageInWorker")
+        .mockRejectedValueOnce(new WorkerTaskError("worker task capacity reached", "overloaded"));
+      const changed = waitForEvent("sessions.changed");
       emitSessionTranscriptUpdate(update);
-      const messageEvent = await nextMessage;
-      expect(messageEvent.payload).toMatchObject({
+      const invalidation = await changed;
+      expect(invalidation.payload).toMatchObject({
         sessionKey: target.sessionKey,
-        messageSeq: 1,
-        message: transcriptMessage,
+        phase: "message",
       });
-      if (read === "by-id") {
-        expect(messageEvent.payload).toMatchObject({
-          messageId: "msg-selected",
-          message: {
-            __openclaw: {
-              id: "msg-selected",
-              seq: 1,
-              transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
-            },
+      expect(invalidation.payload).not.toHaveProperty("message");
+      expect(invalidation.payload).not.toHaveProperty("messageSeq");
+    }
+
+    const nextMessage = waitForEvent("session.message");
+    emitSessionTranscriptUpdate(update);
+    const messageEvent = await nextMessage;
+    expect(messageEvent.payload).toMatchObject({
+      sessionKey: target.sessionKey,
+      messageSeq: 1,
+      message: transcriptMessage,
+    });
+    if (read === "by-id") {
+      expect(messageEvent.payload).toMatchObject({
+        messageId: "msg-selected",
+        message: {
+          __openclaw: {
+            id: "msg-selected",
+            seq: 1,
+            transcriptPosition: { source: expect.any(String), rawSeq: expect.any(Number) },
           },
-        });
-      }
-    } finally {
-      await closeGatewayTestWebSocket(ws);
+        },
+      });
     }
   },
 );

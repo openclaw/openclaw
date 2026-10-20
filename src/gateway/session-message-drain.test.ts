@@ -23,12 +23,11 @@ vi.mock("../plugin-sdk/browser-maintenance.js", async (importOriginal) => ({
 installGatewayTestHooks({ scope: "suite" });
 
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-let clients: WebSocket[];
+const clients: WebSocket[] = [];
 const cleanupDirs: string[] = [];
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
-  clients = [];
   for (const subscription of ["messages", "list", "both"]) {
     const ws = await harness.openWs();
     clients.push(ws);
@@ -43,9 +42,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  for (const ws of clients ?? []) {
-    ws.close();
-  }
+  clients.forEach((ws) => ws.close());
   await harness?.close();
 });
 
