@@ -17,36 +17,19 @@ export function createGlobalDatabase(databasePath: string): void {
     `);
     database
       .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
-        `,
+        `INSERT INTO schema_meta
+          (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
       )
       .run(OPENCLAW_STATE_SCHEMA_VERSION);
     const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
-        `
-          INSERT INTO delivery_queue_entries (
-            queue_name,
-            id,
-            status,
-            entry_json,
-            retention_id_prefix,
-            retention_max_age_ms,
-            retention_max_entries,
-            enqueued_at,
-            updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?,
-            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
-        `,
+        `INSERT INTO delivery_queue_entries
+          (queue_name, id, status, entry_json, retention_id_prefix,
+           retention_max_age_ms, retention_max_entries, enqueued_at, updated_at)
+          VALUES ('delivery', 'queued', 'pending', ?,
+            @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)`,
       )
       .run(deriveDeliveryQueueRetentionColumns("queued", entryJson), entryJson);
   });
@@ -55,11 +38,9 @@ export function createGlobalDatabase(databasePath: string): void {
 export function seedGlobalPluginBlobSnapshotFixtures(databasePath: string): void {
   withDatabase(databasePath, (database) => {
     const insertPluginBlob = database.prepare(
-      `
-        INSERT INTO plugin_blob_entries (
-          plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
+      `INSERT INTO plugin_blob_entries
+        (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     insertPluginBlob.run(
       "diffs",
@@ -90,17 +71,9 @@ export function createAgentDatabase(databasePath: string, agentId: string): void
     `);
     database
       .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)
-        `,
+        `INSERT INTO schema_meta
+          (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+          VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)`,
       )
       .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
   });
@@ -110,11 +83,9 @@ export function seedStateLease(databasePath: string): void {
   withDatabase(databasePath, (database) => {
     database
       .prepare(
-        `
-          INSERT INTO state_leases (
-            scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
-          ) VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
-        `,
+        `INSERT INTO state_leases
+          (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+          VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)`,
       )
       .run(STATE_LEASE_MARKER);
   });
@@ -132,11 +103,8 @@ export function createUnsafeIndexDrift(databasePath: string): void {
   withDatabase(databasePath, (database) => {
     disableDefensiveModeForSchemaCorruption(database);
     database.exec(`
-      CREATE TABLE records (
-        id INTEGER PRIMARY KEY,
-        indexed_value TEXT NOT NULL,
-        alternate_value TEXT NOT NULL
-      );
+      CREATE TABLE records
+        (id INTEGER PRIMARY KEY, indexed_value TEXT NOT NULL, alternate_value TEXT NOT NULL);
       CREATE INDEX records_value ON records(indexed_value);
       INSERT INTO records (indexed_value, alternate_value)
       VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');

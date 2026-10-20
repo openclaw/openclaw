@@ -76,7 +76,7 @@ it.each(["global", "agent"] as const)(
       identity: { role: "generic", id: role },
     });
     const artifactPath = path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME);
-    let manifest: SnapshotManifest = {
+    const manifest: SnapshotManifest = {
       ...snapshot.manifest,
       database: {
         basename: snapshot.manifest.database.basename,
@@ -89,6 +89,11 @@ it.each(["global", "agent"] as const)(
         path.join(snapshot.ref.path, SNAPSHOT_MANIFEST_FILENAME),
         `${JSON.stringify(manifest)}\n`,
       );
+    async function rehashManifest() {
+      const { sha256, sizeBytes } = await hashSnapshotArtifact(snapshot.ref.path);
+      manifest.artifact = { ...manifest.artifact, sha256, sizeBytes };
+      await writeManifest();
+    }
     await writeManifest();
     const bytes = await fs.readFile(artifactPath);
     await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
@@ -102,13 +107,8 @@ it.each(["global", "agent"] as const)(
         db.exec(`PRAGMA user_version = ${version}`);
         db.prepare("UPDATE schema_meta SET schema_version = ?").run(metadataVersion);
       });
-      const digest = await hashSnapshotArtifact(snapshot.ref.path);
-      manifest = {
-        ...manifest,
-        database: { ...manifest.database, userVersion: version },
-        artifact: { ...manifest.artifact, sha256: digest.sha256, sizeBytes: digest.sizeBytes },
-      };
-      await writeManifest();
+      manifest.database.userVersion = version;
+      await rehashManifest();
     }
 
     await rewriteVersion(currentVersion + 1);
@@ -127,12 +127,7 @@ it.each(["global", "agent"] as const)(
     withDatabase(artifactPath, (db) => {
       db.prepare("UPDATE schema_meta SET role = ?").run(role === "global" ? "agent" : "global");
     });
-    const digest = await hashSnapshotArtifact(snapshot.ref.path);
-    manifest = {
-      ...manifest,
-      artifact: { ...manifest.artifact, sha256: digest.sha256, sizeBytes: digest.sizeBytes },
-    };
-    await writeManifest();
+    await rehashManifest();
     await expect(provider.verify(snapshot.ref)).rejects.toThrow(/expected global|expected agent/u);
   },
 );

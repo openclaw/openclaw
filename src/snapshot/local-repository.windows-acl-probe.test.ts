@@ -45,6 +45,21 @@ const CURRENT_USER_FULL_ACCESS: WindowsAccessControlEntry = {
   },
 };
 
+function untrustedAccess(mask: number, inheritOnly = false): WindowsAccessControlEntry {
+  return {
+    ...CURRENT_USER_FULL_ACCESS,
+    sid: "s-1-1-0",
+    mask,
+    flags: {
+      ...CURRENT_USER_FULL_ACCESS.flags,
+      raw: inheritOnly ? 11 : 3,
+      objectInherit: true,
+      containerInherit: true,
+      inheritOnly,
+    },
+  };
+}
+
 function mockWindowsPathSecurity(
   params: {
     ancestorEntries?: WindowsAccessControlEntry[];
@@ -88,96 +103,66 @@ describe("fail-closed Windows ACL probe", () => {
   });
 
   it.each([
-    { role: "root", rightsMask: 0x100000, inheritOnly: false, allowed: true },
-    { role: "ancestor", rightsMask: 0x000001, inheritOnly: false, allowed: true },
-    { role: "ancestor", rightsMask: 0x040000, inheritOnly: false, allowed: false },
-    { role: "ancestor", rightsMask: 0x040000, inheritOnly: true, allowed: true },
-    { role: "root", rightsMask: 0x040000, inheritOnly: true, allowed: false },
-    { role: "ancestor", rightsMask: 0x000200, inheritOnly: false, allowed: false },
-  ])("enforces $role access for mask $rightsMask with inheritOnly=$inheritOnly", async (row) => {
-    const entries: WindowsAccessControlEntry[] = [
-      CURRENT_USER_FULL_ACCESS,
-      {
-        ...CURRENT_USER_FULL_ACCESS,
-        sid: "s-1-1-0",
-        mask: row.rightsMask,
-        flags: {
-          ...CURRENT_USER_FULL_ACCESS.flags,
-          raw: row.inheritOnly ? 11 : 3,
-          objectInherit: true,
-          containerInherit: true,
-          inheritOnly: row.inheritOnly,
-        },
-      },
-    ];
-    mockWindowsPathSecurity(
-      row.role === "root" ? { rootEntries: entries } : { ancestorEntries: entries },
-    );
-    const result = admitRoot(tempDir);
-    if (row.allowed) {
-      await expect(result).resolves.toBe(tempDir);
-    } else {
-      await expect(result).rejects.toThrow(
-        new RegExp(
-          `Windows ACL permits untrusted SQLite staging access on ${row.role === "root" ? "repository root" : "ancestor"}: path=.*principal=S-1-1-0 rights=.*Remove the untrusted grant.*shared or synced root`,
-        ),
+    ["root", 0x100000, false, true],
+    ["ancestor", 0x000001, false, true],
+    ["ancestor", 0x040000, false, false],
+    ["ancestor", 0x040000, true, true],
+    ["root", 0x040000, true, false],
+    ["ancestor", 0x000200, false, false],
+  ] as const)(
+    "enforces %s access for mask %i with inheritOnly=%s",
+    async (role, mask, inheritOnly, allowed) => {
+      const entries: WindowsAccessControlEntry[] = [
+        CURRENT_USER_FULL_ACCESS,
+        untrustedAccess(mask, inheritOnly),
+      ];
+      mockWindowsPathSecurity(
+        role === "root" ? { rootEntries: entries } : { ancestorEntries: entries },
       );
-    }
-  });
+      const result = admitRoot(tempDir);
+      if (allowed) {
+        await expect(result).resolves.toBe(tempDir);
+      } else {
+        await expect(result).rejects.toThrow(
+          new RegExp(
+            `Windows ACL permits untrusted SQLite staging access on ${role === "root" ? "repository root" : "ancestor"}: path=.*principal=S-1-1-0 rights=.*Remove the untrusted grant.*shared or synced root`,
+          ),
+        );
+      }
+    },
+  );
 
   it.each([
-    {
-      label: "an untrusted read grant",
-      params: {
-        rootEntries: [
-          {
-            ...CURRENT_USER_FULL_ACCESS,
-            sid: "s-1-1-0",
-            mask: 0x120089,
-            flags: {
-              ...CURRENT_USER_FULL_ACCESS.flags,
-              raw: 3,
-              containerInherit: true,
-              objectInherit: true,
-            },
-          },
-        ],
-      },
-      expected:
-        /repository root: path=.*principal=S-1-1-0 rights=.*Remove the untrusted grant.*shared or synced root/u,
+    [
+      "an untrusted read grant",
+      { rootEntries: [untrustedAccess(0x120089)] },
+      /repository root: path=.*principal=S-1-1-0 rights=.*Remove the untrusted grant.*shared or synced root/u,
+    ],
+    [
+      "an untrusted owner",
+      { rootOwnerSid: "S-1-5-21-2000" },
+      /repository root is owned by an untrusted principal: path=.*principal=S-1-5-21-2000/u,
+    ],
+    ["null DACL", { rootFacts: { daclPresent: false } }],
+    ["unknown ACE types", { rootFacts: { complete: false, unsupportedAceTypes: [5] } }],
+    ["remote filesystem", { rootFacts: { isLocal: false } }],
+    ["deny-only DACL", { rootFacts: { aces: [{ ...CURRENT_USER_FULL_ACCESS, aceType: "deny" }] } }],
+    ["unsupported inspection", undefined],
+  ] satisfies [string, Parameters<typeof mockWindowsPathSecurity>[0], RegExp?][])(
+    "rejects %s",
+    async (
+      _label,
+      params,
+      expected = /Unable to verify private Windows ACL for SQLite staging/,
+    ) => {
+      if (params) {
+        mockWindowsPathSecurity(params);
+      } else {
+        aclMocks.readOwnerAndDaclBatch.mockImplementation(async (paths) =>
+          paths.map(() => ({ status: "unsupported-platform", platform: "linux" })),
+        );
+      }
+      await expect(admitRoot(tempDir)).rejects.toThrow(expected);
     },
-    {
-      label: "an untrusted owner",
-      params: { rootOwnerSid: "S-1-5-21-2000" },
-      expected:
-        /repository root is owned by an untrusted principal: path=.*principal=S-1-5-21-2000/u,
-    },
-    ...[
-      { label: "null DACL", facts: { daclPresent: false } },
-      { label: "unknown ACE types", facts: { complete: false, unsupportedAceTypes: [5] } },
-      { label: "remote filesystem", facts: { isLocal: false } },
-      {
-        label: "deny-only DACL",
-        facts: { aces: [{ ...CURRENT_USER_FULL_ACCESS, aceType: "deny" as const }] },
-      },
-    ].map(({ label, facts }) => ({
-      label,
-      params: { rootFacts: facts },
-      expected: /Unable to verify private Windows ACL for SQLite staging/,
-    })),
-    {
-      label: "unsupported inspection",
-      params: undefined,
-      expected: /Unable to verify private Windows ACL for SQLite staging/,
-    },
-  ])("rejects $label", async ({ params, expected }) => {
-    if (params) {
-      mockWindowsPathSecurity(params);
-    } else {
-      aclMocks.readOwnerAndDaclBatch.mockImplementation(async (paths) =>
-        paths.map(() => ({ status: "unsupported-platform", platform: "linux" })),
-      );
-    }
-    await expect(admitRoot(tempDir)).rejects.toThrow(expected);
-  });
+  );
 });
