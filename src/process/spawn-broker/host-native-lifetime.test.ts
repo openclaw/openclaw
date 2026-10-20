@@ -41,6 +41,15 @@ it.each([
     Object.defineProperty(process.versions, "bun", { value: bun, configurable: true });
     const child = new ChildProcess();
     const referenced = { child: true, channel: true };
+    const referenceChild = (value: boolean) => () => {
+      referenced.child = value;
+      if (!channelControl) {
+        referenced.channel = value;
+      }
+    };
+    const referenceChannel = (value: boolean) => () => {
+      referenced.channel = value;
+    };
     let exited = false;
     const exit = () => {
       exited = true;
@@ -52,32 +61,11 @@ it.each([
       pid: { value: 41001 },
       exitCode: { get: () => (exited ? 0 : null) },
       connected: { get: () => !exited },
-      ref: {
-        value: () => {
-          referenced.child = true;
-          if (!channelControl) {
-            referenced.channel = true;
-          }
-        },
-      },
-      unref: {
-        value: () => {
-          referenced.child = false;
-          if (!channelControl) {
-            referenced.channel = false;
-          }
-        },
-      },
+      ref: { value: referenceChild(true) },
+      unref: { value: referenceChild(false) },
       channel: {
         value: channelControl
-          ? {
-              ref: () => {
-                referenced.channel = true;
-              },
-              unref: () => {
-                referenced.channel = false;
-              },
-            }
+          ? { ref: referenceChannel(true), unref: referenceChannel(false) }
           : {},
       },
       send: {

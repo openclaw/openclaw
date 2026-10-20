@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { BrokerChild } from "./child.js";
 import { createSpawnBrokerHost } from "./host.js";
 
@@ -93,21 +94,14 @@ describe.skipIf(skipBrokerTests)("spawn broker event order", () => {
       }
     `,
     );
-    const previousNodeOptions = process.env.NODE_OPTIONS;
-    process.env.NODE_OPTIONS = `${previousNodeOptions ?? ""} --import=${pathToFileURL(preload).href}`;
+    const environment = captureEnv(["NODE_OPTIONS"]);
+    process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`;
     const host = createSpawnBrokerHost();
-    const restoreNodeOptions = () => {
-      if (previousNodeOptions === undefined) {
-        delete process.env.NODE_OPTIONS;
-      } else {
-        process.env.NODE_OPTIONS = previousNodeOptions;
-      }
-    };
     try {
       try {
         await host.ready();
       } finally {
-        restoreNodeOptions();
+        environment.restore();
       }
       const child = host.spawn(
         process.execPath,
@@ -137,7 +131,7 @@ describe.skipIf(skipBrokerTests)("spawn broker event order", () => {
       expect(messages).toEqual(["A", "B", "C"]);
       expect(child.exitCode).toBe(0);
     } finally {
-      restoreNodeOptions();
+      environment.restore();
       await host.close();
     }
   });

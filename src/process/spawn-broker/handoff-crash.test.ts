@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import {
   awaitGateBeforeSettlement,
@@ -21,16 +20,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
-describe.skipIf(skipBrokerTests)("spawn broker admission custody", () => {
-  let receipts: FixtureReceiptChannel;
-  beforeAll(async () => {
-    receipts = await openFixtureReceiptChannel();
-  });
-  afterAll(async () => {
-    await receipts.close();
-  });
-
-  it("cleans a command when the broker dies before its pipes are ready", async ({ signal }) => {
+it.skipIf(skipBrokerTests)(
+  "cleans a command when the broker dies before its pipes are ready",
+  async ({ signal }) => {
+    const receipts = await openFixtureReceiptChannel();
+    onTestFinished(() => receipts.close());
     const host = createSpawnBrokerHost();
     const marker = path.join(tempDirs.make("openclaw-broker-handoff-"), "pid");
     let pid: number | undefined;
@@ -135,5 +129,6 @@ fixtureReceiptSocket.end();`,
       }
       await (closeOutcome ?? host.close());
     }
-  }, 15_000);
-});
+  },
+  15_000,
+);

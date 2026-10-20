@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -46,19 +47,15 @@ describe.skipIf(skipBrokerTests)("spawn broker process-group custody", () => {
         }
       `,
       );
-      const previousNodeOptions = process.env.NODE_OPTIONS;
-      process.env.NODE_OPTIONS = `${previousNodeOptions ?? ""} --import=${pathToFileURL(preload).href}`;
+      const environment = captureEnv(["NODE_OPTIONS"]);
+      process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`;
       const host = createSpawnBrokerHost();
       let childPid: number | undefined;
       try {
         try {
           await host.ready();
         } finally {
-          if (previousNodeOptions === undefined) {
-            delete process.env.NODE_OPTIONS;
-          } else {
-            process.env.NODE_OPTIONS = previousNodeOptions;
-          }
+          environment.restore();
         }
         const child =
           transport === "native"
@@ -87,11 +84,7 @@ describe.skipIf(skipBrokerTests)("spawn broker process-group custody", () => {
         expect(isPidDefinitelyDead(childPid!)).toBe(true);
         expect(recorded.brokerPgid).toBe(recorded.brokerPid);
       } finally {
-        if (previousNodeOptions === undefined) {
-          delete process.env.NODE_OPTIONS;
-        } else {
-          process.env.NODE_OPTIONS = previousNodeOptions;
-        }
+        environment.restore();
         if (childPid && !isPidDefinitelyDead(childPid)) {
           try {
             process.kill(childPid, "SIGKILL");
