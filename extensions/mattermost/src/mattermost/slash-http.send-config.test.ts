@@ -34,7 +34,9 @@ const mockState = vi.hoisted(() => ({
     modelNames: new Map(),
   })),
   resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
-  authorizeMattermostCommandInvocation: vi.fn(() => ({
+  authorizeMattermostCommandInvocation: vi.fn<
+    typeof import("./monitor-auth.js").authorizeMattermostCommandInvocation
+  >(async () => ({
     ok: true,
     commandAuthorized: true,
     channelInfo: { id: "chan-1", type: "O", name: "town-square", display_name: "Town Square" },
@@ -378,7 +380,7 @@ describe("slash-http cfg threading", () => {
       url: callbackUrlFixture,
       delete_at: 0,
     });
-    mockState.authorizeMattermostCommandInvocation.mockReturnValueOnce({
+    mockState.authorizeMattermostCommandInvocation.mockResolvedValueOnce({
       ok: true,
       commandAuthorized: true,
       channelInfo: { id: "dm-1", type: "D", name: "alice", display_name: "Alice" },
@@ -426,6 +428,13 @@ describe("slash-http cfg threading", () => {
     mockState.authorizeMattermostCommandInvocation.mockResolvedValueOnce({
       ok: false,
       denyReason: "dm-pairing",
+      commandAuthorized: false,
+      channelInfo: { id: "dm-1", type: "D", name: "alice", display_name: "Alice" },
+      kind: "direct",
+      chatType: "direct",
+      channelName: "alice",
+      channelDisplay: "Alice",
+      roomLabel: "Alice",
     });
     const handler = createHandler({}, { id: "cmd-status", trigger: "oc_status" });
     const response = createMockServerResponse();
