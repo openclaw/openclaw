@@ -228,7 +228,10 @@ export function createComposerMobileInteraction(
             if (editable(target)) {
               changeEditing(true);
             }
-          } else if (!insideComposer(target)) {
+          } else if (
+            !insideComposer(target) &&
+            !(pointerOrigin instanceof Node && insideComposer(pointerOrigin))
+          ) {
             changeEditing(false);
           }
         },
