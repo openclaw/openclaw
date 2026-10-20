@@ -18,7 +18,6 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-// Matrix tests cover sdk plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
@@ -341,6 +340,20 @@ function createSdkClient(options: ConstructorParameters<typeof MatrixClient>[2] 
   return new MatrixClient("https://matrix.example.org", "token", options);
 }
 
+function createLoopbackClient(options: ConstructorParameters<typeof MatrixClient>[2] = {}) {
+  return new MatrixClient("http://127.0.0.1:8008", "token", {
+    ...options,
+    ssrfPolicy: { allowPrivateNetwork: true },
+  });
+}
+
+function mockEncryptedRoom() {
+  matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
+  matrixJsClient.getCrypto.mockReturnValue({
+    isEncryptionEnabledInRoom: vi.fn(async () => true),
+  });
+}
+
 const cryptoPersistenceContext = {
   createSdkClient,
   getMatrixJsClient: () => matrixJsClient,
@@ -366,6 +379,49 @@ function makeCryptoApi(overrides: Record<string, unknown> = {}): Record<string, 
   return { ...createMatrixCryptoApi(), ...overrides };
 }
 
+function mockCryptoApi(overrides: () => Record<string, unknown>) {
+  matrixJsClient.getCrypto = vi.fn(() => makeCryptoApi(overrides()));
+}
+
+function makeSecretStorageStatus() {
+  return {
+    ready: true,
+    defaultKeyId: "SSSSKEY",
+    secretStorageKeyValidityMap: {
+      "m.cross_signing.master": true,
+      "m.cross_signing.user_signing": true,
+      "m.cross_signing.self_signing": true,
+    },
+  };
+}
+
+function makeBackupApi(version: string) {
+  return {
+    getActiveSessionBackupVersion: vi.fn(async () => version),
+    getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
+    getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo(version)),
+    isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
+  };
+}
+
+function mockCrossSigningPublication(client: MatrixClient, published = true) {
+  vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
+    userId: "@bot:example.org",
+    masterKeyPublished: published,
+    selfSigningKeyPublished: published,
+    userSigningKeyPublished: published,
+    published,
+  });
+}
+
+function createRecoveryClient(prefix: string) {
+  const recoveryKeyPath = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), prefix)),
+    "recovery-key.json",
+  );
+  return { client: createSdkClient({ encryption: true, recoveryKeyPath }), recoveryKeyPath };
+}
+
 function makeDeviceVerificationStatus(overrides: Record<string, unknown> = {}) {
   return {
     isVerified: () => true,
@@ -374,6 +430,25 @@ function makeDeviceVerificationStatus(overrides: Record<string, unknown> = {}) {
     signedByOwner: true,
     ...overrides,
   };
+}
+
+function createCryptoSignalClient(prefix: string) {
+  const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const client = createSdkClient({
+    encryption: true,
+    idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
+    cryptoDatabasePrefix: path.basename(cryptoStateDir),
+  });
+  const delivered: string[] = [];
+  const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
+  mockCryptoApi(() => ({
+    on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+      cryptoListeners.set(eventName, listener);
+    }),
+    bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+  }));
+  client.on("room.message", (_roomId, event) => delivered.push(event.type));
+  return { client, delivered, cryptoListeners };
 }
 
 async function installSecretStorageKey(privateKey: Uint8Array<ArrayBuffer>) {
@@ -530,28 +605,18 @@ describe("MatrixClient request hardening", () => {
     expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
   });
 
-  it.each([{ msgtype: MsgType.Location, thumbnail: true }])(
-    "rejects unencrypted $msgtype media (thumbnail: $thumbnail)",
-    async ({ msgtype, thumbnail }) => {
-      const content = {
-        msgtype,
+  it("rejects unencrypted location thumbnails", async () => {
+    mockEncryptedRoom();
+    const client = createEncryptedSdkClient();
+    await expect(
+      client.sendMessage("!room:example.org", {
+        msgtype: MsgType.Location,
         body: "attachment",
-        ...(thumbnail
-          ? { info: { thumbnail_url: "mxc://example/plain-thumbnail" } }
-          : { url: "mxc://example/plain-primary" }),
-      };
-      matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-      matrixJsClient.getCrypto.mockReturnValue({
-        isEncryptionEnabledInRoom: vi.fn(async () => true),
-      });
-      const client = createSdkClient({ encryption: true });
-
-      await expect(client.sendMessage("!room:example.org", content)).rejects.toThrow(
-        /unencrypted media.*retry/i,
-      );
-      expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
-    },
-  );
+        info: { thumbnail_url: "mxc://example/plain-thumbnail" },
+      }),
+    ).rejects.toThrow(/unencrypted media.*retry/i);
+    expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
+  });
 
   it("rejects unencrypted media sent through the generic event owner", async () => {
     const content = {
@@ -559,10 +624,7 @@ describe("MatrixClient request hardening", () => {
       body: "photo.png",
       url: "mxc://example/plain-primary",
     };
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-    matrixJsClient.getCrypto.mockReturnValue({
-      isEncryptionEnabledInRoom: vi.fn(async () => true),
-    });
+    mockEncryptedRoom();
     const client = createSdkClient({ encryption: true });
 
     await expect(client.sendEvent("!room:example.org", "m.room.message", content)).rejects.toThrow(
@@ -572,10 +634,7 @@ describe("MatrixClient request hardening", () => {
   });
 
   it("allows fully encrypted attachments and preserves text URLs in encrypted rooms", async () => {
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-    matrixJsClient.getCrypto.mockReturnValue({
-      isEncryptionEnabledInRoom: vi.fn(async () => true),
-    });
+    mockEncryptedRoom();
     const client = createSdkClient({ encryption: true });
     const encryptedFile = {
       url: "mxc://example/encrypted",
@@ -617,10 +676,7 @@ describe("MatrixClient request hardening", () => {
     { eventType: "m.room.encrypted", message: /encrypted wire events.*sdk/i },
     { eventType: "m.room.redaction", message: /redaction wire events.*redactEvent/i },
   ])("rejects caller-supplied reserved $eventType wire events", async ({ eventType, message }) => {
-    matrixJsClient.getRoom.mockReturnValue({ hasEncryptionStateEvent: () => true });
-    matrixJsClient.getCrypto.mockReturnValue({
-      isEncryptionEnabledInRoom: vi.fn(async () => true),
-    });
+    mockEncryptedRoom();
     const client = createSdkClient({ encryption: true });
 
     await expect(
@@ -713,9 +769,7 @@ describe("MatrixClient request hardening", () => {
       return Response.json({ event_id: "$sent" });
     });
     stubRuntimeFetch(fetchMock as unknown as typeof fetch);
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const client = createLoopbackClient();
     const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch;
     matrixJsClient.sendMessage = vi.fn(async (roomId, _content, transactionId) => {
       await fetchFn(
@@ -923,9 +977,7 @@ describe("MatrixClient request hardening", () => {
     });
     stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const client = createLoopbackClient();
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -943,10 +995,7 @@ describe("MatrixClient request hardening", () => {
     const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
     stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
-      encryption: true,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const client = createLoopbackClient({ encryption: true });
     await (
       client as unknown as {
         ensureCryptoSupportInitialized: () => Promise<void>;
@@ -1132,9 +1181,7 @@ describe("MatrixClient request hardening", () => {
     });
     stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const client = createLoopbackClient();
 
     await expect(
       client.doRequest("GET", "http://127.0.0.1:8008/start", undefined, undefined, {
@@ -1163,9 +1210,7 @@ describe("MatrixClient request hardening", () => {
     });
     stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
-    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const client = createLoopbackClient();
     await client.doRequest("GET", "http://127.0.0.1:8008/start", undefined, undefined, {
       allowAbsoluteEndpoint: true,
     });
@@ -1188,10 +1233,7 @@ describe("MatrixClient request hardening", () => {
           }),
       );
       stubRuntimeFetch(fetchMock as unknown as typeof fetch);
-      const client = new MatrixClient("http://127.0.0.1:8008", "token", {
-        localTimeoutMs,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      });
+      const client = createLoopbackClient({ localTimeoutMs });
       const assertion = expect(
         client.doRequest("GET", "/_matrix/client/v3/account/whoami"),
       ).rejects.toThrow("aborted");
@@ -1788,27 +1830,9 @@ describe("MatrixClient event bridge", () => {
 
   it("retries an exhausted missing-key decryption when a crypto key signal arrives", async () => {
     vi.useFakeTimers();
-    const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-exhausted-retry-"));
-    const client = createSdkClient({
-      encryption: true,
-      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
-      cryptoDatabasePrefix: path.basename(cryptoStateDir),
-    });
-    const delivered: string[] = [];
-    const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
-
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
-        cryptoListeners.set(eventName, listener);
-      }),
-      bootstrapCrossSigning: vi.fn(async () => {}),
-      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
-    }));
-
-    client.on("room.message", (_roomId, event) => {
-      delivered.push(event.type);
-    });
+    const { client, delivered, cryptoListeners } = createCryptoSignalClient(
+      "matrix-sdk-exhausted-retry-",
+    );
 
     const encrypted = makeMatrixEvent({ decryptionFailure: true });
 
@@ -1860,27 +1884,9 @@ describe("MatrixClient event bridge", () => {
   });
 
   it("does not start duplicate retries when crypto signals fire while retry is in-flight", async () => {
-    const cryptoStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-duplicate-retry-"));
-    const client = createSdkClient({
-      encryption: true,
-      idbSnapshotPath: path.join(cryptoStateDir, "crypto-idb-snapshot.json"),
-      cryptoDatabasePrefix: path.basename(cryptoStateDir),
-    });
-    const delivered: string[] = [];
-    const cryptoListeners = new Map<string, (...args: unknown[]) => void>();
-
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
-        cryptoListeners.set(eventName, listener);
-      }),
-      bootstrapCrossSigning: vi.fn(async () => {}),
-      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
-    }));
-
-    client.on("room.message", (_roomId, event) => {
-      delivered.push(event.type);
-    });
+    const { client, delivered, cryptoListeners } = createCryptoSignalClient(
+      "matrix-sdk-duplicate-retry-",
+    );
 
     const encrypted = makeMatrixEvent({ decryptionFailure: true });
     const decrypted = makeDecryptedMessageEvent();
@@ -2185,9 +2191,7 @@ describe("MatrixClient crypto bootstrapping", () => {
   it("trusts the own Matrix identity after completed self-verification", async () => {
     const verifyOwnIdentity = vi.fn(async () => ({}));
     const freeOwnIdentity = vi.fn();
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       getOwnIdentity: vi.fn(async () => ({
         free: freeOwnIdentity,
         isVerified: () => false,
@@ -2360,11 +2364,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     matrixJsClient.getDevices = vi.fn(async () => ({
       devices: [{ device_id: "OTHERDEVICE" }],
     }));
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        getDeviceVerificationStatus: vi.fn(async () => null),
-      }),
-    );
+    mockCryptoApi(() => ({}));
 
     const client = createEncryptedSdkClient();
     await client.start();
@@ -2378,11 +2378,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     matrixJsClient.getDevices = vi.fn(async () => {
       throw new Error("device list unavailable");
     });
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
-      }),
-    );
+    mockCryptoApi(() => ({
+      getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
+    }));
 
     const client = createEncryptedSdkClient();
     await client.start();
@@ -2406,11 +2404,9 @@ describe("MatrixClient crypto bootstrapping", () => {
         statusCode: 401,
       });
     });
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
-      }),
-    );
+    mockCryptoApi(() => ({
+      getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
+    }));
 
     const client = createEncryptedSdkClient();
     await client.start();
@@ -2468,24 +2464,9 @@ describe("MatrixClient crypto bootstrapping", () => {
       const bootstrapSecretStorage = vi.fn(consumeMatrixSecretStorageKey);
       const bootstrapCrossSigning = vi.fn(async () => {});
       const checkKeyBackupAndEnable = vi.fn(async () => {});
-      const getSecretStorageStatus = vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "SSSSKEY",
-        secretStorageKeyValidityMap: {
-          "m.cross_signing.master": true,
-          "m.cross_signing.user_signing": true,
-          "m.cross_signing.self_signing": true,
-        },
-      }));
-      const getDeviceVerificationStatus = vi.fn(async () => ({
-        isVerified: () => true,
-        localVerified: true,
-        crossSigningVerified: true,
-        signedByOwner: true,
-      }));
-      matrixJsClient.getCrypto = vi.fn(() => ({
-        ...makeCryptoApi(),
-        on: vi.fn(),
+      const getSecretStorageStatus = vi.fn(async () => makeSecretStorageStatus());
+      const getDeviceVerificationStatus = vi.fn(async () => makeDeviceVerificationStatus());
+      mockCryptoApi(() => ({
         bootstrapCrossSigning,
         bootstrapSecretStorage,
         getSecretStorageStatus,
@@ -2493,11 +2474,7 @@ describe("MatrixClient crypto bootstrapping", () => {
         checkKeyBackupAndEnable,
       }));
 
-      const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-key-"));
-      const client = createSdkClient({
-        encryption: true,
-        recoveryKeyPath: path.join(recoveryDir, "recovery-key.json"),
-      });
+      const { client } = createRecoveryClient("matrix-sdk-verify-key-");
 
       const result = await client.verifyWithRecoveryKey(encoded as string);
       expect(result.success).toBe(accepted);
@@ -2521,8 +2498,8 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     matrixJsClient.secretStorage.getDefaultKeyId = vi.fn(async () => "SSSSKEY");
     let backupKeyLoaded = false;
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi({ bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey) }),
+    mockCryptoApi(() => ({
+      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
       getSecretStorageStatus: vi.fn(async () => ({
         ready: true,
         defaultKeyId: "SSSSKEY",
@@ -2539,12 +2516,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
     }));
 
-    const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-used-key-"));
-    const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const client = createSdkClient({
-      encryption: true,
-      recoveryKeyPath,
-    });
+    const { client, recoveryKeyPath } = createRecoveryClient("matrix-sdk-verify-used-key-");
 
     const result = await client.verifyWithRecoveryKey(encoded as string);
 
@@ -2560,30 +2532,15 @@ describe("MatrixClient crypto bootstrapping", () => {
     const encoded = encodeRecoveryKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
 
     await installSecretStorageKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi({ bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey) }),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "SSSSKEY",
-        secretStorageKeyValidityMap: {
-          "m.cross_signing.master": true,
-          "m.cross_signing.user_signing": true,
-          "m.cross_signing.self_signing": true,
-        },
-      })),
-      getDeviceVerificationStatus: vi.fn(async () => ({
-        isVerified: () => true,
-        localVerified: true,
-        crossSigningVerified: false,
-        signedByOwner: true,
-      })),
+    mockCryptoApi(() => ({
+      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+      getSecretStorageStatus: vi.fn(async () => makeSecretStorageStatus()),
+      getDeviceVerificationStatus: vi.fn(async () =>
+        makeDeviceVerificationStatus({ crossSigningVerified: false }),
+      ),
     }));
 
-    const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-local-only-"));
-    const client = createSdkClient({
-      encryption: true,
-      recoveryKeyPath: path.join(recoveryDir, "recovery-key.json"),
-    });
+    const { client } = createRecoveryClient("matrix-sdk-verify-local-only-");
     await client.start();
 
     const result = await client.verifyWithRecoveryKey(encoded as string);
@@ -2595,80 +2552,28 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.error).toContain("full Matrix identity trust");
   });
 
-  it("does not persist a staged recovery key when backup usability came from existing material", async () => {
+  it.each([
+    { name: "backup uses existing material", keySeed: 55, consumeKey: false },
+    { name: "secret storage rejects the key", keySeed: 5, consumeKey: true },
+  ])("does not persist a staged recovery key when $name", async ({ keySeed, consumeKey }) => {
     const attemptedEncoded = encodeRecoveryKey(
       new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 55)),
     );
 
-    await installSecretStorageKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 55)));
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        getSecretStorageStatus: vi.fn(async () => ({
-          ready: true,
-          defaultKeyId: "SSSSKEY",
-          secretStorageKeyValidityMap: {
-            "m.cross_signing.master": true,
-            "m.cross_signing.user_signing": true,
-            "m.cross_signing.self_signing": true,
-          },
-        })),
-        getDeviceVerificationStatus: vi.fn(async () =>
-          makeDeviceVerificationStatus({ crossSigningVerified: false, signedByOwner: false }),
-        ),
-        checkKeyBackupAndEnable: vi.fn(async () => {}),
-        getActiveSessionBackupVersion: vi.fn(async () => "11"),
-        getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
-        getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo("11")),
-        isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
-      }),
+    await installSecretStorageKey(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + keySeed)),
     );
-
-    const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-cached-"));
-    const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const previousEncoded = await writeRecoveryKeyFixture(recoveryKeyPath, 5);
-
-    const client = createSdkClient({
-      encryption: true,
-      recoveryKeyPath,
-    });
-
-    const result = await client.verifyWithRecoveryKey(attemptedEncoded as string);
-
-    expect(result.success).toBe(false);
-    expect(result.recoveryKeyAccepted).toBe(false);
-    expect(result.backupUsable).toBe(true);
-    const persisted = await readStoredRecoveryKey(recoveryKeyPath);
-    expect(persisted?.encodedPrivateKey).toBe(previousEncoded);
-  });
-
-  it("does not persist a staged recovery key that secret storage did not validate", async () => {
-    const attemptedEncoded = encodeRecoveryKey(
-      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 55)),
-    );
-
-    await installSecretStorageKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 5)));
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi({ bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey) }),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "SSSSKEY",
-        secretStorageKeyValidityMap: {
-          "m.cross_signing.master": true,
-          "m.cross_signing.user_signing": true,
-          "m.cross_signing.self_signing": true,
-        },
-      })),
+    mockCryptoApi(() => ({
+      ...(consumeKey ? { bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey) } : {}),
+      getSecretStorageStatus: vi.fn(async () => makeSecretStorageStatus()),
       getDeviceVerificationStatus: vi.fn(async () =>
         makeDeviceVerificationStatus({ crossSigningVerified: false, signedByOwner: false }),
       ),
       checkKeyBackupAndEnable: vi.fn(async () => {}),
-      getActiveSessionBackupVersion: vi.fn(async () => "11"),
-      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
-      getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo("11")),
-      isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
+      ...makeBackupApi("11"),
     }));
 
-    const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-invalid-"));
+    const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-unconfirmed-"));
     const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
     const previousEncoded = await writeRecoveryKeyFixture(recoveryKeyPath, 5);
 
@@ -2691,31 +2596,19 @@ describe("MatrixClient crypto bootstrapping", () => {
       throw new Error("bootstrap should not run");
     });
 
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       bootstrapCrossSigning,
-      bootstrapSecretStorage: vi.fn(async () => {}),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "SSSSKEY",
-        secretStorageKeyValidityMap: {
-          "m.cross_signing.master": true,
-          "m.cross_signing.user_signing": true,
-          "m.cross_signing.self_signing": true,
-        },
-      })),
-      getDeviceVerificationStatus: vi.fn(async () => ({
-        isVerified: () => false,
-        localVerified: false,
-        crossSigningVerified: false,
-        signedByOwner: false,
-      })),
+      getSecretStorageStatus: vi.fn(async () => makeSecretStorageStatus()),
+      getDeviceVerificationStatus: vi.fn(async () =>
+        makeDeviceVerificationStatus({
+          isVerified: () => false,
+          localVerified: false,
+          crossSigningVerified: false,
+          signedByOwner: false,
+        }),
+      ),
       checkKeyBackupAndEnable: vi.fn(async () => {}),
-      getActiveSessionBackupVersion: vi.fn(async () => "11"),
-      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
-      getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo("11")),
-      isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
+      ...makeBackupApi("11"),
     }));
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-restored-"));
@@ -2741,17 +2634,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     const encoded = encodeRecoveryKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
 
     await installSecretStorageKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi({ bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey) }),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "SSSSKEY",
-        secretStorageKeyValidityMap: {
-          "m.cross_signing.master": true,
-          "m.cross_signing.user_signing": true,
-          "m.cross_signing.self_signing": true,
-        },
-      })),
+    mockCryptoApi(() => ({
+      bootstrapSecretStorage: vi.fn(consumeMatrixSecretStorageKey),
+      getSecretStorageStatus: vi.fn(async () => makeSecretStorageStatus()),
       getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
       checkKeyBackupAndEnable: vi.fn(async () => {}),
       getActiveSessionBackupVersion: vi.fn(async () => "11"),
@@ -2762,12 +2647,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       ),
     }));
 
-    const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-untrusted-"));
-    const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const client = createSdkClient({
-      encryption: true,
-      recoveryKeyPath,
-    });
+    const { client, recoveryKeyPath } = createRecoveryClient("matrix-sdk-verify-untrusted-");
 
     const result = await client.verifyWithRecoveryKey(encoded as string);
     expect(result.success).toBe(false);
@@ -2785,28 +2665,19 @@ describe("MatrixClient crypto bootstrapping", () => {
       new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 55)),
     );
 
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       bootstrapCrossSigning: vi.fn(async () => {
         throw new Error("secret storage rejected recovery key");
       }),
-      bootstrapSecretStorage: vi.fn(async () => {}),
-      getSecretStorageStatus: vi.fn(async () => ({
-        ready: true,
-        defaultKeyId: "SSSSKEY",
-        secretStorageKeyValidityMap: {
-          "m.cross_signing.master": true,
-          "m.cross_signing.user_signing": true,
-          "m.cross_signing.self_signing": true,
-        },
-      })),
-      getDeviceVerificationStatus: vi.fn(async () => ({
-        isVerified: () => false,
-        localVerified: false,
-        crossSigningVerified: false,
-        signedByOwner: false,
-      })),
+      getSecretStorageStatus: vi.fn(async () => makeSecretStorageStatus()),
+      getDeviceVerificationStatus: vi.fn(async () =>
+        makeDeviceVerificationStatus({
+          isVerified: () => false,
+          localVerified: false,
+          crossSigningVerified: false,
+          signedByOwner: false,
+        }),
+      ),
     }));
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-preserve-"));
@@ -2827,9 +2698,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   it("restores backup keys when the matching decryption key is cached but signature trust is stale", async () => {
     const restoreKeyBackup = vi.fn(async () => ({ imported: 3, total: 3 }));
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       getActiveSessionBackupVersion: vi.fn(async () => "42"),
       getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
       getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo("42")),
@@ -2852,11 +2721,7 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("fails restore when backup key cannot be loaded on this device", async () => {
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
-      getActiveSessionBackupVersion: vi.fn(async () => null),
-      getSessionBackupPrivateKey: vi.fn(async () => null),
+    mockCryptoApi(() => ({
       loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => {
         throw new Error(
           "loadSessionBackupPrivateKeyFromSecretStorage: missing decryption key in secret storage",
@@ -2891,9 +2756,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       privateKey: new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
       encodedPrivateKey: "rotated-key",
     }));
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       bootstrapSecretStorage,
       checkKeyBackupAndEnable,
       createRecoveryKeyFromPassphrase,
@@ -2923,10 +2786,7 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("fails reset when the recreated backup still does not match the local decryption key", async () => {
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
-      bootstrapSecretStorage: vi.fn(async () => {}),
+    mockCryptoApi(() => ({
       checkKeyBackupAndEnable: vi.fn(async () => {}),
       getActiveSessionBackupVersion: vi.fn(async () => "21868"),
       getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
@@ -2969,9 +2829,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       .fn()
       .mockResolvedValueOnce(null)
       .mockResolvedValue("22001");
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       bootstrapSecretStorage,
       checkKeyBackupAndEnable,
       loadSessionBackupPrivateKeyFromSecretStorage,
@@ -2982,12 +2840,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     }));
 
     const client = createEncryptedSdkClient();
-    const doRequest = vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && endpoint.includes("/room_keys/version")) {
-        return {};
-      }
-      return {};
-    });
+    const doRequest = vi.spyOn(client, "doRequest").mockResolvedValue({});
 
     const result = await client.resetRoomKeyBackup();
 
@@ -3019,9 +2872,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       .fn()
       .mockResolvedValueOnce(null)
       .mockResolvedValue(new Uint8Array([1]));
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
+    mockCryptoApi(() => ({
       bootstrapSecretStorage,
       checkKeyBackupAndEnable,
       loadSessionBackupPrivateKeyFromSecretStorage,
@@ -3054,22 +2905,14 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("reports bootstrap failure when cross-signing keys are not published", async () => {
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        isCrossSigningReady: vi.fn(async () => false),
-        userHasCrossSigningKeys: vi.fn(async () => false),
-        getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
-      }),
-    );
+    mockCryptoApi(() => ({
+      isCrossSigningReady: vi.fn(async () => false),
+      userHasCrossSigningKeys: vi.fn(async () => false),
+      getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
+    }));
 
     const client = createEncryptedSdkClient();
-    vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
-      userId: "@bot:example.org",
-      masterKeyPublished: false,
-      selfSigningKeyPublished: false,
-      userSigningKeyPublished: false,
-      published: false,
-    });
+    mockCrossSigningPublication(client, false);
 
     const result = await client.bootstrapOwnDeviceVerification();
     expect(result.success).toBe(false);
@@ -3080,24 +2923,14 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("reports bootstrap failure when the device is only locally trusted", async () => {
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        isCrossSigningReady: vi.fn(async () => true),
-        userHasCrossSigningKeys: vi.fn(async () => true),
-        getDeviceVerificationStatus: vi.fn(async () =>
-          makeDeviceVerificationStatus({ crossSigningVerified: false, signedByOwner: false }),
-        ),
-      }),
-    );
+    mockCryptoApi(() => ({
+      getDeviceVerificationStatus: vi.fn(async () =>
+        makeDeviceVerificationStatus({ crossSigningVerified: false, signedByOwner: false }),
+      ),
+    }));
 
     const client = createEncryptedSdkClient();
-    vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
-      userId: "@bot:example.org",
-      masterKeyPublished: true,
-      selfSigningKeyPublished: true,
-      userSigningKeyPublished: true,
-      published: true,
-    });
+    mockCrossSigningPublication(client);
 
     const result = await client.bootstrapOwnDeviceVerification();
     expect(result.success).toBe(false);
@@ -3108,28 +2941,14 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   it("creates a key backup during bootstrap when none exists on the server", async () => {
     const bootstrapSecretStorage = vi.fn(async () => {});
-    matrixJsClient.getCrypto = vi.fn(() => ({
-      ...makeCryptoApi(),
-      on: vi.fn(),
-      bootstrapCrossSigning: vi.fn(async () => {}),
+    mockCryptoApi(() => ({
       bootstrapSecretStorage,
-      isCrossSigningReady: vi.fn(async () => true),
-      userHasCrossSigningKeys: vi.fn(async () => true),
       getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
-      getActiveSessionBackupVersion: vi.fn(async () => "7"),
-      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
-      getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo("7")),
-      isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
+      ...makeBackupApi("7"),
     }));
 
     const client = createEncryptedSdkClient();
-    vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
-      userId: "@bot:example.org",
-      masterKeyPublished: true,
-      selfSigningKeyPublished: true,
-      userSigningKeyPublished: true,
-      published: true,
-    });
+    mockCrossSigningPublication(client);
     let backupChecks = 0;
     vi.spyOn(client, "doRequest").mockImplementation(async (_method, endpoint) => {
       if (endpoint.includes("/room_keys/version")) {
@@ -3148,35 +2967,14 @@ describe("MatrixClient crypto bootstrapping", () => {
 
   it("does not report bootstrap errors when final verification state is healthy", async () => {
     const encoded = encodeRecoveryKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 90)));
-    matrixJsClient.getCrypto = vi.fn(() =>
-      makeCryptoApi({
-        isCrossSigningReady: vi.fn(async () => true),
-        userHasCrossSigningKeys: vi.fn(async () => true),
-        getSecretStorageStatus: vi.fn(async () => ({
-          ready: true,
-          defaultKeyId: "SSSSKEY",
-          secretStorageKeyValidityMap: {
-            "m.cross_signing.master": true,
-            "m.cross_signing.user_signing": true,
-            "m.cross_signing.self_signing": true,
-          },
-        })),
-        getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
-        getActiveSessionBackupVersion: vi.fn(async () => "12"),
-        getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
-        getKeyBackupInfo: vi.fn(async () => makeKeyBackupInfo("12")),
-        isKeyBackupTrusted: vi.fn(async () => makeKeyBackupTrust()),
-      }),
-    );
+    mockCryptoApi(() => ({
+      getSecretStorageStatus: vi.fn(async () => makeSecretStorageStatus()),
+      getDeviceVerificationStatus: vi.fn(async () => makeDeviceVerificationStatus()),
+      ...makeBackupApi("12"),
+    }));
 
     const client = createEncryptedSdkClient();
-    vi.spyOn(client, "getOwnCrossSigningPublicationStatus").mockResolvedValue({
-      userId: "@bot:example.org",
-      masterKeyPublished: true,
-      selfSigningKeyPublished: true,
-      userSigningKeyPublished: true,
-      published: true,
-    });
+    mockCrossSigningPublication(client);
     vi.spyOn(client, "doRequest").mockResolvedValue({ version: "12" });
 
     const result = await client.bootstrapOwnDeviceVerification({
