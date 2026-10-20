@@ -41,7 +41,7 @@ import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
 import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
 import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 import { listenLoopback } from "./gateway-recovery.test-support.js";
 
@@ -103,20 +103,6 @@ function forwardProvider(request: IncomingMessage, raw: string, baseUrl: string)
   });
 }
 
-async function cleanupAll(cleanups: Cleanup[], message: string) {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length) {
-    throw new AggregateError(errors, message);
-  }
-}
-
 async function createPresentationTransport(
   channel: "slack" | "discord",
   cleanups: Cleanup[],
@@ -149,6 +135,11 @@ async function waitForChannel(gateway: Gateway, channel: string, fields: string[
       accounts.some((account) => fields.every((field) => asRecord(account)[field] === true))
     );
   }, `${channel} ready`);
+}
+
+async function listSessions(gateway: Gateway, limit = 20) {
+  const { sessions } = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit }));
+  return Array.isArray(sessions) ? sessions.map(asRecord) : [];
 }
 
 function presentationGatewayOptions(
@@ -564,48 +555,35 @@ function progressConfig(
       ...(channel === "slack" ? { style: compact ? ("compact" as const) : ("card" as const) } : {}),
     },
   };
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: { ...config.agents?.defaults, model: { primary: MODEL, fallbacks: [] } },
-      entries: {
-        ...config.agents?.entries,
-        qa: {
-          ...config.agents?.entries?.qa,
-          identity: { name: "Progress QA" },
-          model: { primary: MODEL, fallbacks: [] },
-        },
-      },
-    },
-    messages: {
-      ackReaction: "eyes",
-      ackReactionScope: "all",
-      statusReactions: { enabled: true },
-    },
-    channels: {
-      ...config.channels,
-      ...(channel === "slack"
-        ? {
-            slack: {
-              ...config.channels?.slack,
-              replyToMode: "all",
-              streaming: { ...streaming, nativeTransport: native },
-            },
-          }
-        : {
-            discord: {
-              ...config.channels?.discord,
-              // Crabline emits a fresh guild join with the first input. This proof
-              // owns the ordinary user turn, not the separate welcome-message turn.
-              joinIntro: false,
-              ackReaction: "👀",
-              streaming,
-              commands: { native: false, nativeSkills: false },
-            },
-          }),
-    },
+  // mutateConfig receives this fixture's own config; preserve unrelated fields.
+  const agents = (config.agents ??= {});
+  const model = { primary: MODEL, fallbacks: [] };
+  agents.defaults = { ...agents.defaults, model };
+  const entries = (agents.entries ??= {});
+  entries.qa = { ...entries.qa, identity: { name: "Progress QA" }, model };
+  config.messages = {
+    ackReaction: "eyes",
+    ackReactionScope: "all",
+    statusReactions: { enabled: true },
   };
+  const channels = (config.channels ??= {});
+  if (channel === "slack") {
+    channels.slack = {
+      ...channels.slack,
+      replyToMode: "all",
+      streaming: { ...streaming, nativeTransport: native },
+    };
+  } else {
+    // The first Crabline guild join must not create a separate welcome turn.
+    channels.discord = {
+      ...channels.discord,
+      joinIntro: false,
+      ackReaction: "👀",
+      streaming,
+      commands: { native: false, nativeSkills: false },
+    };
+  }
+  return config;
 }
 
 function progressCase(
@@ -757,10 +735,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
   afterAll(async () => {
     // The identical Slack cases run last; startup and every acquired owner stay joined through teardown.
     await Promise.allSettled(sharedSlackFixture ? [sharedSlackFixture] : []);
-    await cleanupAll(sharedSlackCleanups, "shared Slack presentation fixture cleanup failed");
+    await runQaGatewayFixture(async () => {}, ...sharedSlackCleanups.splice(0).toReversed());
   });
   afterEach(async () => {
-    await cleanupAll(cleanups, "progress fixture cleanup failed");
+    await runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed());
   });
 
   it("retires unphased Slack previews across tool-only assistant messages", async () => {
@@ -851,9 +829,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       "Slack final answer",
     );
     await waitForFact(async () => {
-      const listing = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit: 20 }));
-      const sessions = Array.isArray(listing.sessions) ? listing.sessions.map(asRecord) : [];
-      return sessions.some(
+      return (await listSessions(gateway)).some(
         (session) => String(session.key).includes(":slack:") && session.hasActiveRun === false,
       );
     }, "Slack turn settlement");
@@ -912,15 +888,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
         .flatMap((line) => {
           try {
             const value = asRecord(JSON.parse(line));
-            const message = readStringValue(value.message) ?? "";
-            return message === "session observer disabled after consecutive failures"
-              ? [
-                  {
-                    error: value.error,
-                    runId: value.runId,
-                    attempts: value.consecutiveFailures,
-                  },
-                ]
+            return value.message === "session observer disabled after consecutive failures"
+              ? [value]
               : [];
           } catch {
             return [];
@@ -933,7 +902,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
       const currentText = turn?.text ?? "";
       const completion = turn?.kind === "completion" || turn?.kind === "settled";
-      if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
+      if (String(body.model).endsWith("observer-failure-fixture")) {
         response.writeHead(400, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -991,23 +960,21 @@ describe("channel progress presentation through an isolated Gateway", () => {
       ...presentationGatewayOptions(adapter, api, providerBaseUrl),
       mockSessionObserverUrl: provider.sessionObserverUrl,
       alternateModel: observerModel,
-      mutateConfig: (config) => ({
-        ...config,
-        logging: { ...config.logging, consoleStyle: "json" },
-        agents: {
-          ...config.agents,
-          defaults: { ...config.agents?.defaults, utilityModel: observerModel },
-          entries: {
-            ...config.agents?.entries,
-            qa: { ...config.agents?.entries?.qa, utilityModel: observerModel },
-          },
-        },
-        plugins: pluginConfig(config, pluginId, pluginDir),
-        channels: {
-          ...config.channels,
-          slack: { ...config.channels?.slack, replyToMode: "all", streaming: { mode: "off" } },
-        },
-      }),
+      mutateConfig: (config) => {
+        config.logging = { ...config.logging, consoleStyle: "json" };
+        const agents = (config.agents ??= {});
+        agents.defaults = { ...agents.defaults, utilityModel: observerModel };
+        const entries = (agents.entries ??= {});
+        entries.qa = { ...entries.qa, utilityModel: observerModel };
+        config.plugins = pluginConfig(config, pluginId, pluginDir);
+        const channels = (config.channels ??= {});
+        channels.slack = {
+          ...channels.slack,
+          replyToMode: "all",
+          streaming: { mode: "off" },
+        };
+        return config;
+      },
     });
     await waitForChannel(gateway, "slack", ["running"]);
     const observerEvents: Array<Record<string, unknown>> = [];
@@ -1040,10 +1007,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
       await deliverSlackEvent(adapter, gateway, receipt.event);
       if (caseName === "visible") {
         await waitForFact(() => Boolean(releaseRequester), "requester model admission");
-        const listing = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit: 20 }));
-        const session = Array.isArray(listing.sessions)
-          ? listing.sessions.map(asRecord).find((entry) => String(entry.key).includes(":slack:"))
-          : undefined;
+        const session = (await listSessions(gateway)).find((entry) =>
+          String(entry.key).includes(":slack:"),
+        );
         expect(session?.key).toBeTypeOf("string");
         await client.request("sessions.messages.subscribe", { key: session!.key, agentId: "qa" });
         releaseRequester!();
@@ -1104,7 +1070,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     ).toBe(true);
     // The observer warning carries its run-owned consecutive-failure count;
     // provider transport starts from overlapping runs cannot be partitioned by warning order.
-    expect(observerFailures().every((failure) => failure.attempts === 2)).toBe(true);
+    expect(observerFailures().every((failure) => failure.consecutiveFailures === 2)).toBe(true);
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
   }, 240_000);
 

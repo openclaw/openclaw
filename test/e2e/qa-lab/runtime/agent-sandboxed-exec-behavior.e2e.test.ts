@@ -10,6 +10,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../../src/config/runtime-snapshot.js";
+import type { AgentSandboxConfig } from "../../../../src/config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 
@@ -17,12 +18,10 @@ afterEach(clearRuntimeConfigSnapshot);
 
 test("host:auto executes inside the resolved Docker sandbox", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandboxed-exec-"));
-  const stateDir = path.join(root, "state");
   const workspaceDir = path.join(root, "workspace");
   const outsideDir = path.join(root, "host-only");
   const outsideScript = path.join(outsideDir, "must-not-run.sh");
   const outsideMarker = path.join(outsideDir, "executed.txt");
-  const workspaceMarker = path.join(workspaceDir, "container-marker.txt");
   const env = captureEnv(["OPENCLAW_STATE_DIR"]);
   let runtimeId: string | undefined;
 
@@ -35,31 +34,27 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
     `#!/bin/sh\nprintf executed > ${JSON.stringify(outsideMarker)}\n`,
     { mode: 0o755 },
   );
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state"));
 
   try {
     const sessionId = randomUUID();
     const sessionKey = `agent:sandboxed-exec:qa:${sessionId}`;
     const execPolicy = { host: "auto", security: "full", ask: "off" } as const;
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          skipBootstrap: true,
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            scope: "session",
-            workspaceAccess: "rw",
-            workspaceRoot: path.join(root, "sandboxes"),
-            docker: {
-              image: process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:trixie-slim",
-              containerPrefix: `oc-qa-exec-${process.pid}-`,
-            },
-            browser: { enabled: false },
-            prune: { idleHours: 0, maxAgeDays: 0 },
-          },
-        },
+    const sandbox: AgentSandboxConfig = {
+      mode: "all",
+      backend: "docker",
+      scope: "session",
+      workspaceAccess: "rw",
+      workspaceRoot: path.join(root, "sandboxes"),
+      docker: {
+        image: process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:trixie-slim",
+        containerPrefix: `oc-qa-exec-${process.pid}-`,
       },
+      browser: { enabled: false },
+      prune: { idleHours: 0, maxAgeDays: 0 },
+    };
+    const config: OpenClawConfig = {
+      agents: { defaults: { skipBootstrap: true, sandbox } },
       tools: { exec: execPolicy },
     };
     setRuntimeConfigSnapshot(config);
@@ -104,7 +99,9 @@ test("host:auto executes inside the resolved Docker sandbox", async () => {
       exitCode: 0,
       aggregated: expect.stringContaining("sandbox-ok"),
     });
-    await expect(fs.readFile(workspaceMarker, "utf8")).resolves.toBe("sandbox-ok\n");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "container-marker.txt"), "utf8"),
+    ).resolves.toBe("sandbox-ok\n");
     await expect(fs.access(outsideMarker)).rejects.toThrow();
     await expect(fs.readFile(outsideScript, "utf8")).resolves.toContain("printf executed");
   } finally {

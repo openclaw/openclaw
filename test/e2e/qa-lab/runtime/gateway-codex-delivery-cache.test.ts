@@ -22,9 +22,7 @@ import { waitForRun } from "./gateway-recovery.test-support.js";
 // execution and channel transport are real. This proves wire stability, not model compliance.
 it(
   "keeps one native session and static request bytes across alternating Gateway turns",
-  {
-    timeout: 240_000,
-  },
+  { timeout: 240_000 },
   async () => {
     const repoRoot = process.cwd();
     const head = resolveGitHead({ cwd: repoRoot });
@@ -103,9 +101,8 @@ it(
             (request) => request.cursor > cursor && request.plannedToolName === "message",
           );
           expect(deliveryRequests).toHaveLength(1);
-          const deliveryRequest = deliveryRequests[0]!;
-          const input = deliveryRequest.body.input as Array<{ role?: string; content?: unknown }>;
-          expect(Array.isArray(input)).toBe(true);
+          const { body } = deliveryRequests[0]!;
+          const input = body.input as Array<{ role?: string; content?: unknown }>;
           // Codex 0.162 prepends base instructions as a developer input item.
           const instructions = input[0];
           expect(instructions).toMatchObject({
@@ -113,19 +110,16 @@ it(
             content: [{ type: "input_text", text: expect.stringMatching(/\S/u) }],
           });
           const identity = {
-            key: deliveryRequest.body.prompt_cache_key,
+            key: body.prompt_cache_key,
             instructions: JSON.stringify(instructions),
-            tools: JSON.stringify(deliveryRequest.body.tools),
+            tools: JSON.stringify(body.tools),
           };
-          const currentUser = input.findLastIndex(
-            (item) => item.role === "user" && JSON.stringify(item.content).includes(message),
-          );
+          const contains = (role: string, fragment: string) => (item: (typeof input)[number]) =>
+            item.role === role && JSON.stringify(item.content).includes(fragment);
+          const currentUser = input.findLastIndex(contains("user", message));
           const policyIndex = input.findLastIndex(
-            (item) =>
-              item.role === "developer" &&
-              JSON.stringify(item.content).includes("<openclaw_source_delivery>"),
+            contains("developer", "<openclaw_source_delivery>"),
           );
-          expect(policyIndex).toBeGreaterThanOrEqual(0);
           expect(currentUser).toBeGreaterThan(policyIndex);
           const policy = JSON.stringify(input[policyIndex]?.content);
           expect(policy).toContain("replaces earlier source-delivery guidance");
@@ -138,18 +132,12 @@ it(
           expect(Buffer.byteLength(policy)).toBeLessThan(1_000);
           if (index > 0) {
             expect(
-              input
-                .slice(0, policyIndex)
-                .some(
-                  (item) =>
-                    item.role === "user" &&
-                    JSON.stringify(item.content).includes(`cache turn ${index - 1}`),
-                ),
+              input.slice(0, policyIndex).some(contains("user", `cache turn ${index - 1}`)),
             ).toBe(true);
             expect(identity).toEqual(firstRequest);
           }
           firstRequest ??= identity;
-          expect(deliveryRequest.body).toMatchObject({
+          expect(body).toMatchObject({
             prompt_cache_key: expect.any(String),
             tools: expect.any(Array),
           });

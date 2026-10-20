@@ -9,10 +9,6 @@ import { testing } from "./gateway-mcp-real-transports.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createRepoRoot() {
-  return tempDirs.make("openclaw-qalab-cli-entry-");
-}
-
 async function writeEntry(root: string, relativePath: string) {
   const entryPath = path.join(root, relativePath);
   await mkdir(path.dirname(entryPath), { recursive: true });
@@ -21,7 +17,7 @@ async function writeEntry(root: string, relativePath: string) {
 }
 
 it.each([false, true])("resolves channel MCP with packaged output=%s", async (packaged) => {
-  const root = createRepoRoot();
+  const root = tempDirs.make("openclaw-qalab-cli-entry-");
   const channelServerPath = await writeEntry(root, "src/mcp/channel-server.ts");
   const distEntry = packaged ? await writeEntry(root, "dist/index.js") : undefined;
   const mcp = testing.resolveChannelMcpInvocation({
@@ -58,7 +54,7 @@ it.each([false, true])("resolves channel MCP with packaged output=%s", async (pa
 });
 
 it("isolates the source plugin-tools MCP invocation", () => {
-  const root = createRepoRoot();
+  const root = tempDirs.make("openclaw-qalab-cli-entry-");
   const invocation = testing.resolvePluginToolsMcpInvocation({
     configPath: "/tmp/plugin-tools/openclaw.json",
     homeDir: "/tmp/plugin-tools/home",
@@ -86,9 +82,7 @@ it("isolates the source plugin-tools MCP invocation", () => {
 
 it("sets explicit timeouts for each plugin-tools MCP request", async () => {
   const connect = vi.fn().mockResolvedValue(undefined);
-  const listTools = vi.fn().mockResolvedValue({
-    tools: [{ name: "memory_search" }],
-  });
+  const listTools = vi.fn().mockResolvedValue({ tools: [{ name: "memory_search" }] });
   const callTool = vi.fn().mockResolvedValue({
     content: [{ type: "text", text: "MCP fact: the codename is ORBIT-9." }],
     isError: false,
@@ -100,13 +94,11 @@ it("sets explicit timeouts for each plugin-tools MCP request", async () => {
     "real plugin-tools pid=42",
   );
 
-  expect(connect).toHaveBeenCalledWith(transport, { timeout: 180_000 });
-  expect(listTools).toHaveBeenCalledWith({}, { timeout: 180_000 });
-  expect(callTool).toHaveBeenCalledWith(
-    {
-      name: "memory_search",
-      arguments: { query: "ORBIT-9 codename", maxResults: 3 },
-    },
-    { timeout: 180_000 },
-  );
+  for (const [request, args] of [
+    [connect, transport],
+    [listTools, {}],
+    [callTool, { name: "memory_search", arguments: { query: "ORBIT-9 codename", maxResults: 3 } }],
+  ] as const) {
+    expect(request).toHaveBeenCalledWith(args, { timeout: 180_000 });
+  }
 });
