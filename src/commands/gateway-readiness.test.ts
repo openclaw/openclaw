@@ -112,12 +112,24 @@ describe("ensureDashboardGatewayReady", () => {
 
     const result = await check();
 
-    expect(result.ready).toBe(false);
+    expect(result).toMatchObject({ ready: false, declined: true });
     expect(confirm).toHaveBeenCalledWith(
       "No background Gateway service was detected for this profile. Install and start one to open the dashboard?",
       true,
     );
     expect(output()).toContain("Gateway is not running.");
+  });
+
+  it("does not report a user decline when recovery cannot prompt noninteractively", async () => {
+    gatherStatus.mockResolvedValue(createStatus());
+
+    const result = await ensureDashboardGatewayReady({ runtime, interactive: false });
+
+    expect(result).toMatchObject({ ready: false, recoverable: true });
+    expect(result).not.toHaveProperty("declined", true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installGateway).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("recovers a stopped gateway (installed=%s)", async (installed) => {
