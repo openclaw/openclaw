@@ -1,6 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it } from "vitest";
 import { setupSessionHistoryFixtures, settledFixture } from "./session-history.test-support.js";
 import {
@@ -72,7 +71,7 @@ it.each(["file", "sqlite"] as const)(
         message: yieldText,
       });
       for (const message of [...prior, ...settledMessages]) {
-        await appendSessionTranscriptMessageByIdentity({ ...fixture.sessionTarget, message });
+        await fixture.append(message);
       }
     }
     const target = fixture
@@ -90,19 +89,18 @@ it.each(["file", "sqlite"] as const)(
       turnId: "settled",
     });
     expect(captured).toBeInstanceOf(CodexSettledTurnContext);
-    for (const text of [
+    const expectedHistory = [
       yieldText,
       "Keep the agreed task scope.",
       "Ran `check`\n```\nEarlier check failed.\n```\n\nCommand exited with code 2",
       "The following is a summary of a branch that this conversation came back from:\n\n<summary>\nPrior branch decision.</summary>",
       "The conversation history before this point was compacted into the following summary:\n\n<summary>\nPrior task context.\n</summary>",
-    ]) {
-      expect(captured?.data).toContainEqual({
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text }],
-      });
-    }
+    ].map((text) => ({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text }],
+    }));
+    expect(captured?.data).toEqual(expect.arrayContaining(expectedHistory));
     expect(captured?.data.slice(-3)).toEqual([
       { type: "message", role: "user", content: [{ type: "input_text", text: upstreamPrompt }] },
       { type: "function_call", call_id: "sent", name: "message", arguments: "{}" },

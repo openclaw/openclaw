@@ -3,6 +3,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { expect, vi } from "vitest";
 import plugin from "../../index.js";
 import * as boundedTurn from "./bounded-turn.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
 import {
   buildEmptyToolTelemetry,
   createParams,
@@ -39,9 +40,7 @@ export async function createCodexSettledFinalizerTestFixture(
         .filter(isMirroredAgentMessage)
         .map((message) =>
           attachCodexMirrorAttestation(
-            Object.assign({}, message, {
-              idempotencyKey: `${input.idempotencyScope}:assistant`,
-            }),
+            { ...message, idempotencyKey: `${input.idempotencyScope}:assistant` },
             fingerprintCodexMirrorSourceMessage(message),
           ),
         )
@@ -71,15 +70,11 @@ export async function createCodexSettledFinalizerTestFixture(
   const emit = (...args: Parameters<typeof forCurrentTurn>) =>
     projector.handleNotification(forCurrentTurn(...args));
   const completed = options.terminalStatus === "completed";
-  const command = {
-    type: "commandExecution",
+  const { durationMs, ...command } = createNativeCommandItem({
     id: "command-settled",
     command: "printf 'settled'",
-    cwd: "/workspace",
-    processId: null,
-    source: "agent",
-    commandActions: [],
-  };
+    durationMs: 1,
+  });
   await emit("item/started", {
     item: { ...command, status: "inProgress", aggregatedOutput: null, exitCode: null },
   });
@@ -89,7 +84,7 @@ export async function createCodexSettledFinalizerTestFixture(
       status: options.failedTool ? "failed" : "completed",
       aggregatedOutput: options.failedTool ? "command failed" : "settled",
       exitCode: options.failedTool ? 1 : 0,
-      durationMs: 1,
+      durationMs,
     },
   });
   await emit("turn/completed", {
