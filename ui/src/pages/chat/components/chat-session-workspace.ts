@@ -44,10 +44,14 @@ import { hasUniformLineEndings } from "./chat-sidebar-file-view.tsx";
 registerFilePreviewEnglish();
 
 export { retireSessionWorkspaceCheckout } from "./chat-session-workspace-state.ts";
-export type {
-  SessionWorkspaceHost,
-  SessionWorkspaceProps,
-} from "./chat-session-workspace-types.ts";
+export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
+
+type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
+export type SessionWorkspaceProps = Omit<
+  SessionWorkspaceView,
+  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
+> &
+  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must

@@ -2,7 +2,6 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   FileSidebarNavigation,
   SidebarContent,
@@ -10,13 +9,6 @@ import type {
 } from "./chat-sidebar-content-types.ts";
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
-
-type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
-export type SessionWorkspaceProps = Omit<
-  SessionWorkspaceView,
-  "connectionEpoch" | "onDownloadFile" | "onOpenDiff"
-> &
-  Partial<Pick<SessionWorkspaceView, "connectionEpoch" | "onDownloadFile" | "onOpenDiff">>;
 
 export type SessionWorkspacePreview = {
   id: string;
