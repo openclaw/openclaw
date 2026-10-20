@@ -78,8 +78,10 @@ it.each(["live", "closing"] as const)(
         expect(f.writes).toBe(writesBefore + 1);
         if (lifecycle === "live") {
           await predecessor;
-          expect(f.current().cleanupHandled).toBe(false);
-          expect(f.current().label).toBe("queued before recovery");
+          expect(f.current()).toMatchObject({
+            cleanupHandled: false,
+            label: "queued before recovery",
+          });
           expect(f.stored()?.cleanupHandled).toBe(false);
           expect(f.options.resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(original.runId);
         } else {
@@ -90,11 +92,7 @@ it.each(["live", "closing"] as const)(
         }
       } finally {
         write.release();
-        await Promise.allSettled([
-          waiting,
-          ...(predecessor ? [predecessor] : []),
-          ...(closing ? [closing] : []),
-        ]);
+        await Promise.allSettled([waiting, predecessor, closing]);
         timing.mockRestore();
         mutation.mockRestore();
       }

@@ -5,7 +5,7 @@ import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
-  tryBeginGatewayRootWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import {
   mockGatewayMethods,
@@ -27,6 +27,7 @@ export function registerSubagentResultRefreshCases(params: {
   it("tracks missing-entry lifecycle result refresh through restart drain until capture and persistence settle", async () => {
     const mod = getRegistry();
     const childSessionKey = "agent:main:subagent:refresh-admission";
+    const reply = "replacement final reply";
     const waitStarted = createDeferred();
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": () => {
@@ -42,7 +43,6 @@ export function registerSubagentResultRefreshCases(params: {
       expectsCompletionMessage: true,
     });
     await waitStarted.promise;
-    expect(mocks.callGateway).toHaveBeenCalled();
     const entry = expectDefined(
       await mod.getSubagentRunByChildSessionKey(childSessionKey),
       "registered result owner",
@@ -56,7 +56,7 @@ export function registerSubagentResultRefreshCases(params: {
       };
       current.completion = {
         required: true,
-        terminalReply: { disposition: "visible", text: "replacement final reply" },
+        terminalReply: { disposition: "visible", text: reply },
       };
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -74,41 +74,31 @@ export function registerSubagentResultRefreshCases(params: {
     const lifecycleHandler = getLifecycleHandler();
 
     try {
-      const parent = expectDefined(
-        tryBeginGatewayRootWorkAdmission("replacement-run"),
-        "replacement root",
-      );
-      try {
-        await parent.run(async () => {
-          markGatewayRestartDraining();
-          lifecycleHandler({
-            runId: "run-refresh-admission-new",
-            seq: 1,
-            stream: "lifecycle",
-            ts: Date.now(),
-            sessionKey: childSessionKey,
-            data: { phase: "end" },
-          });
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        markGatewayRestartDraining();
+        lifecycleHandler({
+          runId: "run-refresh-admission-new",
+          seq: 1,
+          stream: "lifecycle",
+          ts: Date.now(),
+          sessionKey: childSessionKey,
+          data: { phase: "end" },
         });
-      } finally {
-        parent.release();
-      }
+      }, "replacement-run");
 
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       await captureStarted.promise;
       expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledOnce();
       expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBeUndefined();
 
-      capture.resolve("replacement final reply");
+      capture.resolve(reply);
       await persisted.promise;
       await vi.advanceTimersByTimeAsync(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBe(
-        "replacement final reply",
-      );
+      expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBe(reply);
       expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
     } finally {
-      capture.resolve("replacement final reply");
+      capture.resolve(reply);
       await vi.advanceTimersByTimeAsync(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     }

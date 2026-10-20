@@ -46,24 +46,30 @@ function run(runId = "retained", createdAt = 100): SubagentRunRecord {
 const runMap = (...runs: SubagentRunRecord[]) => new Map(runs.map((row) => [row.runId, row]));
 const readSnapshot = () => getSubagentRunsSnapshotForRead(new Map());
 const restore = () => restoreSubagentRunsFromDisk({ runs: new Map() });
-const refuseWrites = (message: string) =>
-  configureMockSubagentRegistryPersistence({
+const writeFailure = "Synthetic write failure";
+async function withRefusedWrites(work: () => Promise<void>) {
+  const fail = await configureMockSubagentRegistryPersistence({
     persistRegistryRows: () => {
-      throw new Error(message);
+      throw new Error(writeFailure);
     },
   });
+  try {
+    await work();
+  } finally {
+    fail.mockRestore();
+  }
+}
 async function expectRefusedMutation(
   runs: Map<string, SubagentRunRecord>,
-  postimages: Array<[string, SubagentRunRecord | null]>,
-  message: string,
+  postimages: Record<string, SubagentRunRecord | null>,
 ) {
   await expect(
     mutateSubagentRuns(
-      postimages.map(([id]) => id),
-      () => ({ value: undefined, postimages: new Map(postimages) }),
+      Object.keys(postimages),
+      () => ({ value: undefined, postimages: new Map(Object.entries(postimages)) }),
       { runs },
     ),
-  ).rejects.toThrow(message);
+  ).rejects.toThrow(writeFailure);
 }
 function readLatest() {
   return withSubagentRunReadSnapshot(
@@ -98,15 +104,12 @@ describe("prepared subagent publication ownership", () => {
   it.each(["run", "session"] as const)(
     "reuses the selected %s projection from 5,000 retained records",
     async (kind) => {
-      const records = new Map(
-        Array.from({ length: 5_000 }, (_, i) => {
-          const entry = {
-            ...run(`run-${i}`),
-            childSessionKey: `agent:main:child-${i}`,
-            requesterSessionKey: `agent:main:parent-${i}`,
-          };
-          return [entry.runId, entry] as const;
-        }),
+      const records = runMap(
+        ...Array.from({ length: 5_000 }, (_, i) => ({
+          ...run(`run-${i}`),
+          childSessionKey: `agent:main:child-${i}`,
+          requesterSessionKey: `agent:main:parent-${i}`,
+        })),
       );
       persistRegistryFixture(records);
       for (const entry of [...records.values()].slice(0, 300)) {
@@ -162,19 +165,12 @@ describe("prepared subagent publication ownership", () => {
       if (warm) {
         await restore();
       }
-      const fail = await refuseWrites("Synthetic disk failure");
-      try {
-        await expectRefusedMutation(
-          committed,
-          [
-            [first.runId, null],
-            [second.runId, null],
-          ],
-          "Synthetic disk failure",
-        );
-      } finally {
-        fail.mockRestore();
-      }
+      await withRefusedWrites(() =>
+        expectRefusedMutation(committed, {
+          [first.runId]: null,
+          [second.runId]: null,
+        }),
+      );
       if (preparedFirst) {
         expect(await readLatest()).toMatchObject(second);
       }
@@ -195,20 +191,13 @@ describe("prepared subagent publication ownership", () => {
     const original = runMap(removed, retained);
     saveSubagentRegistryToSqlite(original);
     await restore();
-    const fail = await refuseWrites("Synthetic replacement failure");
-    try {
-      await expectRefusedMutation(
-        original,
-        [
-          [removed.runId, null],
-          [retained.runId, retained],
-          [intended.runId, intended],
-        ],
-        "Synthetic replacement failure",
-      );
-    } finally {
-      fail.mockRestore();
-    }
+    await withRefusedWrites(() =>
+      expectRefusedMutation(original, {
+        [removed.runId]: null,
+        [retained.runId]: retained,
+        [intended.runId]: intended,
+      }),
+    );
     const copy = expectDefined(await readLatest(), "retained committed row");
     expect(() => {
       copy.task = "Caller must not mutate committed facts";
@@ -230,36 +219,32 @@ describe("prepared subagent publication ownership", () => {
     const original = runMap(retained);
     saveSubagentRegistryToSqlite(original);
     await restore();
-    const fail = await refuseWrites("Synthetic database failure");
     const other = await createOpenClawTestState({
       prefix: "openclaw-subagent-other-",
       applyEnv: false,
     });
     try {
-      await expectRefusedMutation(original, [[retained.runId, null]], "Synthetic database failure");
-      const otherDurable = { ...retained, task: "Other database durable row" };
-      const otherIntent = { ...retained, task: "Other database refused owner intent" };
-      await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-        const otherRows = runMap(otherDurable);
-        saveSubagentRegistryToSqlite(otherRows);
-        expect(await readLatest()).toMatchObject(otherDurable);
-        await expectRefusedMutation(
-          otherRows,
-          [[otherIntent.runId, otherIntent]],
-          "Synthetic database failure",
-        );
-        const copy = expectDefined(await readLatest(), "other database committed row");
-        expect(() => {
-          copy.task = "Caller must not mutate committed facts";
-        }).toThrow(TypeError);
-        expect(await readLatest()).toMatchObject(otherDurable);
-      });
-      expect(await readLatest()).toMatchObject(retained);
-      await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-        expect(await readLatest()).toMatchObject(otherDurable);
+      await withRefusedWrites(async () => {
+        await expectRefusedMutation(original, { [retained.runId]: null });
+        const otherDurable = { ...retained, task: "Other database durable row" };
+        const otherIntent = { ...retained, task: "Other database refused owner intent" };
+        await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+          const otherRows = runMap(otherDurable);
+          saveSubagentRegistryToSqlite(otherRows);
+          expect(await readLatest()).toMatchObject(otherDurable);
+          await expectRefusedMutation(otherRows, { [otherIntent.runId]: otherIntent });
+          const copy = expectDefined(await readLatest(), "other database committed row");
+          expect(() => {
+            copy.task = "Caller must not mutate committed facts";
+          }).toThrow(TypeError);
+          expect(await readLatest()).toMatchObject(otherDurable);
+        });
+        expect(await readLatest()).toMatchObject(retained);
+        await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+          expect(await readLatest()).toMatchObject(otherDurable);
+        });
       });
     } finally {
-      fail.mockRestore();
       await other.cleanup();
     }
   });
