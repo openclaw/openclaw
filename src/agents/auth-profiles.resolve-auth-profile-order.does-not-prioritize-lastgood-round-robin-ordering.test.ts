@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createApiKeyCredential,
-  createAuthProfileStoreFixture,
+  createAuthProfileStoreFixture as makeStore,
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
@@ -14,13 +14,12 @@ vi.mock("./provider-auth-aliases.js", () => ({
 
 const apiKey = (provider = "anthropic") => createApiKeyCredential(provider, "synthetic-key");
 const oauth = () => createOAuthRefreshCredential({ provider: "anthropic", access: "", expires: 1 });
-const makeStore: (profiles: AuthProfileStore["profiles"]) => AuthProfileStore =
-  createAuthProfileStoreFixture;
-function expectOrder(
-  store: AuthProfileStore,
-  expected: string[],
-  options: { cfg?: OpenClawConfig; preferredProfile?: string; provider?: string } = {},
-) {
+type AuthConfig = NonNullable<OpenClawConfig["auth"]>;
+function authConfig(profiles: AuthConfig["profiles"], order: AuthConfig["order"]) {
+  return { auth: { profiles, order } };
+}
+type OrderOptions = { cfg?: OpenClawConfig; preferredProfile?: string; provider?: string };
+function expectOrder(store: AuthProfileStore, expected: string[], options: OrderOptions = {}) {
   expect(resolveAuthProfileOrder({ store, provider: "anthropic", ...options })).toEqual(expected);
 }
 
@@ -29,16 +28,13 @@ it("accepts a config-only AWS profile with AWS SDK provider auth", () => {
     models: {
       providers: { bedrock: { auth: "aws-sdk", baseUrl: "https://example.test", models: [] } },
     },
-    auth: {
-      profiles: { aws: { provider: "bedrock", mode: "aws-sdk" } },
-      order: { bedrock: ["aws"] },
-    },
+    ...authConfig({ aws: { provider: "bedrock", mode: "aws-sdk" } }, { bedrock: ["aws"] }),
   };
   expectOrder(makeStore({}), ["aws"], { cfg, provider: "bedrock" });
 });
 
 it("ranks credential modes, then lastUsed, without prioritizing lastGood", () => {
-  const store = makeStore({
+  const store: AuthProfileStore = makeStore({
     recent: apiKey(),
     oauth: oauth(),
     oldest: apiKey(),
@@ -50,7 +46,7 @@ it("ranks credential modes, then lastUsed, without prioritizing lastGood", () =>
 });
 
 it("filters explicit selection by provider, mode, secret availability, and expiry", () => {
-  const store = makeStore({
+  const store: AuthProfileStore = makeStore({
     keyRef: {
       type: "api_key",
       provider: "anthropic",
@@ -69,17 +65,15 @@ it("filters explicit selection by provider, mode, secret availability, and expir
     expired: { type: "token", provider: "anthropic", token: "token", expires: 1 },
     invalid: { type: "token", provider: "anthropic", token: "token", expires: 0 },
   });
-  const cfg: OpenClawConfig = {
-    auth: {
-      order: { Anthropic: ["missing", ...Object.keys(store.profiles)] },
-      profiles: {
-        tokenRef: { provider: "anthropic", mode: "oauth" },
-        refreshable: { provider: "anthropic", mode: "oauth" },
-        wrongMode: { provider: "anthropic", mode: "token" },
-        wrongConfigProvider: { provider: "openai", mode: "api_key" },
-      },
+  const cfg = authConfig(
+    {
+      tokenRef: { provider: "anthropic", mode: "oauth" },
+      refreshable: { provider: "anthropic", mode: "oauth" },
+      wrongMode: { provider: "anthropic", mode: "token" },
+      wrongConfigProvider: { provider: "openai", mode: "api_key" },
     },
-  };
+    { Anthropic: ["missing", ...Object.keys(store.profiles)] },
+  );
   expectOrder(store, ["keyRef", "tokenRef", "refreshable"], { cfg });
 });
 
@@ -89,18 +83,13 @@ it("promotes a preferred profile without dropping its fallback", () => {
 });
 
 it("repairs configured profile-id drift using stored credentials", () => {
-  const cfg: OpenClawConfig = {
-    auth: {
-      profiles: { old: { provider: "anthropic", mode: "oauth" } },
-      order: { anthropic: ["old"] },
-    },
-  };
+  const cfg = authConfig({ old: { provider: "anthropic", mode: "oauth" } }, { anthropic: ["old"] });
   expectOrder(makeStore({ current: oauth() }), ["current"], { cfg });
 });
 
 it("clears expired cooldowns and orders active windows after available profiles", () => {
   const now = Date.now();
-  const store = makeStore({
+  const store: AuthProfileStore = makeStore({
     expired: apiKey(),
     late: oauth(),
     early: apiKey(),

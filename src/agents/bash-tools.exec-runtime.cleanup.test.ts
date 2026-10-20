@@ -84,16 +84,31 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
   });
 }
 
-const routingFields = [
-  "sessionKey",
-  "eventRouting",
-  "notifyDeliveryContext",
-  "notifySessionTarget",
-  "notifyOnExit",
-  "notifyOnExitEmptySuccess",
-] as const;
+function queueRun(wait: () => Promise<RunExit>, output = "") {
+  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+    ...runtimeManagedRun(input, output),
+    wait,
+  }));
+}
+
+const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
+const notificationRouting = {
+  agentId: "main",
+  eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+  notifyDeliveryContext: deliveryContext,
+  notifyOnExit: true,
+  notifyOnExitEmptySuccess: false,
+} satisfies Partial<Parameters<typeof runExecProcess>[0]>;
+
 function expectRoutingReleased(session: ProcessSession | undefined) {
-  for (const field of routingFields) {
+  for (const field of [
+    "sessionKey",
+    "eventRouting",
+    "notifyDeliveryContext",
+    "notifySessionTarget",
+    "notifyOnExit",
+    "notifyOnExitEmptySuccess",
+  ] as const) {
     expect(session?.[field], field).toBeUndefined();
   }
 }
@@ -301,10 +316,7 @@ it.each([
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
     const cleanupFailure = "sandbox artifact cleanup failed";
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-      ...runtimeManagedRun(input),
-      wait: async () => createRunExit({ exitCode: commandCode }),
-    }));
+    queueRun(async () => createRunExit({ exitCode: commandCode }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
       entered.resolve();
@@ -371,28 +383,18 @@ it.each([
   const exit = createDeferred<RunExit>();
   const observed: string[] = [];
   const removal = vi.fn(() => true);
-  const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
   enqueueSessionEventMock.mockImplementation((_text, options) => {
     observed.push("enqueue");
     expect(options.deliveryContext).toEqual(deliveryContext);
     return completedReceipt(removal);
   });
-  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-    ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
-    wait: () => exit.promise,
-  }));
+  queueRun(() => exit.promise, path === "quiet" ? "" : "retained output\n");
   const run = await runTestExecProcess({
+    ...notificationRouting,
     command: "context-release",
     scopeKey: "global",
     sessionKey: path === "unrouted" ? undefined : "agent:main:main",
-    agentId: "main",
-    eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-    notifyDeliveryContext: deliveryContext,
-    notifyOnExit: true,
-    notifyOnExitEmptySuccess: false,
-    onSettledBeforeNotify: () => {
-      observed.push("task");
-    },
+    onSettledBeforeNotify: () => void observed.push("task"),
   });
   markBackgrounded(run.session);
   const scope = { scopeKeys: ["global"], agentId: "main" };
@@ -437,22 +439,15 @@ it.each(["task", "persistent task", "stdin"])(
       observed.push("enqueue");
       return completedReceipt();
     });
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-      ...runtimeManagedRun(input, "process output\n"),
-      wait: () => exit.promise,
-    }));
+    queueRun(() => exit.promise, "process output\n");
     const run = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
       () =>
         runTestExecProcess({
+          ...notificationRouting,
           command: "settlement-recovery",
           scopeKey,
           sessionKey: "agent:main:settlement-recovery",
-          agentId: "main",
-          eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-          notifyDeliveryContext: { channel: "telegram", to: "synthetic-chat" },
-          notifyOnExit: true,
-          notifyOnExitEmptySuccess: false,
           onSettledBeforeNotify: (outcome) => {
             observed.push(`task:${outcome.status}`);
             identities.push(getGatewayToolCallerIdentity());
@@ -502,9 +497,7 @@ it.each(["task", "persistent task", "stdin"])(
       if (boundary === "persistent task") {
         await expect(run.promise).rejects.toBe(failure);
       } else {
-        await expect(run.promise).resolves.toMatchObject({
-          status: "failed",
-        });
+        await expect(run.promise).resolves.toMatchObject({ status: "failed" });
       }
       await joined;
       expect(observed).toEqual([

@@ -17,8 +17,8 @@ import { readAuthProfileStoreForTest, storeWith } from "./auth-profiles/oauth-te
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 
-const PROVIDER_ID = "lifecycle-provider";
-const PROFILE_ID = `${PROVIDER_ID}:default`;
+const provider = "lifecycle-provider";
+const profileId = `${provider}:default`;
 
 function reset() {
   clearRuntimeAuthProfileStoreSnapshots();
@@ -33,21 +33,16 @@ it("resumes OAuth refresh after synchronous provider registration completes", as
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-provider-refresh-", agentEnv: "main" },
     async (state) => {
-      const expiredCredential = oauthCred({
-        provider: PROVIDER_ID,
-        access: "access-old",
-        refresh: "refresh-old",
-        expires: 1,
-      });
-      const initialStore = storeWith(PROFILE_ID, expiredCredential);
-      await state.writeAuthProfiles(initialStore);
+      const expired = oauthCred({ provider, access: "old", refresh: "old", expires: 1 });
+      const store = storeWith(profileId, expired);
+      await state.writeAuthProfiles(store);
       useNoBundledPlugins();
       const plugin = writePlugin({
         id: "provider-refresh-lifecycle",
         registration: `
           api.logger.info("registration-start");
           api.registerProvider({
-            id: ${JSON.stringify(PROVIDER_ID)},
+            id: ${JSON.stringify(provider)},
             label: "Lifecycle Provider",
             auth: [],
             async refreshOAuth(credential) {
@@ -58,14 +53,10 @@ it("resumes OAuth refresh after synchronous provider registration completes", as
       });
       fs.writeFileSync(
         path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: plugin.id,
-          providers: [PROVIDER_ID],
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        }),
+        JSON.stringify({ id: plugin.id, providers: [provider], configSchema: EMPTY_PLUGIN_SCHEMA }),
         "utf8",
       );
-      const loadOptions: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]> = {
+      const load: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]> = {
         cache: false,
         workspaceDir: plugin.dir,
         config: {
@@ -77,31 +68,27 @@ it("resumes OAuth refresh after synchronous provider registration completes", as
         },
         onlyPluginIds: [plugin.id],
       };
-      let authResolution: ReturnType<typeof resolveApiKeyForProfile> | undefined;
-      const startAuthDuringRegister = vi.fn(() => {
-        expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(true);
-        authResolution = resolveApiKeyForProfile({
-          cfg: loadOptions.config,
-          store: initialStore,
-          profileId: PROFILE_ID,
-        });
+      let refresh: ReturnType<typeof resolveApiKeyForProfile> | undefined;
+      const startRefresh = vi.fn(() => {
+        expect(isPluginRegistryLoadInFlight(load)).toBe(true);
+        refresh = resolveApiKeyForProfile({ cfg: load.config, store, profileId });
       });
       loadOpenClawPlugins({
-        ...loadOptions,
-        logger: { info: startAuthDuringRegister, warn: vi.fn(), error: vi.fn() },
+        ...load,
+        logger: { info: startRefresh, warn: vi.fn(), error: vi.fn() },
       });
-      expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(false);
-      if (!authResolution) {
+      expect(isPluginRegistryLoadInFlight(load)).toBe(false);
+      if (!refresh) {
         throw new Error("provider lifecycle fixture did not start auth resolution");
       }
-      await expect(authResolution).resolves.toMatchObject({ apiKey: "access-new" });
-      expect(readAuthProfileStoreForTest(state.agentDir()).profiles[PROFILE_ID]).toEqual({
-        ...expiredCredential,
+      await expect(refresh).resolves.toMatchObject({ apiKey: "access-new" });
+      expect(readAuthProfileStoreForTest(state.agentDir()).profiles[profileId]).toEqual({
+        ...expired,
         access: "access-new",
         refresh: "refresh-new",
         expires: 4_102_444_800_000,
       });
-      expect(startAuthDuringRegister).toHaveBeenCalledOnce();
+      expect(startRefresh).toHaveBeenCalledOnce();
     },
   );
 });
