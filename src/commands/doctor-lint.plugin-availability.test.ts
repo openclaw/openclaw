@@ -65,6 +65,12 @@ describe("Doctor lint plugin availability", () => {
     });
     const registry = vi.spyOn(pluginRegistry, "loadPluginManifestRegistryForPluginRegistry");
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const lint = async (id: string, exitCode: number) => {
+      expect(
+        await runDoctorLintCli(runtime, { json: true, severityMin: "error", onlyIds: [id] }),
+      ).toBe(exitCode);
+      return JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+    };
     try {
       await withEnvAsync(
         {
@@ -82,29 +88,18 @@ describe("Doctor lint plugin availability", () => {
             "untrusted",
             "healthy",
           ] as const) {
+            const plugin = createPluginManifestRecordFixture({
+              id: "codex",
+              origin: "global",
+              trustedOfficialInstall: state !== "untrusted",
+              doctorHealthChecks: true,
+              rootDir: state === "healthy" ? healthy : broken,
+            });
             registry.mockReturnValue({
-              plugins:
-                state === "missing"
-                  ? []
-                  : [
-                      createPluginManifestRecordFixture({
-                        id: "codex",
-                        origin: "global",
-                        trustedOfficialInstall: state !== "untrusted",
-                        doctorHealthChecks: true,
-                        rootDir: state === "healthy" ? healthy : broken,
-                      }),
-                    ],
+              plugins: state === "missing" ? [] : [plugin],
               diagnostics: [],
             });
-            expect(
-              await runDoctorLintCli(runtime, {
-                json: true,
-                severityMin: "error",
-                onlyIds: ["core/doctor/codex-session-routes"],
-              }),
-            ).toBe(0);
-            const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+            const output = await lint("core/doctor/codex-session-routes", 0);
             expect(output).toMatchObject({ ok: true, findings: [] });
             if (state === "healthy") {
               expect(output.warnings).toBeUndefined();
@@ -123,14 +118,10 @@ describe("Doctor lint plugin availability", () => {
                 encoding: "utf8",
                 flag: "a+",
               });
-              expect(
-                await runDoctorLintCli(runtime, {
-                  json: true,
-                  severityMin: "error",
-                  onlyIds: ["codex/managed-app-server"],
-                }),
-              ).toBe(state === "healthy" ? 1 : 0);
-              const selectedOutput = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+              const selectedOutput = await lint(
+                "codex/managed-app-server",
+                state === "healthy" ? 1 : 0,
+              );
               expect(fs.readFileSync(path.join(root, "probes"), "utf8")).toBe(
                 probesBefore + (state === "healthy" ? "probe\n" : ""),
               );

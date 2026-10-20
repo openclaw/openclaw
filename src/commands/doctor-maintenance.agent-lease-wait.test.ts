@@ -31,13 +31,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-/** Another live OpenClaw process (the test runner's parent) holds an agent database lease. */
-function holdForeignLease(options: {
-  update: boolean;
-  /** Published updaters run activation Doctor with the external service policy. */
-  externalPolicy?: boolean;
-  own?: boolean;
-}) {
+function holdForeignLease(options: { update: boolean; externalPolicy?: boolean; own?: boolean }) {
   const stateDir = dirs.make("doctor-agent-lease-wait-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -71,6 +65,21 @@ function holdForeignLease(options: {
       holder.close();
     },
   };
+}
+
+function holdState(databasePath: string, gateway = false) {
+  const stateDir = path.dirname(path.dirname(databasePath));
+  return acquireGatewayStateOwner({
+    databasePath,
+    payload: {
+      pid: gateway ? process.pid : process.ppid,
+      processNamespace: readGatewayLockProcessNamespace(),
+      role: gateway ? "gateway" : "agent-embedded",
+      createdAt: new Date().toISOString(),
+      configPath: path.join(stateDir, "openclaw.json"),
+      stateDir,
+    },
+  });
 }
 
 function startDoctor() {
@@ -118,6 +127,17 @@ function startDoctor() {
   };
 }
 
+async function reachDeadline(doctor: ReturnType<typeof startDoctor>) {
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
+  expect(doctor.isSettled()).toBe(false);
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS);
+  return doctor.result;
+}
+
+const failureFacts = (message: string) => [
+  { check: "doctor", code: "agent-database-lease-active", message },
+];
+
 it.each([
   { name: "update Doctor", externalPolicy: false },
   { name: "a published updater's activation Doctor", externalPolicy: true },
@@ -154,10 +174,7 @@ it("fails update Doctor admission at the wait deadline, naming the lease holder"
   const holder = holdForeignLease({ update: true });
   const doctor = startDoctor();
   await doctor.firstWait;
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
-  expect(doctor.isSettled()).toBe(false);
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS);
-  const completed = await doctor.result;
+  const completed = await reachDeadline(doctor);
   const error = "error" in completed ? completed.error : undefined;
   expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
   expect((error as DoctorMaintenanceRefusalError).refusal).toEqual({
@@ -166,27 +183,14 @@ it("fails update Doctor admission at the wait deadline, naming the lease holder"
   });
   const message = `Doctor could not enter maintenance. Waited 1200 s; database held by PID ${holder.holderPid}. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
   expect((error as Error).message).toBe(message);
-  expect(collectUpdateDoctorFailureFacts(error)).toEqual([
-    { check: "doctor", code: "agent-database-lease-active", message },
-  ]);
+  expect(collectUpdateDoctorFailureFacts(error)).toEqual(failureFacts(message));
   // A failed admission releases ownership for the holder and the next Doctor.
   expect(fs.existsSync(holder.ownerPath)).toBe(false);
 });
 
 it("shares one deadline with the state wait, so a long first wait shortens the lease wait", async () => {
   const lease = holdForeignLease({ update: true });
-  const stateDir = path.dirname(path.dirname(lease.databasePath));
-  const stateHolder = acquireGatewayStateOwner({
-    databasePath: lease.databasePath,
-    payload: {
-      pid: process.ppid,
-      processNamespace: readGatewayLockProcessNamespace(),
-      role: "agent-embedded",
-      createdAt: new Date().toISOString(),
-      configPath: path.join(stateDir, "openclaw.json"),
-      stateDir,
-    },
-  });
+  const stateHolder = holdState(lease.databasePath);
   try {
     const doctor = startDoctor();
     await doctor.logged(`Waiting up to 1200 s for the OpenClaw agent-embedded process`);
@@ -197,10 +201,7 @@ it("shares one deadline with the state wait, so a long first wait shortens the l
     expect(doctor.log).toHaveBeenCalledWith(
       `Waiting up to 300 s for OpenClaw process ${lease.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
     );
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
-    expect(doctor.isSettled()).toBe(false);
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS);
-    const completed = await doctor.result;
+    const completed = await reachDeadline(doctor);
     expect((completed as { error?: Error }).error?.message).toContain(
       `Waited 1200 s; database held by PID ${lease.holderPid}.`,
     );
@@ -216,32 +217,17 @@ it.each([
 ])("keeps the immediate agent lease refusal for $name", async ({ update, own, gateway }) => {
   const holder = holdForeignLease({ update, own, externalPolicy: gateway });
   // The serving Gateway may own the lease; its lifecycle lock would mask the refusal.
-  const serving = gateway
-    ? acquireGatewayStateOwner({
-        databasePath: holder.databasePath,
-        payload: {
-          pid: process.pid,
-          processNamespace: readGatewayLockProcessNamespace(),
-          role: "gateway",
-          createdAt: new Date().toISOString(),
-          configPath: path.join(path.dirname(path.dirname(holder.databasePath)), "openclaw.json"),
-          stateDir: path.dirname(path.dirname(holder.databasePath)),
-        },
-      })
-    : undefined;
+  const serving = gateway ? holdState(holder.databasePath, true) : undefined;
   try {
     const doctor = startDoctor();
     const completed = await doctor.result;
     expect(
       collectUpdateDoctorFailureFacts("error" in completed ? completed.error : undefined),
-    ).toEqual([
-      {
-        check: "doctor",
-        code: "agent-database-lease-active",
-        message:
-          "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.",
-      },
-    ]);
+    ).toEqual(
+      failureFacts(
+        "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.",
+      ),
+    );
     expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
   } finally {
     serving?.release();

@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -89,17 +90,7 @@ module.exports = { id: "native-capture-proof", register(api) {
             fixture: {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                {
-                  id: "local",
-                  name: "Local fixture",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
+              models: [buildCatalogModel("local", { name: "Local fixture" })],
             },
           },
         },
