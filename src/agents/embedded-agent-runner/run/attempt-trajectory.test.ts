@@ -5,6 +5,13 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 
+const sessionTarget = {
+  agentId: "main",
+  sessionId: "session-1",
+  sessionKey: "agent:main:session-1",
+  storePath: "/tmp/openclaw-agent.sqlite",
+};
+
 const admissions: ReturnType<typeof prepareSystemAgentRunAdmission>[] = [];
 afterEach(() => {
   for (const admission of admissions.splice(0)) {
@@ -31,12 +38,18 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
 
 import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
 
-async function createInput(disableTrajectory = false, abortSignal?: AbortSignal) {
+async function createInput(retained = false, disableTrajectory = false, abortSignal?: AbortSignal) {
   const admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "trajectory-test");
   admissions.push(admission);
   const admittedRunContext = await admission.admit("embedded");
   return {
     activeSession: { sessionId: "session-1" },
+    transcriptOwner: retained
+      ? {
+          sessionTarget,
+          assertCommitAllowed: resolveAdmittedRunActiveAssertion(admittedRunContext),
+        }
+      : undefined,
     attempt: {
       config: {},
       admittedRunContext,
@@ -49,12 +62,7 @@ async function createInput(disableTrajectory = false, abortSignal?: AbortSignal)
       runId: "run-1",
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:session-1",
-      sessionTarget: {
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        storePath: "/tmp/openclaw-agent.sqlite",
-      },
+      sessionTarget,
       thinkLevel: "medium",
       trigger: "user",
       workspaceDir: "/tmp/workspace",
@@ -68,9 +76,7 @@ async function createInput(disableTrajectory = false, abortSignal?: AbortSignal)
 }
 
 describe("prepareEmbeddedAttemptTrajectory", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it.each([false, true])(
     "creates trajectory metadata with retained target: %s",
@@ -78,20 +84,8 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
       const recorder = { recordEvent: vi.fn() };
       hoisted.createTrajectoryRuntimeRecorder.mockReturnValue(recorder);
 
-      const input = await createInput();
-      const result = await prepareEmbeddedAttemptTrajectory({
-        ...input,
-        ...(retained
-          ? {
-              transcriptOwner: {
-                sessionTarget: input.attempt.sessionTarget,
-                assertCommitAllowed: resolveAdmittedRunActiveAssertion(
-                  input.attempt.admittedRunContext,
-                ),
-              },
-            }
-          : {}),
-      } as never);
+      const input = await createInput(retained);
+      const result = await prepareEmbeddedAttemptTrajectory(input as never);
 
       expect(result).toBe(recorder);
       if (retained) {
@@ -110,22 +104,13 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
           runId: "run-1",
           sessionFile: retained ? input.attempt.sessionKey : "/tmp/trajectory.jsonl",
           sessionId: "session-1",
-          sessionTarget: expect.objectContaining({
-            agentId: "main",
-            sessionId: "session-1",
-            sessionKey: "agent:main:session-1",
-            storePath: "/tmp/openclaw-agent.sqlite",
-          }),
+          sessionTarget: expect.objectContaining(sessionTarget),
         }),
       );
-      expect(recorder.recordEvent).toHaveBeenNthCalledWith(
-        1,
-        "session.started",
-        expect.objectContaining({ toolCount: 7, clientToolCount: 2 }),
-      );
-      expect(recorder.recordEvent).toHaveBeenNthCalledWith(2, "trace.metadata", {
-        trace: "metadata",
-      });
+      expect(recorder.recordEvent.mock.calls.slice(0, 2)).toEqual([
+        ["session.started", expect.objectContaining({ toolCount: 7, clientToolCount: 2 })],
+        ["trace.metadata", { trace: "metadata" }],
+      ]);
       expect(hoisted.buildTrajectoryRunMetadata).toHaveBeenCalledWith(
         expect.objectContaining({ fastMode: true, provider: "provider-1" }),
       );
@@ -136,7 +121,7 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
     "does not record prepared metadata after %s during sink preparation",
     async (change) => {
       const abort = new AbortController();
-      const input = await createInput(false, abort.signal);
+      const input = await createInput(true, false, abort.signal);
       const recorder = { recordEvent: vi.fn() };
       hoisted.createTrajectoryRuntimeRecorder.mockImplementation(async () => {
         if (change === "revoke") {
@@ -146,24 +131,16 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
         }
         return recorder;
       });
-      await expect(
-        prepareEmbeddedAttemptTrajectory({
-          ...input,
-          transcriptOwner: {
-            sessionTarget: input.attempt.sessionTarget,
-            assertCommitAllowed: resolveAdmittedRunActiveAssertion(
-              input.attempt.admittedRunContext,
-            ),
-          },
-        } as never),
-      ).rejects.toThrow("admitted run authority is no longer active");
+      await expect(prepareEmbeddedAttemptTrajectory(input as never)).rejects.toThrow(
+        "admitted run authority is no longer active",
+      );
       expect(recorder.recordEvent).not.toHaveBeenCalled();
     },
   );
 
   it("keeps trajectory path resolution but skips recorder creation when disabled", async () => {
     await expect(
-      prepareEmbeddedAttemptTrajectory((await createInput(true)) as never),
+      prepareEmbeddedAttemptTrajectory((await createInput(false, true)) as never),
     ).resolves.toBeNull();
 
     expect(hoisted.resolveAttemptTrajectorySessionFile).toHaveBeenCalledOnce();

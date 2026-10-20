@@ -1,44 +1,26 @@
-// Coverage for promoting standalone text tool calls into structured events.
-
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { collectStreamEvents } from "./attempt-stream.test-helpers.js";
 import {
-  collectStreamEvents,
-  createFakeStream,
-  type FakeWrappedStream,
-} from "./attempt-stream.test-helpers.js";
-import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
+  assistantMessage,
+  commandText,
+  createPromotionStream,
+} from "./attempt-tool-call-text-promotion.test-support.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
   it("buffers split XML function markers until final promotion", async () => {
-    const rawToolText = [
-      "<function=exec>",
-      "<parameter=command>",
-      "pwd",
-      "</parameter>",
-      "</function>",
-    ].join("\n");
-    const resultMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: rawToolText }],
-      stopReason: "stop",
-    };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          { type: "text_delta", contentIndex: 0, delta: "<" },
-          { type: "text_delta", contentIndex: 0, delta: rawToolText.slice(1) },
-          { type: "done", reason: "stop", message: resultMessage },
-        ],
-        resultMessage,
-      }),
-    );
-    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
-    const stream = (await Promise.resolve(
-      wrapped({} as never, {} as never, {} as never),
-    )) as FakeWrappedStream;
+    const rawToolText = commandText("pwd", "<function=exec>");
+    const resultMessage = assistantMessage([{ type: "text", text: rawToolText }]);
+    const stream = await createPromotionStream({
+      events: [
+        { type: "text_delta", contentIndex: 0, delta: "<" },
+        { type: "text_delta", contentIndex: 0, delta: rawToolText.slice(1) },
+        { type: "done", reason: "stop", message: resultMessage },
+      ],
+      resultMessage,
+    });
 
     const events = await collectStreamEvents(stream);
 
@@ -51,49 +33,35 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     ]);
   });
 
-  it.each([
-    {
-      label: "zero-argument XML text over the byte cap",
-      marker: "<function=exec>",
-      rawToolText: `<function=exec>${"\u00a0".repeat(128_001)}</function>`,
-    },
-  ])("suppresses $label instead of flushing it", async ({ marker, rawToolText }) => {
-    const resultMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: rawToolText }],
-      stopReason: "stop",
-    };
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          { type: "start", partial: { content: [] } },
-          {
-            type: "text_start",
-            contentIndex: 0,
-            partial: { content: [{ type: "text", text: "" }] },
+  it("suppresses zero-argument XML text over the byte cap instead of flushing it", async () => {
+    const marker = "<function=exec>";
+    const rawToolText = `${marker}${"\u00a0".repeat(128_001)}</function>`;
+    const resultMessage = assistantMessage([{ type: "text", text: rawToolText }]);
+    const stream = await createPromotionStream({
+      events: [
+        { type: "start", partial: { content: [] } },
+        {
+          type: "text_start",
+          contentIndex: 0,
+          partial: { content: [{ type: "text", text: "" }] },
+        },
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "thinking_delta",
+          contentIndex: 1,
+          delta: "still thinking",
+          partial: {
+            content: [
+              { type: "text", text: rawToolText },
+              { type: "thinking", thinking: "still thinking" },
+            ],
           },
-          { type: "text_delta", contentIndex: 0, delta: rawToolText },
-          {
-            type: "thinking_delta",
-            contentIndex: 1,
-            delta: "still thinking",
-            partial: {
-              content: [
-                { type: "text", text: rawToolText },
-                { type: "thinking", thinking: "still thinking" },
-              ],
-            },
-          },
-          { type: "text_end", contentIndex: 0, content: rawToolText },
-          { type: "done", reason: "stop", message: resultMessage },
-        ],
-        resultMessage,
-      }),
-    );
-    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
-    const stream = (await Promise.resolve(
-      wrapped({} as never, {} as never, {} as never),
-    )) as FakeWrappedStream;
+        },
+        { type: "text_end", contentIndex: 0, content: rawToolText },
+        { type: "done", reason: "stop", message: resultMessage },
+      ],
+      resultMessage,
+    });
 
     const events = await collectStreamEvents(stream);
     const result = requireRecord(await stream.result(), "result message");
@@ -122,16 +90,8 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
 
   it("scrubs an incomplete named call from stream.result()", async () => {
     const rawToolText = "<function=exec><parameter=command>SECRET";
-    const resultMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: rawToolText }],
-      stopReason: "stop",
-    };
-    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage }));
-    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
-    const stream = (await Promise.resolve(
-      wrapped({} as never, {} as never, {} as never),
-    )) as FakeWrappedStream;
+    const resultMessage = assistantMessage([{ type: "text", text: rawToolText }]);
+    const stream = await createPromotionStream({ events: [], resultMessage });
 
     const result = requireRecord(await stream.result(), "result message");
 
@@ -142,27 +102,18 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     const rawCall = "<function=exec></function>";
     const visibleText = "Visible answer after the leaked call.";
     const rawText = `${rawCall}\n${visibleText}`;
-    const createMessage = () => ({
-      role: "assistant",
-      content: [
+    const createMessage = () =>
+      assistantMessage([
         { type: "text", text: rawCall },
         { type: "text", text: visibleText },
+      ]);
+    const stream = await createPromotionStream({
+      events: [
+        { type: "text_delta", contentIndex: 0, delta: rawText },
+        { type: "done", reason: "stop", message: createMessage() },
       ],
-      stopReason: "stop",
+      resultMessage: createMessage(),
     });
-    const baseFn = vi.fn(() =>
-      createFakeStream({
-        events: [
-          { type: "text_delta", contentIndex: 0, delta: rawText },
-          { type: "done", reason: "stop", message: createMessage() },
-        ],
-        resultMessage: createMessage(),
-      }),
-    );
-    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["exec"]));
-    const stream = (await Promise.resolve(
-      wrapped({} as never, {} as never, {} as never),
-    )) as FakeWrappedStream;
 
     const result = requireRecord(await stream.result(), "result message");
     const events = await collectStreamEvents(stream);

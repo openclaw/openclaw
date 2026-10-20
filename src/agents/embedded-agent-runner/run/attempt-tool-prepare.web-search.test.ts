@@ -34,6 +34,47 @@ const hoisted = getHoisted();
 beforeEach(() => resetEmbeddedAttemptHarness());
 afterEach(() => vi.restoreAllMocks());
 
+async function createAttempt(
+  admission: ReturnType<typeof prepareSystemAgentRunAdmission>,
+  overrides: Partial<EmbeddedRunAttemptInternalParams>,
+) {
+  return {
+    runId: "attribution",
+    sessionId: "attribution",
+    sessionKey: "agent:main:attribution",
+    modelId: "test-model",
+    provider: "anthropic",
+    model: makeProviderModelFixture({
+      id: "test-model",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    }),
+    authProfileStore: { version: 1, profiles: {} },
+    admittedRunContext: await admission.admit("embedded"),
+    ...overrides,
+  } as EmbeddedRunAttemptInternalParams;
+}
+
+function prepareTools(
+  attempt: EmbeddedRunAttemptInternalParams,
+  runAbortController = new AbortController(),
+) {
+  return prepareEmbeddedAttemptToolBase({
+    attempt,
+    agentDir: attempt.agentDir ?? "/tmp/attribution-agent",
+    setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
+    markCoreToolStage: () => {},
+    onYield: async () => {},
+    runAbortController,
+    runTrace: { traceId: "1234567890abcdef1234567890abcdef" },
+    skillUsagePaths: [],
+    skillsSnapshot: undefined,
+    codeModeSkills: [],
+    toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
+  });
+}
+
 describe("prepared missing-search guidance", () => {
   let state: OpenClawTestState;
   let storePath: string;
@@ -48,10 +89,7 @@ describe("prepared missing-search guidance", () => {
     storePath = path.join(state.sessionsDir(), "sessions.json");
     await replaceSessionEntry(
       { storePath, sessionKey: dashboardSessionKey },
-      {
-        sessionId: "search-guidance",
-        updatedAt: 1,
-      },
+      { sessionId: "search-guidance", updatedAt: 1 },
     );
     await replaceSessionEntry(
       { storePath, sessionKey: childSessionKey },
@@ -113,30 +151,15 @@ describe("prepared missing-search guidance", () => {
       let result: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>> | undefined;
       let pending: ReturnType<AnyAgentTool["execute"]> | undefined;
       try {
-        // This fixture exercises tool preparation only; the attempt harness owns unrelated runtime state.
-        const attempt = {
+        const attempt = await createAttempt(admission, {
           config,
-          runId: "attribution",
-          sessionId: "attribution",
-          sessionKey: "agent:main:attribution",
-          modelId: "test-model",
-          provider: "anthropic",
-          model: makeProviderModelFixture({
-            id: "test-model",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            baseUrl: "https://api.anthropic.com",
-          }),
-          authProfileStore: { version: 1, profiles: {} },
-          admittedRunContext: await admission.admit("embedded"),
           skillsSnapshot,
           awaitSessionDiffBaseline: async () => {
             entered.resolve();
             await baseline.promise;
           },
-        } as EmbeddedRunAttemptInternalParams;
-        // Built-ins are wrapped by the factory, not by the later catalog hook path.
-        // Consume only the callback forwarded to that factory so a missing wire fails here.
+        });
+        // Built-ins must use the factory-forwarded callback, not the catalog hook path.
         hoisted.createOpenClawCodingToolsMock.mockImplementation((options) =>
           surface === "built-in"
             ? [
@@ -146,19 +169,7 @@ describe("prepared missing-search guidance", () => {
               ]
             : [],
         );
-        result = await prepareEmbeddedAttemptToolBase({
-          attempt,
-          agentDir: "/tmp/attribution-agent",
-          setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
-          markCoreToolStage: () => {},
-          onYield: async () => {},
-          runAbortController,
-          runTrace: { traceId: "1234567890abcdef1234567890abcdef" },
-          skillUsagePaths: [],
-          skillsSnapshot: undefined,
-          codeModeSkills: [],
-          toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
-        });
+        result = await prepareTools(attempt, runAbortController);
         const builtInOptions = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0];
         expect(builtInOptions?.pluginExecutionAuthority).toBe(authority);
         expect(builtInOptions?.pluginExecutionSkillsSnapshot).toBe(skillsSnapshot);
@@ -229,10 +240,8 @@ describe("prepared missing-search guidance", () => {
         options?.onWebSearchConfiguration?.(scenario.configured === true);
         return [];
       });
-      // The real capability owner prepares persisted dashboard metadata in its worker scope.
-      // The factory double invokes the actual callback after that scope ends, with no Gateway
-      // row projection; this proves preparation/guidance, not model or tool execution.
-      const attempt = {
+      // Invoke the real callback after dashboard metadata preparation, without a Gateway projection.
+      const attempt = await createAttempt(admission, {
         config,
         runId: "search-guidance",
         sessionId: scenario.inheritedDeny ? "search-denied-child" : "search-guidance",
@@ -242,7 +251,6 @@ describe("prepared missing-search guidance", () => {
             ? dashboardSessionKey
             : "agent:main:search-guidance",
         agentDir: state.agentDir(),
-        modelId: "test-model",
         provider: scenario.native ? "openai" : "anthropic",
         model: makeProviderModelFixture({
           id: "test-model",
@@ -250,27 +258,12 @@ describe("prepared missing-search guidance", () => {
           api: scenario.native ? "openai-responses" : "anthropic-messages",
           baseUrl: scenario.native ? "https://api.openai.com/v1" : "https://api.anthropic.com",
         }),
-        authProfileStore: { version: 1, profiles: {} },
-        admittedRunContext: await admission.admit("embedded"),
         toolOverrides: scenario.sessionDisabled ? { webSearch: false } : undefined,
-      } as EmbeddedRunAttemptInternalParams;
-      result = await prepareEmbeddedAttemptToolBase({
-        attempt,
-        agentDir: attempt.agentDir!,
-        setup: createAttemptSetupFixture({ sandboxSessionKey: attempt.sessionKey! }),
-        markCoreToolStage: () => {},
-        onYield: async () => {},
-        runAbortController: new AbortController(),
-        runTrace: { traceId: "1234567890abcdef1234567890abcdef" },
-        skillUsagePaths: [],
-        skillsSnapshot: undefined,
-        codeModeSkills: [],
-        toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
       });
+      result = await prepareTools(attempt);
       expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
       expect(result.webSearchUnconfigured).toBe(scenario.expected);
-      // A disabled factory does not report configuration. Reset must clear the previous fact,
-      // rather than relying on a later callback to overwrite it.
+      // A disabled factory never reports configuration, so rebuild must clear the old fact.
       hoisted.createOpenClawCodingToolsMock.mockImplementation(() => []);
       attempt.toolOverrides = { webSearch: false };
       await result.refreshPermissionMode(null, () => {});
