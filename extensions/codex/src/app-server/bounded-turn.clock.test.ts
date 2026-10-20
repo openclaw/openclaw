@@ -17,6 +17,13 @@ describe("bounded Codex turn elapsed deadlines over WebSocket", () => {
       const methods: string[] = [];
       const thread = threadStartResult("clock-thread", process.cwd());
       const turn = turnStartResult("clock-turn");
+      const responses: Record<string, unknown> = {
+        initialize: { userAgent: `codex/${CODEX_APP_SERVER_VERSION}` },
+        "model/list": { data: [codexModel(thread.model)], nextCursor: null },
+        "thread/start": thread,
+        "turn/start": turn,
+        "turn/interrupt": {},
+      };
       server.on("connection", (socket) => {
         socket.on("message", (data) => {
           const buffer = Array.isArray(data)
@@ -29,43 +36,26 @@ describe("bounded Codex turn elapsed deadlines over WebSocket", () => {
           const respond = (result: unknown) => {
             socket.send(JSON.stringify({ id: request.id, result }));
           };
-          switch (request.method) {
-            case "initialize":
-              respond({ userAgent: `codex/${CODEX_APP_SERVER_VERSION}` });
-              break;
-            case "initialized":
-              break;
-            case "model/list":
-              respond({
-                data: [codexModel(thread.model)],
-                nextCursor: null,
-              });
-              break;
-            case "thread/start":
-              respond(thread);
-              break;
-            case "turn/start":
-              respond(turn);
-              break;
-            case "turn/interrupt":
-              respond({});
-              socket.send(
-                JSON.stringify({
-                  method: "turn/completed",
-                  params: {
-                    threadId: thread.thread.id,
-                    ...turnStartResult(turn.turn.id, "interrupted"),
-                  },
-                }),
-              );
-              break;
-            default:
-              socket.send(
-                JSON.stringify({
-                  id: request.id,
-                  error: { code: -32601, message: `Unexpected method: ${request.method}` },
-                }),
-              );
+          if (Object.hasOwn(responses, request.method)) {
+            respond(responses[request.method]);
+          } else if (request.method !== "initialized") {
+            socket.send(
+              JSON.stringify({
+                id: request.id,
+                error: { code: -32601, message: `Unexpected method: ${request.method}` },
+              }),
+            );
+          }
+          if (request.method === "turn/interrupt") {
+            socket.send(
+              JSON.stringify({
+                method: "turn/completed",
+                params: {
+                  threadId: thread.thread.id,
+                  ...turnStartResult(turn.turn.id, "interrupted"),
+                },
+              }),
+            );
           }
         });
       });

@@ -1,4 +1,3 @@
-// Codex tests cover Computer Use shared plugin cache reconciliation.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,8 +8,22 @@ import { useAutoCleanupTempDirTracker } from "./test-support.js";
 describe("Codex Computer Use shared plugin cache", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("selects the first installed desktop marketplace", async () => {
+  function fixture() {
     const root = tempDirs.make("openclaw-computer-use-cache-");
+    const codexHome = path.join(root, "agent", "codex-home");
+    const reconcile = (
+      options: Partial<Parameters<typeof ensureCodexComputerUseSharedPluginCache>[0]>,
+    ) =>
+      ensureCodexComputerUseSharedPluginCache({
+        codexHome,
+        config: computerUseConfig(),
+        ...options,
+      });
+    return { root, codexHome, reconcile };
+  }
+
+  it("selects the first installed desktop marketplace", async () => {
+    const { root, codexHome, reconcile } = fixture();
     const marketplacePath = (app: string) =>
       path.join(root, "Applications", app, "Contents", "Resources", "plugins", "openai-bundled");
     const chatGptMarketplacePath = marketplacePath("ChatGPT.app");
@@ -18,11 +31,8 @@ describe("Codex Computer Use shared plugin cache", () => {
     await writeBundledComputerUsePlugin(chatGptMarketplacePath, "2.0.0");
     await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
 
-    const codexHome = path.join(root, "agent", "codex-home");
-    const result = await ensureCodexComputerUseSharedPluginCache({
-      codexHome,
+    const result = await reconcile({
       bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
-      config: computerUseConfig(),
     });
 
     expect(result).toBe(true);
@@ -32,7 +42,7 @@ describe("Codex Computer Use shared plugin cache", () => {
   });
 
   it("copies a bundled plugin symlink without replacing current copies or removing live versions", async () => {
-    const root = tempDirs.make("openclaw-computer-use-cache-");
+    const { root, codexHome, reconcile } = fixture();
     const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
     const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
     await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
@@ -43,29 +53,18 @@ describe("Codex Computer Use shared plugin cache", () => {
     await fs.mkdir(externalPath);
     await fs.writeFile(path.join(externalPath, "sentinel"), "outside");
     await fs.symlink(externalPath, path.join(bundledPluginRoot, "external-link"), "dir");
-    const codexHome = path.join(root, "agent", "codex-home");
     const activeCachePath = computerUseCachePath(codexHome, "1.0.857");
     const priorCachePath = computerUseCachePath(codexHome, "1.0.799");
     await fs.mkdir(priorCachePath, { recursive: true });
     await fs.writeFile(path.join(priorCachePath, "live-client-marker"), "in use");
     await fs.symlink(bundledPluginRoot, activeCachePath, "dir");
 
-    const result = await ensureCodexComputerUseSharedPluginCache({
-      codexHome,
-      bundledMarketplacePath,
-      config: computerUseConfig(),
-    });
+    const result = await reconcile({ bundledMarketplacePath });
 
     expect(result).toBe(true);
     await expect(
       fs.readFile(path.join(priorCachePath, "live-client-marker"), "utf8"),
     ).resolves.toBe("in use");
-    const cacheEntries = await fs.readdir(path.dirname(activeCachePath), {
-      withFileTypes: true,
-    });
-    const activeCacheEntry = cacheEntries.find((entry) => entry.name === "1.0.857");
-    expect(activeCacheEntry?.isDirectory()).toBe(true);
-    expect(activeCacheEntry?.isSymbolicLink()).toBe(false);
     expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
     expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
     await expect(
@@ -76,11 +75,7 @@ describe("Codex Computer Use shared plugin cache", () => {
       true,
     );
     const cacheBefore = await fs.lstat(activeCachePath);
-    await ensureCodexComputerUseSharedPluginCache({
-      codexHome,
-      bundledMarketplacePath,
-      config: computerUseConfig(),
-    });
+    await reconcile({ bundledMarketplacePath });
     const cacheAfter = await fs.lstat(activeCachePath);
     expect(cacheAfter.ino).toBe(cacheBefore.ino);
     expect(cacheAfter.mtimeMs).toBe(cacheBefore.mtimeMs);
@@ -90,9 +85,8 @@ describe("Codex Computer Use shared plugin cache", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked managed cache parent without touching its external target",
     async () => {
-      const root = tempDirs.make("openclaw-computer-use-cache-link-");
+      const { root, codexHome, reconcile } = fixture();
       const agentDir = path.join(root, "agent");
-      const codexHome = path.join(agentDir, "codex-home");
       const bundledMarketplacePath = path.join(root, "bundled-marketplace");
       const external = path.join(root, "external-cache");
       await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
@@ -102,11 +96,9 @@ describe("Codex Computer Use shared plugin cache", () => {
       await fs.symlink(external, path.join(codexHome, "plugins"), "dir");
 
       await expect(
-        ensureCodexComputerUseSharedPluginCache({
-          codexHome,
+        reconcile({
           ownershipRoot: agentDir,
           bundledMarketplacePath,
-          config: computerUseConfig(),
         }),
       ).rejects.toThrow(/symlink|real directories/u);
       await expect(fs.readFile(path.join(external, "sentinel"), "utf8")).resolves.toBe("outside");
@@ -115,23 +107,15 @@ describe("Codex Computer Use shared plugin cache", () => {
   );
 
   it("preserves the default namespace when marketplacePath is explicit", async () => {
-    const root = tempDirs.make("openclaw-computer-use-cache-");
-    const codexHome = path.join(root, "agent", "codex-home");
+    const { root, codexHome, reconcile } = fixture();
     const cacheRoot = path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use");
     await fs.mkdir(path.join(cacheRoot, "1.0.101"), { recursive: true });
     await fs.mkdir(path.join(cacheRoot, "1.0.102"), { recursive: true });
 
-    const result = await ensureCodexComputerUseSharedPluginCache({
-      codexHome,
+    const result = await reconcile({
       bundledMarketplacePath: path.join(root, "missing-bundled-marketplace"),
       config: computerUseConfig({
-        marketplacePath: path.join(
-          root,
-          "custom-marketplace",
-          ".agents",
-          "plugins",
-          "marketplace.json",
-        ),
+        marketplacePath: path.join(root, "custom-marketplace", ".agents/plugins/marketplace.json"),
       }),
     });
 

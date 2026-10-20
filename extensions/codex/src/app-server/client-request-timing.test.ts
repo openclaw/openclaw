@@ -20,10 +20,7 @@ function read(harness: Harness, options: RequestOptions = {}) {
   const request = harness.client.request<Page>(
     "thread/list",
     { limit: 1 },
-    {
-      timeoutMs: 1_000,
-      ...options,
-    },
+    { timeoutMs: 1_000, ...options },
   );
   // Teardown closes all fixture clients even if an assertion fails before a reply.
   void request.catch(() => undefined);
@@ -53,7 +50,7 @@ afterEach(() => {
 });
 
 describe("Codex request timing", () => {
-  it("prepares fresh authority for every wire attempt and releases before response", async () => {
+  it("refreshes and releases wire authority across overload retry and a wall-clock jump", async () => {
     const harness = createHarness();
     let retained = false;
     const withCurrent = vi.fn(async (write: () => void) => {
@@ -68,13 +65,16 @@ describe("Codex request timing", () => {
     const pending = read(harness, { withCurrent, assertCurrent });
     expect(withCurrent).toHaveBeenCalledTimes(1);
     expect(retained).toBe(false);
+    vi.setSystemTime(Date.now() + 300_100);
     harness.send({ id: requestId(harness), error: { code: -32001, message: "Server overloaded" } });
     await vi.advanceTimersByTimeAsync(50);
+    expect(harness.writes).toHaveLength(2);
     expect(withCurrent).toHaveBeenCalledTimes(2);
     expect(assertCurrent).toHaveBeenCalledTimes(2);
     expect(retained).toBe(false);
     harness.send({ id: requestId(harness, 1), result: page });
     await expect(pending).resolves.toEqual(page);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(
@@ -140,21 +140,6 @@ describe("Codex request timing", () => {
       }),
     ).rejects.toThrow("session superseded");
     expect(harness.writes).toHaveLength(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retries overload within its budget across a wall-clock jump", async () => {
-    const harness = createHarness();
-    const pending = read(harness);
-    vi.setSystemTime(Date.now() + 300_100);
-    harness.send({
-      id: requestId(harness),
-      error: { code: -32001, message: "Server overloaded" },
-    });
-    await vi.advanceTimersByTimeAsync(50);
-    expect(harness.writes).toHaveLength(2);
-    harness.send({ id: requestId(harness, 1), result: page });
-    await expect(pending).resolves.toEqual(page);
     expect(vi.getTimerCount()).toBe(0);
   });
 

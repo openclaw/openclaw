@@ -18,7 +18,14 @@ const harnesses: ReturnType<typeof createClientHarness>[] = [];
 function createHarness() {
   const harness = createClientHarness({ autoEmitExit: false });
   harnesses.push(harness);
-  return harness;
+  return Object.assign(harness, {
+    list: (
+      params: JsonObject = {},
+      options: NonNullable<Parameters<typeof harness.client.request>[2]> = {},
+    ) => harness.client.request("thread/list", params, { catalogPreview: true, ...options }),
+    reply: (result: JsonObject, index = 0) =>
+      harness.send({ id: requestId(harness, index), result }),
+  });
 }
 
 function requestId(harness: ReturnType<typeof createClientHarness>, index = 0): string | number {
@@ -66,12 +73,9 @@ describe("Codex catalog worker transport", () => {
     expect(harness.stdinDestroyed).toBe(false);
     expect(harness.client.getCloseError()).toBeUndefined();
     const submitted = vi.spyOn(pool, "run");
-    const page = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const page = harness.list();
     const outcome = nextAction === "close" ? expect(page).rejects.toThrow(/closed/u) : page;
-    harness.send({
-      id: requestId(harness, 1),
-      result: { data: [{ id: "queued" }], unused: "x".repeat(64 * 1024) },
-    });
+    harness.reply({ data: [{ id: "queued" }], unused: "x".repeat(64 * 1024) }, 1);
     let closed = false;
     const closing =
       nextAction === "close"
@@ -130,11 +134,7 @@ describe("Codex catalog worker transport", () => {
   ])("projects $name with byte-bounded inline decoding", async ({ bytes, character, worker }) => {
     const harness = createHarness();
     const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
-    const request = harness.client.request(
-      "thread/list",
-      { limit: 64 },
-      { catalogPreview: true, catalogRows: 1 },
-    );
+    const request = harness.list({ limit: 64 }, { catalogRows: 1 });
     const response = {
       result: {
         data: [
@@ -233,11 +233,9 @@ describe("Codex catalog worker transport", () => {
         observed.push(notification.method);
         delivered.resolve();
       });
-      const request = harness.client.request(
-        "thread/list",
+      const request = harness.list(
         { limit: 64 },
         {
-          catalogPreview: true,
           catalogRows,
           attemptWaiterFinished: () => observed.push("response"),
         },
@@ -281,11 +279,9 @@ describe("Codex catalog worker transport", () => {
       return { decision: "decline" };
     });
     const requests = ["first", "second"].map((name) =>
-      harness.client.request(
-        "thread/list",
+      harness.list(
         { limit: 1 },
         {
-          catalogPreview: true,
           attemptWaiterFinished: () => observed.push(`${name} response`),
         },
       ),
@@ -331,20 +327,13 @@ describe("Codex catalog worker transport", () => {
       const harness = createHarness();
       const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
       const abort = new AbortController();
-      const cancelled = harness.client.request(
-        "thread/list",
-        { limit: 64 },
-        { catalogPreview: true, signal: abort.signal },
-      );
+      const cancelled = harness.list({ limit: 64 }, { signal: abort.signal });
       const rejection = expect(cancelled).rejects.toThrow(/aborted/u);
       abort.abort();
       await rejection;
-      const next = harness.client.request("thread/list", { limit: 1 }, { catalogPreview: true });
-      harness.send({
-        id: requestId(harness),
-        result: { data: [{ id: "late", preview: "discarded ".repeat(repeats) }] },
-      });
-      harness.send({ id: requestId(harness, 1), result: { data: [{ id: "current" }] } });
+      const next = harness.list({ limit: 1 });
+      harness.reply({ data: [{ id: "late", preview: "discarded ".repeat(repeats) }] });
+      harness.reply({ data: [{ id: "current" }] }, 1);
       await expect(next).resolves.toEqual({ data: [{ id: "current", projectId: null }] });
       expect(parse).not.toHaveBeenCalled();
       expect(harness.client.getCloseError()).toBeUndefined();
@@ -353,7 +342,7 @@ describe("Codex catalog worker transport", () => {
 
   it("preserves native RPC rejection and keeps projection failures scoped to their request", async () => {
     const harness = createHarness();
-    const native = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const native = harness.list();
     const nativeRejected = expect(native).rejects.toMatchObject({
       name: "CodexAppServerRpcError",
       code: -32600,
@@ -364,12 +353,12 @@ describe("Codex catalog worker transport", () => {
       error: { code: -32600, message: "synthetic invalid cursor" },
     });
     await nativeRejected;
-    const invalid = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const invalid = harness.list();
     const invalidRejected = expect(invalid).rejects.toThrow("invalid thread id");
-    harness.send({ id: requestId(harness, 1), result: { data: [{ preview: "missing id" }] } });
+    harness.reply({ data: [{ preview: "missing id" }] }, 1);
     await invalidRejected;
-    const next = harness.client.request("thread/list", {}, { catalogPreview: true });
-    harness.send({ id: requestId(harness, 2), result: { data: [] } });
+    const next = harness.list();
+    harness.reply({ data: [] }, 2);
     await expect(next).resolves.toEqual({ data: [] });
     expect(harness.client.getCloseError()).toBeUndefined();
   });
@@ -380,10 +369,10 @@ describe("Codex catalog worker transport", () => {
     const harness = createHarness();
     const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const request = harness.list();
     const malformed = `{"id":${JSON.stringify(requestId(harness))},"result":{"token":${JSON.stringify(token)},"data":[{"id":"thread","preview":"${contentMarker} invalid \\q`;
     harness.process.stdout.write(`${malformed}\n`);
-    harness.send({ id: requestId(harness), result: { data: [] } });
+    harness.reply({ data: [] });
     await expect(request).resolves.toEqual({ data: [] });
     expect(warn).toHaveBeenCalledExactlyOnceWith("failed to parse codex app-server message", {
       byteCount: Buffer.byteLength(malformed),
@@ -397,33 +386,23 @@ describe("Codex catalog worker transport", () => {
   it("rejects oversized catalog frames before decoding and accepts the next response", async () => {
     const harness = createHarness();
     const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
-    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
+    const request = harness.list();
     const rejected = expect(request).rejects.toThrow("exceeds 8 MiB");
-    harness.send({
-      id: requestId(harness),
-      result: { data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }] },
-    });
+    harness.reply({ data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }] });
     await rejected;
     expect(submitted).not.toHaveBeenCalled();
-    const next = harness.client.request("thread/list", {}, { catalogPreview: true });
-    harness.send({ id: requestId(harness, 1), result: { data: [{ id: "healthy" }] } });
+    const next = harness.list();
+    harness.reply({ data: [{ id: "healthy" }] }, 1);
     await expect(next).resolves.toEqual({ data: [{ id: "healthy", projectId: null }] });
     expect(harness.client.getCloseError()).toBeUndefined();
   });
 
   it("keeps an oversized singleton's continuation without retaining rows at capacity", async () => {
     const harness = createHarness();
-    const request = harness.client.request(
-      "thread/list",
-      { limit: 1 },
-      { catalogPreview: true, catalogRows: 0 },
-    );
-    harness.send({
-      id: requestId(harness),
-      result: {
-        data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }],
-        nextCursor: "opaque-continuation",
-      },
+    const request = harness.list({ limit: 1 }, { catalogRows: 0 });
+    harness.reply({
+      data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }],
+      nextCursor: "opaque-continuation",
     });
     await expect(request).resolves.toEqual({ data: [], nextCursor: "opaque-continuation" });
   });
@@ -434,7 +413,7 @@ describe("Codex catalog worker transport", () => {
       const harness = createHarness();
       const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
       const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
-      const request = harness.client.request("thread/list", { limit: 1 }, { catalogPreview: true });
+      const request = harness.list({ limit: 1 });
       const expected = {
         data: [{ id: "bounded", projectId: null, catalogError: "oversized-thread" }],
         nextCursor: null,
@@ -458,7 +437,7 @@ describe("Codex catalog worker transport", () => {
     "rejects oversized singleton recovery with invalid %s",
     async (invalid) => {
       const harness = createHarness();
-      const request = harness.client.request("thread/list", { limit: 1 }, { catalogPreview: true });
+      const request = harness.list({ limit: 1 });
       const rejected = expect(request).rejects.toThrow("exceeds 8 MiB");
       const response = {
         id: requestId(harness),
@@ -486,10 +465,9 @@ describe("Codex catalog worker transport", () => {
 
   it("preserves meaningful text after a long ANSI prefix through the worker", async () => {
     const harness = createHarness();
-    const request = harness.client.request("thread/list", {}, { catalogPreview: true });
-    harness.send({
-      id: requestId(harness),
-      result: { data: [{ id: "ansi", preview: "\u001b[0m".repeat(15_000) + "meaningful text" }] },
+    const request = harness.list();
+    harness.reply({
+      data: [{ id: "ansi", preview: "\u001b[0m".repeat(15_000) + "meaningful text" }],
     });
     await expect(request).resolves.toEqual({
       data: [{ id: "ansi", projectId: null, preview: "meaningful text" }],
