@@ -1125,6 +1125,7 @@ describe("resolveBuildStepCacheState", () => {
       "scripts/lib/native-declaration-filesystem.mts",
       "scripts/lib/native-typescript-config.mts",
       "scripts/lib/native-typescript-toolchain.mts",
+      "scripts/lib/tsdown-package-config.mts",
     ]) {
       const original = fs.readFileSync(path.join(rootDir, file), "utf8");
       writeFixture(rootDir, file, original + "\n// changed generator bytes\n");

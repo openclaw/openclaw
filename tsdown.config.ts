@@ -46,6 +46,7 @@ import {
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
+import { splitTsdownPackageConfig } from "./scripts/lib/tsdown-package-config.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
@@ -340,18 +341,23 @@ function workerHelperBuildConfig(
   };
 }
 
-function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig = {}): UserConfig {
-  return {
-    ...config,
-    dts: TSDOWN_PACKAGE_DECLARATIONS,
-    hooks: createDeclarationBoundaryHooks(config.hooks),
-    entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
-    env,
-    name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
-    outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
-    sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options),
-  };
+function nodeWorkspacePackageBuildConfigs(
+  packageDir: string,
+  config: UserConfig = {},
+): UserConfig[] {
+  return splitTsdownPackageConfig(
+    {
+      ...config,
+      hooks: createDeclarationBoundaryHooks(config.hooks),
+      entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
+      env,
+      name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
+      outDir: config.outDir ?? tsdownPackageOutputRoot(packageDir),
+      sourcemap: OUTPUT_SOURCE_MAPS,
+      inputOptions: (options) => buildInputOptions(options),
+    },
+    TSDOWN_PACKAGE_DECLARATIONS,
+  );
 }
 
 const bundledPluginBuildInventory = createBundledPluginBuildInventory();
@@ -826,7 +832,7 @@ const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions
 } = { stableTypeOrdering: true };
 
 const configs: UserConfig[] = [
-  nodeBuildConfig(
+  ...splitTsdownPackageConfig(
     {
       name: TSDOWN_PACKAGE_CONFIG_GROUP,
       entry: buildAgentCoreDistEntries(),
@@ -836,33 +842,33 @@ const configs: UserConfig[] = [
       },
     },
     TSDOWN_PACKAGE_DECLARATIONS,
-  ),
-  nodeWorkspacePackageBuildConfig("gateway-protocol", {
+  ).map((config) => nodeBuildConfig(config, config.dts)),
+  ...nodeWorkspacePackageBuildConfigs("gateway-protocol", {
     deps: {
       neverBundle: shouldExternalizeGatewayProtocolDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("gateway-client", {
+  ...nodeWorkspacePackageBuildConfigs("gateway-client", {
     deps: {
       neverBundle: shouldExternalizeGatewayClientDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("net-policy", {
+  ...nodeWorkspacePackageBuildConfigs("net-policy", {
     deps: {
       neverBundle: shouldExternalizeNetPolicyDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("media-generation-core"),
-  nodeWorkspacePackageBuildConfig("media-understanding-common"),
-  nodeWorkspacePackageBuildConfig("markdown-core", {
+  ...nodeWorkspacePackageBuildConfigs("media-generation-core"),
+  ...nodeWorkspacePackageBuildConfigs("media-understanding-common"),
+  ...nodeWorkspacePackageBuildConfigs("markdown-core", {
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("normalization-core"),
-  nodeWorkspacePackageBuildConfig("retry"),
-  nodeWorkspacePackageBuildConfig("worker-runtime"),
-  nodeWorkspacePackageBuildConfig("sdk", {
+  ...nodeWorkspacePackageBuildConfigs("normalization-core"),
+  ...nodeWorkspacePackageBuildConfigs("retry"),
+  ...nodeWorkspacePackageBuildConfigs("worker-runtime"),
+  ...nodeWorkspacePackageBuildConfigs("sdk", {
     deps: withExternalPackageSubpaths({
       neverBundle: [
         "@openclaw/gateway-client",
@@ -871,26 +877,26 @@ const configs: UserConfig[] = [
       ],
     }),
   }),
-  nodeWorkspacePackageBuildConfig("media-core"),
-  nodeWorkspacePackageBuildConfig("acp-core", {
+  ...nodeWorkspacePackageBuildConfigs("media-core"),
+  ...nodeWorkspacePackageBuildConfigs("acp-core", {
     entry: {
       ...buildPackageDistEntriesFromExports("acp-core"),
       // Preserve the standalone package build's non-exported redactor artifact.
       "error-format": "packages/acp-core/src/error-format.ts",
     },
   }),
-  nodeWorkspacePackageBuildConfig("terminal-core", {
+  ...nodeWorkspacePackageBuildConfigs("terminal-core", {
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("llm-core", {
+  ...nodeWorkspacePackageBuildConfigs("llm-core", {
     entry: buildLlmCoreDistEntries(),
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("model-catalog-core"),
+  ...nodeWorkspacePackageBuildConfigs("model-catalog-core"),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

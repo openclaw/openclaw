@@ -38,7 +38,10 @@ describe("tsdown runtime artifact cache", () => {
     const source = (name: string) => path.join(root, `packages/${name}/src/index.ts`);
     const output = (name: string) => path.join(root, `packages/${name}/dist/index.js`);
     const dependency = () => path.join(root, "shared.ts");
+    const assetSource = () => path.join(root, "NOTICE");
+    const assetOutput = () => path.join(root, "packages/b/dist/NOTICE");
     fs.writeFileSync(dependency(), "original shared input");
+    fs.writeFileSync(assetSource(), "original notice");
     for (const name of ["a", "b"]) {
       fs.mkdirSync(path.dirname(source(name)), { recursive: true });
       fs.writeFileSync(source(name), `export const value = "${name}-original";`);
@@ -56,7 +59,12 @@ describe("tsdown runtime artifact cache", () => {
         const name = path.basename(path.dirname(config.outDir!));
         const watched = [source(name), ...(name === "a" ? [dependency()] : [])];
         type DoneContext = {
-          chunks: { outDir: string; fileName: string }[];
+          chunks: {
+            type: "chunk" | "asset";
+            outDir: string;
+            fileName: string;
+            originalFileNames?: string[];
+          }[];
           options: { configDeps: Set<string> };
         };
         const done: ((context: DoneContext) => void)[] = [];
@@ -87,9 +95,21 @@ describe("tsdown runtime artifact cache", () => {
           output(name),
           watched.map((file) => fs.readFileSync(file, "utf8")).join("\n"),
         );
+        const chunks: DoneContext["chunks"] = [
+          { type: "chunk", outDir: path.dirname(output(name)), fileName: "index.js" },
+        ];
+        if (name === "b") {
+          fs.copyFileSync(assetSource(), assetOutput());
+          chunks.push({
+            type: "asset",
+            outDir: path.dirname(assetOutput()),
+            fileName: "NOTICE",
+            originalFileNames: [assetSource()],
+          });
+        }
         done.forEach((callback) =>
           callback({
-            chunks: [{ outDir: path.dirname(output(name)), fileName: "index.js" }],
+            chunks,
             options: { configDeps: new Set([path.join(root, "package.json")]) },
           }),
         );
@@ -110,9 +130,16 @@ describe("tsdown runtime artifact cache", () => {
     const second = select();
     expect(second.configs.map((config) => config.outDir)).toEqual(["packages/a/dist"]);
     expect(fs.readFileSync(output("b"), "utf8")).toBe(originalB);
+    expect(fs.readFileSync(assetOutput(), "utf8")).toBe("original notice");
     await complete(second.configs);
     finalizeTsdownRuntimeCaches(second.pending, root);
     expect(fs.readFileSync(output("a"), "utf8")).toContain("changed shared input");
+    fs.writeFileSync(assetSource(), "updated notice");
+    const changedAsset = select();
+    expect(changedAsset.configs.map((config) => config.outDir)).toEqual(["packages/b/dist"]);
+    await complete(changedAsset.configs);
+    finalizeTsdownRuntimeCaches(changedAsset.pending, root);
+    expect(fs.readFileSync(assetOutput(), "utf8")).toBe("updated notice");
     const cachedB = path.join(cache, "tsdown-runtime-b/outputs/packages/b/dist/index.js");
     fs.writeFileSync(cachedB, "corrupt");
     fs.rmSync(path.join(root, "packages/b/dist"), { recursive: true });

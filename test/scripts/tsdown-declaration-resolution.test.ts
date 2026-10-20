@@ -16,6 +16,7 @@ import {
   createDeclarationTest,
   declarationCacheRecords,
   expectStagingClean,
+  runFixture,
   runFixtureModule,
   runUnifiedWriter,
   runWriter,
@@ -64,11 +65,6 @@ function createFixture(
   extraEntrypoints?: readonly string[],
 ) {
   const fixture = createDeclarationFixture(command, groups, root, extraEntrypoints);
-  if (extraEntrypoints?.includes("tsdown.ai.config.ts")) {
-    // The real AI build copies its bundled SDK's license alongside every output.
-    const license = "node_modules/@mistralai/mistralai/LICENSE";
-    fixture.write(license, fs.readFileSync(license, "utf8"));
-  }
   return { ...fixture, run: (source: string) => runModule(command, fixture.root, source) };
 }
 
@@ -134,6 +130,148 @@ function nestedFixture(
   return fixture;
 }
 
+it.concurrent.for([false, true])(
+  "rebuilds canonical AI runtime and selected declarations in watch mode: %s",
+  (declarations, { command }) =>
+    command.lifetime.run(async () => {
+      const { root, write } = createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, undefined, [
+        "tsdown.ai.config.ts",
+      ]);
+      materializeNativeCompiler(root);
+      write("packages/ai/src/index.ts", 'export const marker = "before-watch";');
+      fs.appendFileSync(
+        path.join(root, "tsdown.ai.config.ts"),
+        `
+for (const config of (Array.isArray(exportsForWatch) ? exportsForWatch : [exportsForWatch])) {
+const original = config.hooks;
+config.hooks = async hooks => {
+  if (typeof original === "function") await original(hooks);
+  else if (original) hooks.addHooks(original);
+  hooks.hook("build:done", () => console.log("FIXTURE_BUILD:" + (config.dts ? "dts" : "runtime")));
+};
+}
+`,
+      );
+      // Observe canonical configs without replacing their entries or native compiler hooks.
+      const configPath = path.join(root, "tsdown.ai.config.ts");
+      const configText = fs.readFileSync(configPath, "utf8");
+      write(
+        "tsdown.ai.config.ts",
+        configText.replace("export default ", "const exportsForWatch = ") +
+          "\nexport default exportsForWatch;\n",
+      );
+      const result = await runFixtureModule(
+        command,
+        root,
+        `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { runManagedCommand } from "./scripts/lib/managed-child-process.mts";
+const controller = new AbortController();
+const completed = new Set();
+let round = 0;
+let failure;
+let buffered = "";
+try {
+await runManagedCommand({
+  bin: process.execPath,
+  args: ["scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts", "--watch", "--sourcemap", ${JSON.stringify(declarations ? "--dts=true" : "--dts=false")}],
+  env: { ...process.env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+  signal: controller.signal,
+  stdio: ["ignore", "pipe", "pipe"],
+  onReady(child) {
+    child.stderr.on("data", data => process.stderr.write(data));
+    child.stdout.on("data", data => {
+      buffered += data.toString();
+      for (;;) {
+        const newline = buffered.indexOf("\\n");
+        if (newline < 0) break;
+        const line = buffered.slice(0, newline).trim();
+        buffered = buffered.slice(newline + 1);
+        if (!line.startsWith("FIXTURE_BUILD:") || controller.signal.aborted) continue;
+        completed.add(line.slice("FIXTURE_BUILD:".length));
+        if (!completed.has("runtime") || (${declarations} && !completed.has("dts"))) continue;
+        try {
+          const marker = round === 0 ? "before-watch" : "after-watch";
+          assert.ok(fs.readFileSync("packages/ai/dist/index.mjs", "utf8").includes(marker));
+          const map = JSON.parse(fs.readFileSync("packages/ai/dist/index.mjs.map", "utf8"));
+          assert.ok(map.sourcesContent.some(source => source.includes(marker)));
+          assert.equal(fs.existsSync("packages/ai/dist/index.d.mts"), ${declarations});
+          if (${declarations}) assert.ok(fs.readFileSync("packages/ai/dist/index.d.mts", "utf8").includes(marker));
+          completed.clear();
+          if (++round === 1) fs.writeFileSync("packages/ai/src/index.ts", 'export const marker = "after-watch";');
+          else controller.abort();
+        } catch (error) { failure = error; controller.abort(); }
+      }
+    });
+  },
+});
+} catch (error) {
+if (!controller.signal.aborted || error.code !== "ABORT_ERR") throw error;
+}
+if (failure) throw failure;
+assert.equal(round, 2, "watch exited before both completed builds");
+`,
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expectStagingClean(root);
+    }),
+);
+
+it.concurrent("honors canonical DTS precedence without overriding custom configs", ({ command }) =>
+  command.lifetime.run(async () => {
+    const { root, write } = createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, undefined, [
+      "tsdown.ai.config.ts",
+    ]);
+    materializeNativeCompiler(root);
+    let previousDeclaration: string | undefined;
+    let revision = 0;
+    for (const [switches, declarations] of [
+      [["--dts", "--dts=false"], false],
+      [["--no-dts", "--dts=true"], true],
+      [["--dts", "false"], false],
+      [["--dts", "true"], true],
+    ] as const) {
+      const marker = `canonical-dts-${revision++}`;
+      write("packages/ai/src/index.ts", `export const marker = ${JSON.stringify(marker)};`);
+      const result = await runFixture(command, root, [
+        "scripts/tsdown-build.mts",
+        "--config",
+        "tsdown.ai.config.ts",
+        ...switches,
+      ]);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(fs.readFileSync(path.join(root, "packages/ai/dist/index.mjs"), "utf8")).toContain(marker);
+      const declaration = path.join(root, "packages/ai/dist/index.d.mts");
+      const contents = fs.existsSync(declaration) ? fs.readFileSync(declaration, "utf8") : undefined;
+      if (declarations) {
+        expect(contents).toContain(JSON.stringify(marker));
+      } else {
+        expect(contents).toBe(previousDeclaration);
+      }
+      previousDeclaration = contents;
+    }
+    write(
+      "custom.config.ts",
+      `
+import config from "./tsdown.ai.config.ts";
+export default { ...config.find(entry => entry.dts === false), dts: true, outDir: "custom-dist" };
+`,
+    );
+    const custom = await runFixture(command, root, [
+      "scripts/tsdown-build.mts",
+      "--config",
+      "custom.config.ts",
+      "--dts=false",
+    ]);
+    expect(custom.status, custom.stdout + custom.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(root, "custom-dist/index.mjs"), "utf8")).toContain(
+      "canonical-dts",
+    );
+    expect(fs.existsSync(path.join(root, "custom-dist/index.d.mts"))).toBe(false);
+    expectStagingClean(root);
+  }));
+
 it.concurrent("bounds standalone package builds while preserving public declarations and sibling outputs", ({
   command,
 }) =>
@@ -195,7 +333,7 @@ import { pathToFileURL } from "node:url";
 import { buildWorkspacePackage } from "./scripts/build-workspace-package.mts";
 import configs from "./tsdown.config.ts";
 for (const [name, target] of [["sdk", undefined], ["gateway-client", ["node22.19.0"]]]) {
-  const config = configs.find(config => config.outDir === "packages/" + name + "/dist");
+  const config = configs.find(config => config.outDir === "packages/" + name + "/dist" && config.dts === false);
   const original = config.hooks;
   config.hooks = async hooks => {
     await original(hooks);
@@ -534,12 +672,13 @@ import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = ${JSON.stringify(dts ? "1" : "0")};
 const { default: configs } = await import("./tsdown.config.ts");
-const { default: ai } = await import("./tsdown.ai.config.ts");
+const { default: aiConfigs } = await import("./tsdown.ai.config.ts");
 const owner = ${JSON.stringify(owner)};
-const config = owner === "AI" ? ai : configs.find(config => config.outDir ===
+const candidates = owner === "AI" ? aiConfigs : configs.filter(config => config.outDir ===
   (owner === "node" ? "packages/agent-core/dist" : "packages/gateway-protocol/dist"));
+const config = candidates.find(config => Boolean(config.dts) === ${!dts});
 assert.ok(config);
-assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'});
+assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json", emitDtsOnly: true }'});
 // The build API's cwd, rather than the importing process's cwd, owns inputs.
 process.chdir(path.dirname(root));
 const runtime = Promise.withResolvers();
@@ -611,8 +750,9 @@ it.concurrent("isolates native compilation across overlapping workspace and AI b
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 const { default: configs } = await import("./tsdown.config.ts");
-const { default: ai } = await import("./tsdown.ai.config.ts");
-const workspace = configs.find(config => config.outDir === "packages/gateway-protocol/dist");
+const { default: aiConfigs } = await import("./tsdown.ai.config.ts");
+const ai = aiConfigs.find(config => config.dts);
+const workspace = configs.find(config => config.outDir === "packages/gateway-protocol/dist" && config.dts);
 assert.ok(workspace);
 process.chdir(path.dirname(root));
 for (const failure of [false, true]) {

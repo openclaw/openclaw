@@ -6,7 +6,7 @@ import { build } from "tsdown";
 import { expect, it } from "vitest";
 import manifest from "../../packages/ai/package.json" with { type: "json" };
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import config from "../../tsdown.ai.config.ts";
+import configs from "../../tsdown.ai.config.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -14,8 +14,10 @@ const { createTempDir } = createScriptTestHarness();
 it("streams Mistral from the built AI package without installing the SDK", async () => {
   const root = createTempDir("openclaw-ai-package-");
   const outDir = path.join(root, "dist");
+  const runtimeConfigs = configs.filter((config) => config.dts === false);
+  expect(runtimeConfigs).toHaveLength(1);
   const { bundles } = await build({
-    ...config,
+    ...runtimeConfigs[0],
     config: false,
     entry: {
       index: "packages/ai/src/index.ts",

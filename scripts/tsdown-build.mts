@@ -798,8 +798,8 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 export function resolveTsdownBuildInvocation(
   params: TsdownBuildParams = {},
 ): TsdownBuildInvocation {
-  const env = resolveTsdownEnv(params.env ?? process.env, params);
-  const args = params.args ?? [];
+  const { args, env: inputEnv } = resolveTsdownDtsParams(params);
+  const env = resolveTsdownEnv(inputEnv, params);
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
     : args;
@@ -839,9 +839,69 @@ export function resolveTsdownBuildInvocation(
   };
 }
 
+function readDtsArg(args: string[], index: number) {
+  const arg = args[index];
+  const next = args[index + 1];
+  if (arg === "--dts" && (next === "true" || next === "false")) {
+    return { enabled: next === "true", count: 2 };
+  }
+  const enabled =
+    arg === "--dts" || arg === "--dts=true"
+      ? true
+      : arg === "--no-dts" || arg === "--dts=false"
+        ? false
+        : undefined;
+  return enabled === undefined ? undefined : { enabled, count: 1 };
+}
+
+function resolveTsdownDtsParams(params: TsdownBuildParams) {
+  const args = params.args ?? [];
+  const env = params.env ?? process.env;
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  if (
+    args.includes("--no-config") ||
+    (config !== undefined &&
+      !selectsMainConfig(args) &&
+      path.resolve(config) !== path.resolve("tsdown.ai.config.ts"))
+  ) {
+    return { args, env };
+  }
+  let enabled: boolean | undefined;
+  const forwarded: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--") {
+      forwarded.push(...args.slice(index));
+      break;
+    }
+    const dts = readDtsArg(args, index);
+    if (dts) {
+      enabled = dts.enabled;
+      index += dts.count - 1;
+    } else {
+      forwarded.push(args[index]!);
+    }
+  }
+  if (enabled === undefined) {
+    return { args, env };
+  }
+  // Inline flags would recombine the graphs owned by the split runtime/DTS configs.
+  return {
+    args: forwarded,
+    env: { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: enabled ? "0" : "1" },
+  };
+}
+
 function tsdownDeclarationsEnabled(args: string[], env: NodeJS.ProcessEnv) {
-  const dtsArg = args.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  return dtsArg ? dtsArg === "--dts" : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  let enabled: boolean | undefined;
+  for (let index = 0; index < args.length && args[index] !== "--"; index += 1) {
+    const dts = readDtsArg(args, index);
+    if (dts) {
+      // Unowned configs keep CAC semantics: repeated positive flags form truthy arrays.
+      enabled = args[index] === "--no-dts" ? false : enabled === undefined ? dts.enabled : true;
+      index += dts.count - 1;
+    }
+  }
+  return enabled ?? env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
 }
 
 function selectsMainConfig(args: string[]) {
@@ -880,12 +940,12 @@ function resolveSerializedMainConfigGroups(filters: string[]) {
 
 /** Builds declarations in dependency order without overlapping the largest graphs. */
 export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
-  const forwardedArgs = params.args ?? [];
-  readForwardedScalarOption(forwardedArgs, ["--out-dir", "-d"], "--out-dir/-d");
-  if (forwardedArgs.filter(isConfigArg).length > 1) {
+  const initialArgs = params.args ?? [];
+  readForwardedScalarOption(initialArgs, ["--out-dir", "-d"], "--out-dir/-d");
+  if (initialArgs.filter(isConfigArg).length > 1) {
     throw new Error("tsdown build accepts only one --config/-c/--no-config selector");
   }
-  const env = params.env ?? process.env;
+  const { args: forwardedArgs, env } = resolveTsdownDtsParams(params);
   const forwardedFilters = readForwardedOptions(forwardedArgs, ["--filter", "-F"]);
   const hasForwardedFilter = forwardedArgs.some(isFilterArg);
   const aiArgs = forwardedArgs.filter((arg, index) => {
@@ -927,7 +987,9 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     return [
       resolveTsdownBuildInvocation({
         ...params,
-        ...(groups ? { args: [...groups.flatMap((group) => ["--filter", group]), ...aiArgs] } : {}),
+        args: groups
+          ? [...groups.flatMap((group) => ["--filter", group]), ...aiArgs]
+          : forwardedArgs,
         env: mainConfig ? mainEnv : env,
       }),
     ];
@@ -953,6 +1015,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     return [
       resolveTsdownBuildInvocation({
         ...params,
+        args: forwardedArgs,
         env: mainConfig ? mainEnv : env,
       }),
     ];
@@ -964,10 +1027,13 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
         resolveTsdownBuildInvocation({
           ...params,
           args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+          env,
         }),
       ];
   if (!declarationsEnabled || (hasForwardedFilter && !serializedGroups)) {
-    invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
+    invocations.push(
+      resolveTsdownBuildInvocation({ ...params, args: forwardedArgs, env: mainEnv }),
+    );
     return invocations;
   }
 
@@ -1001,7 +1067,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
     resolvedMaxOldSpaceMb: maxOldSpaceMb,
   };
   return {
-    env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
+    env: resolveTsdownEnv(resolveTsdownDtsParams(params).env, preparedParams),
     maxOldSpaceMb,
     heapShortfall:
       budget.unresolvedCgroupMemory || isFullTsdownBuildPlan(params.args ?? [])
@@ -1037,7 +1103,7 @@ export function prepareTsdownBuildExecution(
       assertTsdownCleanOutputRoots({ roots });
       pruneUntrackedGeneratedSourceDeclarations();
       pruneStaleRuntimeSymlinks();
-      cleanTsdownOutputRoots({ roots });
+      cleanTsdownOutputRoots({ roots, env: plan.env });
     });
   cleanup(args);
   return plan;

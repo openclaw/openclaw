@@ -29,6 +29,7 @@ import {
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import aiConfigs from "../../tsdown.ai.config.ts";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
@@ -1296,7 +1297,7 @@ console.log("relocated session card renders with bundled fonts");
     },
   );
 
-  it("gives every standalone declaration caller one canonical package config", () => {
+  it("gives every standalone declaration caller matching runtime and declaration entries", () => {
     for (const packageName of [
       "gateway-client",
       "gateway-protocol",
@@ -1308,13 +1309,20 @@ console.log("relocated session card renders with bundled fonts");
       "media-generation-core",
       "media-core",
       "acp-core",
+      "worker-runtime",
     ]) {
       const manifest = JSON.parse(
         fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
       ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
       expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
       const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
-      expect(selected, packageName).toHaveLength(1);
+      expect(selected, packageName).toHaveLength(2);
+      expect(selected[0]?.dts).toBe(false);
+      expect(selected[1]?.dts).toEqual({
+        tsconfig: "tsconfig.packages.json",
+        emitDtsOnly: true,
+      });
+      expect(selected[1]?.entry).toEqual(selected[0]?.entry);
       const sources = Object.values(selected[0]!.entry ?? {});
       for (const entry of Object.values(manifest.exports)) {
         expect(sources).toContain(
@@ -1347,9 +1355,19 @@ console.log("relocated session card renders with bundled fonts");
     );
 
     expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(
-      packageConfigs.map(() => ({ tsconfig: "tsconfig.packages.json" })),
-    );
+    for (const runtime of [...aiConfigs, ...packageConfigs].filter(
+      (entry) => entry.dts === false,
+    )) {
+      const matching = [...aiConfigs, ...packageConfigs].filter(
+        (entry) => entry.outDir === runtime.outDir,
+      );
+      expect(matching).toHaveLength(2);
+      expect(matching[1]?.dts).toEqual({
+        tsconfig: "tsconfig.packages.json",
+        emitDtsOnly: true,
+      });
+      expect(matching[1]?.entry).toEqual(runtime.entry);
+    }
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(standaloneRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs).toHaveLength(1);

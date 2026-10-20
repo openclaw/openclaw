@@ -10,6 +10,7 @@ import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-ru
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+  TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
@@ -142,6 +143,7 @@ function readConfigEntries(
   root: string,
   privateQa: boolean,
   groups: readonly string[],
+  includePackageInputs: boolean,
 ): ConfigEntries {
   const result = spawnSync(
     requireNodeTool("node"),
@@ -151,14 +153,19 @@ function readConfigEntries(
       `
 import path from "node:path";
 import configs from ${JSON.stringify(pathToFileURL(path.join(root, "tsdown.config.ts")).href)};
+${includePackageInputs ? 'import aiConfigs from "./tsdown.ai.config.ts";' : ""}
 const groups = configs.filter(config => ${JSON.stringify(groups)}.includes(config.name));
 if (groups.length !== ${groups.length}) throw new Error("Missing canonical declaration groups");
 const selected = Object.fromEntries(groups.flatMap(config =>
   Object.entries(config.entry).filter(([, source]) => config.dts.entry.some(entry => path.resolve(entry) === path.resolve(source)))
 ));
 const declarations = Object.fromEntries(groups.map(config => [config.name, config.dts.entry]));
-const inputs = configs.filter(config => config.name === "openclaw-unified")
-  .flatMap(config => Object.values(config.entry));
+const inputs = ${
+        includePackageInputs
+          ? `[...configs.filter(config => config.name === "openclaw-unified" || config.name === ${JSON.stringify(TSDOWN_PACKAGE_CONFIG_GROUP)}), ...aiConfigs]`
+          : 'configs.filter(config => config.name === "openclaw-unified")'
+      }
+  .flatMap(config => Object.values(config.entry ?? {}));
 process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
 `,
     ],
@@ -201,6 +208,7 @@ export function createFixture(
   root: string,
   extraEntrypoints: readonly string[] = [],
 ) {
+  const includePackageInputs = extraEntrypoints.includes("tsdown.ai.config.ts");
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(path.join(root, ".artifacts"));
   // Link the selected graph's real toolchain and runtime packages: each writer
@@ -236,6 +244,11 @@ export function createFixture(
   );
   write("pnpm-workspace.yaml", "packages: []\n");
   write("pnpm-lock.yaml", fs.readFileSync(path.join(sourceRoot, "pnpm-lock.yaml"), "utf8"));
+  if (includePackageInputs) {
+    // The real AI config copies the bundled SDK's license alongside its output.
+    const license = "node_modules/@mistralai/mistralai/LICENSE";
+    write(license, fs.readFileSync(path.join(sourceRoot, license), "utf8"));
+  }
   // tsdown.config.ts passes this path to package declaration builds as compiler configuration, not an import edge.
   write(
     "tsconfig.packages.json",
@@ -284,12 +297,12 @@ export function createFixture(
       write(`extensions/${id}/index.ts`, "export {};\n");
     }
   }
-  const key = groups.join(",");
+  const key = JSON.stringify([groups, includePackageInputs]);
   let entries = configEntries.get(key);
   if (!entries) {
     entries = {
-      production: readConfigEntries(root, false, groups),
-      qa: readConfigEntries(root, true, groups),
+      production: readConfigEntries(root, false, groups, includePackageInputs),
+      qa: readConfigEntries(root, true, groups, includePackageInputs),
     };
     configEntries.set(key, entries);
   }
@@ -420,6 +433,37 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   process.exitCode = result.exitCode;
 });
 `,
+  );
+}
+
+export function runPackageCacheBuild(
+  command: CommandFixture,
+  root: string,
+  labels: readonly string[] = ["tsdown-ai", "tsdown-packages", "write-unified-entry-dts"],
+  env: NodeJS.ProcessEnv = {},
+) {
+  return runFixture(
+    command,
+    root,
+    [
+      "--input-type=module",
+      "--eval",
+      `
+import assert from "node:assert/strict";
+import { resolveBuildAllSteps, runBuildAllSteps } from "./scripts/build-all.mts";
+import { withDistArtifactOwnership } from "./scripts/lib/dist-artifact-ownership.mts";
+const labels = ${JSON.stringify(labels)};
+const selected = new Set(labels);
+await withDistArtifactOwnership(process.cwd(), async () => {
+  const steps = resolveBuildAllSteps("full").filter(step => selected.has(step.label));
+  assert.deepEqual(steps.map(step => step.label), labels);
+  const result = await runBuildAllSteps("full", { steps });
+  process.exitCode = result.exitCode;
+});
+`,
+    ],
+    false,
+    { OUTPUT_SOURCE_MAPS: "1", ...env },
   );
 }
 

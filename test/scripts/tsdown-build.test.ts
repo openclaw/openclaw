@@ -261,7 +261,72 @@ describe("resolveTsdownBuildInvocation", () => {
         ...NO_MEMORY_LIMIT,
       });
       expect(results).toHaveLength(1);
+      expect(results[0]?.args).not.toContain("--no-dts");
       expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    },
+  );
+
+  it.each([
+    { args: ["--dts", "--no-dts"], skip: "1", count: 2 },
+    { args: ["--no-dts", "--dts"], skip: "0", count: 3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length },
+    { args: ["--dts", "--dts=false"], skip: "1", count: 2 },
+    { args: ["--dts", "false"], skip: "1", count: 2 },
+    { args: ["--dts", "true"], skip: "0", count: 3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length },
+    { args: ["--dts", "true", "--dts", "false"], skip: "1", count: 2 },
+    {
+      args: ["--dts=false", "--dts"],
+      skip: "0",
+      count: 3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
+    },
+    { args: ["--config", "tsdown.config.ts", "--dts=false"], skip: "1", count: 1 },
+    {
+      args: ["--config", ".", "--no-dts", "--dts=true"],
+      skip: "0",
+      count: 2 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
+    },
+    { args: ["--config", "tsdown.ai.config.ts", "--dts=true"], skip: "0", count: 1 },
+    {
+      args: ["--filter", TSDOWN_PACKAGE_CONFIG_GROUP, "--filter", "missing", "--dts", "--no-dts"],
+      skip: "1",
+      count: 2,
+    },
+  ])("normalizes canonical DTS switches before planning $args", ({ args, skip, count }) => {
+    const results = resolveTsdownBuildInvocations({
+      args,
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skip === "1" ? "0" : "1" },
+      ...NO_MEMORY_LIMIT,
+    });
+    expect(results).toHaveLength(count);
+    for (const result of results) {
+      expect(
+        result.args.some((arg) => ["--dts", "--no-dts", "--dts=true", "--dts=false"].includes(arg)),
+      ).toBe(false);
+      expect(result.args).not.toContain("true");
+      expect(result.args).not.toContain("false");
+      expect(result.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skip);
+      if (skip === "1") {
+        expect(result.args).not.toContain("--concurrency");
+      }
+    }
+  });
+
+  it.each([
+    { switches: ["--dts=false"], declarations: false },
+    { switches: ["--dts", "false"], declarations: false },
+    { switches: ["--dts", "true"], declarations: true },
+    { switches: ["--dts", "--dts=false"], declarations: true },
+    { switches: ["--no-dts", "--dts"], declarations: true },
+    { switches: ["--dts", "--no-dts"], declarations: false },
+  ])(
+    "preserves upstream DTS argument semantics for unowned configs: $switches",
+    ({ switches, declarations }) => {
+      for (const selector of [["--config", "custom.config.ts"], ["--no-config"]]) {
+        const args = [...selector, ...switches];
+        const [result] = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+        expect(result?.args.slice(-args.length)).toEqual(args);
+        expect(result?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+        expect(result?.args.includes("--concurrency")).toBe(declarations);
+      }
     },
   );
 
@@ -1144,11 +1209,37 @@ describe("resolveTsdownBuildInvocation", () => {
     }));
 
   it.each([
-    { label: "default build", args: [], skipDts: "0", preserveMetadata: "0" },
-    { label: "cached source launcher", args: ["--no-clean"], skipDts: "1", preserveMetadata: "1" },
+    {
+      label: "default build",
+      args: [],
+      skipDts: "0",
+      preserveDeclarations: false,
+      preserveMetadata: "0",
+    },
+    {
+      label: "cached source launcher",
+      args: ["--no-clean"],
+      skipDts: "1",
+      preserveDeclarations: true,
+      preserveMetadata: "1",
+    },
+    {
+      label: "explicit declaration rebuild",
+      args: ["--dts=true"],
+      skipDts: "1",
+      preserveDeclarations: false,
+      preserveMetadata: "1",
+    },
+    {
+      label: "explicit runtime-only build",
+      args: ["--dts=false"],
+      skipDts: "0",
+      preserveDeclarations: true,
+      preserveMetadata: "0",
+    },
   ])(
     "preserves separately owned outputs during $label cleanup",
-    ({ args, skipDts, preserveMetadata }) =>
+    ({ args, skipDts, preserveDeclarations, preserveMetadata }) =>
       fixture.run(async () => {
         const rootDir = createTempDir("openclaw-tsdown-clean-");
         const sourceDependencies = await createSourcePluginDependenciesFixture(rootDir);
@@ -1234,7 +1325,7 @@ describe("resolveTsdownBuildInvocation", () => {
           expectPathMissing(path.join(rootDir, relativePath));
         }
         for (const [files, preserve] of [
-          [declarationFiles, skipDts === "1"],
+          [declarationFiles, preserveDeclarations],
           [[metadataFile], preserveMetadata === "1"],
         ] as const) {
           for (const relativePath of files) {

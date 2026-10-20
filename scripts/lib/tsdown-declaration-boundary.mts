@@ -226,6 +226,10 @@ function createNativeDeclarationPlugin(
       ? (_output, bundle) => {
           for (const [file, value] of Object.entries(bundle)) {
             if (value.type === "chunk" && !/\.d\.[cm]?ts(?:\.map)?$/u.test(file)) {
+              // Stub maps share runtime filenames; only declaration maps belong to this pass.
+              if (value.sourcemapFileName) {
+                delete bundle[value.sourcemapFileName];
+              }
               delete bundle[file];
             }
           }

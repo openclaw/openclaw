@@ -169,6 +169,13 @@ export function cacheTsdownRuntimeConfigs(configs: UserConfig[]): UserConfig[] {
           }
           for (const chunk of chunks) {
             outputs.add(portableRelativePath(rootDir, path.resolve(chunk.outDir, chunk.fileName)));
+            if (chunk.type === "asset") {
+              for (const file of chunk.originalFileNames) {
+                if (fs.existsSync(file) && fs.statSync(file).isFile()) {
+                  inputs.add(portableRelativePath(rootDir, file));
+                }
+              }
+            }
           }
           if (++completed !== members.length) {
             return;

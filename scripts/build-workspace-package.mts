@@ -14,7 +14,7 @@ export function selectWorkspacePackageBuildConfig(
   target: string | false,
 ): InlineConfig {
   const outDir = tsdownPackageOutputRoot(packageName);
-  const selected = configs.filter((config) => config.outDir === outDir);
+  const selected = configs.filter((config) => config.outDir === outDir && config.dts === false);
   if (selected.length !== 1) {
     throw new Error(`Expected one build config for ${packageName}; found ${selected.length}`);
   }

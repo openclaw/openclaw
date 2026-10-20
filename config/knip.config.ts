@@ -8,7 +8,7 @@ import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
-import aiBuildConfig from "../tsdown.ai.config.ts";
+import aiBuildConfigs from "../tsdown.ai.config.ts";
 import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -753,7 +753,7 @@ function compileBundledPackageConsumers(source: string, filePath: string): strin
     const manifest: {
       dependencies?: Record<string, string>;
     } = JSON.parse(source);
-    const neverBundle = aiBuildConfig.deps?.neverBundle;
+    const neverBundle = aiBuildConfigs.find((config) => config.dts === false)?.deps?.neverBundle;
     if (typeof neverBundle !== "function") {
       throw new Error("Expected the AI build's externalization callback.");
     }

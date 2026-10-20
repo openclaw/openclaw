@@ -1,7 +1,10 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
+import fs from "node:fs";
+import path from "node:path";
 import type { UserConfig } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
+import { splitTsdownPackageConfig } from "./scripts/lib/tsdown-package-config.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 
 const externalDependencies = [
@@ -48,7 +51,21 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
-  copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
+  plugins: [
+    {
+      name: "openclaw:mistral-license",
+      buildStart(options) {
+        const license = path.resolve(options.cwd, "node_modules/@mistralai/mistralai/LICENSE");
+        // Emitted assets participate in runtime-cache output and input ownership.
+        this.emitFile({
+          type: "asset",
+          fileName: "mistral.LICENSE",
+          originalFileName: license,
+          source: fs.readFileSync(license),
+        });
+      },
+    },
+  ],
   platform: "node",
   target: "node22",
   deps: {
@@ -62,4 +79,4 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default cacheTsdownRuntimeConfigs([config])[0]!;
+export default cacheTsdownRuntimeConfigs(splitTsdownPackageConfig(config, config.dts));
