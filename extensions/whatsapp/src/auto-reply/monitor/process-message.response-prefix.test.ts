@@ -23,21 +23,36 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
   it.each([
     {
       name: "account prefix with quote",
+      messageId: "inbound-prefix-account",
       selfChat: false,
       channelPrefix: "[CHANNEL]",
       accountPrefix: "[ACCOUNT]",
       inboundForbidden: "[CHANNEL]",
       outboundPrefix: "[ACCOUNT]",
       quoted: true,
+      identity: { name: "Harbor" },
     },
     {
       name: "unset prefix with self-chat identity",
+      messageId: "inbound-prefix-self-identity",
       selfChat: true,
       channelPrefix: undefined,
       accountPrefix: undefined,
       inboundForbidden: "[Harbor]",
       outboundPrefix: "[Harbor]",
       quoted: false,
+      identity: { name: "Harbor" },
+    },
+    {
+      name: "unset prefix with self-chat and no identity",
+      messageId: "inbound-prefix-self-plain",
+      selfChat: true,
+      channelPrefix: undefined,
+      accountPrefix: undefined,
+      inboundForbidden: "[Harbor]",
+      outboundPrefix: undefined,
+      quoted: false,
+      identity: undefined,
     },
   ])("$name", async (scenario) => {
     await withTempHome(
@@ -62,11 +77,11 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
         const boundary = await createReplyBoundary(root, peer, {
           channel: { responsePrefix: scenario.channelPrefix },
           account: { responsePrefix: scenario.accountPrefix, selfChatMode: scenario.selfChat },
-          agents: { entries: { main: { identity: { name: "Harbor" } } } },
+          agents: { entries: { main: { identity: scenario.identity } } },
         });
         const { route, backgroundTasks } = boundary;
         const msg = createTestWebInboundMessage({
-          event: { id: "inbound-prefix-proof", timestamp: 1_700_000_000_000 },
+          event: { id: scenario.messageId, timestamp: 1_700_000_000_000 },
           payload: { body, commandBody: body },
           platform: {
             chatJid: `${peer.slice(1)}@s.whatsapp.net`,
@@ -107,7 +122,7 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
           const call = sendMessage.mock.calls[0]!;
           expect({ to: call[0], text: call[1], options: call[4] }).toMatchObject({
             to: peer,
-            text: `${scenario.outboundPrefix} ${replyText}`,
+            text: scenario.outboundPrefix ? `${scenario.outboundPrefix} ${replyText}` : replyText,
             options: { accountId },
           });
           const context = replyResolver.mock.calls[0]?.[0];
