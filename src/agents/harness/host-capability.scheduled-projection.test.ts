@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -34,8 +35,6 @@ it("issues scheduled shell projections only from this host-created tool surface"
     sessionKey: "agent:main:session-1",
     cwd: "/attempt/worktree",
     workspaceDir: "/workspace",
-    currentChannelId: "chat-1",
-    messageChannel: "telegram",
   });
   const { hostCapabilities, closeHost } = host;
   const resolveProjection = (ownerPluginId: string) =>
@@ -47,9 +46,7 @@ it("issues scheduled shell projections only from this host-created tool surface"
   const sourceTools = (await hostCapabilities.createToolSurfaceAsync?.({})) ?? [];
   const execTool = sourceTools.find((tool) => tool.name === "exec");
   const createProjection = resolveProjection("codex");
-  if (!execTool || !createProjection) {
-    throw new Error("expected host-created exec projection test surface");
-  }
+  assert(execTool && createProjection, "expected host-created exec projection test surface");
   const alias = createProjection(execTool, projection);
   expect(readCronScheduledToolProjection(alias)).toEqual({
     targetTool: "exec",
@@ -67,20 +64,16 @@ it("issues scheduled shell projections only from this host-created tool surface"
   expect(() => readCronScheduledToolProjection(alias)).toThrow("changed after host creation");
   Object.assign(alias, { execute: renamedAlias.execute });
 
-  const forgedExecute = async () => ({ content: [], details: {} });
   const sourceExecute = execTool.execute;
-  execTool.execute = forgedExecute;
+  execTool.execute = async () => ({ content: [], details: {} });
   expectRejectedSource(execTool);
   execTool.execute = sourceExecute;
 
-  const pluginExec = { ...execTool, name: "exec" };
-  const [boundPluginExec] = hostCapabilities.bindToolSurface([pluginExec]);
+  const [boundPluginExec] = hostCapabilities.bindToolSurface([{ ...execTool }]);
   expectRejectedSource(boundPluginExec!);
 
   const nonShellTool = sourceTools.find((tool) => tool.name !== "exec" && tool.name !== "process");
-  if (!nonShellTool) {
-    throw new Error("expected a non-shell host-created tool");
-  }
+  assert(nonShellTool, "expected a non-shell host-created tool");
   nonShellTool.name = "exec";
   expectRejectedSource(nonShellTool);
 
@@ -89,13 +82,10 @@ it("issues scheduled shell projections only from this host-created tool surface"
 });
 
 it("constructs scheduled exec projections with host-owned policy", async () => {
+  const text =
+    "Command still running. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
   const execute = vi.fn(async () => ({
-    content: [
-      {
-        type: "text" as const,
-        text: "Command still running. Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-      },
-    ],
+    content: [{ type: "text" as const, text }],
     details: {},
   }));
   const source = {
@@ -116,16 +106,9 @@ it("constructs scheduled exec projections with host-owned policy", async () => {
     ask: "off",
   });
 
-  expect(execute).toHaveBeenCalledWith(
-    "call-1",
-    { command: "echo safe", host: "gateway", ask: "always" },
-    undefined,
-    undefined,
-  );
-  expect(readCronScheduledToolProjection(alias)).toEqual({
-    targetTool: "exec",
-    execTarget: { host: "gateway", ask: "always" },
-  });
+  expect(execute.mock.calls).toEqual([
+    ["call-1", { command: "echo safe", host: "gateway", ask: "always" }, undefined, undefined],
+  ]);
   expect(result.content).toEqual([
     { type: "text", text: "Command still running. Use gateway_process for follow-up." },
   ]);

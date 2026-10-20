@@ -18,7 +18,6 @@ const PLUGIN_A = "test-grant-alpha";
 const PLUGIN_B = "test-grant-beta";
 const TOOL_A = "alpha_optional_tool";
 const TOOL_B = "beta_optional_tool";
-const grantA = () => ({ pluginId: PLUGIN_A, toolNames: [TOOL_A] });
 const grantB = () => ({ pluginId: PLUGIN_B, toolNames: [TOOL_B] });
 let tempDir: string;
 const cleanups: Array<() => void> = [];
@@ -34,17 +33,13 @@ beforeEach(async () => {
     await fs.mkdir(pluginDir, { recursive: true });
     await fs.writeFile(
       path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        configSchema: {},
-        contracts: { tools: [toolName] },
-      }),
+      JSON.stringify({ id: pluginId, configSchema: {}, contracts: { tools: [toolName] } }),
     );
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `
       const toolName = ${JSON.stringify(toolName)};
-      const plugin = { register(api) {
+      module.exports = { register(api) {
         api.registerTool({
           name: toolName, label: toolName, description: toolName + ' fixture tool',
           parameters: { type: 'object', properties: {} },
@@ -55,8 +50,6 @@ beforeEach(async () => {
           },
         }, { name: toolName, optional: true });
       }};
-      module.exports = plugin;
-      module.exports.default = plugin;
     `,
     );
   }
@@ -73,7 +66,7 @@ afterEach(async () => {
 });
 
 async function createSurface(scenario: "forged options" | "mutated attempt" | "absent grant") {
-  const grant = grantA();
+  const grant = { pluginId: PLUGIN_A, toolNames: [TOOL_A] };
   const workspaceDir = path.join(tempDir, "workspace");
   const config: OpenClawConfig = {
     tools: { profile: "coding" },

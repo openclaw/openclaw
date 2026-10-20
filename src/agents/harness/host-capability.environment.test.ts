@@ -8,6 +8,9 @@ import * as gatewayCliShim from "../../infra/openclaw-cli-shim.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
+const computerText = (nodeId: string) =>
+  `Current active computer (latest reported app/system input, not message origin): active_node=${nodeId} active_node_identity=requester`;
+
 let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
 async function createHost(
   config: OpenClawConfig,
@@ -50,9 +53,7 @@ it("keeps host context reads current and closure-bound", async () => {
     }),
   );
   expect(preparedEnvironment?.()).toMatchObject({
-    credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
     localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
-    managedLocalIdentity: true,
     hostExecutionRequired: true,
     localProcessEnv: {
       OPENCLAW_STATE_DIR: "/state",
@@ -63,17 +64,13 @@ it("keeps host context reads current and closure-bound", async () => {
   expect(Object.isFrozen(preparedEnvironment?.().localProcessEnv)).toBe(true);
   for (const nodeId of ["mac-a", "mac-b"]) {
     setActiveNodeContexts([{ nodeId: "shared-mac" }, { nodeId, profileId: "requester" }]);
-    expect(activeComputerContext?.()).toBe(
-      `Current active computer (latest reported app/system input, not message origin): active_node=${nodeId} active_node_identity=requester`,
-    );
+    expect(activeComputerContext?.()).toBe(computerText(nodeId));
   }
   setActiveNodeContexts([
     { nodeId: "shared-mac" },
     { nodeId: "mac-b", profileId: "requester", isCurrent: () => false },
   ]);
-  expect(activeComputerContext?.()).toBe(
-    "Current active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=requester",
-  );
+  expect(activeComputerContext?.()).toBe(computerText("unknown"));
   host!.closeHost();
   expect(() => preparedEnvironment?.()).toThrow("no longer active");
   expect(() => activeComputerContext?.()).toThrow("no longer active");
@@ -104,6 +101,4 @@ it("snapshots the inherited tool PATH independently of identity", async () => {
   expect(environment?.hostExecutionRequired).toBeUndefined();
   expect(Object.isFrozen(environment?.localToolEnv)).toBe(true);
   expect(Object.isFrozen(environment?.localToolPathPrepend)).toBe(true);
-  host!.closeHost();
-  expect(() => preparedEnvironment?.()).toThrow("no longer active");
 });

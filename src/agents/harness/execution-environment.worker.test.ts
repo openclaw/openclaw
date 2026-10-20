@@ -53,16 +53,9 @@ it("reads native consent in the worker and observes a committed revocation", asy
         nativeRuntimeConsent: harness.id,
       },
     );
-    await withoutMainThreadSql(async () => {
-      await check(params).resolves.toBe(true);
-    });
-    await update({
-      sandboxMode: undefined,
-      nativeRuntimeConsent: undefined,
-    });
-    await withoutMainThreadSql(async () => {
-      await check(params).rejects.toThrow("outside the sandbox");
-    });
+    await withoutMainThreadSql(() => check(params).resolves.toBe(true));
+    await update({ sandboxMode: undefined, nativeRuntimeConsent: undefined });
+    await withoutMainThreadSql(() => check(params).rejects.toThrow("outside the sandbox"));
   });
 });
 

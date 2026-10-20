@@ -33,21 +33,16 @@ export async function createAdmittedHostCapabilityTestFixture(
   if (options.gatewayContext) {
     const { createContext } =
       await import("../../gateway/server-plugin-in-process-dispatch.test-support.js");
-    const {
-      getGatewayContextLifetime,
-      withPluginRuntimeGatewayRequestScope,
-      bindGatewayContextResolver,
-    } = await import("../../plugins/runtime/gateway-request-scope.js");
-    const context = createContext();
+    const gateway = await import("../../plugins/runtime/gateway-request-scope.js");
+    const context = createContext([], () => attempt.config ?? {});
     const resolver = () => context;
     context.resolveGatewayContext = resolver;
-    context.getRuntimeConfig = () => attempt.config ?? {};
     resolveGatewayContext = resolver;
-    bindGateway = (admitted) => bindGatewayContextResolver(admitted, resolver);
-    const lifetime = getGatewayContextLifetime(resolver);
+    bindGateway = (admitted) => gateway.bindGatewayContextResolver(admitted, resolver);
+    const lifetime = gateway.getGatewayContextLifetime(resolver);
     runWithGatewayScope = <T>(run: () => T): T => {
       lifetime.signal.throwIfAborted();
-      return withPluginRuntimeGatewayRequestScope(
+      return gateway.withPluginRuntimeGatewayRequestScope(
         { context, resolveGatewayContext: resolver, isWebchatConnect: () => false },
         run,
       );
@@ -83,15 +78,13 @@ export async function createAdmittedHostCapabilityTestFixture(
     attempt: hostAttempt,
     admittedRunContext,
     hostCapabilities: host.capabilities,
-    ...(attempt.sessionKey
-      ? {
-          agentHarnessCompletionScope: createAgentHarnessCompletionScope({
-            requesterSessionKey: attempt.sessionKey,
-            requesterAgentId: attempt.agentId ?? "main",
-            gatewayContextResolver: resolveGatewayContext,
-          }),
-        }
-      : {}),
+    ...(attempt.sessionKey && {
+      agentHarnessCompletionScope: createAgentHarnessCompletionScope({
+        requesterSessionKey: attempt.sessionKey,
+        requesterAgentId: attempt.agentId ?? "main",
+        gatewayContextResolver: resolveGatewayContext,
+      }),
+    }),
     closeHost: host.close,
     closeAdmission: admission.close,
     runWithGatewayScope,

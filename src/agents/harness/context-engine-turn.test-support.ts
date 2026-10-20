@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
+import { createPassthroughEngineMethods } from "../../context-engine/context-engine.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
@@ -11,26 +12,24 @@ export function createTurnBoundary(
   sessionId = "session-a",
   sequence = 1,
 ): TranscriptTurnBoundary {
-  const anchor = {
+  const anchor = (
+    role: "user" | "assistant",
+    rawSeq: number,
+    effectiveParentId: string | null,
+  ) => ({
     agentId: "main",
     sessionId,
     sessionKey: `agent:main:${sessionId}`,
     storePath,
     generation: "generation-1",
-    entryId: `${logicalTurnId}:user`,
-    rawSeq: sequence,
-    activeMessagePosition: sequence,
-    effectiveParentId: null,
-  };
+    entryId: `${logicalTurnId}:${role}`,
+    rawSeq,
+    activeMessagePosition: rawSeq,
+    effectiveParentId,
+  });
   return {
-    admission: { ...anchor, logicalTurnId, role: "user" },
-    terminal: {
-      ...anchor,
-      entryId: `${logicalTurnId}:assistant`,
-      rawSeq: sequence + 1,
-      activeMessagePosition: sequence + 1,
-      effectiveParentId: anchor.entryId,
-    },
+    admission: { ...anchor("user", sequence, null), logicalTurnId, role: "user" },
+    terminal: anchor("assistant", sequence + 1, `${logicalTurnId}:user`),
   };
 }
 
@@ -59,20 +58,16 @@ export function createTurnEngine<T extends NonNullable<ContextEngine["commitTurn
   commitTurn: T,
   durable = true,
 ) {
+  const info: ContextEngine["info"] = { id: "test", name: "Test" };
+  if (durable) {
+    info.transcriptSemantics = {
+      currentTurnFence: "before-current-turn-entry-v1",
+      turnAdvancementIdempotency: "atomic-idempotent-v1",
+    };
+  }
   return {
-    info: {
-      id: "test",
-      name: "Test",
-      transcriptSemantics: durable
-        ? {
-            currentTurnFence: "before-current-turn-entry-v1" as const,
-            turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
-          }
-        : undefined,
-    },
-    ingest: async () => ({ ingested: true }),
-    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-    compact: async () => ({ ok: true, compacted: false }),
+    info,
+    ...createPassthroughEngineMethods(),
     commitTurn,
   } satisfies ContextEngine;
 }
