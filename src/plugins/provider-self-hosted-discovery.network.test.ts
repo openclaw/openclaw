@@ -27,6 +27,17 @@ const model: Model<"openai-completions"> = {
   maxTokens: 256,
 };
 
+function stubFetch(run = async () => Response.json({ data: [{ id: "local-model" }] })) {
+  const fetch = vi.fn(run);
+  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
+    Agent,
+    EnvHttpProxyAgent,
+    ProxyAgent,
+    fetch,
+  });
+  return fetch;
+}
+
 afterEach(async () => {
   await closeProviderTransportDispatcherPool();
   lookupMock.mockReset();
@@ -46,13 +57,7 @@ describe("discovery request authority and proxy routing", () => {
       authorized = false;
       return [{ address: "93.184.216.34", family: 4 }];
     });
-    const fetch = vi.fn(async () => Response.json({ data: [{ id: "local-model" }] }));
-    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
-      Agent,
-      EnvHttpProxyAgent,
-      ProxyAgent,
-      fetch,
-    });
+    const fetch = stubFetch();
 
     const result = await discoverOpenAICompatibleLocalModels({
       baseUrl,
@@ -80,13 +85,7 @@ describe("discovery request authority and proxy routing", () => {
     vi.stubEnv("NO_PROXY", "");
     vi.stubEnv("no_proxy", "");
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const fetch = vi.fn(async () => Response.json({ data: [{ id: "local-model" }] }));
-    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
-      Agent,
-      EnvHttpProxyAgent,
-      ProxyAgent,
-      fetch,
-    });
+    const fetch = stubFetch();
 
     const result = await discoverOpenAICompatibleLocalModels({
       baseUrl: "http://public-provider.example/v1",
@@ -140,13 +139,7 @@ describe.each([
     lookupMock.mockResolvedValue([
       { address: testCase.address, family: testCase.address.includes(":") ? 6 : 4 },
     ]);
-    const fetch = vi.fn(async () => Response.json({ data: [{ id: "local-model" }] }));
-    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
-      Agent,
-      EnvHttpProxyAgent,
-      ProxyAgent,
-      fetch,
-    });
+    const fetch = stubFetch();
     const allowed =
       allowPrivateNetwork === true ||
       (allowPrivateNetwork === false ? testCase.strictAllowed : testCase.defaultAllowed);
@@ -171,16 +164,10 @@ describe.each([
 
   it("keeps the inference guard on cross-host redirects during discovery", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    const fetch = vi.fn(
+    const fetch = stubFetch(
       async () =>
         new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest" } }),
     );
-    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
-      Agent,
-      EnvHttpProxyAgent,
-      ProxyAgent,
-      fetch,
-    });
 
     expect(await discover(allowPrivateNetwork)).toMatchObject({ kind: "unreachable" });
     expect(fetch).toHaveBeenCalledTimes(1);

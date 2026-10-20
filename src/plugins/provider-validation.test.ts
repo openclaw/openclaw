@@ -21,6 +21,16 @@ function normalizeProviderFixture(provider: ProviderPlugin) {
 describe("normalizeRegisteredProvider", () => {
   it("drops invalid and duplicate auth methods, and clears bad wizard method bindings", () => {
     const primaryAuthRun = async () => ({ profiles: [] });
+    const methodMetadata = {
+      modelTarget: "utility",
+      assistantVisibility: "detected-only",
+      onboardingFeatured: true,
+      modelSelection: { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false },
+    } as const;
+    const setupMetadata = {
+      onboardingFeatured: true,
+      modelSelection: { promptWhenAuthChoiceProvided: false, allowKeepCurrent: true },
+    };
     const { provider, diagnostics } = normalizeProviderFixture(
       makeProvider({
         id: " demo ",
@@ -34,14 +44,8 @@ describe("normalizeRegisteredProvider", () => {
             label: " Primary ",
             kind: "custom",
             wizard: {
+              ...methodMetadata,
               choiceId: " demo-primary ",
-              modelTarget: "utility",
-              assistantVisibility: "detected-only",
-              onboardingFeatured: true,
-              modelSelection: {
-                promptWhenAuthChoiceProvided: true,
-                allowKeepCurrent: false,
-              },
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
@@ -61,10 +65,9 @@ describe("normalizeRegisteredProvider", () => {
         ],
         wizard: {
           setup: {
+            ...setupMetadata,
             choiceId: " demo-choice ",
-            onboardingFeatured: true,
             methodId: " missing ",
-            modelSelection: { promptWhenAuthChoiceProvided: false, allowKeepCurrent: true },
           },
           modelPicker: {
             label: " Demo models ",
@@ -86,14 +89,8 @@ describe("normalizeRegisteredProvider", () => {
             label: "Primary",
             kind: "custom",
             wizard: {
+              ...methodMetadata,
               choiceId: "demo-primary",
-              modelTarget: "utility",
-              assistantVisibility: "detected-only",
-              onboardingFeatured: true,
-              modelSelection: {
-                promptWhenAuthChoiceProvided: true,
-                allowKeepCurrent: false,
-              },
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
@@ -106,9 +103,8 @@ describe("normalizeRegisteredProvider", () => {
         ],
         wizard: {
           setup: {
+            ...setupMetadata,
             choiceId: "demo-choice",
-            onboardingFeatured: true,
-            modelSelection: { promptWhenAuthChoiceProvided: false, allowKeepCurrent: true },
           },
           modelPicker: {
             label: "Demo models",
@@ -116,25 +112,17 @@ describe("normalizeRegisteredProvider", () => {
         },
       }),
     );
-    expect(diagnostics.map(({ level, message }) => ({ level, message }))).toEqual([
-      {
-        level: "error",
-        message: 'provider "demo" auth method duplicated id "primary"',
-      },
-      {
-        level: "error",
-        message: 'provider "demo" auth method missing id',
-      },
-      {
-        level: "warn",
-        message:
-          'provider "demo" setup method "missing" not found; falling back to available methods',
-      },
-      {
-        level: "warn",
-        message:
-          'provider "demo" model-picker method "missing" not found; falling back to available methods',
-      },
+    expect(diagnostics.map(({ level, message }) => [level, message])).toEqual([
+      ["error", 'provider "demo" auth method duplicated id "primary"'],
+      ["error", 'provider "demo" auth method missing id'],
+      [
+        "warn",
+        'provider "demo" setup method "missing" not found; falling back to available methods',
+      ],
+      [
+        "warn",
+        'provider "demo" model-picker method "missing" not found; falling back to available methods',
+      ],
     ]);
   });
 

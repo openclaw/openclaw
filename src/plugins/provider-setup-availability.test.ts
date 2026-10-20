@@ -30,6 +30,16 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug }),
 }));
 
+function mockProbe(detectAvailability: () => Promise<boolean>) {
+  resolvePluginProvidersCore.mockReturnValue([
+    {
+      pluginId: "ollama",
+      id: "ollama",
+      auth: [{ id: "local", appGuidedSetup: { detectAvailability } }],
+    },
+  ]);
+}
+
 describe("detectAvailableSetupProviderIds", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -70,13 +80,7 @@ describe("detectAvailableSetupProviderIds", () => {
 
   it("returns the provider id when its read-only availability probe succeeds", async () => {
     const detectAvailability = vi.fn(async () => true);
-    resolvePluginProvidersCore.mockReturnValue([
-      {
-        pluginId: "ollama",
-        id: "ollama",
-        auth: [{ id: "local", appGuidedSetup: { detectAvailability } }],
-      },
-    ]);
+    mockProbe(detectAvailability);
 
     await expect(detectAvailableSetupProviderIds({ config: {} })).resolves.toEqual(
       new Set(["ollama"]),
@@ -110,22 +114,9 @@ describe("detectAvailableSetupProviderIds", () => {
   });
 
   it("treats failed availability probes as an intentional non-match", async () => {
-    resolvePluginProvidersCore.mockReturnValue([
-      {
-        pluginId: "ollama",
-        id: "ollama",
-        auth: [
-          {
-            id: "local",
-            appGuidedSetup: {
-              detectAvailability: vi.fn(async () => {
-                throw new Error("offline");
-              }),
-            },
-          },
-        ],
-      },
-    ]);
+    mockProbe(async () => {
+      throw new Error("offline");
+    });
 
     await expect(detectAvailableSetupProviderIds({ config: {} })).resolves.toEqual(new Set());
     expect(debug).toHaveBeenCalledWith(expect.stringContaining("offline"));

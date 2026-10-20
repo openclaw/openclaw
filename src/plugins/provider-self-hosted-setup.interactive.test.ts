@@ -83,23 +83,21 @@ describe("promptAndConfigureOpenAICompatibleSelfHostedProviderAuth", () => {
       },
       defaultModel: "fixture/org/demo-model",
     });
-    expect(vi.mocked(prompter.text).mock.calls).toEqual([
+    expect(vi.mocked(prompter.text).mock.calls).toEqual(
       [
         {
           message: "Fixture base URL",
           placeholder: "http://127.0.0.1:8000/v1",
         },
-      ],
-      [
         {
           message: "Fixture API key",
           placeholder: "sk-... (or any non-empty string)",
           validate: expect.any(Function),
           sensitive: true,
         },
-      ],
-      [{ message: "Fixture model", placeholder: "org/example", validate: expect.any(Function) }],
-    ]);
+        { message: "Fixture model", placeholder: "org/example", validate: expect.any(Function) },
+      ].map((prompt) => [prompt]),
+    );
     for (const [prompt] of vi.mocked(prompter.text).mock.calls.slice(1)) {
       expect(prompt.validate?.(" ")).toBe("Required");
       expect(prompt.validate?.(" value ")).toBeUndefined();
@@ -109,40 +107,28 @@ describe("promptAndConfigureOpenAICompatibleSelfHostedProviderAuth", () => {
   });
 
   it.each([
-    {
-      name: "blank input uses the default",
-      cfg: {},
-      initialValue: undefined,
-      baseUrl: "http://127.0.0.1:8000/v1",
-    },
-    {
-      name: "blank input keeps the stored URL, prefilled for editing",
-      cfg: {
-        models: { providers: { fixture: { baseUrl: "http://gpu-box:8000/v1/", models: [] } } },
-      },
-      initialValue: "http://gpu-box:8000/v1/",
-      baseUrl: "http://gpu-box:8000/v1",
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; initialValue?: string; baseUrl: string }>)(
-    "$name",
-    async ({ cfg, initialValue, baseUrl }) => {
-      const prompter = createWizardPrompter();
-      vi.mocked(prompter.text)
-        .mockResolvedValueOnce(" ")
-        .mockResolvedValueOnce("key")
-        .mockResolvedValueOnce("model");
+    [undefined, "http://127.0.0.1:8000/v1"],
+    ["http://gpu-box:8000/v1/", "http://gpu-box:8000/v1"],
+  ])("blank input falls back to stored URL %s or default", async (initialValue, baseUrl) => {
+    const cfg: OpenClawConfig = initialValue
+      ? { models: { providers: { fixture: { baseUrl: initialValue, models: [] } } } }
+      : {};
+    const prompter = createWizardPrompter();
+    vi.mocked(prompter.text)
+      .mockResolvedValueOnce(" ")
+      .mockResolvedValueOnce("key")
+      .mockResolvedValueOnce("model");
 
-      const result = await promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
-        ...fixtureProvider,
-        cfg,
-        prompter,
-      });
+    const result = await promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
+      ...fixtureProvider,
+      cfg,
+      prompter,
+    });
 
-      expect(vi.mocked(prompter.text).mock.calls[0]?.[0]).toMatchObject({
-        initialValue,
-        placeholder: "http://127.0.0.1:8000/v1",
-      });
-      expect(result.configPatch?.models?.providers?.fixture?.baseUrl).toBe(baseUrl);
-    },
-  );
+    expect(vi.mocked(prompter.text).mock.calls[0]?.[0]).toMatchObject({
+      initialValue,
+      placeholder: "http://127.0.0.1:8000/v1",
+    });
+    expect(result.configPatch?.models?.providers?.fixture?.baseUrl).toBe(baseUrl);
+  });
 });
