@@ -23,6 +23,13 @@ const query = <T extends Element = Element>(selector: string) =>
 const render = (props: Partial<ReturnType<typeof buildProps>>) =>
   renderSessionsView({ ...buildProps(buildMultiResult([])), ...props }, container);
 
+const unavailable = "Connect to the Gateway to search transcripts.";
+const connectionStatus = () => query('.settings-section__desc [role="status"]');
+const transcriptTrigger = () => query<HTMLButtonElement>(".sessions-transcript-search__trigger");
+const filterInput = () => query<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const escapeKey = (options: KeyboardEventInit = {}) =>
+  new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
+
 describe("sessions transcript search view", () => {
   it.each([true, false])(
     "keeps transcript submission separate from roster filtering (available=%s)",
@@ -41,19 +48,17 @@ describe("sessions transcript search view", () => {
       const rosterFilter = query<HTMLInputElement>(
         '.sessions-filter-popover__search input[type="text"]',
       );
-      const transcriptTrigger = query<HTMLButtonElement>(".sessions-transcript-search__trigger");
+      const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");
       expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(transcriptTrigger?.getAttribute("aria-label")).toBe(
-        available ? "Search transcripts" : "Connect to the Gateway to search transcripts.",
+      expect(trigger?.getAttribute("aria-label")).toBe(
+        available ? "Search transcripts" : unavailable,
       );
-      expect(transcriptTrigger?.disabled).toBe(!available);
+      expect(trigger?.disabled).toBe(!available);
       expect(query(".sessions-transcript-search__input input")).toBeNull();
-      expect(query('.settings-section__desc [role="status"]')?.textContent).toBe(
-        available ? undefined : "Connect to the Gateway to search transcripts.",
-      );
+      expect(connectionStatus()?.textContent).toBe(available ? undefined : unavailable);
       if (available) {
-        transcriptTrigger!.click();
+        trigger!.click();
         await Promise.resolve();
         const transcriptInput = query<HTMLInputElement>(
           '.sessions-transcript-search__input input[type="search"]',
@@ -66,27 +71,16 @@ describe("sessions transcript search view", () => {
         query(".sessions-transcript-search__form")?.dispatchEvent(
           new Event("submit", { bubbles: true, cancelable: true }),
         );
-        expect(onTranscriptSearch).toHaveBeenCalledTimes(1);
       } else {
-        expect(transcriptTrigger?.closest("openclaw-tooltip")).toBeNull();
+        expect(trigger?.closest("openclaw-tooltip")).toBeNull();
+        render({ transcriptSearchAvailable: true });
+        await Promise.resolve();
+        expect(connectionStatus()).toBeNull();
+        expect(transcriptTrigger()?.disabled).toBe(false);
       }
       expect(onTranscriptSearch).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );
-
-  it("removes the connection explanation when transcript search becomes available", async () => {
-    const props = buildProps(buildMultiResult([]));
-    render({ ...props, transcriptSearchAvailable: false });
-    await Promise.resolve();
-    expect(query('.settings-section__desc [role="status"]')?.textContent).toBe(
-      "Connect to the Gateway to search transcripts.",
-    );
-
-    render({ ...props, transcriptSearchAvailable: true });
-    await Promise.resolve();
-    expect(query('.settings-section__desc [role="status"]')).toBeNull();
-    expect(query<HTMLButtonElement>(".sessions-transcript-search__trigger")?.disabled).toBe(false);
-  });
 
   it("renders transcript provenance and opens the matching session", async () => {
     const onNavigateToChat = vi.fn();
@@ -135,17 +129,18 @@ describe("Sessions query clearing", () => {
     "clears only the query with %s and returns focus to search",
     (action) => {
       document.body.append(container);
+      const onFilterChange = vi.fn();
+      const onClearFilters = vi.fn();
       const props = {
-        ...buildProps(buildMultiResult([])),
         searchQuery: "missing",
         statusFilter: "archived" as const,
         activeMinutes: "60",
         limit: "25",
         includeGlobal: false,
         groupBy: "category" as const,
-        onClearFilters: vi.fn(),
-        onFiltersChange: vi.fn(),
-        onStatusFilterChange: vi.fn(),
+        onClearFilters,
+        onFiltersChange: onFilterChange,
+        onStatusFilterChange: onFilterChange,
       };
       const onSearchChange = vi.fn((value: string) => {
         props.searchQuery = value;
@@ -154,46 +149,33 @@ describe("Sessions query clearing", () => {
 
       render({ ...props, onSearchChange });
       query<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
-      const input = query<HTMLInputElement>(".sessions-filter-popover__search input")!;
-      expect(input.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
+      const input = filterInput();
       const clear = query<HTMLButtonElement>('button[aria-label="Clear search"]')!;
-      expect(clear).not.toBeNull();
-      expect(clear.hidden).toBe(false);
-      expect(clear.disabled).toBe(false);
+      expect(clear).toMatchObject({ hidden: false, disabled: false });
       if (action === "click") {
         clear.focus();
         clear.click();
       } else {
         input.focus();
-        const event = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const event = escapeKey();
         input.dispatchEvent(event);
         expect(event.defaultPrevented).toBe(true);
       }
       expect(onSearchChange).toHaveBeenCalledExactlyOnceWith("");
       expect(input.value).toBe("");
       expect(document.activeElement).toBe(input);
-      expect(clear.hidden).toBe(true);
-      expect(clear.disabled).toBe(true);
-      expect(props.onClearFilters).not.toHaveBeenCalled();
-      expect(props.onFiltersChange).not.toHaveBeenCalled();
-      expect(props.onStatusFilterChange).not.toHaveBeenCalled();
+      expect(clear).toMatchObject({ hidden: true, disabled: true });
+      expect(onFilterChange).not.toHaveBeenCalled();
+      expect(onClearFilters).not.toHaveBeenCalled();
       expect(query<HTMLInputElement>(".session-filter-input--limit")?.value).toBe("25");
       expect(query<HTMLSelectElement>(".session-groupby__select")?.value).toBe("category");
-      const emptyEscape = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const emptyEscape = escapeKey();
       input.dispatchEvent(emptyEscape);
       expect(emptyEscape.defaultPrevented).toBe(true);
       expect(query(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
       expect(onSearchChange).toHaveBeenCalledTimes(1);
       query<HTMLButtonElement>(".data-table-empty-state button")!.click();
-      expect(props.onClearFilters).toHaveBeenCalledOnce();
+      expect(onClearFilters).toHaveBeenCalledOnce();
     },
   );
 
@@ -222,43 +204,39 @@ describe("Sessions query clearing", () => {
       }
       render(props);
       query<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
-      const input = query<HTMLInputElement>(".sessions-filter-popover__search input")!;
+      const input = filterInput();
       if (owner !== "unfocused") {
         input.focus();
       }
-      if (owner === "menu" || owner === "closed menu") {
-        overlay = document.createElement("openclaw-menu-surface");
+      if (["menu", "closed menu", "popover", "modal", "shell modal"].includes(owner)) {
+        overlay = document.createElement(
+          owner.endsWith("menu") ? "openclaw-menu-surface" : owner === "modal" ? "dialog" : "div",
+        );
+        if (owner === "popover") {
+          overlay.popover = "manual";
+        }
+        if (owner === "modal") {
+          overlay.setAttribute("open", "");
+        }
+        if (owner === "shell modal") {
+          overlay.className = "shell-nav";
+          overlay.setAttribute("aria-modal", "true");
+        }
         document.body.append(overlay);
         if (owner === "closed menu") {
           overlay.hidePopover();
         }
+        if (owner === "popover") {
+          overlayOwner = createOverlay("sessions-search-test", undefined, { dismissEscape: false });
+          overlayOwner.bindSurface(overlay);
+          overlayOwner.bindTrigger(input);
+          expect(overlayOwner.request(true, "none")).toBe(true);
+        }
+        if (owner === "modal" || owner === "shell modal") {
+          releaseModal = registerModalSurface(overlay);
+        }
       }
-      if (owner === "popover") {
-        overlay = document.createElement("div");
-        overlay.popover = "manual";
-        document.body.append(overlay);
-        overlayOwner = createOverlay("sessions-search-test", undefined, { dismissEscape: false });
-        overlayOwner.bindSurface(overlay);
-        overlayOwner.bindTrigger(input);
-        expect(overlayOwner.request(true, "none")).toBe(true);
-      }
-      if (owner === "modal") {
-        overlay = document.createElement("dialog");
-        overlay.setAttribute("open", "");
-        document.body.append(overlay);
-        releaseModal = registerModalSurface(overlay);
-      }
-      if (owner === "shell modal") {
-        overlay = document.createElement("div");
-        overlay.className = "shell-nav";
-        overlay.setAttribute("aria-modal", "true");
-        document.body.append(overlay);
-        releaseModal = registerModalSurface(overlay);
-      }
-      const event = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
+      const event = escapeKey({
         isComposing: owner === "composing",
         keyCode: owner === "IME keycode" ? 229 : 0,
         ctrlKey: owner === "modified",

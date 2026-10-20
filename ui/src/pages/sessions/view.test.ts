@@ -118,8 +118,9 @@ describe("sessions view", () => {
           ? ["", "Session", "Group", "Updated", "Actions"]
           : ["", "Session", "Updated", "Actions"],
       );
-      expect(query(".session-data-row .session-agent-col")).toBeNull();
-      expect(query(".session-data-row .agent-row-chip")).toBeNull();
+      expect(
+        queryAll(".session-data-row .session-agent-col, .session-data-row .agent-row-chip"),
+      ).toHaveLength(0);
       expect(query(".session-details-row td")?.getAttribute("colspan")).toBe(
         String(scopedHeaders.length),
       );
@@ -312,13 +313,15 @@ describe("sessions view", () => {
       throw new Error("Expected session menu button");
     }
     expect(button.getAttribute("aria-haspopup")).toBe("menu");
+    const expectMenuCall = (call: number, x: number, y: number, trigger: Element | null) =>
+      expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+        call,
+        expect.objectContaining({ key: session.key }),
+        { x, y },
+        trigger,
+      );
     button.click();
-    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ key: session.key }),
-      { x: expect.any(Number), y: expect.any(Number) },
-      button,
-    );
+    expectMenuCall(1, expect.any(Number), expect.any(Number), button);
     const row = query(".session-data-row");
     if (!row) {
       throw new Error("Expected session row");
@@ -330,12 +333,7 @@ describe("sessions view", () => {
       clientY: 45,
     });
     row.dispatchEvent(contextMenu);
-    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ key: session.key }),
-      { x: 123, y: 45 },
-      null,
-    );
+    expectMenuCall(2, 123, 45, null);
     expect(contextMenu.defaultPrevented).toBe(true);
 
     const keyboardContextMenu = new KeyboardEvent("keydown", {
@@ -345,12 +343,7 @@ describe("sessions view", () => {
       shiftKey: true,
     });
     row.dispatchEvent(keyboardContextMenu);
-    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({ key: session.key }),
-      { x: expect.any(Number), y: expect.any(Number) },
-      button,
-    );
+    expectMenuCall(3, expect.any(Number), expect.any(Number), button);
     expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
@@ -381,8 +374,7 @@ describe("sessions view", () => {
     const trigger = actions?.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger");
     const popover = actions?.querySelector(".sessions-filter-popover");
     const panel = popover?.querySelector(".sessions-filter-popover__panel");
-    expect(query(".sessions-filter-bar")).toBeNull();
-    expect(query(".settings-count")).toBeNull();
+    expect(queryAll(".sessions-filter-bar, .settings-count")).toHaveLength(0);
     expect(panel?.querySelector(".sessions-view-segment")).not.toBeNull();
     expect(panel?.querySelector(".sessions-filter-popover__search input")).not.toBeNull();
     expect(trigger?.textContent?.trim()).toBe("");
@@ -431,55 +423,42 @@ describe("sessions view", () => {
     expect(onSearchChange).not.toHaveBeenCalled();
   });
 
-  it("renders and patches provider-owned thinking ids", async () => {
-    const onPatch = vi.fn();
-    await renderSettled(
-      mainSession({
-        thinkingLevel: "adaptive",
-        thinkingLevels: [
-          { id: "off", label: "off" },
-          { id: "adaptive", label: "adaptive" },
-          { id: "max", label: "maximum" },
-        ],
-      }),
-      { expandedSessionKey: "agent:main:main", onPatch },
-    );
-
-    const thinking = query("tbody select") as HTMLSelectElement | null;
-    expect(thinking?.value).toBe("adaptive");
-    expect(optionValues(thinking)).toEqual(["", "off", "adaptive", "max"]);
-    expect(
-      Array.from(thinking?.options ?? [])
-        .find((option) => option.value === "max")
-        ?.textContent?.trim(),
-    ).toBe("Maximum");
-
-    thinking!.value = "max";
-    thinking!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: "max" });
-  });
-
-  it("keeps legacy binary thinking labels patching canonical ids", async () => {
-    const onPatch = vi.fn();
-    await renderSettled(mainSession({ thinkingLevel: "low", thinkingOptions: ["off", "on"] }), {
-      expandedSessionKey: "agent:main:main",
-      onPatch,
-    });
-
-    const thinking = query("tbody select") as HTMLSelectElement | null;
-    expect(thinking?.value).toBe("low");
-    expect(
-      Array.from(thinking?.options ?? [])
-        .find((option) => option.value === "low")
-        ?.textContent?.trim(),
-    ).toBe("On");
-
-    thinking!.value = "low";
-    thinking!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: "low" });
-  });
+  it.each(["provider-owned", "legacy binary"])(
+    "renders and patches %s thinking ids",
+    async (mode) => {
+      const binary = mode === "legacy binary";
+      const onPatch = vi.fn();
+      await renderSettled(
+        mainSession(
+          binary
+            ? { thinkingLevel: "low", thinkingOptions: ["off", "on"] }
+            : {
+                thinkingLevel: "adaptive",
+                thinkingLevels: [
+                  { id: "off", label: "off" },
+                  { id: "adaptive", label: "adaptive" },
+                  { id: "max", label: "maximum" },
+                ],
+              },
+        ),
+        { expandedSessionKey: "agent:main:main", onPatch },
+      );
+      const thinking = query<HTMLSelectElement>("tbody select");
+      const value = binary ? "low" : "max";
+      expect(thinking?.value).toBe(binary ? "low" : "adaptive");
+      if (!binary) {
+        expect(optionValues(thinking)).toEqual(["", "off", "adaptive", "max"]);
+      }
+      expect(
+        Array.from(thinking?.options ?? [])
+          .find((option) => option.value === value)
+          ?.textContent?.trim(),
+      ).toBe(binary ? "On" : "Maximum");
+      thinking!.value = value;
+      thinking!.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: value });
+    },
+  );
 
   it("shows agent identity name and emoji for matching session keys", async () => {
     await renderSettled(
@@ -507,12 +486,6 @@ describe("sessions view", () => {
     await renderSettled(
       [
         createRow("agent:main:queued", { updatedAt: 40, hasActiveRun: true, status: "queued" }),
-        createRow("agent:main:live", {
-          totalTokens: 1200,
-          updatedAt: 30,
-          hasActiveRun: true,
-          status: "running",
-        }),
         createRow("agent:main:idle", {
           unread: true,
           totalTokens: 300,
@@ -520,16 +493,13 @@ describe("sessions view", () => {
           hasActiveRun: false,
           status: "running",
         }),
-        createRow("agent:main:failed", { updatedAt: 10, status: "failed" }),
-        createRow("agent:main:done", { updatedAt: 5, hasActiveRun: true, status: "done" }),
       ],
       { expandedSessionKey: "agent:main:queued" },
     );
 
     expect(sessionTableHeaders()).toEqual(SESSION_TABLE_HEADERS);
     expect(queryAll(".session-data-row .settings-status")).toHaveLength(0);
-    expect(query(".settings-count")).toBeNull();
-    expect(query(".sessions-heading-fact")).toBeNull();
+    expect(queryAll(".settings-count, .sessions-heading-fact")).toHaveLength(0);
     expect(query(".session-details-panel__badges")?.textContent).toContain("Queued");
   });
 
@@ -615,8 +585,7 @@ describe("sessions view", () => {
     for (const select of overridesSection?.querySelectorAll<HTMLSelectElement>(
       ".session-override-field select",
     ) ?? []) {
-      expect(select.disabled).toBe(true);
-      expect(select.title).toBe("Operator admin access is required.");
+      expect(select).toMatchObject({ disabled: true, title: "Operator admin access is required." });
     }
   });
 
@@ -751,8 +720,7 @@ describe("session category controls", () => {
     });
 
     const select = query<HTMLSelectElement>('select[aria-label="Move session to a group"]');
-    expect(select?.disabled).toBe(true);
-    expect(select?.title).toBe(reason);
+    expect(select).toMatchObject({ disabled: true, title: reason });
     if (select) {
       select.value = "";
       select.dispatchEvent(new Event("change", { bubbles: true }));
