@@ -12,6 +12,33 @@ import { prepareCliTurnPromptContext } from "./cli-runner/prompt-context.js";
 import { prepareEmbeddedAttemptPromptContext } from "./embedded-agent-runner/run/attempt-prompt-build.js";
 import { buildInterruptedInputContext } from "./interrupted-input-context.js";
 
+async function stage(
+  target: Parameters<typeof stageSessionPendingInput>[0],
+  id: string,
+  overrides: Partial<PersistedUserTurnMessage> = {},
+  state: "interrupted" | "cancelled" | "queued" = "interrupted",
+) {
+  const receipt = await stageSessionPendingInput(target, {
+    runId: id,
+    message: {
+      role: "user",
+      timestamp: 1,
+      content: id,
+      ...overrides,
+      idempotencyKey: `${id}:user`,
+    },
+    assertCurrent: () => {},
+  });
+  if (!receipt) {
+    throw new Error("Expected accepted input custody");
+  }
+  if (state !== "queued") {
+    receipt.finish(state);
+    await receipt.settled?.();
+  }
+  return receipt;
+}
+
 it("shows interrupted accepted input to a continuation without replaying or consuming it", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = {
@@ -21,21 +48,10 @@ it("shows interrupted accepted input to a continuation without replaying or cons
     };
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
     writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-    const receipt = await stageSessionPendingInput(scope, {
-      runId: "original-request",
-      message: {
-        role: "user",
-        content: "Repair the synthetic widget and verify its keyboard navigation.",
-        timestamp: 100,
-        idempotencyKey: "original-request:user",
-      },
-      assertCurrent: () => {},
+    const receipt = await stage(scope, "original-request", {
+      content: "Repair the synthetic widget and verify its keyboard navigation.",
+      timestamp: 100,
     });
-    if (!receipt) {
-      throw new Error("Expected accepted input custody");
-    }
-    receipt.finish("interrupted");
-    await receipt.settled?.();
     const before = await listSessionPendingInputs(scope);
     const prepared = await prepareEmbeddedAttemptPromptContext({
       attempt: { ...scope, config: {}, sessionTarget: { ...scope, storePath: database.path } },
@@ -74,8 +90,7 @@ it("shows interrupted accepted input to a continuation without replaying or cons
       kind: "conversation-data",
       text: expect.stringContaining("## Temporal Context\nCurrent date:"),
     });
-    expect(prepared.promptForSession).toBe("cont");
-    expect(prepared.promptForModel).toBe("cont");
+    expect(prepared).toMatchObject({ promptForSession: "cont", promptForModel: "cont" });
     for (const privateContext of [false, true]) {
       const cli = await prepareCliTurnPromptContext({
         backendId: "fixture-cli",
@@ -117,44 +132,19 @@ it("bounds quoted interrupted context and excludes queued, cancelled, hidden, an
       storePath: database.path,
     };
     writeSessionEntry(database, target.sessionKey, { sessionId: target.sessionId, updatedAt: 1 });
-    const stage = async (
-      id: string,
-      overrides: Partial<PersistedUserTurnMessage> = {},
-      state: "interrupted" | "cancelled" | "queued" = "interrupted",
-    ) => {
-      const receipt = await stageSessionPendingInput(target, {
-        runId: id,
-        message: {
-          role: "user",
-          timestamp: 1,
-          content: id,
-          ...overrides,
-          idempotencyKey: `${id}:user`,
-        },
-        assertCurrent: () => {},
-      });
-      if (!receipt) {
-        throw new Error("Expected accepted input custody");
-      }
-      if (state !== "queued") {
-        receipt.finish(state);
-        await receipt.settled?.();
-      }
-      return receipt;
-    };
-    await stage("oldest-visible");
-    await stage("old-visible");
-    await stage("recent-visible");
-    const long = await stage("long-visible", {
+    await stage(target, "oldest-visible");
+    await stage(target, "old-visible");
+    await stage(target, "recent-visible");
+    const long = await stage(target, "long-visible", {
       content: [
         { type: "text", text: "long-visible:" + "x".repeat(6_000) },
         { type: "image", data: "synthetic-image-data", mimeType: "image/png" },
       ],
     });
-    await stage("hidden-input", { display: false });
-    await stage("context-excluded-input", { excludeFromContext: true });
-    await stage("cancelled-input", {}, "cancelled");
-    const queued = await stage("queued-input", {}, "queued");
+    await stage(target, "hidden-input", { display: false });
+    await stage(target, "context-excluded-input", { excludeFromContext: true });
+    await stage(target, "cancelled-input", {}, "cancelled");
+    const queued = await stage(target, "queued-input", {}, "queued");
     try {
       const params = {
         sessionTarget: target,

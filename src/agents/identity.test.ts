@@ -15,13 +15,10 @@ describe("resolveAckReaction", () => {
       channels: {
         slack: {
           ackReaction: "eyes",
-          accounts: {
-            acct1: { ackReaction: "party_parrot" },
-          },
+          accounts: { acct1: { ackReaction: "party_parrot" } },
         },
       },
     };
-
     expect(resolveAckReaction(cfg, "main", { channel: "slack", accountId: "missing" })).toBe(
       "eyes",
     );
@@ -36,9 +33,7 @@ describe("resolveAckReaction", () => {
   });
 
   it("returns the default emoji when no config is present", () => {
-    const cfg: OpenClawConfig = {};
-
-    expect(resolveAckReaction(cfg, "main")).toBe("👀");
+    expect(resolveAckReaction({}, "main")).toBe("👀");
   });
 });
 
@@ -69,8 +64,7 @@ describe("response prefixes", () => {
   });
 
   it("passes channel context through to responsePrefix resolution", () => {
-    const cfg = prefixConfig("[WA] ");
-    const result = resolveEffectiveMessagesConfig(cfg, "main", {
+    const result = resolveEffectiveMessagesConfig(prefixConfig("[WA] "), "main", {
       channel: "whatsapp",
     });
     expect(result.responsePrefix).toBe("[WA] ");
@@ -79,18 +73,13 @@ describe("response prefixes", () => {
 
 describe("resolveHumanDelayConfig", () => {
   it("returns undefined when no humanDelay config is set", () => {
-    const cfg: OpenClawConfig = {};
-    expect(resolveHumanDelayConfig(cfg, "main")).toBeUndefined();
+    expect(resolveHumanDelayConfig({}, "main")).toBeUndefined();
   });
 
   it("merges defaults with per-agent overrides", () => {
-    // Partial agent overrides should preserve unspecified timing bounds from
-    // defaults while replacing the fields the agent owns.
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: {
-          humanDelay: { mode: "natural", minMs: 800, maxMs: 1800 },
-        },
+        defaults: { humanDelay: { mode: "natural", minMs: 800, maxMs: 1800 } },
         entries: { main: { humanDelay: { mode: "custom", minMs: 400 } } },
       },
     };

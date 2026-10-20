@@ -33,34 +33,26 @@ function taskCompletionEvent(result: string): AgentInternalEvent {
   };
 }
 
-function extractStatusLine(prompt: string): string {
-  const status = prompt.match(/^status: (.*)$/m)?.[1];
-  if (status === undefined) {
-    throw new Error("Expected status line");
+function extract(prompt: string, pattern: RegExp): string {
+  const value = prompt.match(pattern)?.[1];
+  if (value === undefined) {
+    throw new Error(`Expected ${pattern}`);
   }
-  return status;
+  return value;
 }
-
-function extractChildResult(prompt: string): string {
-  const result = prompt.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
-  if (result === undefined) {
-    throw new Error("Expected child result data block");
-  }
-  return result;
+function fragmentText(fragments: ReturnType<typeof buildAgentInternalEventContext>, kind?: string) {
+  return fragments
+    .filter((fragment) => !kind || fragment.kind === kind)
+    .map((fragment) => fragment.text)
+    .join("\n");
 }
 
 describe("agent internal events", () => {
   it("keeps child output and task labels in data while retaining the producer instruction", () => {
     const event = taskCompletionEvent("The measured value is < 5.");
     const fragments = buildAgentInternalEventContext([event]);
-    const instructions = fragments
-      .filter((fragment) => fragment.kind === "runtime-instruction")
-      .map((fragment) => fragment.text)
-      .join("\n");
-    const data = fragments
-      .filter((fragment) => fragment.kind === "conversation-data")
-      .map((fragment) => fragment.text)
-      .join("\n");
+    const instructions = fragmentText(fragments, "runtime-instruction");
+    const data = fragmentText(fragments, "conversation-data");
     expect(instructions).toContain(event.replyInstruction);
     expect(instructions).not.toContain(event.result);
     expect(instructions).not.toContain(event.taskLabel);
@@ -82,9 +74,7 @@ describe("agent internal events", () => {
     const prompts = [
       formatAgentInternalEventsForPrompt([event]),
       resolveAcpPromptBody("", [event]),
-      buildAgentInternalEventContext([event])
-        .map((fragment) => fragment.text)
-        .join("\n"),
+      fragmentText(buildAgentInternalEventContext([event])),
     ];
 
     for (const prompt of prompts) {
@@ -96,7 +86,6 @@ describe("agent internal events", () => {
         audioAsVoice: undefined,
       });
     }
-    // The delivered-media notice names files without re-arming them for delivery.
     const delivered = formatGeneratedMediaDeliveredForPrompt([mediaUrl]);
     expect(delivered).toContain("Do not send these files again.");
     expect(
@@ -126,7 +115,7 @@ describe("agent internal events", () => {
     } satisfies AgentInternalEvent;
     const prompt = formatAgentInternalEventsForPrompt([event]);
 
-    expect(extractChildResult(prompt)).toBe("child result");
+    expect(extract(prompt, /<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)).toBe("child result");
     expect(prompt).toContain(event.modelRouteChange);
   });
 
@@ -139,7 +128,7 @@ describe("agent internal events", () => {
       status: "timeout",
       statusLabel: `${"a".repeat(keep - 1)}\u{1F600}${"b".repeat(50)}`,
     } satisfies AgentInternalEvent;
-    const status = extractStatusLine(formatAgentInternalEventsForPrompt([event]));
+    const status = extract(formatAgentInternalEventsForPrompt([event]), /^status: (.*)$/m);
 
     expect(status.length).toBeLessThanOrEqual(MAX_STATUS_LABEL_CHARS);
     expect(status.endsWith(marker)).toBe(true);

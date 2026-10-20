@@ -37,6 +37,11 @@ afterEach(async () => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+function writeManifest(plugin: ReturnType<typeof writePlugin>, metadata: object) {
+  const manifest = { id: plugin.id, ...metadata, configSchema: { type: "object" } };
+  writeFileSync(path.join(plugin.dir, "openclaw.plugin.json"), JSON.stringify(manifest));
+}
+
 it("completes without loading configured context/memory or unrelated startup plugins", async () => {
   useNoBundledPlugins();
   const engine = writePlugin({
@@ -51,31 +56,18 @@ it("completes without loading configured context/memory or unrelated startup plu
     body: `globalThis[Symbol.for("openclaw.test.isolatedContextEvaluation")] = true;
       throw new Error("Prompt-only inference must not load the configured memory plugin");`,
   });
-  writeFileSync(
-    path.join(memory.dir, "openclaw.plugin.json"),
-    JSON.stringify({ id: memory.id, kind: "memory", configSchema: { type: "object" } }),
-  );
+  writeManifest(memory, { kind: "memory" });
   const provider = writePlugin({
     id: "openai",
     registration: 'api.registerProvider({ id: "openai", label: "Fixture", auth: [] });',
   });
-  writeFileSync(
-    path.join(provider.dir, "openclaw.plugin.json"),
-    JSON.stringify({ id: "openai", providers: ["openai"], configSchema: { type: "object" } }),
-  );
+  writeManifest(provider, { providers: ["openai"] });
   const harness = writePlugin({
     id: "codex",
     registration: `api.registerAgentHarness({ id: "codex", label: "Fixture",
       supports: () => ({ supported: true }), runAttempt: async () => {} });`,
   });
-  writeFileSync(
-    path.join(harness.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "codex",
-      activation: { onAgentHarnesses: ["codex"] },
-      configSchema: { type: "object" },
-    }),
-  );
+  writeManifest(harness, { activation: { onAgentHarnesses: ["codex"] } });
   const config = {
     plugins: {
       allow: [engine.id, memory.id, provider.id, harness.id],
