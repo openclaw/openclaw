@@ -43,6 +43,10 @@ async function withTarget(
       updatedAt: number;
     };
     events: () => ReturnType<typeof loadTranscriptEvents>;
+    readMessages: () => Promise<ReturnType<typeof readTranscriptEventMessage>[]>;
+    publish: (
+      overrides?: Partial<PublicationParams>,
+    ) => ReturnType<typeof publishHeartbeatSessionReply>;
     workspaceDir: string;
   }) => Promise<void>,
 ) {
@@ -82,6 +86,9 @@ async function withTarget(
         scope,
         entry,
         events: () => loadTranscriptEvents(scope),
+        readMessages: async () =>
+          (await loadTranscriptEvents(scope)).map(readTranscriptEventMessage),
+        publish: (overrides = {}) => publishHeartbeatSessionReply({ ...params, ...overrides }),
         workspaceDir: state.workspaceDir,
       });
     },
@@ -90,7 +97,7 @@ async function withTarget(
 
 describe("publishHeartbeatSessionReply", () => {
   it("publishes through worker reads and observes a later committed reset", async () => {
-    await withTarget(async ({ params, scope, entry }) => {
+    await withTarget(async ({ scope, entry, publish }) => {
       const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
       const reads: string[] = [];
@@ -108,13 +115,11 @@ describe("publishHeartbeatSessionReply", () => {
         );
       });
       try {
-        expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
+        expect(await publish()).toMatchObject({ ok: true });
         expect(reads).toEqual([]);
         await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "reset-generation" });
         reads.length = 0;
-        expect(
-          await publishHeartbeatSessionReply({ ...params, occurrenceIds: ["after-reset"] }),
-        ).toMatchObject({ ok: false });
+        expect(await publish({ occurrenceIds: ["after-reset"] })).toMatchObject({ ok: false });
         expect(reads).toEqual([]);
       } finally {
         observers.forEach((observer) => observer.mockRestore());
@@ -125,7 +130,7 @@ describe("publishHeartbeatSessionReply", () => {
   it.each(["abort", "authority"] as const)(
     "accepts the committed occurrence before queued %s and publishes a later occurrence once",
     async (change) => {
-      await withTarget(async ({ params, scope, events }) => {
+      await withTarget(async ({ params, scope, publish, readMessages }) => {
         const controller = new AbortController();
         let ownerActive = true;
         let cancellationQueued = false;
@@ -158,31 +163,22 @@ describe("publishHeartbeatSessionReply", () => {
               withTranscriptWrite: async (run) => await run(),
             },
             () =>
-              publishHeartbeatSessionReply({
-                ...params,
+              publish({
                 occurrenceIds: ["occurrence-a"],
                 signal: controller.signal,
               }),
           );
           expect(cancellationQueued).toBe(true);
           expect(first).toMatchObject({ ok: true });
-          const second = await publishHeartbeatSessionReply({
-            ...params,
+          const second = await publish({
             occurrenceIds: ["occurrence-b"],
             payload: { text: "The later command finished." },
           });
           expect(second).toMatchObject({ ok: true });
           expect(second).not.toEqual(first);
+          expect(await publish({ occurrenceIds: ["occurrence-a"] })).toEqual(first);
           expect(
-            await publishHeartbeatSessionReply({
-              ...params,
-              occurrenceIds: ["occurrence-a"],
-            }),
-          ).toEqual(first);
-          expect(
-            (await events())
-              .map(readTranscriptEventMessage)
-              .filter((message) => message?.role === "assistant"),
+            (await readMessages()).filter((message) => message?.role === "assistant"),
           ).toHaveLength(2);
           expect(updates.filter((update) => update.messageId)).toHaveLength(2);
           expect(
@@ -199,7 +195,7 @@ describe("publishHeartbeatSessionReply", () => {
   );
 
   it("commits model-visible notification under its still-active admission and replays once", async () => {
-    await withTarget(async ({ params, scope, events }) => {
+    await withTarget(async ({ params, scope, publish, readMessages }) => {
       const admission = await beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
@@ -208,34 +204,25 @@ describe("publishHeartbeatSessionReply", () => {
       const updates: Array<{ messageId?: string }> = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
       try {
-        const first = await admission.run(() => publishHeartbeatSessionReply(params));
+        const first = await admission.run(() => publish());
         expect(first.ok).toBe(true);
         expect(admission.isActive()).toBe(true);
-        const retry = await publishHeartbeatSessionReply({
-          ...params,
+        const retry = await publish({
           occurrenceIds: params.occurrenceIds.toReversed(),
         });
         expect(retry).toEqual(first);
-        const messages = (await events())
-          .map(readTranscriptEventMessage)
-          .filter((message) => message?.role === "assistant");
+        const messages = (await readMessages()).filter((message) => message?.role === "assistant");
         expect(messages).toHaveLength(1);
         expect(messages[0]?.content).toEqual([{ type: "text", text: "The command finished." }]);
         expect(isTranscriptOnlyOpenClawAssistantMessage(messages[0])).toBe(false);
         expect(updates.filter((update) => update.messageId)).toHaveLength(1);
-        expect(
-          await publishHeartbeatSessionReply({
-            ...params,
-            payload: { text: "Conflicting notification" },
-          }),
-        ).toMatchObject({ ok: false });
-        expect(
-          (await events())
-            .map(readTranscriptEventMessage)
-            .filter((message) => message?.role === "assistant"),
-        ).toEqual(messages);
-        const next = await publishHeartbeatSessionReply({
-          ...params,
+        expect(await publish({ payload: { text: "Conflicting notification" } })).toMatchObject({
+          ok: false,
+        });
+        expect((await readMessages()).filter((message) => message?.role === "assistant")).toEqual(
+          messages,
+        );
+        const next = await publish({
           occurrenceIds: ["new-occurrence"],
         });
         expect(next.ok).toBe(true);
@@ -250,7 +237,7 @@ describe("publishHeartbeatSessionReply", () => {
   it.each(["key", "index"] as const)(
     "reconciles an actual runtime %s receipt without duplicating its row",
     async (identity) => {
-      await withTarget(async ({ params, scope, events }) => {
+      await withTarget(async ({ params, scope, events, publish }) => {
         const original = await persistSessionTranscriptTurn(scope, {
           expectedSessionId: scope.sessionId,
           expectedLifecycleRevision: params.expectedGeneration.lifecycleRevision,
@@ -276,7 +263,7 @@ describe("publishHeartbeatSessionReply", () => {
             ...(identity === "index" ? { assistantMessageIndex: 7 } : {}),
           },
         );
-        expect(await publishHeartbeatSessionReply({ ...params, payload })).toEqual({
+        expect(await publish({ payload })).toEqual({
           ok: true,
           messageId: original.messages[0]?.messageId,
         });
@@ -286,40 +273,15 @@ describe("publishHeartbeatSessionReply", () => {
   );
 
   it.each([
-    {
-      name: "captioned image",
-      caption: "Attached image",
-      expectedCaption: "Attached image",
-      source: "/tmp/reply-image.png",
-    },
-    {
-      name: "media-only image",
-      caption: "",
-      expectedCaption: undefined,
-      source: "/tmp/reply-image.png",
-    },
-    {
-      name: "silent voice",
-      caption: "NO_REPLY",
-      expectedCaption: undefined,
-      source: "/tmp/voice.opus",
-    },
-    {
-      name: "literal suffix voice",
-      caption: "NO_REPLY\nNO_REPLY",
-      expectedCaption: "NO_REPLY",
-      source: "/tmp/voice.opus",
-    },
-    {
-      name: "punctuated caption voice",
-      caption: "NO_REPLY.",
-      expectedCaption: "NO_REPLY.",
-      source: "/tmp/voice.opus",
-    },
-  ])(
-    "reconciles a producer-derived $name receipt without rewriting it",
-    async ({ caption, expectedCaption, source }) => {
-      await withTarget(async ({ params, scope, events }) => {
+    ["captioned image", "Attached image", "Attached image", "/tmp/reply-image.png"],
+    ["media-only image", "", undefined, "/tmp/reply-image.png"],
+    ["silent voice", "NO_REPLY", undefined, "/tmp/voice.opus"],
+    ["literal suffix voice", "NO_REPLY\nNO_REPLY", "NO_REPLY", "/tmp/voice.opus"],
+    ["punctuated caption voice", "NO_REPLY.", "NO_REPLY.", "/tmp/voice.opus"],
+  ] as const)(
+    "reconciles a producer-derived %s receipt without rewriting it",
+    async (_name, caption, expectedCaption, source) => {
+      await withTarget(async ({ params, scope, events, publish }) => {
         const assistant = {
           role: "assistant" as const,
           api: "openai-responses" as const,
@@ -368,7 +330,7 @@ describe("publishHeartbeatSessionReply", () => {
         const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
         try {
           for (let replay = 0; replay < 2; replay++) {
-            expect(await publishHeartbeatSessionReply({ ...params, payload })).toEqual({
+            expect(await publish({ payload })).toEqual({
               ok: true,
               messageId: original.messages[0]?.messageId,
             });
@@ -398,9 +360,7 @@ describe("publishHeartbeatSessionReply", () => {
                 assistantTranscriptMediaUrls: mismatch.sources,
               },
             );
-            expect(
-              await publishHeartbeatSessionReply({ ...params, payload: conflicting }),
-            ).toMatchObject({ ok: false });
+            expect(await publish({ payload: conflicting })).toMatchObject({ ok: false });
             expect(await events()).toEqual(before);
           }
           expect(updates).toHaveLength(2);
@@ -412,7 +372,7 @@ describe("publishHeartbeatSessionReply", () => {
   );
 
   it("rejects ownership metadata without a current committed final", async () => {
-    await withTarget(async ({ params, scope, events }) => {
+    await withTarget(async ({ params, scope, events, publish }) => {
       await persistSessionTranscriptTurn(scope, {
         expectedSessionId: scope.sessionId,
         messages: [
@@ -435,7 +395,7 @@ describe("publishHeartbeatSessionReply", () => {
         { assistantTranscriptOwned: true, assistantTranscriptIdempotencyKey: "earlier-final" },
       ]) {
         const payload = setReplyPayloadMetadata({ text: params.payload.text }, metadata);
-        expect(await publishHeartbeatSessionReply({ ...params, payload })).toMatchObject({
+        expect(await publish({ payload })).toMatchObject({
           ok: false,
         });
       }
@@ -446,7 +406,7 @@ describe("publishHeartbeatSessionReply", () => {
   it.each(["Managed source caption", ""])(
     "reconciles an actual source-mirror media receipt with caption %j",
     async (caption) => {
-      await withTarget(async ({ params, scope, events, workspaceDir }) => {
+      await withTarget(async ({ params, scope, events, workspaceDir, publish }) => {
         await fs.mkdir(workspaceDir, { recursive: true });
         const source = path.join(workspaceDir, "source-mirror.png");
         await fs.writeFile(
@@ -514,14 +474,12 @@ describe("publishHeartbeatSessionReply", () => {
                 sourceReplyTranscriptMirror: { ...mirror, ...change },
               },
             );
-            expect(await publishHeartbeatSessionReply({ ...params, payload: wrong })).toMatchObject(
-              { ok: false },
-            );
+            expect(await publish({ payload: wrong })).toMatchObject({ ok: false });
             expect(await events()).toEqual(before);
           }
           expect(updates).toEqual([]);
           for (let replay = 0; replay < 2; replay++) {
-            expect(await publishHeartbeatSessionReply({ ...params, payload })).toMatchObject({
+            expect(await publish({ payload })).toMatchObject({
               ok: true,
             });
             expect(await events()).toEqual(before);
@@ -538,7 +496,7 @@ describe("publishHeartbeatSessionReply", () => {
   it.each(["abort", "authority", "session", "revision", "writer", "archive"] as const)(
     "rejects %s after asynchronous preparation without a transcript write",
     async (change) => {
-      await withTarget(async ({ params, scope, entry, events }) => {
+      await withTarget(async ({ scope, entry, publish, readMessages }) => {
         const entered = createDeferred();
         const release = createDeferred();
         const controller = new AbortController();
@@ -559,7 +517,7 @@ describe("publishHeartbeatSessionReply", () => {
               return await run();
             },
           },
-          () => publishHeartbeatSessionReply({ ...params, signal: controller.signal }),
+          () => publish({ signal: controller.signal }),
         );
         try {
           await Promise.race([
@@ -583,7 +541,7 @@ describe("publishHeartbeatSessionReply", () => {
           }
           release.resolve();
           expect(await publication).toMatchObject({ ok: false });
-          expect((await events()).map(readTranscriptEventMessage).filter(Boolean)).toEqual([]);
+          expect((await readMessages()).filter(Boolean)).toEqual([]);
         } finally {
           release.resolve();
           await publication;
@@ -593,32 +551,32 @@ describe("publishHeartbeatSessionReply", () => {
   );
 
   it("fences a revision-less generation when a revision is materialized", async () => {
-    await withTarget(async ({ params, scope, entry, events }) => {
+    await withTarget(async ({ params, scope, entry, publish, readMessages }) => {
       // Pin the absent revision before another owner materializes it.
       await replaceSessionEntry(scope, { ...entry, lifecycleRevision: undefined });
       params.expectedGeneration.lifecycleRevision = undefined;
       await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "materialized" });
-      expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: false });
-      expect((await events()).map(readTranscriptEventMessage).filter(Boolean)).toEqual([]);
+      expect(await publish()).toMatchObject({ ok: false });
+      expect((await readMessages()).filter(Boolean)).toEqual([]);
     });
   });
 
   it("does not revive an abandoned completion on replay", async () => {
-    await withTarget(async ({ params, scope, events }) => {
-      expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
+    await withTarget(async ({ scope, events, publish }) => {
+      expect(await publish()).toMatchObject({ ok: true });
       await appendTranscriptMessage(scope, {
         eventId: "replacement-root",
         parentId: null,
         message: { role: "assistant", content: [{ type: "text", text: "Replacement branch" }] },
       });
       const before = await events();
-      expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: false });
+      expect(await publish()).toMatchObject({ ok: false });
       expect(await events()).toEqual(before);
     });
   });
 
   it("retains accepted publication through owned-drain failure without another assistant row", async () => {
-    await withTarget(async ({ params, scope, events }) => {
+    await withTarget(async ({ scope, events, publish }) => {
       const updates: Array<{ messageId?: string }> = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
       try {
@@ -632,7 +590,7 @@ describe("publishHeartbeatSessionReply", () => {
               throw new Error("owned drain failed after commit");
             },
           },
-          () => publishHeartbeatSessionReply(params),
+          () => publish(),
         );
         expect(failed).toMatchObject({ ok: true });
         const before = await events();
@@ -640,7 +598,7 @@ describe("publishHeartbeatSessionReply", () => {
           before.map(readTranscriptEventMessage).filter((message) => message?.role === "assistant"),
         ).toHaveLength(1);
         expect(updates).toHaveLength(1);
-        expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
+        expect(await publish()).toMatchObject({ ok: true });
         expect(await events()).toEqual(before);
         expect(updates).toHaveLength(2);
         expect(updates[1]?.messageId).toBeUndefined();

@@ -26,13 +26,7 @@ describe("heartbeat settings", () => {
       name: "disabled global",
       cfg: {
         agents: {
-          defaults: {
-            heartbeat: {
-              every: "0m",
-              target: "last",
-              session: "telegram:default",
-            },
-          },
+          defaults: { heartbeat: { every: "0m", target: "last", session: "telegram:default" } },
         },
       },
       agentId: "main",
@@ -71,18 +65,10 @@ describe("heartbeat settings", () => {
     }
   });
 
-  it.each([
-    {
-      name: "trimmed override prompt",
-      cfg: { agents: { defaults: { heartbeat: { prompt: "  ping  " } } } },
-      expected: "ping",
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; expected: string }>)(
-    "uses $name",
-    ({ cfg, expected }) => {
-      expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe(expected);
-    },
-  );
+  it("uses a trimmed override prompt", () => {
+    const cfg = { agents: { defaults: { heartbeat: { prompt: "  ping  " } } } };
+    expect(resolveConfiguredHeartbeatPrompt(cfg)).toBe("ping");
+  });
 });
 
 describe("session-state heartbeat wakes", () => {

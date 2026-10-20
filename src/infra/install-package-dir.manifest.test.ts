@@ -30,28 +30,19 @@ describe("package install runtime manifest", () => {
       const sourceDir = path.join(fixtureRoot, "source");
       const targetDir = path.join(fixtureRoot, "plugins", "demo");
       await fs.mkdir(sourceDir, { recursive: true });
+      const readManifest = (dir: string) => fs.readFile(path.join(dir, "package.json"));
+      const expectManifest = async (dir: string, expected = originalManifest) =>
+        expect(await readManifest(dir)).toEqual(expected);
       const originalManifest = Buffer.from(
         `${JSON.stringify(
           {
             name: "demo-plugin",
             version: "2.0.0",
-            dependencies: {
-              openclaw: ">=2026.4.5",
-              yaml: "^2.0.0",
-            },
+            dependencies: { openclaw: ">=2026.4.5", yaml: "^2.0.0" },
             optionalDependencies: { openclaw: ">=2026.4.5", fsevents: "^2.3.3" },
-            peerDependencies: {
-              openclaw: ">=2026.4.5",
-              zod: "^4.0.0",
-            },
-            peerDependenciesMeta: {
-              openclaw: { optional: true },
-              zod: { optional: false },
-            },
-            devDependencies: {
-              openclaw: "2026.6.1",
-              typescript: "~5.9.0",
-            },
+            peerDependencies: { openclaw: ">=2026.4.5", zod: "^4.0.0" },
+            peerDependenciesMeta: { openclaw: { optional: true }, zod: { optional: false } },
+            devDependencies: { openclaw: "2026.6.1", typescript: "~5.9.0" },
           },
           null,
           "\t",
@@ -69,7 +60,7 @@ describe("package install runtime manifest", () => {
         if (cwd === undefined) {
           throw new Error("expected package install cwd");
         }
-        const manifest = JSON.parse(await fs.readFile(path.join(cwd, "package.json"), "utf8"));
+        const manifest = JSON.parse((await readManifest(cwd)).toString("utf8"));
         expect(manifest).toMatchObject({
           dependencies: { yaml: "^2.0.0" },
           optionalDependencies: { fsevents: "^2.3.3" },
@@ -102,9 +93,7 @@ describe("package install runtime manifest", () => {
         omitOpenClawHostDependency: true,
         depsLogMessage: "Installing deps…",
         afterInstall: async (stagedDir: string) => {
-          await expect(fs.readFile(path.join(stagedDir, "package.json"))).resolves.toEqual(
-            originalManifest,
-          );
+          await expectManifest(stagedDir);
           validated = true;
           return { ok: true as const };
         },
@@ -114,19 +103,16 @@ describe("package install runtime manifest", () => {
       );
       expect(result.ok).toBe(true);
       expect(validated).toBe(true);
-      await expect(fs.readFile(path.join(targetDir, "package.json"))).resolves.toEqual(
-        originalManifest,
-      );
-      await expect(fs.readFile(path.join(sourceDir, "package.json"))).resolves.toEqual(
-        originalManifest,
-      );
+      await expectManifest(targetDir);
+      await expectManifest(sourceDir);
       if (settlement !== "install") {
         const transaction = resolvePackageDirInstallTransaction(result);
         if (!transaction) {
           throw new Error("expected deferred install transaction");
         }
         await transaction[settlement]();
-        await expect(fs.readFile(path.join(targetDir, "package.json"))).resolves.toEqual(
+        await expectManifest(
+          targetDir,
           settlement === "commit" ? originalManifest : Buffer.from(previousManifest),
         );
         await expect(

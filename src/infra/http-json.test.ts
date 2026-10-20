@@ -18,6 +18,10 @@ const writers = {
   committed: writeJsonWithoutCharset,
 };
 type Writer = keyof typeof writers;
+const contentType = (writer: Writer) =>
+  writer === "bare" || writer === "committed"
+    ? "application/json"
+    : "application/json; charset=utf-8";
 
 describe("HTTP JSON representation", () => {
   let listener: Awaited<ReturnType<typeof reserveTestPortListener>>;
@@ -53,13 +57,8 @@ describe("HTTP JSON representation", () => {
           body: Buffer;
         }>((resolve, reject) => {
           const req = request(
-            {
-              host: "127.0.0.1",
-              port: listener.claim.port,
-              path: `/${writer}`,
-              method,
-              agent: false,
-            },
+            `http://127.0.0.1:${listener.claim.port}/${writer}`,
+            { method, agent: false },
             (res) => {
               const chunks: Buffer[] = [];
               res.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -77,11 +76,7 @@ describe("HTTP JSON representation", () => {
           req.end();
         });
         expect(response.status).toBe(202);
-        expect(response.headers["content-type"]).toBe(
-          writer === "bare" || writer === "committed"
-            ? "application/json"
-            : "application/json; charset=utf-8",
-        );
+        expect(response.headers["content-type"]).toBe(contentType(writer));
         expect(response.headers["cache-control"]).toBe(
           writer === "private" ? "no-store" : "private, no-cache",
         );
@@ -106,11 +101,7 @@ describe("HTTP JSON representation", () => {
       expect(res.headersSent).toBe(writer === "committed");
       expect(res.statusCode).toBe(writer === "framed" ? 200 : 202);
       expect(res.getHeader("Content-Type")).toBe(
-        writer === "framed"
-          ? undefined
-          : writer === "bare" || writer === "committed"
-            ? "application/json"
-            : "application/json; charset=utf-8",
+        writer === "framed" ? undefined : contentType(writer),
       );
       expect(res.getHeader("Cache-Control")).toBe(writer === "private" ? "no-store" : undefined);
       res.destroy();
