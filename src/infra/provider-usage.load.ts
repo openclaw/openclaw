@@ -9,6 +9,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
+import { loadUndiciRuntimeDeps } from "./net/undici-runtime.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -72,7 +73,7 @@ export async function loadProviderUsageSummary(
   }
   const fetchFn = opts.fetch
     ? resolveFetch(opts.fetch)
-    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
+    : (resolveProxyFetchFromEnv(env) ?? resolveFetch(resolveDefaultUsageFetch()));
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }
@@ -177,4 +178,20 @@ export async function loadProviderUsageSummary(
   );
 
   return { updatedAt: now, providers };
+}
+
+/**
+ * Default usage transport runs on the bundled undici fetch: guarded requests
+ * attach their dispatcher to non-ambient fetch implementations, and Node's
+ * built-in fetch rejects that init (UND_ERR_INVALID_ARG) before any request
+ * is sent. The bundled fetch honors per-request dispatchers; ambient proxy
+ * wrappers and operator-supplied fetches keep their own transport.
+ */
+function resolveDefaultUsageFetch(): typeof fetch {
+  const bundledFetch = loadUndiciRuntimeDeps().fetch;
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    bundledFetch(
+      input instanceof Request ? input.url : input,
+      init as Parameters<typeof bundledFetch>[1],
+    )) as unknown as typeof fetch;
 }

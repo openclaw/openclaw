@@ -178,7 +178,7 @@ const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 type EndpointResult =
   | { ok: true; data: Record<string, unknown> }
   | { ok: false; status: number }
-  | { ok: false; reason: "malformed" | "transport" };
+  | { ok: false; reason: "malformed" | "transport"; transportDetail?: string };
 
 type OpenRouterLimitReset = "daily" | "weekly" | "monthly";
 
@@ -527,8 +527,14 @@ export default defineSingleProviderPluginEntry({
               policy: ssrfPolicy,
               auditContext: "openrouter-usage",
             });
-          } catch {
-            return { ok: false, reason: "transport" };
+          } catch (error) {
+            // Keep the fixed user-facing prefix; the recorded cause makes
+            // transport misconfiguration diagnosable from the usage snapshot.
+            return {
+              ok: false,
+              reason: "transport",
+              transportDetail: error instanceof Error ? error.message : String(error),
+            };
           }
           try {
             const { response } = guardedResponse;
@@ -570,11 +576,18 @@ export default defineSingleProviderPluginEntry({
           const transportFailed = [creditsResult, keyResult].some(
             (result) => "reason" in result && result.reason === "transport",
           );
+          const transportDetail = [creditsResult, keyResult]
+            .map((result) => ("transportDetail" in result ? result.transportDetail : undefined))
+            .find((detail) => detail);
           return {
             provider: "openrouter",
             displayName: "OpenRouter",
             windows: [],
-            error: transportFailed ? "Usage unavailable" : "Malformed usage response",
+            error: transportFailed
+              ? transportDetail
+                ? `Usage unavailable: ${transportDetail}`
+                : "Usage unavailable"
+              : "Malformed usage response",
           };
         }
         const credits = creditsResult.ok ? creditsResult.data : undefined;

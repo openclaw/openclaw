@@ -332,18 +332,19 @@ describe("provider-usage.load", () => {
     ]);
   });
 
-  it("throws when fetch is unavailable", async () => {
+  it("keeps loading through the bundled transport when the ambient global fetch is unavailable", async () => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);
     try {
-      await expect(
-        loadProviderUsageSummary({
-          now: usageNow,
-          auth: [{ provider: "xiaomi", token: "token-x" }],
-          env: {},
-          fetch: undefined,
-        }),
-      ).rejects.toThrow("fetch is not available");
+      const summary = await loadProviderUsageSummary({
+        now: usageNow,
+        auth: [{ provider: "xiaomi", token: "token-x" }],
+        env: {},
+      });
+      expect(summary.updatedAt).toBe(usageNow);
+      expect(summary.providers).toEqual([
+        { provider: "xiaomi", displayName: "Xiaomi", windows: [], error: "Unsupported provider" },
+      ]);
     } finally {
       vi.stubGlobal("fetch", previousFetch);
     }

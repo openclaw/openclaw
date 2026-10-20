@@ -131,4 +131,25 @@ describe("provider usage plugin routing", () => {
     expect(createHttp1EnvHttpProxyAgent).not.toHaveBeenCalled();
     expect(undiciFetch).not.toHaveBeenCalled();
   });
+
+  it("routes default plugin requests through the dispatcher-compatible bundled transport", async () => {
+    undiciFetch.mockResolvedValueOnce(new Response("{}"));
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementationOnce(async ({ context }) => {
+      const response = await context.fetchFn(url);
+      expect(await response.text()).toBe("{}");
+      return snapshot;
+    });
+    expect(
+      await loadProviderUsageSummary({
+        now: usageNow,
+        auth: [{ provider: "openai", token: "fixture-token" }],
+        env: {},
+      }),
+    ).toEqual(expected);
+    expect(undiciFetch).toHaveBeenCalledExactlyOnceWith(
+      url,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(createHttp1EnvHttpProxyAgent).not.toHaveBeenCalled();
+  });
 });
