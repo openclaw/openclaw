@@ -654,7 +654,11 @@ export function createSessionWorkspaceProps(
       loadSessionWorkspace(state, workspace);
       publish();
     },
-    onOpenFile: (path: string, origin: "session" | "workspace", disposition?: "pinned" | "preview") => {
+    onOpenFile: (
+      path: string,
+      origin: "session" | "workspace",
+      disposition?: "pinned" | "preview",
+    ) => {
       // Session paths are cwd-relative; browser rows are workspace-root-relative.
       // Keep the origin explicit so a nested cwd cannot shadow the selected browser file.
       const opts =

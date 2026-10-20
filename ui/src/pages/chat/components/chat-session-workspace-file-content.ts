@@ -54,6 +54,16 @@ export function unsupportedFileSidebarContent(
   };
 }
 
+export function readWorkspaceFileText(
+  file: SessionWorkspaceGetResult["file"] | undefined,
+): string | null {
+  return file?.previewKind === "text" &&
+    file.contentEncoding === "utf8" &&
+    typeof file.content === "string"
+    ? file.content
+    : null;
+}
+
 export function hasUniformLineEndings(content: string): boolean {
   return new Set(content.match(/\r\n?|\n/g)).size <= 1;
 }
