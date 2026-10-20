@@ -170,6 +170,11 @@ Backend adapters retain protocol validation and special-mode handling.
     or unavailable runtimes, aborts, timeouts, rejected output, and other
     completion failures without matching message text.
 
+    `LLM_RUNTIME_LIFECYCLE` means the host refused the completion because a
+    plugin or model runtime is reloading or has retired; no inference ran.
+    Keep the work and retry it from a fresh plugin operation after the reload
+    completes, instead of treating it as a provider failure.
+
     Provider orchestration can also acquire the configured local-service
     lifecycle before issuing an HTTP request:
 

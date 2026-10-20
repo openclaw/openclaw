@@ -12,6 +12,7 @@ import { modelKey } from "../../shared/model-key.js";
 import {
   createLlmCompleteError as completionError,
   isLlmOperatorAuthorizationError,
+  withLlmRuntimeLifecycleErrors,
 } from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
@@ -161,7 +162,7 @@ export function createRuntimeLlm(
   options: CreateRuntimeLlmOptions = {},
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
   const logger = options.logger ?? toRuntimeLogger(defaultLogger);
-  return {
+  const llm: Pick<PluginRuntimeCore["llm"], "complete"> = {
     complete: bindLlmOperatorAuthority(options.authority?.caller, async (params, source) => {
       const caller = resolveTrustedCaller(options.authority);
       if (options.authority?.allowComplete === false) {
@@ -455,4 +456,5 @@ export function createRuntimeLlm(
       return await callerResult.promise;
     }),
   };
+  return { complete: withLlmRuntimeLifecycleErrors(llm.complete) };
 }

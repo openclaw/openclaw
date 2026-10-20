@@ -154,11 +154,10 @@ export function extractSocket(row: ApprovalRow | undefined) {
   }
   const socketPath = isRecord(socket) ? socket.path : undefined;
   const socketToken = isRecord(socket) ? socket.token : undefined;
+  // raw_json is canonical; historical socket projections may be stale.
   if (
     (socketPath !== undefined && typeof socketPath !== "string") ||
-    (socketToken !== undefined && typeof socketToken !== "string") ||
-    (socketPath ?? null) !== row.socket_path ||
-    (socketToken ? 1 : 0) !== row.has_socket_token
+    (socketToken !== undefined && typeof socketToken !== "string")
   ) {
     throw invalid();
   }

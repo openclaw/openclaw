@@ -3,7 +3,10 @@ import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
+import type { SandboxContext } from "../sandbox/types.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createCronToolSchema } from "./cron-tool-schema.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
@@ -28,6 +31,102 @@ function setup(actionsAvailable = false) {
   return { callGateway, tool, execute };
 }
 
+function publicationSandbox(overrides: Partial<SandboxContext> = {}) {
+  return createSandboxTestContext({
+    overrides: {
+      workspaceSource: "managed-worktree",
+      fsBridge: {
+        ...createHostSandboxFsBridge("/tmp/github-publish"),
+        readFileWithSource: async () => {
+          throw new Error("Schema fixture does not read files");
+        },
+      },
+      backend: {
+        id: "docker",
+        runtimeId: "fixture",
+        runtimeLabel: "fixture",
+        workdir: "/workspace",
+        buildExecSpec: async () => {
+          throw new Error("Schema fixture does not execute commands");
+        },
+        runShellCommand: async () => {
+          throw new Error("Schema fixture does not execute commands");
+        },
+      },
+      ...overrides,
+    },
+  });
+}
+
+it.each<{
+  name: string;
+  sandbox: Partial<SandboxContext> | null;
+  refresh: boolean;
+  evidence: boolean;
+}>([
+  { name: "direct session", sandbox: null, refresh: false, evidence: false },
+  { name: "writable managed sandbox", sandbox: {}, refresh: true, evidence: true },
+  {
+    name: "read-only managed sandbox",
+    sandbox: { workspaceAccess: "ro" },
+    refresh: false,
+    evidence: true,
+  },
+  {
+    name: "unmanaged sandbox",
+    sandbox: { workspaceSource: undefined },
+    refresh: false,
+    evidence: true,
+  },
+  { name: "missing backend", sandbox: { backend: undefined }, refresh: false, evidence: true },
+  { name: "missing file bridge", sandbox: { fsBridge: undefined }, refresh: true, evidence: false },
+  {
+    name: "missing source-aware read",
+    sandbox: { fsBridge: createHostSandboxFsBridge("/tmp/github-publish") },
+    refresh: true,
+    evidence: false,
+  },
+  { name: "disabled sandbox", sandbox: { enabled: false }, refresh: false, evidence: false },
+])("offers only supported sandbox actions for $name", ({ sandbox, refresh, evidence }) => {
+  for (const actionsAvailable of [false, true]) {
+    const tool = createGitHubPublishTool({
+      sandbox: sandbox === null ? null : publicationSandbox(sandbox),
+      actionsAvailable,
+    });
+    for (const [action, offered, properties] of [
+      ["refresh_base", refresh, ["conflictsResolved", "baseCommit"]],
+      ["upload_evidence", evidence, ["evidence"]],
+    ] as const) {
+      expect(Value.Check(tool.parameters, { action }), action).toBe(offered);
+      for (const property of properties) {
+        if (offered) {
+          expect(tool.parameters).toHaveProperty(`properties.${property}`);
+        } else {
+          expect(tool.parameters).not.toHaveProperty(`properties.${property}`);
+        }
+        expect(tool.description.includes(property), property).toBe(offered);
+      }
+      expect(tool.description.includes(action), action).toBe(offered);
+    }
+    if (!refresh) {
+      expect(tool.description).not.toMatch(/refresh/i);
+    }
+    expect(Value.Check(tool.parameters, {})).toBe(true);
+    for (const action of ["edit", "ready", "request_review"]) {
+      expect(Value.Check(tool.parameters, { action }), action).toBe(true);
+    }
+    for (const action of ["publish", "inspect", "merge", "close"]) {
+      expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
+    }
+    expect(
+      Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
+    ).toBe(actionsAvailable);
+    const description = tool.description;
+    finalizeAgentToolAvailability([tool]);
+    expect(tool.description).toBe(description);
+  }
+});
+
 it.each(["edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
   "rejects draft on %s without changing PR state",
   async (action) => {
@@ -40,7 +139,7 @@ it.each(["edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
 );
 
 it("offers current-PR preparation without privileged actions", () => {
-  const tool = createGitHubPublishTool();
+  const tool = createGitHubPublishTool({ sandbox: publicationSandbox() });
   const check = (args: unknown, valid = true) =>
     expect(Value.Check(tool.parameters, args)).toBe(valid);
   const request = {

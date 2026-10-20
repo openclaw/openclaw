@@ -91,7 +91,7 @@ describe("iOS resource timeline workload boundary", () => {
   });
 
   posixIt(
-    "uses process observation intervals and resets CPU baseline after a missing probe",
+    "attributes all observed processes without exporting paths and resets a missing CPU baseline",
     () => {
       const root = tempDirs.make("ios-resource-timeline-");
       const output = path.join(root, "timeline.jsonl");
@@ -120,7 +120,27 @@ describe("iOS resource timeline workload boundary", () => {
         if (args.includes("/usr/bin/vm_stat") && observations === 1) now += 75_000;
         if (args.includes("/bin/ps")) {
           if (observations === 3) error = Object.assign(new Error("probe unavailable"), { killed: true });
-          else stdout = "42 1 " + (now / 1_000).toFixed(2) + " 1024 R /usr/bin/xcodebuild\\n";
+          else {
+            const runtime = "/Library/Developer/CoreSimulator/Volumes/iOS_private/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
+            const row = (pid, ppid, rate, rss, state, command) => [pid, ppid, (now * rate / 1_000).toFixed(2), rss, state, command].join(" ");
+            const cryptex = "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.private-runtime/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime/Contents/Resources/RuntimeRoot";
+            stdout = [
+              row(42, 1, 1, 1024, "R", "/usr/bin/xcodebuild"),
+              row(80, 1, 0, 1, "S", "/Applications/Xcode_27.app/Contents/Developer/usr/libexec/launchd_sim"),
+              row(81, 80, 0.5, 1024, "R", runtime + "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlightService"),
+              row(82, 80, 0.33, 500000, "U", runtime + "/private-api-token"),
+              row(83, 80, 0.001, 1, "S", cryptex + "/usr/libexec/modelcatalogd"),
+              row(84, 80, 0.01, 1, "S", cryptex + "/System/Library/Frameworks/CoreSpotlight.framework/CoreSpotlightService"),
+              row(85, 80, 0.4, 1024, "S", cryptex + "/usr/libexec/duetexpertd"),
+              row(86, 80, 0.001, 1, "S", "/Library/Developer/CoreSimulator/Devices/private-device/data/RuntimeRoot/usr/libexec/private-device-token"),
+              row(87, 80, 0.001, 1, "S", runtime + "/System/Library/../../private-container-token"),
+              row(88, 80, 0.001, 1, "S", runtime + "/Applications/private-app-token.app/private-app-token"),
+              row(89, 80, 0.001, 1, "S", runtime + "/usr/libexec/private-non-ascii-é"),
+              row(101, 80, 0.001, 1, "S", runtime + "/usr/libexec/" + "private-oversize-".repeat(8)),
+              row(102, 80, 0.001, 1, "S", "/private/app-container/duetexpertd"),
+              ...Array.from({ length: 8 }, (_, i) => row(90 + i, 1, 0.1 + i / 100, 2048, "S", "/usr/libexec/cfprefsd")),
+            ].join("\\n");
+          }
           observations += 1;
         }
         setImmediate(() => callback(error, stdout));
@@ -159,17 +179,83 @@ describe("iOS resource timeline workload boundary", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(23);
       expect(result.stderr).toBe("");
-      const records = readFileSync(output, "utf8")
+      const raw = readFileSync(output, "utf8");
+      expect(raw).not.toMatch(
+        /private-api-token|private-runtime|private-device-token|private-container-token|private-app-token|private-non-ascii|private-oversize|app-container|iOS_private|RuntimeRoot|\/usr\/|\/Applications\//u,
+      );
+      const records = raw
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
       const samples = records.filter((record) => record.type === "sample");
       expect(
         samples.map((sample) =>
-          sample.processes.map((row: { cpuPercent: number | null }) => row.cpuPercent),
+          sample.processes
+            .filter((row: { pid: number }) => row.pid === 42)
+            .map((row: { cpuPercent: number | null }) => row.cpuPercent),
         ),
       ).toEqual([[null], [100], [100], [], [null], [100]]);
+      expect(samples.map((sample) => sample.processIntervalMs)).toEqual([
+        null,
+        90_000,
+        15_000,
+        15_000,
+        null,
+        15_000,
+      ]);
+      expect(samples[1].processes.find((row: { pid: number }) => row.pid === 81)).toMatchObject({
+        role: "CoreSpotlightService",
+        origin: "simulator-runtime",
+        parentRole: "launchd_sim",
+      });
+      expect(samples[1].processes.find((row: { pid: number }) => row.pid === 82)).toMatchObject({
+        role: "other",
+        origin: "simulator-runtime",
+        parentRole: "launchd_sim",
+      });
+      expect(samples[1].processes.map((row: { pid: number }) => row.pid)).not.toContain(83);
+      expect(samples[1].processSummary).toMatchObject({
+        count: 21,
+        runnableCount: 2,
+        uninterruptibleCount: 1,
+        groups: expect.arrayContaining([
+          {
+            origin: "simulator-runtime",
+            role: "CoreSpotlightService",
+            count: 2,
+            cpuObservedCount: 2,
+            cpuDeltaMs: 45_900,
+          },
+          {
+            origin: "simulator-runtime",
+            role: "modelcatalogd",
+            count: 1,
+            cpuObservedCount: 1,
+            cpuDeltaMs: 90,
+          },
+          { origin: "xcode", role: "launchd_sim", count: 1, cpuObservedCount: 1, cpuDeltaMs: 0 },
+        ]),
+      });
+      expect(
+        samples[1].processSummary.groups.filter(
+          (group: { role: string }) => group.role === "duetexpertd",
+        ),
+      ).toEqual([
+        {
+          origin: "simulator-runtime",
+          role: "duetexpertd",
+          count: 1,
+          cpuObservedCount: 1,
+          cpuDeltaMs: 36_000,
+        },
+      ]);
       expect(samples[3].probes.ps.outcome).toBe("timeout");
+      expect(samples[3].processSummary).toBeNull();
+      expect(
+        samples[4].processSummary.groups.every(
+          (group: { cpuObservedCount: number }) => group.cpuObservedCount === 0,
+        ),
+      ).toBe(true);
       expect(records.at(-1)).toMatchObject({ type: "end", code: 23, signal: null });
     },
   );

@@ -19,13 +19,10 @@ export async function waitForBuzzRoomAccess(params: {
   relayUrl: string;
   privateKey: string;
   authTag?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<BuzzDiscoveredRoom[]> {
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
   const publicKey = resolveBuzzPublicKey(params.privateKey);
-  const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS);
-  const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
+  const signal = AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT_MS);
   const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
     relayUrl: params.relayUrl,
     secretKey,
@@ -56,13 +53,7 @@ export async function waitForBuzzRoomAccess(params: {
           resolve(rooms ?? []);
         }
       };
-      const onAbort = () => {
-        if (timeoutSignal.aborted && !params.signal?.aborted) {
-          finish();
-          return;
-        }
-        finish(signal.reason ?? new Error("Buzz room access wait aborted"));
-      };
+      const onAbort = () => finish();
       const checkRooms = async () => {
         if (checking) {
           return;

@@ -281,7 +281,7 @@ describe("LogbookStore", () => {
     expect(await store.observationsInRange(DAY, 0, 3)).toEqual([]);
   });
 
-  it("replaces large card sets in order and rolls back a late missing keyframe", async () => {
+  it("replaces large card sets in order and rolls back a late invalid timestamp", async () => {
     const base = new Date(`${DAY}T10:00:00`).getTime();
     const drafts = Array.from({ length: 70 }, (_, index) => draft({ title: `Card ${index}` }));
     await store.replaceCardsInWindow(DAY, base, base + 60_000, [draft({ title: "replaced" })]);
@@ -293,9 +293,9 @@ describe("LogbookStore", () => {
     await expect(
       store.replaceCardsInWindow(DAY, base, base + 60_000, [
         ...drafts,
-        draft({ title: "invalid", keyframeId: 999_999 }),
+        draft({ title: "invalid", startMs: base + 0.5 }),
       ]),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/INTEGER column cards\.start_ms/);
     expect((await store.cardsForDay(DAY)).map(({ title }) => title)).toEqual(
       drafts.map(({ title }) => title),
     );

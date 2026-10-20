@@ -144,6 +144,14 @@ export async function collectGatewayHealthFindings(
       }),
     );
     const sqliteWalWarning = formatSqliteWalHealthWarning(status.sqliteWal);
+    if (status.modelReasoningWarning) {
+      findings.push(
+        warning(
+          formatGatewayHealthDiagnostic(status.modelReasoningWarning),
+          "Set reasoning: true on the configured model, or choose a non-thinking model.",
+        ),
+      );
+    }
     if (sqliteWalWarning) {
       findings.push(
         warning(`SQLite WAL: ${sqliteWalWarning}`, "Inspect openclaw status --deep output."),
@@ -343,6 +351,7 @@ export async function checkGatewayHealth(params: {
       note(sqliteWalWarning, "SQLite WAL");
     }
     noteWarning(status.startupRecoveryWarning, "Startup session recovery");
+    noteWarning(status.modelReasoningWarning, "Model reasoning");
     const childRuntimeWarning = status.childRuntime
       ? formatMissingChildRuntimeWarning(status.childRuntime)
       : undefined;

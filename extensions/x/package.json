@@ -8,7 +8,7 @@
     "linkify-it": "6.1.0",
     "solid-js": "2.0.0-rc.14",
     "tlds": "1.261.0",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

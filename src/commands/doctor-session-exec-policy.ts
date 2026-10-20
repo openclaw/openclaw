@@ -1,6 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveExecTarget } from "../agents/bash-tools.exec-runtime.js";
+import { resolveExecTarget } from "../agents/bash-tools.exec-target.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

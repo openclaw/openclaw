@@ -288,8 +288,14 @@ simulator services, build parallelism, or release admission.
 The collector takes one serial sample approximately every 15 seconds. It records
 host CPU counters, load, memory compression and swap activity, memory-pressure
 level, disk activity, and at most twelve top CPU/RSS process rows. Process rows
-contain PIDs, parent PIDs, fixed role names, state, CPU time, and RSS; unknown names
-become `other`. It never exports arguments, environment values, paths, or application
+contain PIDs, parent PIDs and roles, state, CPU time, and RSS. Roles use a fixed
+allowlist plus bounded executable basenames from installed Apple simulator runtime
+system directories. Device data, app bundles, containers, and other unknown names
+remain `other`. Fixed origin categories distinguish runtime, Xcode,
+and host-system executable locations where recognizable. Grouped counts and CPU
+deltas cover every parsed process, including rows outside the top-process display.
+`cpuObservedCount` identifies rows with a previous observation; a missing `ps`
+probe leaves the summary null and resets that baseline. It never exports arguments, environment values, paths, or application
 content. Fixed phase labels correlate samples with builds, simulator startup,
 Gateway preparation, native tests, screenshots, archiving, and upload.
 
@@ -330,6 +336,29 @@ enabled. Locally the same wrapper accepts `OPENCLAW_IOS_RESOURCE_DIAGNOSTICS=0`:
 ```bash
 node scripts/ios-resource-timeline.mjs --output /tmp/ios-resource-timeline.jsonl -- pnpm ios:screenshots
 ```
+
+To distinguish simulator startup from OpenClaw and XCTest, the temporary startup
+probe captures only iPhone screenshots. It observes 60 seconds after the build with
+no simulator active, then 120 seconds after boot before app installation or tests:
+
+```bash
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f startup_probe=true
+```
+
+The probe enables the resource timeline even if `resource_diagnostics` is false.
+After simulator cleanup, it also runs a bounded Spotlight experiment: five
+interleaved pairs copy the built products into fresh ordinary and `.noindex`
+directories, observing each for 45 seconds. `ios-spotlight-probe.json` retains
+aggregate file/index counts, matched Spotlight CPU deltas, timing, and host load.
+Only task-owned copies are removed; machine-wide indexing settings are unchanged.
+Missing ordinary-directory positive controls make the result inconclusive. These
+fresh-directory observations do not measure cold-host or release performance.
+
+It is off by default and only configured by the screenshot job. These added waits
+are diagnostic observations, not a performance improvement; include them in any
+end-to-end comparison. Grouped process CPU is still a lower bound: newly observed
+and short-lived processes have no measured delta. Roles and origin categories
+can remain `other`; they are attribution hints, not a complete process inventory.
 
 Remove the collector, phase markers, and comparison switches after the contention
 cause and its improvement are verified. Do not make full Instruments recordings,

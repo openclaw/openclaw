@@ -93,8 +93,11 @@ Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
 `sqlite-vec` loading, native capabilities, and worker readiness in temporary
 state before and after signing, then replaces the previous app. It also rejects
 any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
-`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
-caches still avoid unnecessary declaration work.
+`SKIP_TSC=1` does not bypass the runtime build. App packaging skips SDK declaration
+compilation by default. Its private installation artifacts omit type-only package
+metadata; public npm packages retain their typed SDK contract. Set
+`OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to also build declarations during app
+packaging. Existing content-checked caches still apply to the selected build.
 
 The private worker preserves the app's saved desktop-sharing preference and
 profile selection. Packaging checks startup with sharing enabled, disabled,

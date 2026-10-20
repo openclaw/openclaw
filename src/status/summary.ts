@@ -30,6 +30,7 @@ import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { readModelReasoningWarning } from "../logging/diagnostic-session-state.js";
 import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
@@ -546,6 +547,7 @@ export async function prepareStatusSummary(
           queuedSystemEvents,
           startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
           startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
+          modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,
           secretEgressProxy,
           degradedSecretOwners: listActiveDegradedSecretOwners().map(

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -253,14 +254,26 @@ describe("agentCommand embedded maintenance", () => {
     const sessionId = "maintenance-unlimited";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     let flushTimeout: number | undefined;
+    const advanceWork = async (elapsedMs: number) => {
+      now += elapsedMs;
+      const operation = getCurrentSessionControllerOwner();
+      if (!operation) {
+        throw new Error("Expected the simulated command or maintenance owner");
+      }
+      // The mocked model/checkpoint has completed work, not silently stalled.
+      // Sample the real watchdog so its one-second timer cannot decide the test outcome.
+      operation.watchdog.progress("semantic", "fixture:work_completed");
+      await operation.watchdog.tick();
+      operation.abortSignal.throwIfAborted();
+    };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      now += 1_200_000;
+      await advanceWork(1_200_000);
       return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
-      now += 600_000;
+      await advanceWork(600_000);
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     try {
