@@ -76,16 +76,13 @@ describe("cold-import resource observations", () => {
       "dist/build-info.json",
       JSON.stringify({ commit: "b".repeat(40) }),
     );
-    const observed = captureImportIdentity(root, []);
-    const identity = {
-      ...observed,
-      source: { commit: "a".repeat(40), tree: "c".repeat(40), trackedClean: true },
-    };
+    const identity = captureImportIdentity(root, []);
+    identity.source = { commit: "a".repeat(40), tree: "c".repeat(40), trackedClean: true };
     expect(importIdentityGaps(identity, identity)).toEqual([
       "build declaration does not match source commit",
     ]);
-    const changed = { ...identity, source: { ...identity.source, trackedClean: false } };
-    expect(importIdentityGaps(changed, changed)).toContain(
+    identity.source.trackedClean = false;
+    expect(importIdentityGaps(identity, identity)).toContain(
       "source identity unavailable or tracked source dirty",
     );
   });

@@ -20,6 +20,8 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
   materializeNativeCompiler(root);
   const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
   const marker = (type = '"ok"') => `export type Marker = ${type};\n`;
+  const globalType = (field: string) =>
+    `export {}; declare global { interface FixtureGlobal { ${field}: true } }\n`;
   const entry = (module: string, suffix = "") =>
     `import type { Marker } from "${module}";\nexport const value: Marker = "ok";\n${suffix}`;
   const linkType = process.platform === "win32" ? "junction" : "dir";
@@ -135,25 +137,16 @@ it("reuses observed compiler lookups and rejects newly effective resolutions", a
     "src/index.ts",
     "export const values: Record<keyof FixtureGlobal, number> = { known: 1 };\n",
   );
-  write(
-    "ambient/base/index.d.ts",
-    "export {}; declare global { interface FixtureGlobal { known: true } }\n",
-  );
+  write("ambient/base/index.d.ts", globalType("known"));
   const ambient = await publish();
   expect(matches(ambient)).toBe(true);
-  write(
-    "ambient/added/index.d.ts",
-    "export {}; declare global { interface FixtureGlobal { added: true } }\n",
-  );
+  write("ambient/added/index.d.ts", globalType("added"));
   expect(matches(ambient)).toBe(false);
   await expect(compile()).rejects.toThrow(/TS2741/u);
 
   configure();
   write("src/index.ts", entry("fixture-package"));
-  for (const [name, type] of [
-    ["first", '"ok"'],
-    ["second", "number"],
-  ]) {
+  for (const [name, type] of Object.entries({ first: '"ok"', second: "number" })) {
     write(`packages/${name}/package.json`, '{"name":"fixture-package","types":"index.d.ts"}\n');
     write(
       `packages/${name}/index.d.ts`,

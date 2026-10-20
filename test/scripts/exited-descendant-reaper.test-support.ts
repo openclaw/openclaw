@@ -42,19 +42,18 @@ export function assertFixtureProcessGroupStopped(pgid: number, platform = proces
 // Fail only on live descendants. No JS template escapes in the embedded source.
 export const exitedDescendantReaper = `
 import ctypes, os, signal, subprocess, sys
+from pathlib import Path
 if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
     raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
 
 def process_stat(pid):
-    with open("/proc/%s/stat" % pid) as handle:
-        stat = handle.read()
+    stat = Path("/proc/%s/stat" % pid).read_text()
     return stat[stat.index("(") + 1 : stat.rindex(")")], stat.rsplit(")", 1)[1].split()
 
 def describe(pid):
     try:
         comm, fields = process_stat(pid)
-        with open("/proc/%d/cmdline" % pid, "rb") as handle:
-            argv = [part.decode(errors="replace") for part in handle.read().split(bytes([0])) if part]
+        argv = [part.decode(errors="replace") for part in Path("/proc/%d/cmdline" % pid).read_bytes().split(bytes([0])) if part]
     except OSError:
         return "pid=%d (gone)" % pid
     return "pid=%d ppid=%s state=%s comm=%s argv=%r" % (pid, fields[1], fields[0], comm, argv)

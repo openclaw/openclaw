@@ -14,7 +14,6 @@ const { createTempDir } = createScriptTestHarness();
 let root: string;
 beforeEach(() => {
   root = createTempDir("openclaw-format-docs-");
-  writeDocsFixture(root);
 });
 
 afterEach(() => {
@@ -27,18 +26,12 @@ function commandResult(stdout = "", stderr = "", status = 0): SpawnSyncReturns<s
   return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };
 }
 
-function writeDocsFixture(directory: string, files = ["README.md", "docs/guide.mdx"]): void {
+function mockFormatter(files = ["README.md", "docs/guide.mdx"], run = () => commandResult()) {
   for (const file of files) {
-    const target = path.join(directory, file);
+    const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, "# Guide\n", "utf8");
   }
-}
-
-function mockFormatter(
-  files: string[],
-  run: () => SpawnSyncReturns<string> = () => commandResult(),
-) {
   const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
   vi.mocked(spawnSync).mockImplementation((command, args, options) => {
     if (command === "git") {
@@ -57,7 +50,7 @@ describe("format-docs", () => {
     fs.writeFileSync(shim, "@echo off\n");
     vi.stubGlobal("process", { ...process, platform: "win32" });
     vi.stubEnv("SystemRoot", "C:\\Windows");
-    const calls = mockFormatter(["README.md", "docs/guide.mdx"]);
+    const calls = mockFormatter();
 
     formatDocs({ root });
 
@@ -72,7 +65,6 @@ describe("format-docs", () => {
 
   it("batches oxfmt invocations without losing docs that exceed the command line budget", () => {
     const files = Array.from({ length: 150 }, (_, index) => `docs/${index}-${"a".repeat(180)}.md`);
-    writeDocsFixture(root, files);
     const calls = mockFormatter(files);
 
     formatDocs({ root });
@@ -111,7 +103,7 @@ describe("format-docs", () => {
   });
 
   it("uses repository paths in write mode and temporary paths in check mode", () => {
-    const calls = mockFormatter(["README.md", "docs/guide.mdx"]);
+    const calls = mockFormatter();
 
     expect(formatDocs({ root })).toEqual({ changed: [], fileCount: 2 });
     expect(formatDocs({ root, check: true })).toEqual({ changed: [], fileCount: 2 });

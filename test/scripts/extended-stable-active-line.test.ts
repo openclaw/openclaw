@@ -58,14 +58,10 @@ describe("extended-stable live publication eligibility", () => {
         `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+require("node:assert/strict").deepEqual(args, ${JSON.stringify(mainQuery)});
 fs.appendFileSync(process.env.EVENTS, JSON.stringify(args) + "\\n");
-if (JSON.stringify(args) !== ${JSON.stringify(JSON.stringify(mainQuery))}) {
-  process.stderr.write("Unexpected GitHub operation");
-  process.exit(90);
-}
 if (${JSON.stringify(mainVersion)} === "unavailable") {
-  process.stderr.write("fixture main API unavailable");
-  process.exit(1);
+  throw new Error("fixture main API unavailable");
 }
 process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: mainVersion })).toString("base64"))});
 `,

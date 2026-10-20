@@ -7,65 +7,52 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const FIXTURE_SCRIPT = "scripts/e2e/lib/fixture.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function workspaceFixture() {
+function runDelete(transport?: string, maxBytes?: string) {
   const root = tempDirs.make("openclaw-fixture-workspace-");
   const workspace = path.join(root, "workspace");
   const outputPath = path.join(root, "agents-delete.json");
   const agentsPath = path.join(root, "agents.json");
   mkdirSync(workspace);
-  const run = (maxBytes?: string) =>
-    spawnSync(process.execPath, [FIXTURE_SCRIPT, "agents-delete-assert", outputPath, agentsPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        SHARED_WORKSPACE: workspace,
-        ...(maxBytes ? { OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES: maxBytes } : {}),
-      },
-    });
-  return { workspace, outputPath, agentsPath, run };
-}
-
-function runSharedWorkspaceDelete(transport: string | undefined) {
-  const { workspace, outputPath, agentsPath, run } = workspaceFixture();
-  writeFileSync(
-    outputPath,
-    JSON.stringify({
-      agentId: "ops",
-      workspace,
-      workspaceRetained: true,
-      workspaceRetainedReason: "shared",
-      workspaceSharedWith: ["alpha"],
-      transport,
-    }) + "\n",
-  );
   writeFileSync(agentsPath, JSON.stringify([{ id: "alpha", workspace }]) + "\n");
-  return run();
-}
-
-function invalidDeleteOutput(maxBytes: string) {
-  const { outputPath, run } = workspaceFixture();
   writeFileSync(
     outputPath,
-    `DO_NOT_DUMP_OLD${"x".repeat(70 * 1024)}\nrecent diagnostic tail`,
-    "utf8",
+    maxBytes
+      ? `DO_NOT_DUMP_OLD${"x".repeat(70 * 1024)}\nrecent diagnostic tail`
+      : JSON.stringify({
+          agentId: "ops",
+          workspace,
+          workspaceRetained: true,
+          workspaceRetainedReason: "shared",
+          workspaceSharedWith: ["alpha"],
+          transport,
+        }) + "\n",
   );
-  const result = run(maxBytes);
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("recent diagnostic tail");
-  // Node and Bun expose different prefix lengths in their JSON parse errors.
-  expect(result.stderr).not.toContain("DO_NOT_");
-  return { ...result, outputPath };
+  return {
+    outputPath,
+    ...spawnSync(
+      process.execPath,
+      [FIXTURE_SCRIPT, "agents-delete-assert", outputPath, agentsPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          SHARED_WORKSPACE: workspace,
+          ...(maxBytes ? { OPENCLAW_FIXTURE_AGENTS_DELETE_OUTPUT_MAX_BYTES: maxBytes } : {}),
+        },
+      },
+    ),
+  };
 }
 
 describe("workspace fixture assertions", () => {
   it("requires gateway deletion and retains the shared surviving agent", () => {
-    const result = runSharedWorkspaceDelete("gateway");
+    const result = runDelete("gateway");
     expect(result.status).toBe(0);
   });
 
   it("prepares Open WebUI without retired workspace setup state", () => {
-    const { workspace: workspaceDir } = workspaceFixture();
+    const workspaceDir = tempDirs.make("openclaw-fixture-workspace-");
     const rootStatePath = path.join(workspaceDir, "openclaw-workspace-state.json");
     writeFileSync(rootStatePath, "{}\n");
     const result = spawnSync(process.execPath, [FIXTURE_SCRIPT, "openwebui-workspace"], {
@@ -84,7 +71,10 @@ describe("workspace fixture assertions", () => {
     ["1024", "output exceeded 1024 bytes"],
     ["131072", "did not emit valid JSON"],
   ])("bounds agents-delete diagnostics with a %s byte limit", (limit, error) => {
-    const result = invalidDeleteOutput(limit);
+    const result = runDelete(undefined, limit);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("recent diagnostic tail");
+    expect(result.stderr).not.toContain("DO_NOT_");
     expect(result.stderr).toContain(`agents delete --json ${error}`);
     if (limit === "131072") {
       expect(result.stderr).toContain(result.outputPath);
@@ -92,7 +82,7 @@ describe("workspace fixture assertions", () => {
   });
 
   it.each(["local", undefined])("rejects deletion output with transport %s", (transport) => {
-    const result = runSharedWorkspaceDelete(transport);
+    const result = runDelete(transport);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("transport mismatch");
   });

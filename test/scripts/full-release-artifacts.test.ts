@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -25,6 +24,10 @@ const readLines = (file: string) =>
   existsSync(file) ? readFileSync(file, "utf8").trim().split("\n") : [];
 const completed = { status: "completed", conclusion: "success" };
 const dispatchRecord = () => ({ request: artifactRequest(), runId: "81", runAttempt: "1" });
+const bundleOutputs = (raw: unknown, qualified: unknown) => ({
+  prepared_bundle_json: JSON.stringify(raw),
+  qualified_preflight_bundle_json: JSON.stringify(qualified),
+});
 function artifactMetadata(id: number, name: string, digest: string, runId = 81, size = 256) {
   return {
     id,
@@ -67,10 +70,10 @@ function workflowRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function npmBundles() {
+function npmBundles(sourceSha: string, workflowRef: string) {
   const producer = {
     repository: REPOSITORY,
-    workflowRef: `${REPOSITORY}/${WORKFLOW}@refs/heads/main`,
+    workflowRef: `${REPOSITORY}/${WORKFLOW}@refs/heads/${workflowRef}`,
     workflowSha: TOOLING_SHA,
     runId: "81",
     runAttempt: "1",
@@ -80,7 +83,7 @@ function npmBundles() {
   };
   const raw = {
     schema: "openclaw.prepared-npm-bundle/v1",
-    source: { sha: SOURCE_SHA },
+    source: { sha: sourceSha },
     producer,
     artifact: {
       id: "401",
@@ -94,7 +97,7 @@ function npmBundles() {
       version: "2026.8.1",
       fileName: "openclaw-2026.8.1.tgz",
       sha256: "d".repeat(64),
-      sourceSha: SOURCE_SHA,
+      sourceSha,
     },
     corePackages: [],
     manifestSha256: "e".repeat(64),
@@ -107,14 +110,11 @@ function npmBundles() {
       jobId: "902",
       jobName: "Prepare npm artifacts / Qualify prepared npm package",
     },
-    artifact: { ...raw.artifact, id: "402", name: `openclaw-npm-preflight-${SOURCE_SHA}` },
+    artifact: { ...raw.artifact, id: "402", name: `openclaw-npm-preflight-${sourceSha}` },
     preparedBundle: raw,
     manifestSha256: "f".repeat(64),
   };
-  const outputs = {
-    prepared_bundle_json: JSON.stringify(raw),
-    qualified_preflight_bundle_json: JSON.stringify(qualified),
-  };
+  const outputs = bundleOutputs(raw, qualified);
   const jobs = [raw, qualified].map(({ producer: owner }) => ({
     id: Number(owner.jobId),
     name: owner.jobName,
@@ -129,7 +129,7 @@ function npmBundles() {
   return { raw, qualified, outputs, jobs };
 }
 
-function fixture() {
+function fixture(sourceSha = SOURCE_SHA, workflowRef = "main") {
   const root = tempDirs.make("full-release-artifacts-");
   const bin = join(root, "bin");
   const responsesPath = join(root, "responses.json");
@@ -207,14 +207,14 @@ globalThis.fetch = async (input) => {
           ...process.env,
           ARTIFACT_STAGE: "npm",
           ARTIFACT_DISPATCH_ID: DISPATCH_ID,
-          TARGET_SHA: SOURCE_SHA,
+          TARGET_SHA: sourceSha,
           PARENT_WORKFLOW_SHA: TOOLING_SHA,
-          CHILD_WORKFLOW_REF: "main",
+          CHILD_WORKFLOW_REF: workflowRef,
           RELEASE_TAG: "v2026.8.1",
           PREFLIGHT_PHASE: "all",
           GITHUB_REPOSITORY: REPOSITORY,
           GITHUB_SHA: TOOLING_SHA,
-          GITHUB_REF_NAME: "main",
+          GITHUB_REF_NAME: workflowRef,
           GITHUB_RUN_ID: "51",
           GITHUB_RUN_ATTEMPT: "1",
           ARTIFACT_RUN_ID: "81",
@@ -265,7 +265,7 @@ globalThis.fetch = async (input) => {
     downloads[`repos/${REPOSITORY}/actions/artifacts/${id}/zip`] = archivePath;
     return { bytes, archivePath, metadata };
   };
-  const npm = npmBundles();
+  const npm = npmBundles(sourceSha, workflowRef);
   runApi("51", { id: 51, path: ".github/workflows/full-release-validation.yml" });
   runApi("81", {});
   runApi("81/attempts/1", {});
@@ -275,13 +275,25 @@ globalThis.fetch = async (input) => {
   }
   const rawArtifact = () =>
     artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", npm.raw);
+  const wait = (output: string, env: NodeJS.ProcessEnv = {}) =>
+    run("wait", { ARTIFACT_OUTPUT: output, ...env });
+  const collect = (output: string, env: NodeJS.ProcessEnv = {}, error = "") => {
+    const result = wait(output, env);
+    if (error) {
+      expectRejected(result, error);
+    } else {
+      expectSuccess(result);
+    }
+    return result.outputs;
+  };
   const seal = (attempt = "1") => {
-    const result = run("receipt", {
-      GITHUB_RUN_ID: "81",
-      GITHUB_RUN_ATTEMPT: attempt,
-      ARTIFACT_OUTPUTS_JSON: JSON.stringify(npm.outputs),
-    });
-    expect(result.status, result.stderr).toBe(0);
+    const result = expectSuccess(
+      run("receipt", {
+        GITHUB_RUN_ID: "81",
+        GITHUB_RUN_ATTEMPT: attempt,
+        ARTIFACT_OUTPUTS_JSON: JSON.stringify(npm.outputs),
+      }),
+    );
     return readJson(join(result.outputs.directory!, "artifact-receipt.json"));
   };
   const receiptArtifact = (value: unknown, attempt = "1") =>
@@ -293,6 +305,8 @@ globalThis.fetch = async (input) => {
     runApi,
     jobsApi,
     run,
+    wait,
+    collect,
     artifact,
     rawArtifact,
     seal,
@@ -302,15 +316,10 @@ globalThis.fetch = async (input) => {
 }
 
 function publicationReuseFixture(changedReceipt = false) {
-  const test = fixture();
   const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
+  const test = fixture(TOOLING_SHA, workflowRef);
   const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
   const fullRef = `refs/heads/${workflowRef}`;
-  test.raw.source.sha = TOOLING_SHA;
-  test.raw.package.sourceSha = TOOLING_SHA;
-  test.raw.producer.workflowRef = `${REPOSITORY}/${WORKFLOW}@${fullRef}`;
-  test.qualified.producer.workflowRef = test.raw.producer.workflowRef;
-  test.qualified.artifact.name = `openclaw-npm-preflight-${TOOLING_SHA}`;
   const npmRun = {
     ...completed,
     head_branch: workflowRef,
@@ -340,10 +349,7 @@ function publicationReuseFixture(changedReceipt = false) {
   test.artifact(
     "full-release-artifact-receipt-81-1",
     "artifact-receipt.json",
-    receipt("npm", "81", {
-      prepared_bundle_json: JSON.stringify(test.raw),
-      qualified_preflight_bundle_json: JSON.stringify(qualifiedReceipt),
-    }),
+    receipt("npm", "81", bundleOutputs(test.raw, qualifiedReceipt)),
   );
   const artifactName = `docker-release-${TOOLING_SHA}-1`;
   const dockerManifest = {
@@ -497,6 +503,10 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
 }
 
 type Result = ReturnType<ReturnType<typeof fixture>["run"]>;
+function expectSuccess(result: Result) {
+  expect(result.status, result.stderr).toBe(0);
+  return result;
+}
 function expectRejected(result: Result, message: string) {
   expect(result.status, result.stderr).not.toBe(0);
   expect(result.stderr).toContain(message);
@@ -523,9 +533,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     "reuses publication artifacts without dispatch for %s",
     (scenario, payloadChanges, sdkChanges, missing, error) => {
       const test = publicationReuseFixture(scenario === "changed receipt");
-      const payload = test.payloads[0];
-      assert(payload, "expected Docker payload fixture");
-      Object.assign(payload, payloadChanges);
+      Object.assign(test.payloads[0]!, payloadChanges);
       Object.assign(test.sdk, sdkChanges);
       if (missing === "npm") {
         test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
@@ -541,10 +549,8 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       if (error) {
         expectRejected(result, error);
       } else {
-        expect(result.status, result.stderr).toBe(0);
+        expectSuccess(result);
         if (scenario === "retained") {
-          assert(result.outputs.prepared_bundle_json);
-          assert(result.outputs.qualified_preflight_bundle_json);
           expect(JSON.parse(result.outputs.prepared_bundle_json)).toEqual(test.raw);
           expect(JSON.parse(result.outputs.qualified_preflight_bundle_json)).toEqual(
             test.qualified,
@@ -579,7 +585,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     });
     const result = test.run("admit", { GITHUB_RUN_ID: "81" });
     if (accepted) {
-      expect(result.status, result.stderr).toBe(0);
+      expectSuccess(result);
       expect(result.outputs.dispatch_name).toBe(`${DISPATCH_ID}-dispatch`);
       expect(readJson(join(result.outputs.directory!, "dispatch.json"))).toEqual(dispatchRecord());
     } else {
@@ -587,27 +593,29 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     }
   });
 
-  it("restores the original producer on attempt two without dispatching or rebuilding", () => {
+  it.each([1, 2])("restores producer attempt %i without dispatching or rebuilding", (attempt) => {
     const test = fixture();
-    const admitted = test.run("admit", { GITHUB_RUN_ID: "81" });
-    expect(admitted.status, admitted.stderr).toBe(0);
+    const admitted = expectSuccess(test.run("admit", { GITHUB_RUN_ID: "81" }));
     const recordPath = join(admitted.outputs.directory!, "dispatch.json");
     const recordBytes = readFileSync(recordPath, "utf8");
     test.artifact(admitted.outputs.dispatch_name!, "dispatch.json", JSON.parse(recordBytes), true);
-    const first = test.run("resolve");
-    expect(first.status, first.stderr).toBe(0);
+    const first = expectSuccess(test.run("resolve"));
     expect(first.outputs).toMatchObject({
       run_id: "81",
       run_attempt: "1",
       dispatch_id: DISPATCH_ID,
     });
-    const second = test.run("resolve", {
-      GITHUB_RUN_ATTEMPT: "2",
-      ARTIFACT_RUN_ID: "99",
-      ARTIFACT_RUN_ATTEMPT: "2",
-    });
-    expect(second.status, second.stderr).toBe(0);
-    expect(second.outputs).toEqual(first.outputs);
+    if (attempt === 2) {
+      test.runApi("81", { run_attempt: attempt, ...completed });
+    }
+    const second = expectSuccess(
+      test.run("resolve", {
+        GITHUB_RUN_ATTEMPT: "2",
+        ARTIFACT_RUN_ID: "99",
+        ARTIFACT_RUN_ATTEMPT: "2",
+      }),
+    );
+    expect(second.outputs).toEqual({ ...first.outputs, run_attempt: String(attempt) });
     expect(readFileSync(recordPath, "utf8")).toBe(recordBytes);
     expect(second.calls).toContainEqual([
       "gh",
@@ -622,19 +630,6 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         .filter(([kind]) => kind === "gh")
         .every(([, command]) => command === "api"),
     ).toBe(true);
-  });
-
-  it("adopts a newer producer attempt without replacing its original dispatch", () => {
-    const test = fixture();
-    test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", dispatchRecord(), true);
-    test.runApi("81", { run_attempt: 2, ...completed });
-    const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.outputs).toMatchObject({
-      run_id: "81",
-      run_attempt: "2",
-      dispatch_id: DISPATCH_ID,
-    });
   });
 
   it.each([
@@ -666,16 +661,15 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
             : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
     );
     test.rawArtifact();
-    const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
+    const raw = test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" });
     if (outcome === "replacement preparation failed") {
       expectRejected(raw, "Successful npm preparation was replaced");
       return;
     }
-    expect(raw.status, raw.stderr).toBe(0);
+    expectSuccess(raw);
     expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
     test.receiptArtifact(test.seal("2"), "2");
-    const receipt = test.run("wait", { ARTIFACT_OUTPUT: "receipt", ARTIFACT_RUN_ATTEMPT: "2" });
-    expect(receipt.status, receipt.stderr).toBe(0);
+    const receipt = expectSuccess(test.wait("receipt", { ARTIFACT_RUN_ATTEMPT: "2" }));
     expect(receipt.outputs).toEqual(test.outputs);
   });
 
@@ -723,10 +717,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       "artifacts",
       [],
     );
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: output,
-      FIXTURE_STOP_ON_WAIT: "true",
-    });
+    const result = test.wait(output, { FIXTURE_STOP_ON_WAIT: "true" });
     expectRejected(result, `${name} ended with failure`);
     expect(result.stderr).toContain(`https://github.com/${REPOSITORY}/actions/runs/81/job/901`);
     expect(result.stderr).toContain("Other producer jobs continue running");
@@ -736,11 +727,11 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     const test = fixture();
     test.runApi("81", { status: "queued" });
     test.jobsApi(1, []);
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: "receipt",
-      FIXTURE_STOP_ON_WAIT: "true",
-    });
-    expectRejected(result, "Fixture reached another artifact poll");
+    test.collect(
+      "receipt",
+      { FIXTURE_STOP_ON_WAIT: "true" },
+      "Fixture reached another artifact poll",
+    );
   });
 
   it.each([
@@ -754,16 +745,10 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     Object.assign(test.jobs[0]!, raw);
     Object.assign(test.jobs[1]!, { status: "in_progress", conclusion: null }, qualifier);
     test.rawArtifact();
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: "raw",
-      FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun),
-    });
+    const outputs = test.collect("raw", { FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun) }, error);
     if (!error) {
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
-      expect(result.outputs.qualified_preflight_bundle_json).toBeUndefined();
-    } else {
-      expectRejected(result, error);
+      expect(JSON.parse(outputs.prepared_bundle_json!)).toEqual(test.raw);
+      expect(outputs.qualified_preflight_bundle_json).toBeUndefined();
     }
   });
 
@@ -785,15 +770,13 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         test.jobs[1]!.conclusion = "failure";
       }
       test.receiptArtifact(receipt);
-      const result = test.run("wait", {
-        ARTIFACT_OUTPUT: "receipt",
-        FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun),
-      });
+      const outputs = test.collect(
+        "receipt",
+        { FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun) },
+        error,
+      );
       if (!error) {
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.outputs).toEqual(test.outputs);
-      } else {
-        expectRejected(result, error);
+        expect(outputs).toEqual(test.outputs);
       }
     },
   );
@@ -812,7 +795,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
           archive.metadata.digest = `sha256:${sha256(corrupted)}`;
         }
       }
-      const result = test.run("wait", { ARTIFACT_OUTPUT: "raw" });
+      const result = test.wait("raw");
       expectRejected(
         result,
         failure === "producer failed"
