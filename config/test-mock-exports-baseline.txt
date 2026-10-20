@@ -745,7 +745,6 @@
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../../runtime.js","6bfd54c739bb832b2848fab9f72ab5ac8d723005ee12333a287a561d75bd9b0e",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../client.js","0a0f38a0d184e02f6296013d4907a46d1b408a591e9baefbd335779d8aa5a021",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../config-update.js","ac8eeb17bc63b469ce6640ea4e9b646aa6d4ac3afcf2246248a74faccdad11f5",1]
-["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../device-health.js","8e962847213412bfb1cee61a0c4c4da060c2ca1e0dee28f8807b7146faa2c87d",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../profile.js","48a69141e1c5e728f2ba54eaf229581f2b5f9a6aefbb4d93bb7ab7765ac5a80b",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","../thread-bindings.js","f47149380ad025013c4c79a2163da1e768ebd5924b9c2ae7b0fb8bea4270ed40",1]
 ["extensions/matrix/src/matrix/monitor/index.test-helpers.ts","./allowlist.js","a3231d991d51a0f437a3dc5e3d0ce69ceeec99ddf7ccdde4c73e60dae4e77074",1]
