@@ -12,6 +12,14 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
 
+function readJsonLines<T>(file: string): T[] {
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 function fixture() {
   const root = fs.realpathSync(lifetime.createTempDir("tsgo-ci-continuation-"));
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
@@ -38,12 +46,22 @@ process.exitCode = 2;
   overrideNativeFixtureExecutable(root, compiler);
   return {
     root,
-    events: () =>
-      fs
-        .readFileSync(events, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
+    run: (args: string[], signal: AbortSignal, env = process.env) =>
+      lifetime.track(
+        runNodeScript(
+          [path.join(root, "scripts/run-tsgo-core-test-shards.mts"), ...args],
+          env,
+          undefined,
+          { cwd: root, signal, requireProcessTreeExit: true },
+        ),
+      ),
+    wrapperEnv: (source: string, replacement: string) =>
+      preparedScriptWrapperEnv(
+        [],
+        { ...process.env, CI: "true", OPENCLAW_LOCAL_CHECK: "0", OPENCLAW_CI_STATIC_EVIDENCE: "1" },
+        [[pathToFileURL(path.join(root, source)), pathToFileURL(replacement)]],
+      ),
+    events: () => readJsonLines<string>(events),
   };
 }
 
@@ -55,25 +73,14 @@ it.for([
   "reports all root partition failures on $name",
   async ({ ci, evidence, expected }, { signal }) => {
     const f = fixture();
-    const result = await lifetime.track(
-      runNodeScript(
-        [
-          path.join(f.root, "scripts/run-tsgo-core-test-shards.mts"),
-          "--ci-graphs-json",
-          '["test-root"]',
-        ],
-        {
-          ...process.env,
-          CI: ci,
-          GITHUB_ACTIONS: "",
-          GITHUB_RUN_ATTEMPT: "2",
-          OPENCLAW_LOCAL_CHECK: "0",
-          OPENCLAW_CI_STATIC_EVIDENCE: evidence,
-        },
-        undefined,
-        { cwd: f.root, signal, requireProcessTreeExit: true },
-      ),
-    );
+    const result = await f.run(["--ci-graphs-json", '["test-root"]'], signal, {
+      ...process.env,
+      CI: ci,
+      GITHUB_ACTIONS: "",
+      GITHUB_RUN_ATTEMPT: "2",
+      OPENCLAW_LOCAL_CHECK: "0",
+      OPENCLAW_CI_STATIC_EVIDENCE: evidence,
+    });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(2);
     expect(f.events()).toEqual(
@@ -88,37 +95,17 @@ it.for([
 it("runs changed-path types after boundary validation fails", async ({ signal }) => {
   const f = fixture();
   const boundary = path.join(f.root, "boundary.mjs");
-  // The boundary's external graph query fails. The CLI must still send its
-  // canonical stripe to the real compiler owner, preserving both failures.
   fs.writeFileSync(
     boundary,
     `export class CoreTsgoBoundaryInterruptedError extends Error {}
 export async function checkCoreTsgoGraphBoundary() { throw new Error("fixture boundary failure"); }
 `,
   );
-  const env = preparedScriptWrapperEnv(
-    [],
-    { ...process.env, CI: "true", OPENCLAW_LOCAL_CHECK: "0", OPENCLAW_CI_STATIC_EVIDENCE: "1" },
-    [
-      [
-        pathToFileURL(path.join(f.root, "scripts/check-tsgo-core-boundary.mts")),
-        pathToFileURL(boundary),
-      ],
-    ],
-  );
-  const result = await lifetime.track(
-    runNodeScript(
-      [
-        path.join(f.root, "scripts/run-tsgo-core-test-shards.mts"),
-        "--changed-paths-json",
-        '["src/fixture.test.ts"]',
-        "--stripe",
-        "1/5",
-      ],
-      env,
-      undefined,
-      { cwd: f.root, signal, requireProcessTreeExit: true },
-    ),
+  const env = f.wrapperEnv("scripts/check-tsgo-core-boundary.mts", boundary);
+  const result = await f.run(
+    ["--changed-paths-json", '["src/fixture.test.ts"]', "--stripe", "1/5"],
+    signal,
+    env,
   );
   expect(result.status, result.stderr).toBe(1);
   expect(result.stderr).toContain("fixture boundary failure");
@@ -140,35 +127,11 @@ export async function runManagedCommand(command) {
 }
 `,
   );
-  const env = preparedScriptWrapperEnv(
-    [],
-    { ...process.env, CI: "true", OPENCLAW_LOCAL_CHECK: "0", OPENCLAW_CI_STATIC_EVIDENCE: "1" },
-    [
-      [
-        pathToFileURL(path.join(f.root, "scripts/lib/managed-child-process.mts")),
-        pathToFileURL(managed),
-      ],
-    ],
-  );
-  const result = await lifetime.track(
-    runNodeScript(
-      [
-        path.join(f.root, "scripts/run-tsgo-core-test-shards.mts"),
-        "--ci-graphs-json",
-        '["test-root"]',
-      ],
-      env,
-      undefined,
-      { cwd: f.root, signal, requireProcessTreeExit: true },
-    ),
-  );
+  const env = f.wrapperEnv("scripts/lib/managed-child-process.mts", managed);
+  const result = await f.run(["--ci-graphs-json", '["test-root"]'], signal, env);
   expect(result.status, result.stderr).toBe(1);
   expect(result.stderr).toContain("killed the tsgo process tree");
-  const commands: string[][] = fs
-    .readFileSync(calls, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  const commands = readJsonLines<string[]>(calls);
   expect(commands).toHaveLength(1);
   expect(commands[0]).toContain(TSGO_ROOT_TEST_SHARDS[0].config);
   expect(result.stdout).not.toContain("[ci-static:tsgo:completion]");

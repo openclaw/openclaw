@@ -55,19 +55,13 @@ describe("tsgo core test shards", () => {
       roots: roots(shard.config),
     }));
     const canonicalRoots = roots("test/tsconfig/tsconfig.core.test.json");
-    expect(
-      findTsgoCoreTestShardViolations({
-        canonicalRoots,
-        shards,
-      }),
-    ).toEqual([]);
+    expect(findTsgoCoreTestShardViolations({ canonicalRoots, shards })).toEqual([]);
+    const owners = (file: string) =>
+      shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name);
     const clawRoots = canonicalRoots.filter((file) => file.startsWith("src/claws/"));
     expect(clawRoots.length).toBeGreaterThan(0);
     for (const file of clawRoots) {
-      expect(
-        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
-        file,
-      ).toEqual(["claws"]);
+      expect(owners(file), file).toEqual(["claws"]);
     }
     // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
     for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
@@ -120,10 +114,7 @@ describe("tsgo core test shards", () => {
       ["src/system-agent/operations.test.ts", "services"],
       ["src/system-agent/operations.gateway-lifecycle.test.ts", "services"],
     ] as const) {
-      expect(
-        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
-        file,
-      ).toEqual([owner]);
+      expect(owners(file), file).toEqual([owner]);
     }
   });
 
@@ -149,32 +140,25 @@ describe("tsgo core test shards", () => {
   });
 
   it("stripes partition the full shard list exactly once", () => {
+    const names = (shards: readonly { name: string }[]) =>
+      shards.map((shard) => shard.name).toSorted();
     for (const stripeCount of [1, 2, 3, 5]) {
       const striped = Array.from(
         { length: stripeCount },
         (_, index) => selectTsgoCoreTestStripe(`${index + 1}/${stripeCount}`) ?? [],
       );
-      expect(
-        striped
-          .flat()
-          .map((shard) => shard.name)
-          .toSorted(),
-      ).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).toSorted());
+      expect(names(striped.flat())).toEqual(names(TSGO_CORE_TEST_SHARDS));
       // Round-robin keeps stripe sizes within one shard of each other.
       const sizes = striped.map((shards) => shards.length);
       expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
     }
-    expect(selectTsgoCoreTestStripe("0/2")).toBeUndefined();
-    expect(selectTsgoCoreTestStripe("3/2")).toBeUndefined();
-    expect(selectTsgoCoreTestStripe("src")).toBeUndefined();
-    expect(selectTsgoCoreTestStripe("2-1/5")).toBeUndefined();
-    expect(selectTsgoCoreTestStripe("1-6/5")).toBeUndefined();
+    for (const invalid of ["0/2", "3/2", "src", "2-1/5", "1-6/5"]) {
+      expect(selectTsgoCoreTestStripe(invalid), invalid).toBeUndefined();
+    }
     const paired = ["1-2/5", "3-4/5", "5/5"].flatMap(
       (stripe) => selectTsgoCoreTestStripe(stripe) ?? [],
     );
-    expect(paired.map((shard) => shard.name).toSorted()).toEqual(
-      TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).toSorted(),
-    );
+    expect(names(paired)).toEqual(names(TSGO_CORE_TEST_SHARDS));
     expect(selectTsgoCoreTestStripe("1-2/5")).toEqual(
       TSGO_CORE_TEST_SHARDS.filter((shard) =>
         ["1/5", "2/5"].some((stripe) => selectTsgoCoreTestStripe(stripe)?.includes(shard)),
@@ -497,6 +481,25 @@ exec ${JSON.stringify(native)} "$@"
           ],
         ],
       );
+      const run = (
+        entry: string,
+        args: readonly string[],
+        overrides: NodeJS.ProcessEnv = {},
+        options: Parameters<typeof runNodeScript>[3] = {},
+      ) =>
+        lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              entry,
+              ...args,
+            ],
+            { ...env, ...overrides },
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: true, ...options },
+          ),
+        );
       const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
       const check = async (
         paths = [leaf],
@@ -504,20 +507,10 @@ exec ${JSON.stringify(native)} "$@"
         expectedGraphListings = TSGO_CORE_GRAPHS.length,
       ) => {
         write("compiler-events.tsv", "");
-        const result = await lifetime.track(
-          runNodeScript(
-            [
-              "--import",
-              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
-              driver,
-              ...changedArgs(paths),
-              ...(stripe === undefined ? [] : ["--stripe", stripe]),
-            ],
-            env,
-            undefined,
-            { cwd: root, signal, requireProcessTreeExit: true },
-          ),
-        );
+        const result = await run(driver, [
+          ...changedArgs(paths),
+          ...(stripe === undefined ? [] : ["--stripe", stripe]),
+        ]);
         const calls = compilerEvents();
         expect(calls.filter((args) => args.includes("--listFilesOnly"))).toHaveLength(
           expectedGraphListings,
@@ -574,20 +567,7 @@ if (process.argv[2] === "boundary") {
         extraPaths: string[] = [],
       ) => {
         write("compiler-events.tsv", "");
-        return await lifetime.track(
-          runNodeScript(
-            [
-              "--import",
-              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
-              plannerDriver,
-              mode,
-              JSON.stringify(extraPaths),
-            ],
-            env,
-            undefined,
-            { cwd: root, signal, requireProcessTreeExit: true },
-          ),
-        );
+        return await run(plannerDriver, [mode, JSON.stringify(extraPaths)]);
       };
       const deletedNonCompilerPaths = ["docs/removed.md", "docs/removed.mdx", "ui/src/removed.css"];
       const presentationPaths = [
@@ -749,24 +729,10 @@ if (process.argv[2] === "boundary") {
       const selectedGraphs = ["core-test-agents-other", "core-test-agents-tools"];
       for (const mode of ["default", "evidence", "unknown"] as const) {
         write("compiler-events.tsv", "");
-        const result = await lifetime.track(
-          runNodeScript(
-            [
-              "--import",
-              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
-              driver,
-              "--ci-graphs-json",
-              JSON.stringify(selectedGraphs),
-            ],
-            {
-              ...env,
-              OPENCLAW_CI_STATIC_EVIDENCE: mode === "default" ? "0" : "1",
-              TSGO_FIXTURE_STDERR: mode === "unknown" ? "1" : "0",
-            },
-            undefined,
-            { cwd: root, signal, requireProcessTreeExit: true },
-          ),
-        );
+        const result = await run(driver, ["--ci-graphs-json", JSON.stringify(selectedGraphs)], {
+          OPENCLAW_CI_STATIC_EVIDENCE: mode === "default" ? "0" : "1",
+          TSGO_FIXTURE_STDERR: mode === "unknown" ? "1" : "0",
+        });
         expect(result.status, result.stderr).toBe(2);
         expect(result.stdout).toContain("leaf.test.ts(1,14): error TS2322");
         expect(compilerEvents()).toHaveLength(2);
@@ -830,25 +796,16 @@ setInterval(()=>{},1000);
       );
       let ownerPid: number | undefined;
       const cancel = new AbortController();
-      const running = lifetime.track(
-        runNodeScript(
-          [
-            "--import",
-            pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
-            driver,
-            ...changedArgs([leaf]),
-          ],
-          env,
-          undefined,
-          {
-            cwd: root,
-            signal: AbortSignal.any([signal, cancel.signal]),
-            requireProcessTreeExit: true,
-            onReady(child) {
-              ownerPid = child.pid;
-            },
+      const running = run(
+        driver,
+        changedArgs([leaf]),
+        {},
+        {
+          signal: AbortSignal.any([signal, cancel.signal]),
+          onReady(child) {
+            ownerPid = child.pid;
           },
-        ),
+        },
       );
       try {
         const readPids = () => {

@@ -1,33 +1,25 @@
-// Type Suppression Inventory tests cover AST detection and the repository suppression ratchet.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectTypeSuppressionReport } from "../../scripts/type-suppression-inventory.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const temporaryDirectories: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createFixture(files: Record<string, string>): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-type-suppressions-"));
-  temporaryDirectories.push(root);
+function reportFixture(files: Record<string, string>) {
+  const root = tempDirs.make("openclaw-type-suppressions-");
   for (const [relativePath, source] of Object.entries(files)) {
     const absolutePath = path.join(root, relativePath);
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, source);
   }
-  return root;
+  return collectTypeSuppressionReport({ files: Object.keys(files), repoRoot: root });
 }
-
-afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    fs.rmSync(directory, { force: true, recursive: true });
-  }
-});
 
 describe("type suppression inventory", () => {
   it.each(["\n", "\r\n"])("reports comment markers once with %j line endings", (newline) => {
-    const fixtureRoot = createFixture({
+    const report = reportFixture({
       "src/comments.ts": [
         'const text = "\u{1f680} @ts-expect-error string";',
         "const template = `@ts-expect-error template`;",
@@ -45,22 +37,17 @@ describe("type suppression inventory", () => {
       ].join(newline),
     });
 
-    const report = collectTypeSuppressionReport({
-      files: ["src/comments.ts"],
-      repoRoot: fixtureRoot,
-    });
-
     expect(report.findings).toEqual(
       [
-        { excerpt: "@ts-expect-error first", line: 4 },
-        { excerpt: "@ts-expect-error second", line: 5 },
-        { excerpt: "@ts-expect-error trailing", line: 7 },
-        { excerpt: "@ts-expect-error left */", line: 8 },
-        { excerpt: "@ts-expect-error right */", line: 8 },
-        { excerpt: "@ts-expect-error closing token", line: 11 },
-        { excerpt: "@ts-expect-error eof", line: 13 },
-      ].map(({ excerpt, line }) => ({
-        excerpt,
+        ["first", 4],
+        ["second", 5],
+        ["trailing", 7],
+        ["left */", 8],
+        ["right */", 8],
+        ["closing token", 11],
+        ["eof", 13],
+      ].map(([suffix, line]) => ({
+        excerpt: `@ts-expect-error ${suffix}`,
         line,
         file: "src/comments.ts",
         kind: "expect-error",
@@ -69,7 +56,7 @@ describe("type suppression inventory", () => {
   });
 
   it("detects syntax suppressions without counting prose", () => {
-    const fixtureRoot = createFixture({
+    const report = reportFixture({
       "src/example.ts": `
         const prose = "as any and @ts-expect-error";
         const interpolated = \`value: \${value}\`;
@@ -86,11 +73,6 @@ describe("type suppression inventory", () => {
       "src/plain.ts": "export const value = 1;",
     });
 
-    const report = collectTypeSuppressionReport({
-      files: ["src/example.ts", "src/plain.ts"],
-      repoRoot: fixtureRoot,
-    });
-
     expect(report.summary).toMatchObject({
       findingCount: 6,
       kindCounts: {
@@ -101,13 +83,13 @@ describe("type suppression inventory", () => {
       scannedFileCount: 2,
       touchedFileCount: 1,
     });
-    expect(report.findings.map(({ kind, line }) => ({ kind, line }))).toEqual([
-      { kind: "as-any", line: 4 },
-      { kind: "type-assertion-any", line: 5 },
-      { kind: "as-any", line: 6 },
-      { kind: "type-assertion-any", line: 7 },
-      { kind: "as-any", line: 8 },
-      { kind: "expect-error", line: 11 },
+    expect(report.findings.map(({ kind, line }) => [kind, line])).toEqual([
+      ["as-any", 4],
+      ["type-assertion-any", 5],
+      ["as-any", 6],
+      ["type-assertion-any", 7],
+      ["as-any", 8],
+      ["expect-error", 11],
     ]);
   });
 
