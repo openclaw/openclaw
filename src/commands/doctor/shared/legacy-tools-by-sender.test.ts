@@ -8,6 +8,11 @@ import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 const migrate = (raw: unknown) => migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+const apply = (raw: unknown) =>
+  applyLegacyDoctorMigrations(raw, {
+    sourceConfigBeforeMigrations: raw,
+    pluginContracts: false,
+  });
 function expectLegacyIssue(raw: unknown) {
   expect(findLegacyConfigIssues(raw)).toContainEqual(
     expect.objectContaining({ message: expect.stringContaining("Untyped toolsBySender") }),
@@ -43,12 +48,7 @@ describe("Doctor sender tool policy migration", () => {
     const original = structuredClone(raw);
     expect(validateConfigObjectRaw(raw).ok).toBe(true);
     expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(
-      applyLegacyDoctorMigrations(raw, {
-        sourceConfigBeforeMigrations: raw,
-        pluginContracts: false,
-      }),
-    ).toEqual({ next: null, changes: [] });
+    expect(apply(raw)).toEqual({ next: null, changes: [] });
     expect(migrate(raw).changes).toEqual([]);
     expect(raw).toEqual(original);
   });
@@ -65,10 +65,7 @@ describe("Doctor sender tool policy migration", () => {
     const path = location.split(".");
     setConfigValueAtPath(raw, path, { Alice: { deny: ["exec"] } });
     expectLegacyIssue(raw);
-    const migrated = applyLegacyDoctorMigrations(raw, {
-      sourceConfigBeforeMigrations: raw,
-      pluginContracts: false,
-    });
+    const migrated = apply(raw);
     expect(getConfigValueAtPath(migrated.next ?? {}, path)).toEqual({
       "id:Alice": { deny: ["exec"] },
     });
@@ -101,22 +98,11 @@ describe("Doctor sender tool policy migration", () => {
   });
 
   it.each([
-    {
-      name: "legacy before typed",
-      policies: { " @Alice ": { deny: ["exec"] }, "ID: ALICE": { allow: ["exec"] } },
-      expectedKey: "id:Alice",
-    },
-    {
-      name: "typed before legacy",
-      policies: { "ID: ALICE": { deny: ["exec"] }, " @Alice ": { allow: ["exec"] } },
-      expectedKey: "ID: ALICE",
-    },
-    {
-      name: "normalized legacy collision",
-      policies: { " @Alice ": { deny: ["exec"] }, ALICE: { allow: ["exec"] } },
-      expectedKey: "id:Alice",
-    },
-  ])("preserves the first effective policy for $name", ({ policies, expectedKey }) => {
+    [" @Alice ", "ID: ALICE", "id:Alice"],
+    ["ID: ALICE", " @Alice ", "ID: ALICE"],
+    [" @Alice ", "ALICE", "id:Alice"],
+  ])("preserves the first policy: %s before %s", (first, second, expectedKey) => {
+    const policies = { [first]: { deny: ["exec"] }, [second]: { allow: ["exec"] } };
     const raw = {
       channels: { whatsapp: { groups: { "123@g.us": { toolsBySender: policies } } } },
     };
@@ -140,15 +126,18 @@ describe("Doctor sender tool policy migration", () => {
   });
 
   it("migrates nested account policies without changing typed matching or colon IDs", () => {
+    const identities = [
+      ["@alice:example.invalid", "id:alice:example.invalid", { deny: ["exec"] }],
+      ["id:@alice:example.invalid", "id:@alice:example.invalid", { deny: ["write"] }],
+      ["discord:user:alice", "id:discord:user:alice", { allow: ["read"] }],
+      ["channel:discord:user:alice", "channel:discord:user:alice", { deny: ["read"] }],
+      ["username:alice", "username:alice", { allow: ["exec"] }],
+      ["*", "*", { deny: ["write", "exec"] }],
+    ] as const;
     const group = {
-      toolsBySender: {
-        "@alice:example.invalid": { deny: ["exec"] },
-        "id:@alice:example.invalid": { deny: ["write"] },
-        "discord:user:alice": { allow: ["read"] },
-        "channel:discord:user:alice": { deny: ["read"] },
-        "username:alice": { allow: ["exec"] },
-        "*": { deny: ["write", "exec"] },
-      },
+      toolsBySender: Object.fromEntries(
+        identities.map(([key, , policy]) => [key, structuredClone(policy)]),
+      ),
     };
     const raw = {
       channels: { whatsapp: { accounts: { work: { groups: { "123@g.us": group } } } } },
@@ -158,14 +147,9 @@ describe("Doctor sender tool policy migration", () => {
     const toolsBySender =
       migrated.sourceConfig?.channels?.whatsapp?.accounts?.work?.groups?.["123@g.us"]
         ?.toolsBySender;
-    expect(toolsBySender).toEqual({
-      "id:alice:example.invalid": { deny: ["exec"] },
-      "id:@alice:example.invalid": { deny: ["write"] },
-      "id:discord:user:alice": { allow: ["read"] },
-      "channel:discord:user:alice": { deny: ["read"] },
-      "username:alice": { allow: ["exec"] },
-      "*": { deny: ["write", "exec"] },
-    });
+    expect(toolsBySender).toEqual(
+      Object.fromEntries(identities.map(([, key, policy]) => [key, policy])),
+    );
     for (const [sender, policy] of [
       [{ senderId: "@alice:example.invalid" }, { deny: ["write"] }],
       [{ senderId: "alice:example.invalid" }, { deny: ["exec"] }],

@@ -5,16 +5,15 @@ import { withIsolatedTestHome } from "../../../../test/test-env.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 
-const DEFAULT_RESOLVED_AT = "2026-05-01T00:00:00.000Z";
+type PluginFixture = { id: string; npmSpec: string; label?: string };
+type ChannelFixture = PluginFixture & { trustedSourceLinkedOfficialInstall?: boolean };
+type InstallRecords = Record<string, Record<string, unknown>>;
 
 export function configuredPlugin(id: string): OpenClawConfig {
   return { plugins: { entries: { [id]: { enabled: true } } } };
 }
 
-export function setupPluginInstallTestState(): {
-  testEnv: NodeJS.ProcessEnv;
-  tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
-} {
+export function setupPluginInstallTestState() {
   const testHome = withIsolatedTestHome({ mode: "hermetic" });
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
@@ -24,23 +23,20 @@ export function setupPluginInstallTestState(): {
       testHome.cleanup();
     }),
   );
-  return {
-    testEnv: {
-      HOME: testHome.tempHome,
-      OPENCLAW_HOME: testHome.tempHome,
-      OPENCLAW_STATE_DIR: path.join(testHome.tempHome, ".openclaw"),
-    },
-    tempDirs,
+  const testEnv: NodeJS.ProcessEnv = {
+    HOME: testHome.tempHome,
+    OPENCLAW_HOME: testHome.tempHome,
+    OPENCLAW_STATE_DIR: path.join(testHome.tempHome, ".openclaw"),
   };
+  return { testEnv, tempDirs };
 }
 
-export function officialPluginEntry(params: {
-  id: string;
-  npmSpec: string;
-  label?: string;
-  manifest?: Record<string, unknown>;
-  overrides?: Record<string, unknown>;
-}) {
+export function officialPluginEntry(
+  params: PluginFixture & {
+    manifest?: Record<string, unknown>;
+    overrides?: Record<string, unknown>;
+  },
+) {
   const { id, npmSpec, label = id, manifest, overrides } = params;
   return {
     id,
@@ -51,45 +47,37 @@ export function officialPluginEntry(params: {
   };
 }
 
-export function officialWebSearchPluginEntry(params: {
-  id: string;
-  npmSpec: string;
-  envVar: string;
-  label?: string;
-  providerLabel?: string;
-  credentialPath?: string;
-  includeManifestInstall?: boolean;
-}) {
+export function officialWebSearchPluginEntry(
+  params: PluginFixture & {
+    envVar: string;
+    providerLabel?: string;
+    credentialPath?: string;
+    includeManifestInstall?: boolean;
+  },
+) {
   const label = params.label ?? params.id;
   const providerLabel = params.providerLabel ?? label;
   const install = { npmSpec: params.npmSpec, defaultChoice: "npm" };
-  return officialPluginEntry({
+  const provider = {
     id: params.id,
-    npmSpec: params.npmSpec,
+    label: providerLabel,
+    hint: providerLabel,
+    envVars: [params.envVar],
+    placeholder: `${params.id}-key`,
+    signupUrl: `https://example.test/${params.id}`,
+    ...(params.credentialPath ? { credentialPath: params.credentialPath } : {}),
+  };
+  return officialPluginEntry({
+    ...params,
     label,
     manifest: {
-      webSearchProviders: [
-        {
-          id: params.id,
-          label: providerLabel,
-          hint: providerLabel,
-          envVars: [params.envVar],
-          placeholder: `${params.id}-key`,
-          signupUrl: `https://example.test/${params.id}`,
-          ...(params.credentialPath ? { credentialPath: params.credentialPath } : {}),
-        },
-      ],
+      webSearchProviders: [provider],
       ...(params.includeManifestInstall ? { install } : {}),
     },
   });
 }
 
-export function channelPluginEntry(params: {
-  id: string;
-  npmSpec: string;
-  label?: string;
-  trustedSourceLinkedOfficialInstall?: boolean;
-}) {
+export function channelPluginEntry(params: ChannelFixture) {
   const { id, npmSpec, label = id, trustedSourceLinkedOfficialInstall } = params;
   return {
     id,
@@ -105,7 +93,7 @@ export function channelPluginEntry(params: {
 export function installedRecords(
   pluginId: string,
   overrides: Record<string, unknown>,
-): Record<string, Record<string, unknown>> {
+): InstallRecords {
   return { [pluginId]: { source: "npm", ...overrides } };
 }
 
@@ -127,16 +115,13 @@ export function successfulInstall(params: {
       version,
       resolvedSpec: `${params.npmSpec}@${version}`,
       integrity: `sha512-${params.pluginId}`,
-      resolvedAt: DEFAULT_RESOLVED_AT,
+      resolvedAt: "2026-05-01T00:00:00.000Z",
       ...params.resolution,
     },
   };
 }
 
-export function successfulUpdate(
-  pluginId: string,
-  installs: Record<string, Record<string, unknown>>,
-) {
+export function successfulUpdate(pluginId: string, installs: InstallRecords) {
   return {
     changed: true,
     config: { plugins: { installs } },
@@ -149,15 +134,6 @@ export function brokenPluginSnapshot(
   source: string,
   expectedEntry = "./dist/index.js",
 ) {
-  return {
-    plugins: [],
-    diagnostics: [
-      {
-        level: "error",
-        pluginId,
-        source,
-        message: `installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ${expectedEntry}.`,
-      },
-    ],
-  };
+  const message = `installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ${expectedEntry}.`;
+  return { plugins: [], diagnostics: [{ level: "error", pluginId, source, message }] };
 }
