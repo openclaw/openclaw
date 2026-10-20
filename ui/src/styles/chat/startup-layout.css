@@ -627,7 +627,7 @@
   }
 }
 
-.chat-pane__header--agent {
+.chat-pane__header.chat-pane__header--agent {
   --chat-pane-header-start: var(--chat-pane-header-inset-start, 8px);
   --chat-pane-header-end: var(--chat-pane-header-inset-end, 8px);
   display: grid;
