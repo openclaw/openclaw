@@ -33,12 +33,12 @@ it
         ),
     ]).then(([result]) => result);
     const inputProbe = child.stdio.at(6);
-    assert(inputProbe, "Missing anchor input probe");
     const ready = createDeferredCore();
     const inputEof = createDeferredCore();
     let stdout = "";
     let stderr = "";
     const run = async () => {
+      assert(inputProbe, "Missing anchor input probe");
       child.stdin!.on("error", () => {});
       inputProbe.once("data", () => inputEof.resolve());
       child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
