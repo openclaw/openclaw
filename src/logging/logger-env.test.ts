@@ -59,12 +59,13 @@ it.each([
     expect(getResolvedLoggerSettings().level).toBe(level);
     const warnings = envWarnings(stderrSpy);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
     if (consoleStyle === "json") {
       expect(JSON.parse(warnings[0] ?? "")).toMatchObject({
         level: "warn",
         message: expect.stringContaining('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"'),
       });
+    } else {
+      expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
     }
   },
 );

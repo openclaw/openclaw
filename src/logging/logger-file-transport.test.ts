@@ -328,7 +328,8 @@ it("writes a piped append warning before process exit", () => {
     env: { ...process.env, VITEST: "false" },
   });
 
-  expect(result).toMatchObject({ error: undefined, status: 0 });
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
   expect(result.stderr).toContain("log file append failed; records dropped");
 });
 
