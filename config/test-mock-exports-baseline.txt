@@ -4455,7 +4455,6 @@
 ["src/commands/doctor-gateway-installation-replacement.test.ts","../daemon/service.js","f634844c178e54e00c9183c3499923645fd8cda45b8914463ab14076594fb3dd",1]
 ["src/commands/doctor-gateway-installation-replacement.test.ts","../flows/doctor-gateway-exec-credential.js","cdbdfdec889e3c1bda1dca8d15e22e3487aab929aff026f207099797f8496acc",1]
 ["src/commands/doctor-gateway-services.authority.test.ts","../../packages/terminal-core/src/note.js","cff11fa2fada3594865d1d380814af50d0272b72dfd3485d526baddfee247923",1]
-["src/commands/doctor-gateway-services.native.test-support.ts","../../packages/terminal-core/src/note.js","c6d89a1729db8972b8ff3b9dae124554a7712ef7e1ded98f6bf42809f10805a0",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../config/paths.js","b252281ce3f82ccb3629f4612247166e1fb3ba87b2a1f7ef27bcb288cff19f4b",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/inspect.js","a7ae32645b9f4d1748a63f5648fb67b7f97b65643e1ed66ea445032d03476054",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/runtime-paths.js","4163c7a0efbcc86045b9ea75a886e207692f40d5f01adbf619547ce8df101d48",1]
