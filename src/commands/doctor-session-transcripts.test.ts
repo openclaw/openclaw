@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -24,17 +24,14 @@ import {
   noteSessionTranscriptHealth,
 } from "./doctor-session-transcripts.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+const detect = (filePath: string) =>
+  detectSessionTranscriptHealthIssues({ sessionDirs: [path.dirname(filePath)] });
+
 describe("doctor session transcript health", () => {
-  let root: string;
-  beforeEach(async () => {
-    root = await fsPromises.realpath(
-      await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-")),
-    );
-  });
-  afterEach(async () => {
-    await fsPromises.rm(root, { recursive: true, force: true });
-  });
   async function writeTranscript(entries: unknown[]): Promise<string> {
+    const root = await fsPromises.realpath(tempDirs.make("openclaw-doctor-transcripts-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fsPromises.mkdir(sessionsDir, { recursive: true });
     const filePath = path.join(sessionsDir, "session.jsonl");
@@ -46,20 +43,14 @@ describe("doctor session transcript health", () => {
   }
 
   it("does not label a vanished file as broken", async () => {
-    const code = "ENOENT";
-
     const filePath = await writeTranscript([{ type: "session", id: "uninspected" }]);
     const readSpy = vi
       .spyOn(fsPromises, "readFile")
-      .mockRejectedValueOnce(Object.assign(new Error("unavailable transcript"), { code }));
-    try {
-      await expect(
-        detectSessionTranscriptHealthIssues({ sessionDirs: [path.dirname(filePath)] }),
-      ).resolves.toEqual([]);
-      expect(readSpy).toHaveBeenCalledExactlyOnceWith(filePath, "utf-8");
-    } finally {
-      readSpy.mockRestore();
-    }
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unavailable transcript"), { code: "ENOENT" }),
+      );
+    await expect(detect(filePath)).resolves.toEqual([]);
+    expect(readSpy).toHaveBeenCalledExactlyOnceWith(filePath, "utf-8");
   });
 
   it("maps affected transcripts to structured findings and dry-run effects", async () => {
@@ -77,14 +68,11 @@ describe("doctor session transcript health", () => {
         },
       },
     ]);
-    const sessionsDir = path.dirname(filePath);
-
-    const [issue] = await detectSessionTranscriptHealthIssues({ sessionDirs: [sessionsDir] });
-
+    const [issue] = await detect(filePath);
     if (!issue) {
       throw new Error("expected session transcript health issue");
     }
-    expect(issue?.filePath).toBe(filePath);
+    expect(issue.filePath).toBe(filePath);
     expect(sessionTranscriptIssueToHealthFinding(issue)).toMatchObject({
       checkId: "core/doctor/session-transcripts",
       severity: "info",
@@ -105,9 +93,7 @@ describe("doctor session transcript health", () => {
 
     const filePath = await writeTranscript([]);
     await fsPromises.writeFile(filePath, raw);
-    await expect(
-      detectSessionTranscriptHealthIssues({ sessionDirs: [path.dirname(filePath)] }),
-    ).resolves.toEqual([]);
+    await expect(detect(filePath)).resolves.toEqual([]);
     expect(await fsPromises.readFile(filePath, "utf8")).toBe(raw);
   });
 
@@ -117,17 +103,10 @@ describe("doctor session transcript health", () => {
     ]);
     const readSpy = vi.spyOn(fs, "readFile");
     const promiseReadSpy = vi.spyOn(fsPromises, "readFile");
-    try {
-      const [issue] = await detectSessionTranscriptHealthIssues({
-        sessionDirs: [path.dirname(filePath)],
-      });
-      expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
-      expect(readSpy).not.toHaveBeenCalled();
-      expect(promiseReadSpy).not.toHaveBeenCalled();
-    } finally {
-      promiseReadSpy.mockRestore();
-      readSpy.mockRestore();
-    }
+    const [issue] = await detect(filePath);
+    expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(promiseReadSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -146,6 +125,7 @@ it.each([true, false])(
       fs.mkdirSync(sessions, { recursive: true });
       const storePath = path.join(sessions, "sessions.json");
       const transcriptPath = path.join(sessions, "session-1.jsonl");
+      const scope = { agentId: "main", env: state.env, storePath, sessionKey: "agent:main:main" };
       const events = [
         { type: "session", version: 3, id: "session-1", timestamp: "", cwd: "" },
         {
@@ -158,10 +138,7 @@ it.each([true, false])(
       const original = events.map((event) => JSON.stringify(event)).join("\n") + "\n";
       fs.writeFileSync(transcriptPath, original);
       await importSqliteSessionRows({
-        agentId: "main",
-        env: state.env,
-        storePath,
-        sessionKey: "agent:main:main",
+        ...scope,
         entry: { sessionId: "session-1", updatedAt: 1, label: "Existing title" },
         readTranscriptEvents: (append) => events.forEach(append),
       });
@@ -173,13 +150,7 @@ it.each([true, false])(
       };
       if (complete) {
         await appendTranscriptEvent(
-          {
-            agentId: "main",
-            env: state.env,
-            storePath,
-            sessionKey: "agent:main:main",
-            sessionId: "session-1",
-          },
+          { ...scope, sessionId: "session-1" },
           {
             type: "custom",
             id: "later",

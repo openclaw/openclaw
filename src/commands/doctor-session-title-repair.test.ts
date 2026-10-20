@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -9,6 +8,7 @@ import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
+const cfg = { agents: { entries: { main: {} } } };
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
@@ -17,14 +17,7 @@ beforeEach(() => generateConversationLabelWithFallback.mockReset());
 afterEach(() => vi.restoreAllMocks());
 
 async function withSession(
-  run: (params: {
-    agentId: string;
-    storePath: string;
-    sessionKey: string;
-    sessionId: string;
-    lifecycleRevision: string;
-    sessionEntry: SessionEntry;
-  }) => Promise<void>,
+  run: (params: sessionAccessor.SessionTranscriptRuntimeScope) => Promise<void>,
   messages: Array<{ role: string; content: string; provenance?: unknown }> = [
     { role: "user", content: "Investigate why the gateway times out" },
     { role: "assistant", content: "**Found** the slow query" },
@@ -33,7 +26,7 @@ async function withSession(
   await withOpenClawTestState(
     { scenario: "minimal", label: "doctor-session-title" },
     async (state) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+      setRuntimeConfigSnapshot(cfg);
       const params = {
         agentId: "main",
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
@@ -53,20 +46,14 @@ async function withSession(
         lastActivityAt: 11,
         lastInteractionAt: 10,
       });
-      await run({
-        ...params,
-        sessionEntry: expectDefined(
-          sessionAccessor.loadSessionEntry(params),
-          "seeded session entry",
-        ),
-      });
+      await run(params);
     },
   );
 }
 
 function repair() {
   return noteSessionTranscriptHealth({
-    cfg: { agents: { entries: { main: {} } } },
+    cfg,
     shouldRepair: true,
     postSessionPluginMigrationPlanBound: true,
   });
@@ -148,7 +135,7 @@ describe("Doctor session title repair", () => {
           );
           await expect(
             repairLegacySessionTitles({
-              cfg: { agents: { entries: { main: {} } } },
+              cfg,
               env: process.env,
               apply: true,
               authority,

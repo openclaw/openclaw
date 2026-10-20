@@ -50,37 +50,26 @@ describe("collectStaleRuntimeBuildFindings", () => {
   it("warns when the built commit differs from the checkout commit", async () => {
     const root = await makeCheckout({ built: BUILT, head: HEAD });
 
-    const findings = await collectStaleRuntimeBuildFindings({ root, env: {} });
-
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.checkId).toBe("core/doctor/stale-runtime-build");
     // Doctor exits non-zero only for refused config fixes and update advisories,
     // so this must stay a warning or it starts failing runs it only describes.
-    expect(findings[0]?.severity).toBe("warning");
-    expect(findings[0]?.message).toContain(BUILT.slice(0, 7));
+    const findings = await collectStaleRuntimeBuildFindings({ root, env: {} });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/stale-runtime-build",
+        severity: "warning",
+        message: expect.stringContaining(BUILT.slice(0, 7)),
+      }),
+    ]);
     expect(findings[0]?.message).toContain(HEAD.slice(0, 7));
   });
 
-  it("stays silent while an update is in progress", async () => {
-    const root = await makeCheckout({ built: BUILT, head: HEAD });
-
-    // An update pulls source before rebuilding dist, so the drift this check
-    // reports is the update's own expected intermediate state.
-    await expect(
-      collectStaleRuntimeBuildFindings({ root, env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } }),
-    ).resolves.toEqual([]);
-  });
-
-  it("stays silent for a checkout with no build provenance", async () => {
-    const root = await makeCheckout({ head: HEAD });
-
-    await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);
-  });
-
-  it("stays silent when the built commit matches the checkout", async () => {
-    const root = await makeCheckout({ built: BUILT, head: BUILT });
-
-    await expect(collectStaleRuntimeBuildFindings({ root, env: {} })).resolves.toEqual([]);
+  it.each([
+    ["during an update", { built: BUILT, head: HEAD }, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }],
+    ["without build provenance", { head: HEAD }, {}],
+    ["when build and checkout match", { built: BUILT, head: BUILT }, {}],
+  ])("stays silent %s", async (_label, checkout, env) => {
+    const root = await makeCheckout(checkout);
+    await expect(collectStaleRuntimeBuildFindings({ root, env })).resolves.toEqual([]);
   });
 
   it.each([

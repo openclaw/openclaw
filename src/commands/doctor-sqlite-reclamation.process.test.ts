@@ -95,9 +95,8 @@ it.skipIf(process.platform === "win32")(
         expect(events[0].at).toBeLessThanOrEqual(events[1].at);
         expect(fs.readFileSync(agent.path)).toEqual(untouched);
         const database = openNodeSqliteDatabase(shared, { readOnly: true });
-        let observed;
         try {
-          observed = {
+          const observed = {
             mode: database.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum,
             integrity: database.prepare("PRAGMA integrity_check").get()?.integrity_check,
             value: database.prepare("SELECT value FROM retained").get()?.value,
@@ -110,18 +109,6 @@ it.skipIf(process.platform === "win32")(
         replacement.release();
         expect(() => process.kill(child.pid!, 0)).toThrow(
           expect.objectContaining({ code: "ESRCH" }),
-        );
-        console.log(
-          JSON.stringify({
-            observation: "doctor-maintenance-queued-SIGTERM",
-            code,
-            signal,
-            events,
-            shared: observed,
-            secondDatabaseByteIdentical: true,
-            replacementOwnershipAcquired: true,
-            childPidAbsent: true,
-          }),
         );
       } finally {
         if (child.exitCode === null && child.signalCode === null) {
