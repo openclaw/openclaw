@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
-  AcpSessionManager,
   baseCfg,
-  createRuntime,
   extractStatesFromUpserts,
-  hoisted,
   installAcpSessionManagerTestLifecycle,
-  installMutableAcpSessionMetaUpsert,
+  managerFixture,
   mockMutableSession,
   readySessionMeta,
 } from "./manager.test-helpers.js";
@@ -15,20 +12,17 @@ import {
 const sessionKey = "agent:codex:acp:child-1";
 const target = { cfg: baseCfg, sessionKey };
 
+function fixture() {
+  const state = managerFixture(sessionKey);
+  mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
+  return state;
+}
+
 describe("AcpSessionManager cancelSession", () => {
   installAcpSessionManagerTestLifecycle();
 
   it("records idle cancellation failure and preserves its cause", async () => {
-    const runtime = createRuntime();
-    const state = { currentMeta: readySessionMeta() };
-    installMutableAcpSessionMetaUpsert(state);
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: state.currentMeta,
-    }));
-    const manager = new AcpSessionManager();
+    const { runtimeState: runtime, manager } = fixture();
     const error = new Error("Cancel transport failed");
     runtime.cancel.mockRejectedValue(error);
     await expect(
@@ -44,11 +38,9 @@ describe("AcpSessionManager cancelSession", () => {
   });
 
   it("cancels an active controller turn through the manager API", async () => {
-    const runtime = createRuntime();
+    const { runtimeState: runtime, manager, run } = fixture();
     const entered = createDeferred();
     const release = createDeferred();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
-    mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
     runtime.runTurn.mockImplementationOnce(async function* (input) {
       entered.resolve();
       await Promise.race([
@@ -63,14 +55,7 @@ describe("AcpSessionManager cancelSession", () => {
       ]);
       yield { type: "done", status: "cancelled", stopReason: "cancel" };
     });
-    const manager = new AcpSessionManager();
-    const turn = manager.runTurn({
-      ...target,
-      provenance: "system",
-      requestId: "active",
-      mode: "prompt",
-      text: "active",
-    });
+    const turn = run({ requestId: "active", text: "active" });
     const turnResult = Promise.allSettled([turn]);
     try {
       await entered.promise;
@@ -85,16 +70,13 @@ describe("AcpSessionManager cancelSession", () => {
   });
 
   it("holds new controller turns until the idle backend cancellation settles", async () => {
-    const runtime = createRuntime();
+    const { runtimeState: runtime, manager, run } = fixture();
     const entered = createDeferred();
     const release = createDeferred();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
-    mockMutableSession(sessionKey, { currentMeta: readySessionMeta() });
     runtime.cancel.mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
     });
-    const manager = new AcpSessionManager();
     const cancellation = manager.cancelSession(target);
     let turn: Promise<void> | undefined;
     try {
@@ -103,13 +85,7 @@ describe("AcpSessionManager cancelSession", () => {
         cancellation,
         "Idle cancellation settled before entering the backend.",
       );
-      turn = manager.runTurn({
-        ...target,
-        provenance: "system",
-        requestId: "after-idle-cancel",
-        mode: "prompt",
-        text: "after idle cancel",
-      });
+      turn = run({ requestId: "after-idle-cancel", text: "after idle cancel" });
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });

@@ -1,10 +1,5 @@
-import fs from "node:fs";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
@@ -15,6 +10,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../runtime/session-meta.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
+import { createGate, memoryGuard, startTurn } from "./manager.cancellation-locator.test-support.js";
 import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 
 it.each([
@@ -28,33 +24,20 @@ it.each([
   async (sourceKind, change, readScope) => {
     await withAcpCancellationFixture(
       async (f) => {
-        const path = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: f.state.env });
-        const memory = memorySessionActorOwners.read({ agentId: "main", path });
-        if (sourceKind === "incognito") {
-          expect(memory).toBeDefined();
-          expect(fs.existsSync(path)).toBe(false);
-        }
+        const checkMemory = memoryGuard(f, sourceKind);
         const originalMeta = (await readAcpSessionEntryAsync(f.target))?.acp;
         if (!originalMeta) {
           throw new Error("Expected canonical global ACP metadata.");
         }
-        const actorEntered = createDeferred();
-        const releaseActor = createDeferred();
+        const actorGate = createGate("Actor ended before gate.");
         f.getStatus.mockImplementationOnce(async () => {
-          actorEntered.resolve();
-          await releaseActor.promise;
+          await actorGate.wait();
           return { summary: "ready" };
         });
         const actor = f.manager.getSessionStatus(f.target);
         const actorResult = Promise.allSettled([actor]);
-        await Promise.race([
-          actorEntered.promise,
-          actorResult.then(() => {
-            throw new Error("Actor ended before gate.");
-          }),
-        ]);
-        const reached = createDeferred();
-        const release = createDeferred();
+        await actorGate.reached(actorResult);
+        const mutationGate = createGate("Cancellation ended before mutation gate.");
         const original = stateWorker.runOpenClawStateWorkerOperation;
         let paused = false;
         const intercepted = vi
@@ -69,10 +52,9 @@ it.each([
                     apply(execute, receiver, args: Parameters<typeof worker.execute>) {
                       if (!paused && args[0].type === "sessionState.record") {
                         paused = true;
-                        reached.resolve();
-                        return release.promise.then(() => {
-                          return Reflect.apply(execute, receiver, args);
-                        });
+                        return mutationGate
+                          .wait()
+                          .then(() => Reflect.apply(execute, receiver, args));
                       }
                       return Reflect.apply(execute, receiver, args);
                     },
@@ -81,23 +63,15 @@ it.each([
               options,
             ),
           );
-        const admittedRunContext = createTestAdmittedRunContext("incognito-parity");
         const events: unknown[] = [];
         const runCancellation = () => {
-          const turn = f.manager.runTurn({
-            ...f.target,
-            admittedRunContext,
-            provenance: "system",
-            mode: "prompt",
+          const turn = startTurn(f, "incognito-parity", {
             text: "private",
-            requestId: "incognito-parity",
             onEvent: (event) => {
               events.push(event);
             },
           });
-          const cancellation = stopAcpControllerTurns({
-            ...f.target,
-          });
+          const cancellation = stopAcpControllerTurns(f.target);
           return Promise.allSettled([cancellation, turn]);
         };
         const result =
@@ -105,12 +79,7 @@ it.each([
             ? withOpenClawStateDatabaseReadSnapshot(runCancellation, { env: f.state.env })
             : runCancellation();
         try {
-          await Promise.race([
-            reached.promise,
-            result.then(() => {
-              throw new Error("Cancellation ended before mutation gate.");
-            }),
-          ]);
+          await mutationGate.reached(result);
           if (change === "clear") {
             await upsertAcpSessionMeta({ ...f.target, mutate: () => null });
           } else if (change === "owner") {
@@ -129,7 +98,7 @@ it.each([
               meta: { ...originalMeta, lastActivityAt: 200 },
             });
           }
-          release.resolve();
+          mutationGate.open();
           const settled = await result;
           const signals = openOpenClawStateDatabase({ env: f.state.env })
             .db.prepare("SELECT kind FROM session_state_events WHERE run_id = ?")
@@ -144,16 +113,13 @@ it.each([
               ? [{ status: "fulfilled" }, { status: "fulfilled" }]
               : [{ status: "rejected" }, { status: "rejected" }],
           );
-          if (sourceKind === "incognito") {
-            expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);
-            expect(fs.existsSync(path)).toBe(false);
-          }
+          checkMemory();
           expect(f.runTurn).not.toHaveBeenCalled();
           expect(f.cancel).not.toHaveBeenCalled();
         } finally {
-          release.resolve();
+          mutationGate.open();
           intercepted.mockRestore();
-          releaseActor.resolve();
+          actorGate.open();
           await Promise.allSettled([result, actorResult]);
         }
       },

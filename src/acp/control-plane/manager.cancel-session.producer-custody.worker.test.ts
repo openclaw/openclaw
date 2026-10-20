@@ -4,15 +4,34 @@ import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
+import { createGate, startTurn } from "./manager.cancellation-locator.test-support.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
+
+function invocation(
+  context: ReturnType<typeof createTestAdmittedRunContext>,
+  expectedRunId: string,
+) {
+  return {
+    expectedRunId,
+    expectedInstanceId: context.operationalRunInstance.instanceId,
+    expectedOwnerKey: "agent:main:main",
+  };
+}
+
+function untilAborted(signal: AbortSignal | undefined) {
+  return new Promise<void>((resolve) => {
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
 
 it.for(["delivered", "failed"] as const)(
   "joins %s terminal delivery when cancelling a nested ACP instance without cancelling its parent or same-ID successor",
   async (terminalDelivery, { signal }) => {
     await withAcpCancellationFixture(async (f) => {
       const entered = createDeferred();
-      const cancelEntered = createDeferred();
-      const releaseCancel = createDeferred();
+      const cancelGate = createGate(
+        "Cancellation settled before the captured backend cleanup began",
+      );
       const releaseFirst = createDeferred();
       const successorEntered = createDeferred();
       const releaseSuccessor = createDeferred();
@@ -24,12 +43,7 @@ it.for(["delivered", "failed"] as const)(
         if (input.text === "first") {
           firstSignal = input.signal;
           entered.resolve();
-          await Promise.race([
-            new Promise<void>((resolve) => {
-              input.signal?.addEventListener("abort", () => resolve(), { once: true });
-            }),
-            releaseFirst.promise,
-          ]);
+          await Promise.race([untilAborted(input.signal), releaseFirst.promise]);
           yield { type: "done", stopReason: "cancel" };
         } else {
           successorSignal = input.signal;
@@ -38,21 +52,14 @@ it.for(["delivered", "failed"] as const)(
           yield { type: "done" };
         }
       });
-      f.cancel.mockImplementation(async () => {
-        cancelEntered.resolve();
-        await releaseCancel.promise;
-      });
+      f.cancel.mockImplementation(cancelGate.wait);
       const { storePath } = resolveSessionStorePathForAcp(f.target);
       await withSessionTurn(
         { ...f.target, storePath, sessionId: "cancellation-session" },
         async (parent, parentSignal) => {
           expect(parent).toBeDefined();
-          const first = f.manager.runTurn({
-            ...f.target,
+          const first = startTurn(f, "same-id", {
             admittedRunContext: firstContext,
-            provenance: "system",
-            requestId: "same-id",
-            mode: "prompt",
             text: "first",
             onEvent: (event) => {
               if (terminalDelivery === "failed" && event.type === "done") {
@@ -65,12 +72,8 @@ it.for(["delivered", "failed"] as const)(
           let cancellation: Promise<void> | undefined;
           try {
             await withinTest(entered.promise, signal);
-            successor = f.manager.runTurn({
-              ...f.target,
+            successor = startTurn(f, "same-id", {
               admittedRunContext: successorContext,
-              provenance: "system",
-              requestId: "same-id",
-              mode: "prompt",
               text: "successor",
             });
             let cancellationSettled = false;
@@ -85,20 +88,12 @@ it.for(["delivered", "failed"] as const)(
               .then(() => {
                 cancellationSettled = true;
               });
-            await withinTest(
-              Promise.race([
-                cancelEntered.promise,
-                cancellation.then(() => {
-                  throw new Error("Cancellation settled before the captured backend cleanup began");
-                }),
-              ]),
-              signal,
-            );
+            await withinTest(cancelGate.reached(cancellation), signal);
             expect(firstSignal?.aborted).toBe(true);
             expect(parentSignal.aborted).toBe(false);
             expect(cancellationSettled).toBe(false);
             expect(f.runTurn.mock.calls.map(([input]) => input.text)).toEqual(["first"]);
-            releaseCancel.resolve();
+            cancelGate.open();
             if (terminalDelivery === "failed") {
               await expect(withinTest(cancellation, signal)).rejects.toThrow(
                 "Cancelled terminal delivery failed",
@@ -122,7 +117,7 @@ it.for(["delivered", "failed"] as const)(
             expect(f.cancel).toHaveBeenCalledOnce();
           } finally {
             releaseFirst.resolve();
-            releaseCancel.resolve();
+            cancelGate.open();
             releaseSuccessor.resolve();
             await Promise.allSettled([firstResult, successor, cancellation]);
           }
@@ -151,41 +146,24 @@ it("cancels the exact queued ACP instance while its parent, active sibling, and 
     await withSessionTurn(
       { ...f.target, storePath, sessionId: "cancellation-session" },
       async (_parent, parentSignal) => {
-        const blocker = f.manager.runTurn({
-          ...f.target,
-          admittedRunContext: createTestAdmittedRunContext("blocker"),
-          provenance: "system",
-          requestId: "blocker",
-          mode: "prompt",
-          text: "blocker",
-        });
+        const blocker = startTurn(f, "blocker");
         const blockerResult = Promise.allSettled([blocker]);
         let queued: Promise<void> | undefined;
         let successor: Promise<void> | undefined;
         try {
           await withinTest(blockerEntered.promise, signal);
-          queued = f.manager.runTurn({
-            ...f.target,
+          queued = startTurn(f, "queued-id", {
             admittedRunContext: queuedContext,
-            provenance: "system",
-            requestId: "queued-id",
-            mode: "prompt",
             text: "cancelled queued invocation",
           });
-          successor = f.manager.runTurn({
-            ...f.target,
+          successor = startTurn(f, "queued-id", {
             admittedRunContext: successorContext,
-            provenance: "system",
-            requestId: "queued-id",
-            mode: "prompt",
             text: "same-ID successor",
           });
           await withinTest(
             f.manager.cancelSession({
               ...f.target,
-              expectedRunId: "queued-id",
-              expectedInstanceId: queuedContext.operationalRunInstance.instanceId,
-              expectedOwnerKey: "agent:main:main",
+              ...invocation(queuedContext, "queued-id"),
             }),
             signal,
           );
@@ -221,12 +199,8 @@ it("keeps filtered preparation cancellation pending until that producer cleans u
       await releasePreparation.promise;
       return await ensureSession(input);
     });
-    const turn = f.manager.runTurn({
-      ...f.target,
+    const turn = startTurn(f, "preparing-id", {
       admittedRunContext: context,
-      provenance: "system",
-      requestId: "preparing-id",
-      mode: "prompt",
       text: "must not reach model",
     });
     const turnResult = Promise.allSettled([turn]);
@@ -244,9 +218,7 @@ it("keeps filtered preparation cancellation pending until that producer cleans u
       cancellation = f.manager
         .cancelSession({
           ...f.target,
-          expectedRunId: "preparing-id",
-          expectedInstanceId: context.operationalRunInstance.instanceId,
-          expectedOwnerKey: "agent:main:main",
+          ...invocation(context, "preparing-id"),
         })
         .then(() => {
           settled = true;
@@ -280,12 +252,8 @@ it("rejects a different owner without aborting the selected live ACP invocation"
       await release.promise;
       yield { type: "done" };
     });
-    const turn = f.manager.runTurn({
-      ...f.target,
+    const turn = startTurn(f, "owned-id", {
       admittedRunContext: context,
-      provenance: "system",
-      requestId: "owned-id",
-      mode: "prompt",
       text: "owned invocation",
     });
     const result = Promise.allSettled([turn]);
@@ -294,8 +262,7 @@ it("rejects a different owner without aborting the selected live ACP invocation"
       await expect(
         f.manager.cancelSession({
           ...f.target,
-          expectedRunId: "owned-id",
-          expectedInstanceId: context.operationalRunInstance.instanceId,
+          ...invocation(context, "owned-id"),
           expectedOwnerKey: "agent:other:parent",
         }),
       ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
@@ -313,10 +280,8 @@ it.for(["before-effect", "after-effect"] as const)(
   async (timing, { signal }) => {
     await withAcpCancellationFixture(async (f) => {
       const entered = createDeferred();
-      const guardEntered = createDeferred();
-      const releaseGuard = createDeferred();
-      const cancelEntered = createDeferred();
-      const releaseCancel = createDeferred();
+      const guardGate = createGate("Cancellation completed before the authority boundary");
+      const cancelGate = createGate("Cancellation completed before the authority boundary");
       const releaseRun = createDeferred();
       const context = createTestAdmittedRunContext("revocation-id");
       let callerCurrent = true;
@@ -324,24 +289,12 @@ it.for(["before-effect", "after-effect"] as const)(
       f.runTurn.mockImplementationOnce(async function* (input) {
         invocationSignal = input.signal;
         entered.resolve();
-        await Promise.race([
-          new Promise<void>((resolve) => {
-            input.signal?.addEventListener("abort", () => resolve(), { once: true });
-          }),
-          releaseRun.promise,
-        ]);
+        await Promise.race([untilAborted(input.signal), releaseRun.promise]);
         yield { type: "done", stopReason: "cancel" };
       });
-      f.cancel.mockImplementationOnce(async () => {
-        cancelEntered.resolve();
-        await releaseCancel.promise;
-      });
-      const turn = f.manager.runTurn({
-        ...f.target,
+      f.cancel.mockImplementationOnce(cancelGate.wait);
+      const turn = startTurn(f, "revocation-id", {
         admittedRunContext: context,
-        provenance: "system",
-        requestId: "revocation-id",
-        mode: "prompt",
         text: "revocable cancellation",
       });
       const turnResult = Promise.allSettled([turn]);
@@ -360,8 +313,7 @@ it.for(["before-effect", "after-effect"] as const)(
               const current = await control.readCurrent(...args);
               if (timing === "before-effect" && invocationSignal?.aborted && !guarded) {
                 guarded = true;
-                guardEntered.resolve();
-                await releaseGuard.promise;
+                await guardGate.wait();
               }
               return current;
             },
@@ -369,9 +321,7 @@ it.for(["before-effect", "after-effect"] as const)(
         });
       const cancellation = f.manager.cancelSession({
         ...f.target,
-        expectedRunId: "revocation-id",
-        expectedInstanceId: context.operationalRunInstance.instanceId,
-        expectedOwnerKey: "agent:main:main",
+        ...invocation(context, "revocation-id"),
         assertActive: () => {
           if (!callerCurrent) {
             throw new Error("Cancellation caller was revoked");
@@ -380,18 +330,11 @@ it.for(["before-effect", "after-effect"] as const)(
       });
       const cancellationResult = Promise.allSettled([cancellation]);
       try {
-        await withinTest(
-          Promise.race([
-            timing === "before-effect" ? guardEntered.promise : cancelEntered.promise,
-            cancellation.then(() => {
-              throw new Error("Cancellation completed before the authority boundary");
-            }),
-          ]),
-          signal,
-        );
+        const boundary = timing === "before-effect" ? guardGate : cancelGate;
+        await withinTest(boundary.reached(cancellation), signal);
         callerCurrent = false;
-        releaseGuard.resolve();
-        releaseCancel.resolve();
+        guardGate.open();
+        cancelGate.open();
         const result = await withinTest(cancellationResult, signal);
         expect(f.cancel).toHaveBeenCalledTimes(timing === "before-effect" ? 0 : 1);
         expect(result).toMatchObject(
@@ -401,8 +344,8 @@ it.for(["before-effect", "after-effect"] as const)(
         );
       } finally {
         releaseRun.resolve();
-        releaseGuard.resolve();
-        releaseCancel.resolve();
+        guardGate.open();
+        cancelGate.open();
         await Promise.allSettled([turnResult, cancellationResult]);
         intercepted.mockRestore();
       }
