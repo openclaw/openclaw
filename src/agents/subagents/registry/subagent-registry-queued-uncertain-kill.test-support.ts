@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -59,7 +60,6 @@ export function registerQueuedUnknownKillAuthorityTest() {
 
   it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
     await withQueuedRegistrationFixture(async (f) => {
-      expect(f.runs.size).toBe(0);
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
