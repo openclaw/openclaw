@@ -2,24 +2,35 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import {
-  listClaudeSessionCatalog,
-  listLocalClaudeSessionPage,
-  readLocalClaudeTranscriptPage,
+  listClaudeSessionCatalog as catalog,
+  listLocalClaudeSessionPage as list,
+  readLocalClaudeTranscriptPage as read,
 } from "./session-catalog-listing.js";
 import { CLAUDE_SESSIONS_LIST_COMMAND } from "./session-catalog-shared.js";
 import { createClaudeCatalogWatchDriver } from "./session-catalog-watch.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const local = { includeDesktop: false };
 afterEach(() => vi.restoreAllMocks());
+let home: string;
+let dir: string;
+let watches: ReturnType<typeof createClaudeCatalogWatchDriver>;
+beforeEach(async () => {
+  home = tempDirs.make("openclaw-catalog-budget-");
+  watches = createClaudeCatalogWatchDriver(home);
+  dir = path.join(home, ".claude", "projects", "-workspace");
+  await fs.mkdir(dir, { recursive: true });
+});
+const write = (name: string, data: string | Buffer) => fs.writeFile(path.join(dir, name), data);
+const page = (query: Parameters<typeof list>[0]) => list(query, home, local);
 
 function userLine(sessionId: string, isSidechain = false) {
   return JSON.stringify({
     type: "user",
     sessionId,
-    uuid: `${sessionId}-1`,
     entrypoint: "sdk-cli",
     isSidechain,
     message: { role: "user", content: sessionId },
@@ -28,67 +39,46 @@ function userLine(sessionId: string, isSidechain = false) {
 
 describe("Claude session catalog discovery budget", () => {
   it("reports the discovery frontier and finds and reads an exact ID beyond it", async () => {
-    const home = tempDirs.make("openclaw-catalog-budget-");
-    const watches = createClaudeCatalogWatchDriver(home);
-    const projectDir = path.join(home, ".claude", "projects", "-workspace");
-    await fs.mkdir(projectDir, { recursive: true });
     // Each transcript consumes one MiB before its first user record.
     const transcript = Buffer.alloc(1024 * 1024, `${"x".repeat(16 * 1024 - 1)}\n`);
     for (let index = 0; index < 66; index += 1) {
       const sessionId = `budget-${String(index).padStart(2, "0")}`;
       const line = `\n${userLine(sessionId)}\n`;
       transcript.write(line, transcript.length - Buffer.byteLength(line));
-      await fs.writeFile(path.join(projectDir, `${sessionId}.jsonl`), transcript);
+      await write(`${sessionId}.jsonl`, transcript);
     }
-    const targetId = (await fs.readdir(projectDir)).at(-1)!.slice(0, -".jsonl".length);
-    const options = { includeDesktop: false };
-    const first = await listLocalClaudeSessionPage({ limit: 50 }, home, options);
+    const targetId = (await fs.readdir(dir)).at(-1)!.slice(0, -".jsonl".length);
+    const first = await page({ limit: 50 });
     watches.arm();
     expect(first.nextCursor).toBeDefined();
     expect(first.error).toBeUndefined();
-    const last = await listLocalClaudeSessionPage({ cursor: first.nextCursor }, home, options);
-    expect([...first.sessions, ...last.sessions].map((session) => session.threadId)).not.toContain(
-      targetId,
-    );
+    const last = await page({ cursor: first.nextCursor });
+    const discovered = [...first.sessions, ...last.sessions].map((session) => session.threadId);
+    expect(discovered).not.toContain(targetId);
     expect(last.nextCursor).toBeUndefined();
     expect(last.error?.code).toBe("DISCOVERY_TRUNCATED");
 
     const open = vi.spyOn(fs, "open");
-    const read = await readLocalClaudeTranscriptPage(
-      { threadId: targetId, limit: 1 },
-      home,
-      options,
-    );
-    expect(read.items).toMatchObject([{ text: targetId }]);
-    expect(open.mock.calls.map(([file]) => file)).toEqual([
-      path.join(projectDir, `${targetId}.jsonl`),
-      path.join(projectDir, `${targetId}.jsonl`),
-    ]);
-    const exact = await listLocalClaudeSessionPage(
-      { searchTerm: targetId.toUpperCase() },
-      home,
-      options,
-    );
+    const transcriptPage = await read({ threadId: targetId, limit: 1 }, home, local);
+    expect(transcriptPage.items).toMatchObject([{ text: targetId }]);
+    const targetFile = path.join(dir, `${targetId}.jsonl`);
+    expect(open.mock.calls.map(([file]) => file)).toEqual([targetFile, targetFile]);
+    const exact = await page({ searchTerm: targetId.toUpperCase() });
     expect(exact.sessions.map((session) => session.threadId)).toEqual([targetId]);
-    const missing = await listLocalClaudeSessionPage(
-      { searchTerm: "missing-session" },
-      home,
-      options,
-    );
-    expect(missing.sessions).toEqual([]);
-    expect(missing.error?.code).toBe("DISCOVERY_TRUNCATED");
-    expect(await listLocalClaudeSessionPage({ cursor: first.nextCursor }, home, options)).toEqual(
-      last,
-    );
+    expect(await page({ searchTerm: "missing-session" })).toMatchObject({
+      sessions: [],
+      error: { code: "DISCOVERY_TRUNCATED" },
+    });
+    expect(await page({ cursor: first.nextCursor })).toEqual(last);
 
     const runtime = createPluginRuntimeMock();
     runtime.nodes.list = vi.fn(async () => ({
       nodes: [{ nodeId: "paired", connected: true, commands: [CLAUDE_SESSIONS_LIST_COMMAND] }],
     }));
     runtime.nodes.invoke = vi.fn(async ({ params }) => ({
-      payloadJSON: JSON.stringify(await listLocalClaudeSessionPage(params, home, options)),
+      payloadJSON: JSON.stringify(await page(params)),
     }));
-    const remote = await listClaudeSessionCatalog({
+    const remote = await catalog({
       runtime,
       query: { hostIds: ["node:paired"], cursors: { "node:paired": first.nextCursor } },
     });
@@ -97,19 +87,11 @@ describe("Claude session catalog discovery budget", () => {
   });
 
   it("keeps indexed and transcript sidechains out of exact lookup", async () => {
-    const home = tempDirs.make("openclaw-catalog-exact-");
-    createClaudeCatalogWatchDriver(home);
-    const projectDir = path.join(home, ".claude", "projects", "-workspace");
-    await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(path.join(projectDir, "indexed.jsonl"), userLine("indexed"));
-    await fs.writeFile(path.join(projectDir, "sidechain.jsonl"), userLine("sidechain", true));
-    await fs.writeFile(path.join(projectDir, "visible.jsonl"), userLine("visible"));
-    await fs.writeFile(
-      path.join(projectDir, "sessions-index.json"),
-      JSON.stringify({
-        entries: [{ sessionId: "indexed", isSidechain: true }],
-      }),
-    );
+    for (const id of ["indexed", "sidechain", "visible"]) {
+      await write(`${id}.jsonl`, userLine(id, id === "sidechain"));
+    }
+    const index = { entries: [{ sessionId: "indexed", isSidechain: true }] };
+    await write("sessions-index.json", JSON.stringify(index));
     for (const sessionId of ["indexed", "sidechain", "visible"]) {
       const scan = await listClaudeSessions(home, { sessionId, includeDesktop: false });
       expect(scan.records.map((record) => record.threadId)).toEqual(
