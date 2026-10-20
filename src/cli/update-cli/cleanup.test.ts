@@ -11,18 +11,16 @@ import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owne
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
-vi.mock("../../commands/doctor-session-sqlite-recovery-inventory.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../commands/doctor-session-sqlite-recovery-inventory.js")
-  >()),
+vi.mock(import("../../commands/doctor-session-sqlite-recovery-inventory.js"), async (original) => ({
+  ...(await original()),
   inspectSessionSqliteRecovery: vi.fn(),
 }));
-vi.mock("../../commands/doctor-session-sqlite-retirement.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../commands/doctor-session-sqlite-retirement.js")>()),
+vi.mock(import("../../commands/doctor-session-sqlite-retirement.js"), async (original) => ({
+  ...(await original()),
   retireSessionSqliteRecovery: vi.fn(),
 }));
-vi.mock("../../config/io.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/io.js")>()),
+vi.mock(import("../../config/io.js"), async (original) => ({
+  ...(await original()),
   readSourceConfigBestEffort: vi.fn(),
 }));
 
@@ -32,23 +30,40 @@ beforeEach(() => {
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
-it("reports artifact progress on stderr while preserving one final JSON result", async () => {
-  const report: RecoveryCleanupReport = {
+function cleanupReport(candidateBytes = 0): RecoveryCleanupReport {
+  return {
     stateDir: "/fixture/state",
     missingOriginals: 0,
-    artifacts: [],
+    artifacts: candidateBytes
+      ? [
+          {
+            path: "/fixture/original",
+            runs: [],
+            bytes: candidateBytes,
+            outcome: "candidate",
+            reason: "retained",
+          },
+        ]
+      : [],
     totals: {
-      candidateBytes: 0,
+      candidateBytes,
       verificationRequiredBytes: 0,
       protectedBytes: 0,
       blockedBytes: 0,
       removedBytes: 0,
       removedFiles: 0,
     },
-    status: "complete",
+    status: candidateBytes ? "preview" : "complete",
   };
+}
+
+it("reports artifact progress on stderr while preserving one final JSON result", async () => {
+  const report = cleanupReport();
   vi.mocked(inspectSessionSqliteRecovery).mockReturnValue({ ...report, status: "preview" });
   vi.mocked(retireSessionSqliteRecovery).mockImplementation(async ({ onProgress }) => {
     for (const phase of ["verifying", "claiming", "removing-capture"] as const) {
@@ -72,28 +87,7 @@ it("reports artifact progress on stderr while preserving one final JSON result",
 it.each(["refused", "blocked"] as const)(
   "preserves one reported %s cleanup result while unwinding its exit",
   async (status) => {
-    const report: RecoveryCleanupReport = {
-      stateDir: "/fixture/state",
-      missingOriginals: 0,
-      artifacts: [
-        {
-          path: "/fixture/original",
-          runs: [],
-          bytes: 7,
-          outcome: "candidate",
-          reason: "retained",
-        },
-      ],
-      totals: {
-        candidateBytes: 7,
-        verificationRequiredBytes: 0,
-        protectedBytes: 0,
-        blockedBytes: 0,
-        removedBytes: 0,
-        removedFiles: 0,
-      },
-      status: "preview",
-    };
+    const report = cleanupReport(7);
     vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(report);
     vi.mocked(retireSessionSqliteRecovery).mockResolvedValue({ ...report, status: "blocked" });
 
@@ -129,17 +123,13 @@ it.each([
 ])("reports stop-first guidance on cleanup contention: %s", async (error) => {
   vi.mocked(readSourceConfigBestEffort).mockRejectedValueOnce(error);
   vi.stubEnv("OPENCLAW_PROFILE", "work");
-  try {
-    await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
-    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      {
-        status: "blocked",
-        error: "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.",
-      },
-      2,
-    );
-    expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+    {
+      status: "blocked",
+      error: "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.",
+    },
+    2,
+  );
+  expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
 });

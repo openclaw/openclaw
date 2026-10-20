@@ -40,7 +40,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function previousVersionState(ledger: boolean, legacyMetadata = false) {
+function previousVersionState(ledger: boolean) {
   const root = dirs.make("update-admission-schema-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -53,12 +53,7 @@ function previousVersionState(ledger: boolean, legacyMetadata = false) {
   const db = new DatabaseSync(filename);
   // Exact stable table subset from fac4b318 (2026.9.2), kept unchanged while
   // a serving process prevents the candidate's runtime migrations.
-  const fixture = fs.readFileSync(
-    new URL("./fixtures/admission-state-fac4.sql", import.meta.url),
-    "utf8",
-  );
-  // Schema 1 (2026.6.11) has these metadata columns, but predates STRICT tables.
-  db.exec(legacyMetadata ? fixture.replace(") STRICT;", ");") : fixture);
+  db.exec(fs.readFileSync(new URL("./fixtures/admission-state-fac4.sql", import.meta.url), "utf8"));
   db.exec("PRAGMA user_version=16");
   db.prepare("INSERT INTO schema_meta VALUES ('primary','global',16,NULL,'2026.9.2',1,1)").run();
   db.prepare("INSERT INTO config_machine_state VALUES ('fixture','{\"keep\":true}',1)").run();
@@ -112,9 +107,13 @@ it.each([
   async ({ dryRun, ledger }) => {
     using f = previousVersionState(ledger);
     const before = f.snapshot();
-    expect(() => openOpenClawStateDatabase({ env: f.env })).toThrow(
-      StateSchemaMutationConflictError,
-    );
+    const assertMigrationBlocked = () => {
+      expect(() => openOpenClawStateDatabase({ env: f.env })).toThrow(
+        StateSchemaMutationConflictError,
+      );
+      expect(f.snapshot()).toEqual(before);
+    };
+    assertMigrationBlocked();
     const run = await admitUpdateCommandRun({ opts: { dryRun }, root: f.root });
     recordUpdateRunPhase(run.runId, "validating", {}, { env: run.env });
     expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
@@ -127,10 +126,7 @@ it.each([
     expect(() =>
       withStateDatabaseSchemaMaintenance({ databasePath: f.filename }, () => "migrated"),
     ).toThrow(StateSchemaMutationConflictError);
-    expect(() => openOpenClawStateDatabase({ env: f.env })).toThrow(
-      StateSchemaMutationConflictError,
-    );
-    expect(f.snapshot()).toEqual(before);
+    assertMigrationBlocked();
   },
 );
 

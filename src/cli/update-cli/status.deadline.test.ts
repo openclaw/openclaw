@@ -84,20 +84,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+const lastRun = { runId: "completed-run", status: "succeeded" };
+const delayed = <T>(value: T, ms: number) =>
+  new Promise<T>((resolve) => {
+    setTimeout(() => resolve(value), ms);
+  });
+
 it("keeps history available when a short update-check timeout expires first", async () => {
-  const lastRun = { runId: "completed-run", status: "succeeded" };
-  mocks.check.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        setTimeout(() => resolve({ installKind: "unknown" }), 1000);
-      }),
-  );
-  mocks.run.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        setTimeout(() => resolve({ lastRun }), 2000);
-      }),
-  );
+  mocks.check.mockImplementation(() => delayed({ installKind: "unknown" }, 1000));
+  mocks.run.mockImplementation(() => delayed({ lastRun }, 2000));
   vi.useFakeTimers();
   const pending = updateStatusCommand({ json: true, timeout: "1" });
   await vi.advanceTimersByTimeAsync(2001);
@@ -117,7 +112,6 @@ it.each(["installation", "update history"])(
       registry: { latestVersion: "2026.9.8" },
     };
     mocks.check.mockResolvedValue(update);
-    const lastRun = { runId: "completed-run", status: "succeeded" };
     mocks.run.mockResolvedValue({ lastRun });
     (section === "installation" ? mocks.check : mocks.run).mockReturnValue(new Promise(() => {}));
     vi.useFakeTimers();

@@ -20,32 +20,38 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("observes committed phases without a snapshot worker per tick, and does no disabled reads", async () => {
+async function observation() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-progress-observation-") };
   const run = createUpdateRun({ trigger: "cli" }, { env });
   await closeOpenClawStateDatabaseAsync();
-  const syncSnapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
-  const asyncSnapshot = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
   const read = vi.spyOn(reads, "executeExistingOpenClawStateRead");
   const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  vi.useFakeTimers();
-  const settle = async () => {
-    await Promise.all(read.mock.results.map((result) => result.value));
+  const settle = async (ms = 0, contention = false) => {
+    if (ms) {
+      await vi.advanceTimersByTimeAsync(ms);
+    }
+    const pending = read.mock.results.map((result) => result.value);
+    await (contention ? Promise.allSettled(pending) : Promise.all(pending));
     await vi.advanceTimersByTimeAsync(0);
   };
-  const context = { runId: run.runId, env };
+  return { context: { runId: run.runId, env }, read, log, settle };
+}
+
+it("observes committed phases without a snapshot worker per tick, and does no disabled reads", async () => {
+  const { context, read, log, settle } = await observation();
+  const syncSnapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+  const asyncSnapshot = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
+  vi.useFakeTimers();
   presentation = reads.withArtifactPreservingStateReads(() => createUpdateProgress(true, context));
   await settle();
   for (let tick = 0; tick < 5; tick++) {
-    await vi.advanceTimersByTimeAsync(250);
-    await settle();
+    await settle(250);
   }
   expect(syncSnapshot.mock.calls.length + asyncSnapshot.mock.calls.length).toBeLessThanOrEqual(1);
   expect(log).toHaveBeenCalledWith("Phase: requested");
 
-  recordUpdateRunPhase(run.runId, "verifying", {}, { env });
-  await vi.advanceTimersByTimeAsync(250);
-  await settle();
+  recordUpdateRunPhase(context.runId, "verifying", {}, { env: context.env });
+  await settle(250);
   expect(log).toHaveBeenCalledWith("Phase: verifying");
   presentation.dispose();
   syncSnapshot.mockClear();
@@ -62,11 +68,9 @@ it("observes committed phases without a snapshot worker per tick, and does no di
 });
 
 it("resumes progress quietly after foreign offline maintenance releases custody", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-progress-maintenance-") };
-  const run = createUpdateRun({ trigger: "cli" }, { env });
-  await closeOpenClawStateDatabaseAsync();
+  const { context, read, log, settle } = await observation();
   const owner = acquireGatewayStateOwner({
-    databasePath: path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+    databasePath: path.join(context.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
   });
   const ownerPath = owner.path;
   const payload = JSON.parse(fs.readFileSync(ownerPath, "utf8"));
@@ -83,26 +87,18 @@ it("resumes progress quietly after foreign offline maintenance releases custody"
       role: "sqlite-maintenance",
     }),
   );
-  const read = vi.spyOn(reads, "executeExistingOpenClawStateRead");
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.useFakeTimers();
-  const settle = async () => {
-    await Promise.allSettled(read.mock.results.map((result) => result.value));
-    await vi.advanceTimersByTimeAsync(0);
-  };
   try {
-    presentation = createUpdateProgress(true, { runId: run.runId, env });
-    await settle();
-    await vi.advanceTimersByTimeAsync(250);
-    await settle();
+    presentation = createUpdateProgress(true, context);
+    await settle(0, true);
+    await settle(250, true);
     expect(read).toHaveBeenCalledTimes(2);
     expect(error).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
     fs.unlinkSync(ownerPath);
-    recordUpdateRunPhase(run.runId, "verifying", {}, { env });
-    await vi.advanceTimersByTimeAsync(250);
-    await settle();
+    recordUpdateRunPhase(context.runId, "verifying", {}, { env: context.env });
+    await settle(250, true);
     expect(log).toHaveBeenCalledWith("Phase: verifying");
     expect(error).not.toHaveBeenCalled();
   } finally {

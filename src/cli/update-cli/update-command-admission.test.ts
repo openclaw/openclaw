@@ -13,19 +13,40 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 const { bindExecutionGuards, executionParams, mocks, schemaContext, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
+async function admissionFixture(
+  dir: string,
+  target: Parameters<typeof createUpdateRun>[0]["target"],
+) {
+  const control = path.join(dir, "leases");
+  await fs.mkdir(control);
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  const env = { OPENCLAW_STATE_DIR: dir };
+  const { runId } = createUpdateRun({ trigger: "cli", target }, { env });
+  const context = { ...schemaContext("invoker"), env, readEnv: env };
+  mocks.captureSchemaContext.mockResolvedValue(context);
+  return { env, runId, context, engineReads: vi.spyOn(databaseBackup, "readBackupEngine") };
+}
+
+async function execute(
+  params: Parameters<typeof bindExecutionGuards>[0],
+  runId: string,
+  dir: string,
+) {
+  return withUpdateCommandExecutor(runId, async (executor) => {
+    mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+      admitExecutor(await executor.enter(dir));
+    });
+    return executeMutableUpdate(await bindExecutionGuards(params));
+  });
+}
+
 describe("update target admission", () => {
   it("admits a compatible Git target through inspection and activation without copying stores", async () =>
     withTestDir({ prefix: "engine-compatible-activation-" }, async (dir) => {
-      const control = path.join(dir, "leases");
-      await fs.mkdir(control);
-      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-      const env = { OPENCLAW_STATE_DIR: dir };
-      const { runId } = createUpdateRun(
-        { trigger: "cli", target: { kind: "git", channel: "dev" } },
-        { env },
-      );
-      const context = { ...schemaContext("invoker"), env, readEnv: env };
-      mocks.captureSchemaContext.mockResolvedValue(context);
+      const { env, runId, context, engineReads } = await admissionFixture(dir, {
+        kind: "git",
+        channel: "dev",
+      });
       mocks.captureManagedPreflight.mockResolvedValue(context);
       mocks.maybeStopService.mockResolvedValue({
         inspected: true,
@@ -40,7 +61,6 @@ describe("update target admission", () => {
           refreshDefinition: false,
         },
       });
-      const engineReads = vi.spyOn(databaseBackup, "readBackupEngine");
       const events: string[] = [];
       mocks.runGitUpdate.mockImplementation(
         async (
@@ -57,19 +77,16 @@ describe("update target admission", () => {
           return { ...successfulUpdate, mode: "git" };
         },
       );
-      const result = await withUpdateCommandExecutor(runId, async (executor) => {
-        mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
-          admitExecutor(await executor.enter(dir));
-        });
-        return executeMutableUpdate(
-          await bindExecutionGuards({
-            ...executionParams("git"),
-            root: dir,
-            shouldRestart: false,
-            opts: { json: true, restart: false, run: { runId, env } },
-          }),
-        );
-      });
+      const result = await execute(
+        {
+          ...executionParams("git"),
+          root: dir,
+          shouldRestart: false,
+          opts: { json: true, restart: false, run: { runId, env } },
+        },
+        runId,
+        dir,
+      );
       expect(result?.result.status).toBe("ok");
       expect(result?.mutationStarted).toBe(true);
       expect(events).toEqual(["inspected", "activated"]);
@@ -80,28 +97,15 @@ describe("update target admission", () => {
     "refuses an unsupported native receiver before activation: %s",
     async (route) =>
       withTestDir({ prefix: "native-before-activation-" }, async (dir) => {
-        const control = path.join(dir, "leases");
-        await fs.mkdir(control);
-        vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-        const env = { OPENCLAW_STATE_DIR: dir };
-        const runId = createUpdateRun(
-          {
-            trigger: "cli",
-            target: route === "git" ? { kind: "git", channel: "dev", tag: "latest" } : {},
-          },
-          { env },
-        ).runId;
+        const { env, runId, engineReads } = await admissionFixture(
+          dir,
+          route === "git" ? { kind: "git", channel: "dev", tag: "latest" } : {},
+        );
         const params = executionParams(route === "git" ? "git" : "package");
         params.root = dir;
         params.updateStepTimeoutMs = 600_000;
         params.opts.run = { runId, env };
-        mocks.captureSchemaContext.mockResolvedValue({
-          ...schemaContext("invoker"),
-          env,
-          readEnv: env,
-        });
         mocks.captureManagedPreflight.mockResolvedValue(undefined);
-        const engineReads = vi.spyOn(databaseBackup, "readBackupEngine");
         const databaseEngines = ["sqlite", "postgres"];
         await fs.writeFile(
           path.join(dir, "package.json"),
@@ -160,12 +164,7 @@ describe("update target admission", () => {
             return candidate({ validateCandidate: options.validateCandidate });
           },
         );
-        const result = await withUpdateCommandExecutor(runId, async (executor) => {
-          mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
-            admitExecutor(await executor.enter(dir));
-          });
-          return executeMutableUpdate(await bindExecutionGuards(params));
-        });
+        const result = await execute(params, runId, dir);
         expect(result?.result).toMatchObject({
           status: "error",
           reason: "target-native-unsupported",

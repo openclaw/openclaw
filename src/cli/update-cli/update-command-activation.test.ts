@@ -50,6 +50,7 @@ it.each([false, true])(
     const serviceRoot = retained
       ? fs.realpathSync(dirs.make("update-retained-activation-"))
       : undefined;
+    const roots = serviceRoot ? [root, serviceRoot] : [root];
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     const run: NonNullable<UpdateCommandOptions["run"]> = {
       runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
@@ -93,7 +94,6 @@ it.each([false, true])(
       const before = getUpdateRun(run.runId, { env });
       await vi.advanceTimersByTimeAsync(budget - 1);
       expect(getUpdateRun(run.runId, { env })?.status).toBe("running");
-      expect(assertCurrent).toBeDefined();
       await vi.advanceTimersByTimeAsync(budget + 1);
       await running;
       expect(outcome).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
@@ -117,33 +117,26 @@ it.each([false, true])(
       expect(getUpdateRun(run.runId, { env })).toEqual(before);
       expect(await readRestartSentinelReadOnly(env)).toBeNull();
       expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "update-reports"))).toBe(false);
-      expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({
-        kind: "current",
-        lease: { version: 4 },
-      });
-      if (serviceRoot) {
-        expect(createManagedHandoffLeaseStore().read(serviceRoot)).toMatchObject({
+      for (const ownedRoot of roots) {
+        expect(createManagedHandoffLeaseStore().read(ownedRoot)).toMatchObject({
           kind: "current",
           lease: { version: 4 },
         });
         await expect(
-          withUpdateCommandExecutor("competing-retained-owner", (other) =>
-            other.enter(serviceRoot),
+          withUpdateCommandExecutor(
+            ownedRoot === root ? run.runId : "competing-retained-owner",
+            (other) => other.enter(ownedRoot),
           ),
         ).rejects.toThrow("Another update executor");
       }
-      await expect(
-        withUpdateCommandExecutor(run.runId, (other) => other.enter(root)),
-      ).rejects.toThrow("Another update executor");
     } finally {
       release.resolve();
       await childWork?.catch(() => {});
       await running;
       await setImmediate();
     }
-    expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-    if (serviceRoot) {
-      expect(createManagedHandoffLeaseStore().read(serviceRoot)).toEqual({ kind: "absent" });
+    for (const ownedRoot of roots) {
+      expect(createManagedHandoffLeaseStore().read(ownedRoot)).toEqual({ kind: "absent" });
     }
     // The sentinel observer owns a warm reader pool with an idle-retirement
     // timer. Join that owner before judging executor timer cleanup.
