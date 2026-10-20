@@ -4,6 +4,7 @@ import { messageClientSourcesKey } from "../../../../src/chat/message-client-sou
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
+import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
@@ -11,29 +12,33 @@ import {
   sessionParticipantIdentityKey,
   type SenderIdentity,
 } from "../../lib/chat/sender-label.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
+  assistantMessageKind,
+  isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
+import {
+  createChatItemsGroupingCache,
+  rowsAfterHiddenTurns,
+} from "./chat-thread-grouping-cache.ts";
+import { readChatThreadMessageIdentity, userTurnRunId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
-  assistantGroupIsForwardedBoundary,
-  chatItemStartsDisplayTurn,
+  assistantGroupIsIndependentBoundary,
+  assistantMessageIsAutomationResult,
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
   readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+import type { ChatReasoning } from "./tool-stream-contract.ts";
 
 const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
-
-function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
-  return resolveAssistantReplyPhase(message) ?? (visibleContent === "none" ? "activity" : "reply");
-}
 
 /**
  * Keys a sender without a typed identity by its id alone; names change, ids do
@@ -112,7 +117,10 @@ function stampReplyAttribution(
       // mislabeling the reply as addressed to the previous participant.
       const last = item.messages.at(-1);
       state = { sender: item.sender, message: item.sender ? last : undefined, turnSource: last };
-    } else if (item.role === "assistant" && hasForwardedSource(item)) {
+    } else if (
+      item.role === "assistant" &&
+      (hasForwardedSource(item) || assistantGroupIsIndependentBoundary(item))
+    ) {
       // Forwarded input starts a turn without a local human reply recipient.
       state = {};
     }
@@ -146,7 +154,11 @@ function stampReplyAttribution(
       if (shared) {
         item.replyShared = true;
       }
-      if (item.role !== "assistant" || hasForwardedSource(item)) {
+      if (
+        item.role !== "assistant" ||
+        hasForwardedSource(item) ||
+        assistantGroupIsIndependentBoundary(item)
+      ) {
         continue;
       }
       const currentSource =
@@ -180,37 +192,36 @@ export type ReplyAttributionContext = {
   localPerson?: string;
 };
 
+const groupChatItems = createChatItemsGroupingCache(groupChatItemSegment);
+
 export function groupMessages(
   items: ChatItem[],
   replyContext: ReplyAttributionContext = {},
+  reasoning?: ChatReasoning | null,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
+  const visibleReasoning = new Set(
+    reasoning?.items.flatMap(({ receipt }) =>
+      receipt?.persisted ? [JSON.stringify([receipt.runId, receipt.messageId])] : [],
+    ),
+  );
   const result = groupChatItems(
     items,
+    visibleReasoning,
     replyContext.items && rowsAfterHiddenTurns(items, replyContext.items),
+    showReasoning,
   );
-  const context = replyContext.items ? groupChatItems(replyContext.items) : result;
+  const context = replyContext.items
+    ? groupChatItems(replyContext.items, visibleReasoning, undefined, showReasoning)
+    : result;
   return stampReplyAttribution(result, context, replyContext);
 }
 
-/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
-function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
-  const visible = new Set(items.map((item) => item.key));
-  const rows = new Set<string>();
-  let hiddenTurn = false;
-  for (const item of context) {
-    if (!visible.has(item.key)) {
-      hiddenTurn ||= chatItemStartsDisplayTurn(item);
-    } else if (hiddenTurn) {
-      rows.add(item.key);
-      hiddenTurn = false;
-    }
-  }
-  return rows;
-}
-
-function groupChatItems(
+function groupChatItemSegment(
   items: ChatItem[],
+  visibleReasoning: ReadonlySet<string>,
   rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
 ): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -228,19 +239,53 @@ function groupChatItems(
     }
 
     const { item, normalized } = prepared;
-    const role = normalizeRoleForGrouping(normalized.role);
-    // Classify after content projection and keep the fact with its group; later
-    // presentation passes reuse it; replacing a message refreshes its facts.
+    const record = asRecord(item.message);
+    const identity = visibleReasoning.size ? readChatThreadMessageIdentity(item.message) : null;
+    const hasVisibleReasoning =
+      identity?.role === "assistant" &&
+      !identity.isImported &&
+      visibleReasoning.has(JSON.stringify([identity.runId, identity.id])) &&
+      Boolean(extractThinkingCached(item.message));
+    const hasAssistantText =
+      record?.role === "assistant" &&
+      record.stopReason === "toolUse" &&
+      Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim());
+    // Saved reasoning stays visible until its live owner retires the receipts.
+    // Legacy mixed rows retain their tool grouping and file-link attribution.
+    // Classify after content projection; prepared outcomes may outlive their blocks.
     const visibleContent = resolveMessageVisibleContent(item.message, normalized);
+    const normalizedRole = normalizeRoleForGrouping(normalized.role);
+    const hasPreparedActivity =
+      normalizedRole === "assistant" &&
+      visibleContent === "none" &&
+      hasVisiblePreparedActivity(item.message);
+    const role =
+      hasAssistantText || hasVisibleReasoning
+        ? "assistant"
+        : hasPreparedActivity
+          ? "tool"
+          : normalizedRole;
     const source = {
       message: item.message,
       key: item.key,
       duplicateCount: item.duplicateCount,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
+        hasVisibleReasoning ||
+        (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
         Boolean(resolveMessageDisplayMarkdown(item.message, normalized).trim()),
     };
+    // Projection can remove the last tool block, leaving only hidden thinking.
+    // Keep recorded interruptions/errors, which have their own visible outcome.
+    if (
+      role === "assistant" &&
+      !source.hasVisibleContent &&
+      !assistantMessageIsInterrupted(item.message) &&
+      record?.stopReason !== "error"
+    ) {
+      continue;
+    }
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
@@ -270,7 +315,10 @@ function groupChatItems(
       startsProjectedTurn ||
       // Each automation input owns a turn, including old rows without a projected marker.
       Boolean(
-        readAutomationRun(item.message) || readAutomationRun(currentGroup.messages[0]?.message),
+        readAutomationRun(item.message) ||
+        readAutomationRun(currentGroup.messages[0]?.message) ||
+        assistantMessageIsAutomationResult(item.message) ||
+        assistantMessageIsAutomationResult(currentGroup.messages[0]?.message),
       ) ||
       (isInterSessionMessage(item.message) && !normalized.senderSession?.sessionKey) ||
       currentGroup.role !== role ||
@@ -394,19 +442,24 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     (item.role === "assistant" || item.role === "tool") &&
-    !assistantGroupIsForwardedBoundary(item)
+    !assistantGroupIsIndependentBoundary(item)
   );
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
+  if (
+    item.kind !== "group" ||
+    item.isStreaming ||
+    groupHasVisibleReplyContent(item, false) ||
+    item.messages.some(({ message }) => isProviderVoiceTranscript(message))
+  ) {
     return false;
   }
   const role = item.role.toLowerCase();
   return (
     role === "tool" ||
     (role === "assistant" &&
-      !assistantGroupIsForwardedBoundary(item) &&
+      !assistantGroupIsIndependentBoundary(item) &&
       assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer")
   );
 }
@@ -432,7 +485,8 @@ function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): b
 export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
   return (
     group.role.toLowerCase() === "assistant" &&
-    !assistantGroupIsForwardedBoundary(group) &&
+    !assistantGroupIsIndependentBoundary(group) &&
+    !group.messages.some(({ message }) => isProviderVoiceTranscript(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }

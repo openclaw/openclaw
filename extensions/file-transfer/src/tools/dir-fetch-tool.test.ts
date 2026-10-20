@@ -185,6 +185,29 @@ async function expectUnsafeArchive(
 }
 
 describe("dir.fetch archive extraction", () => {
+  it("reports unreadable extracted metadata instead of returning a partial manifest", async () => {
+    prepareArchive(createRawTarBuffer([{ path: "ok.txt", contents: "saved" }]));
+    const stat = fs.stat;
+    const failure = Object.assign(new Error("cannot read extracted metadata"), { code: "EIO" });
+    const metadata = vi.spyOn(fs, "stat").mockImplementation((...args) => {
+      if (
+        String(args[0]).includes(`${path.sep}dir-fetch-`) &&
+        path.basename(String(args[0])) === "ok.txt"
+      ) {
+        return Promise.reject(failure);
+      }
+      return stat(...args);
+    });
+    try {
+      await expect(executeDirFetch()).rejects.toBe(failure);
+      expect(appendFileTransferAudit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "allowed" }),
+      );
+    } finally {
+      metadata.mockRestore();
+    }
+  });
+
   it("extracts a bounded tar and returns the plugin-side manifest", async () => {
     const largeContent = "a".repeat(300_017);
     const tarBuffer = await createTarBuffer({

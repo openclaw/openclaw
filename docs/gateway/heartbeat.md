@@ -103,10 +103,15 @@ string. `heartbeat.target` accepts `owner`, `last`, `none`, or a channel ID such
 - When recurring heartbeats are disabled with `0m`, the automation job stays but is disabled. Doctor reports a disabled monitor when creating or updating this job, rather than showing its retained interval as an active cadence. Its monitor scratch is retained for when you re-enable the cadence. Targeted event-driven wakes remain available.
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
-- Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. An event-free plain monitor poll that has not begun preparation is recorded as skipped and waits for its next persisted cadence tick, instead of keeping a running automation open behind busy work. Wakes carrying queued events or scheduled tasks, and work already admitted or retained after execution, still retry. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
-- A host background-command completion uses ordinary session execution and waits only for its own session. Heartbeat-owned node completions retain their existing busy and delivery-recovery guards.
+- When a resolved delivery channel reports that it is not ready, an ambient heartbeat poll with no scheduled tasks or queued events skips the model turn. Its readiness retries start at one minute and double up to the heartbeat interval; a channel that remains down incurs no model calls for these polls. Once the channel is ready, the next retry runs normally. Required task and event turns still execute their prompts and check readiness only for delivery. The Gateway logs entry into backoff and settlement once each, rather than logging every retry. Heartbeats without a channel target are unchanged.
+- A heartbeat is dropped only when its own target session is busy. The session's mailbox refuses a heartbeat turn while that session has an active or queued turn, and the skip is recorded as `requests-in-flight`. Turns in other sessions of the same agent, the main queue, and running automations do not defer heartbeats, and sibling agents do not pause each other. A restart-recovery resend counts as queued work as soon as its turn is marked interrupted, even before the resend joins the mailbox, so no heartbeat, manual ones included, runs ahead of it.
+- A dropped event-free plain monitor poll is recorded as skipped and waits for its next persisted cadence tick instead of retrying. Wakes carrying queued events or scheduled tasks, and isolated heartbeat runs, retry until their session is free. A targeted background-command completion waits only for its own session, including final-delivery recovery.
 
 ## What the heartbeat prompt is for
+
+Explicit speech-only replies keep their spoken text through heartbeat selection
+and speech synthesis, even when the visible reply is empty. They follow the same
+delivery target and visibility settings as other heartbeat alerts.
 
 The default prompt is intentionally narrow: follow the heartbeat monitor scratch
 context when provided, keep recurring work in automation jobs, and reply
@@ -125,7 +130,7 @@ Proactive heartbeat behavior is opt-in:
   night-time pings in your configured local timezone (see
   [Timezone](/concepts/timezone)).
 
-Heartbeat still handles node completion events. Host exec, CLI watchdog, ACP parent relay, immediate HTTP hooks, restart continuations, and session-state notices use ordinary session execution. A completion carrying a captured delivery route returns to that account, conversation, and thread; the monitor's configured `target`, `to`, or `accountId` cannot redirect it. Intentional `target: "none"`, direct-message restrictions, notification opt-outs, and disabled heartbeat controls still apply. Plugin normalization that would change the captured route fails closed. Ordinary scheduled heartbeats retain their configured destinations.
+Heartbeat still handles node completion events. Host exec, CLI watchdog, ACP parent relay, immediate HTTP hooks, restart continuations, and session-state notices use ordinary session execution. A completion carrying a captured delivery route returns to that account, conversation, and thread; the monitor's configured `target`, `to`, or `accountId` cannot redirect it. Intentional `target: "none"`, direct-message restrictions, notification opt-outs, and disabled heartbeat controls still apply. Plugin normalization that would change the captured route is rejected. Ordinary scheduled heartbeats retain their configured destinations.
 
 Heartbeat-owned node completions with different delivery routes run in separate turns, including different accounts or topics. Identical completion text does not suppress a different completion occurrence.
 
@@ -155,9 +160,16 @@ completed. Resetting or deleting the target session cancels the retained event
 rather than moving it into the replacement session. A `NO_REPLY` result remains
 silent.
 
+Rejected events retain the session admission reason. Durable restart deliveries
+retry temporary refusals, such as session initialization, but settle permanent
+refusals, such as an archived session or exhausted restart recovery, as failed
+without repeating the same admission attempt.
+
 ## Response contract
 
 - If nothing needs attention, reply with **`NO_REPLY`**.
+- A turn with no usable response, acknowledgment, pending continuation, or confirmed delivery is recorded as failed. This does not add a missing-answer notice to the chat.
+- A token-only strict prefix of `NO_REPLY` with at least four characters, such as `NO_R` or `no_r`, is treated as a quiet reply too, ignoring casing. This fragment handling is limited to heartbeats. With `showOk` enabled, it produces the usual `HEARTBEAT_OK` acknowledgment instead of delivering the fragment.
 - Heartbeat runs may instead call `heartbeat_respond` with `notify: false` for no visible update, or `notify: true` plus `notificationText` for an alert. When present, the structured tool response takes precedence over the text fallback.
 - A meaningful `heartbeat_respond` result with `notify: false` remains silent but is remembered as bounded internal context for the next user turn in that session. A generated `notify: true` alert whose delivery is blocked or unconfirmed is also recorded, including its alert text and delivery reason. This is the latest outcome for the session, not an alert history or exact-delivery replay queue. `no_change` acknowledgments and confirmed visible notifications are not stored this way.
 - Existing custom prompts may still return the legacy `HEARTBEAT_OK` acknowledgment. OpenClaw accepts it at the **start or end** of a reply and drops the reply when its remaining content is at most 300 characters. The suppression budget is fixed.
@@ -377,7 +389,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
     - A wake that carries a channel and recipient uses that named origin before owner discovery. This event destination can be a group because it is explicit, not inferred.
     - To deliver to a specific channel/recipient, set a channel `target` plus `to`. `target: "last"` is an explicit opt-in to the last external conversation, including groups.
     - Heartbeat deliveries allow direct/DM targets by default. Set `directPolicy: "block"` to suppress direct-target sends while still running the heartbeat turn.
-    - Scheduled heartbeats skip when the main queue or automation work is busy, any reply or embedded run for the same agent is active, or the resolved target session has active or queued work. Event-free plain monitor polls that have not begun preparation wait for the next persisted cadence tick. Queued events, scheduled tasks, and work already admitted or retained after execution keep their retries. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
+    - Heartbeats skip as `requests-in-flight` only when the resolved target session has active or queued work. Work in other sessions, the main queue, and automations does not block them. A dropped event-free plain monitor poll waits for the next persisted cadence tick. Queued events, scheduled tasks, and isolated runs keep their retries.
     - If `owner` has no concrete, DM-capable owner or configured channel, the poll is skipped as `reason=no-route` before the agent runs. Explicit `last` also skips when the session has no external route.
     - The first alert delivered by the implicit `owner` default explains periodic checks and how to choose `target: "none"`. Later alerts omit that line.
 
@@ -386,7 +398,7 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
     - If the heartbeat turn fails before the model can reply, the failure notice names the reason whenever OpenClaw itself refused the run. One example is a session runtime that is still busy in another runner. Raw provider or runtime errors stay behind the verbose failure-detail setting (`/verbose on` or `/verbose full`), as in normal chats.
     - If `showOk`, `showAlerts`, and `useIndicator` are all disabled, the run is skipped up front as `reason=alerts-disabled`.
     - If only alert delivery is disabled, OpenClaw can still run the heartbeat, update due-task timestamps, restore the session idle timestamp, and suppress the outward alert payload.
-    - If the channel readiness check blocks an alert, OpenClaw records the non-delivery. It retries the heartbeat after a one-minute grace period, without consuming its cadence slot. This retry runs the heartbeat again. It does not replay the exact earlier alert. Once a send enters the durable delivery queue, that queue owns transport retries.
+    - If a channel becomes unavailable during a turn and the final readiness check blocks an alert, OpenClaw records the non-delivery without consuming its cadence slot. An ambient poll retries after a one-minute grace period; subsequent unavailable-channel attempts check readiness without invoking the model and double the delay up to the heartbeat interval. Required task and queued-event turns keep executing their prompts and retain the one-minute delivery retry. Once readiness permits an ambient retry, it runs a new turn rather than replaying the exact earlier alert. Once a send enters the durable delivery queue, that queue owns transport retries.
     - If the resolved heartbeat target supports typing, OpenClaw shows typing while the heartbeat run is active. This uses the same target the heartbeat would send chat output to, and it is disabled by `typingMode: "never"`.
 
   </Accordion>
@@ -505,7 +517,7 @@ The agent can also update its own scratch: during a heartbeat turn, `heartbeat_r
 If the workspace and state directory are on different filesystems, Doctor keeps the original file in a private `HEARTBEAT.md.doctor-archived.*` directory beside its former location. The state-directory backup remains an immutable snapshot. Later writes through an already-open file descriptor remain recoverable in the workspace archive.
 </Note>
 
-OpenClaw skips the heartbeat run to save API calls when scratch exists but is effectively empty. Effectively empty means only blank lines, Markdown or HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs. That skip is reported as `reason=empty-heartbeat-file`. Scheduled interval monitors without due tasks resolve this skip before deferring behind busy execution queues. If no scratch exists, the heartbeat still runs and the model decides what to do.
+OpenClaw skips the heartbeat run to save API calls when scratch exists but is effectively empty. Effectively empty means only blank lines, Markdown or HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs. That skip is reported as `reason=empty-heartbeat-file`. Scheduled interval monitors without due tasks resolve this skip before any busy deferral. If no scratch exists, the heartbeat still runs and the model decides what to do.
 
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
 
@@ -553,6 +565,8 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 If no `--session-key` is given and multiple agents have `heartbeat` configured, `--mode now` runs each of those agent heartbeats immediately.
 
 Broadcast completion reports an agent failure even if another agent succeeded or was quietly skipped. Busy retries and guarded deferrals keep their existing retry behavior.
+
+Unexpected wake preparation failures are logged and finish that occurrence as failed rather than silently retrying it. A new explicit wake or the next scheduled occurrence can try again after the cause is resolved. Handler disposal and Gateway restart still retain interrupted notifications for the replacement runner.
 
 Related heartbeat controls in the same CLI group:
 

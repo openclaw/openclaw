@@ -1,15 +1,86 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { isChatControlCommand } from "../../lib/chat/commands.ts";
+import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
+import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatProps } from "./chat-view.tsx";
+
+export function createChatPaneRunRecoveryActions(
+  state: Pick<
+    ChatPageHost,
+    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "handleSendChat"
+  >,
+  options: {
+    canSend: boolean;
+    isCurrent: () => boolean;
+    latestFailedRunId: () => string | undefined;
+  },
+): Pick<ChatProps, "onRetryRun"> {
+  const sessionKey = state.sessionKey;
+  const ownsFailure = (runId: string) =>
+    options.isCurrent() &&
+    state.sessionKey === sessionKey &&
+    state.connected &&
+    !state.chatRunId &&
+    !state.chatSending &&
+    options.latestFailedRunId() === runId;
+  return {
+    onRetryRun: options.canSend
+      ? (runId) => {
+          if (ownsFailure(runId)) {
+            // Continue with the existing history, rather than replaying a prompt
+            // whose tools may already have completed side effects.
+            void state.handleSendChat(t("chat.recovery.continuePrompt"));
+          }
+        }
+      : undefined,
+  };
+}
+
+export function createChatPaneSendActions(
+  state: Pick<ChatPageHost, "chatAttachments" | "chatMessage" | "handleSendChat">,
+  options: {
+    canSend: boolean;
+    modelRequiredReason?: string | null;
+    continueSession?: () => ReturnType<ChatProps["onSend"]>;
+    addSuggestion?: () => ReturnType<ChatProps["onSend"]>;
+  },
+): Pick<ChatProps, "onSend" | "onPermissionRetry"> {
+  return {
+    onPermissionRetry:
+      options.canSend && !options.continueSession && !options.addSuggestion
+        ? (message) => void state.handleSendChat(message)
+        : undefined,
+    onSend: (followUpModeOverride, submissionAction) => {
+      if (
+        !options.canSend ||
+        (options.modelRequiredReason &&
+          (state.chatAttachments.length > 0 || !isModelIndependentChatCommand(state.chatMessage)))
+      ) {
+        return;
+      }
+      if (options.continueSession) {
+        return options.continueSession();
+      }
+      if (options.addSuggestion) {
+        return options.addSuggestion();
+      }
+      return state.handleSendChat(
+        undefined,
+        followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+        submissionAction,
+      );
+    },
+  };
+}
 
 type SelectedSessionProjectionState = {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
@@ -103,10 +174,6 @@ export function chatSubmitState(
     submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
-      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
-      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
-        state.requestUpdate?.();
-      }
     },
   };
 }
@@ -118,42 +185,11 @@ export function resolveChatPaneFollowUpMode(
 ) {
   return resolveControlUiFollowUpMode(
     state.settings.chatFollowUpMode,
-    resolveControlUiServerQueueMode(runtimeConfig.configSnapshot?.runtimeConfig, {
+    resolveControlUiServerQueueMode(currentDisplayRuntimeConfig(runtimeConfig), {
       configNeedsApply: runtimeConfig.configNeedsApply,
       effectiveMode: state.chatEffectiveQueueMode,
       sessionMetadataLoaded: session !== undefined || state.chatEffectiveQueueMode !== undefined,
       sessionMode: state.chatQueueModeOverride,
     }),
   );
-}
-
-// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
-const emptyTranscriptItems: [] = [];
-
-export function projectChatPaneTranscript(
-  state: Pick<
-    ChatPageHost,
-    | "chatMessages"
-    | "chatToolMessages"
-    | "guardianNotices"
-    | "chatStreamSegments"
-    | "chatStream"
-    | "chatReasoning"
-    | "chatStreamStartedAt"
-    | "chatRunUsageById"
-  >,
-  catalogMessages: unknown[] | null,
-  runId: string | null,
-) {
-  return {
-    messages: catalogMessages ?? state.chatMessages,
-    toolMessages: catalogMessages ? emptyTranscriptItems : state.chatToolMessages,
-    guardianNotices: catalogMessages ? emptyTranscriptItems : state.guardianNotices,
-    streamSegments: catalogMessages ? emptyTranscriptItems : state.chatStreamSegments,
-    stream: catalogMessages ? null : state.chatStream,
-    reasoning: catalogMessages ? null : state.chatReasoning,
-    streamStartedAt: catalogMessages ? null : state.chatStreamStartedAt,
-    runId: catalogMessages ? null : runId,
-    runUsageById: catalogMessages ? undefined : state.chatRunUsageById,
-  };
 }

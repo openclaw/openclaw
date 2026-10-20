@@ -6,12 +6,13 @@ import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js"
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { repairGatewayMaintenanceStartupFailures } from "../infra/gateway-boot-lifecycle.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
@@ -44,6 +45,12 @@ afterEach(() => vi.restoreAllMocks());
 const workers = createSqliteReadOnlyWorkerScope();
 afterAll(() => workers.close());
 
+async function expectNoSidecars(database: string) {
+  for (const suffix of ["-wal", "-shm"]) {
+    await expect(fs.stat(database + suffix)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
+
 it.each(["configured-owner", "profile"] as const)(
   "keeps %s requester authority live through maintenance and revocation",
   async (source) => {
@@ -75,7 +82,7 @@ it.each(["configured-owner", "profile"] as const)(
         await closeOpenClawStateDatabaseAsync();
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         const files = [databasePath];
-        const generation = readUpdateDatabaseGenerations(files);
+        const generation = await readUpdatePhysicalDatabaseGenerations(files);
         const foreignEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("foreign-state") };
         const foreignDatabase = resolveOpenClawStateSqlitePath(foreignEnv);
         await fs.mkdir(state.path("foreign-state", "state"), { recursive: true });
@@ -98,7 +105,7 @@ it.each(["configured-owner", "profile"] as const)(
           requester.requester,
           foreignEnv,
         );
-        expect(readUpdateDatabaseGenerations(files)).toEqual(generation);
+        expect(await readUpdatePhysicalDatabaseGenerations(files)).toEqual(generation);
         const authorityWorkerLaunches = new Set<object>();
         const assertCurrent = () => {
           const start = vi.mocked(spawnSync).mock.calls.length;
@@ -117,31 +124,25 @@ it.each(["configured-owner", "profile"] as const)(
         };
         assertCurrent();
         await closeOpenClawStateDatabaseAsync();
+        // Keep the initial liveness control outside the maintenance admission budget.
+        authorityWorkerLaunches.clear();
         const maintenance = await beginDoctorMaintenance({
           root: null,
           options: { repair: true, nonInteractive: true },
           runtime: { log() {}, error() {}, exit() {} },
           assertCurrent,
-          beforeStateMutation: async () => {
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(databasePath + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
-          },
+          beforeStateMutation: () => expectNoSidecars(databasePath),
         });
         expect(maintenance).toBeDefined();
         const admissionWorkerLaunches = authorityWorkerLaunches.size;
         try {
-          // The live owner grants storage access only inside its retained closure.
-          expect(assertCurrent).toThrow("undergoing offline maintenance");
+          if (source === "profile") {
+            // The live owner grants storage access only inside its retained closure.
+            expect(assertCurrent).toThrow("without an active schema lease or maintenance scope");
+          }
           await maintenance!.run(async () => {
             expect(foreignRequester.isCurrent()).toBe(true);
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(foreignDatabase + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
+            await expectNoSidecars(foreignDatabase);
             const migration = await withLegacyMigrationStateLock({
               stateDir: state.stateDir,
               env: state.env,
@@ -183,6 +184,15 @@ it.each(["configured-owner", "profile"] as const)(
               }
               assertCurrent();
             }
+            repairGatewayMaintenanceStartupFailures(state.env);
+          });
+          expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
+          // Lease admission rechecks authority after acquisition inside the held scope.
+          expect(admissionWorkerLaunches).toBeLessThanOrEqual(9);
+          // The Doctor flow leaves runChecks before its post-repair cleanup.
+          // Draining those readers requires fresh admission before restoration.
+          await maintenance!.cleanupRetainedRuntimes();
+          await maintenance!.run(async () => {
             if (source === "profile") {
               unlinkUserChannelIdentity(profile.id, identity);
             } else {
@@ -201,8 +211,6 @@ it.each(["configured-owner", "profile"] as const)(
         } finally {
           await maintenance?.release();
         }
-        expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
-        expect(admissionWorkerLaunches).toBeLessThanOrEqual(8);
       }),
     );
   },

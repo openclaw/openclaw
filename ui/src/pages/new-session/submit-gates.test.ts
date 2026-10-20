@@ -1,15 +1,93 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ProjectsCheckoutOptionsResult,
+  ProjectsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
 
-// The closed list of gates allowed to block without a visible reason: the busy
-// Start button and an empty draft explain themselves. Growing it is a product
-// decision — edit this list and the matching one in submit-gates.ts together.
+// Keep the intentional silent gates in sync with submit-gates.ts.
 const SILENT_SUBMIT_GATES = ["submitting", "empty-draft"];
+const projectMethods = [
+  "sessions.create",
+  "projects.list",
+  "projects.checkoutOptions",
+  "worktrees.branches",
+];
+const adminScopes = ["operator.admin", "operator.read", "operator.write"];
+type Fixture = ReturnType<typeof createDraftFixture>;
+type FixtureOptions = Parameters<typeof createDraftFixture>[0];
+type RecoveryCreate = Parameters<Fixture["flow"]["pendingPlacement"]["stageCreate"]>[0];
+type SubmitGate = NonNullable<ReturnType<Fixture["flow"]["submitBlock"]>>["gate"];
+function expectGate(flow: Fixture["flow"], gate?: SubmitGate, reason?: string) {
+  expect(flow.submitBlock()).toEqual(gate ? { gate, reason } : undefined);
+  expect(flow.canSubmit()).toBe(gate === undefined);
+  expect(flow.submitDisabledReason()).toBe(reason);
+}
+const agent = (overrides: Record<string, unknown>) => ({
+  id: "main",
+  workspace: "/workspace",
+  ...overrides,
+});
+function deviceFixture(
+  id: string,
+  runtime: Record<string, unknown>,
+  options: { available?: () => number; deviceFolders?: true; model?: string } = {},
+) {
+  return withMessage({
+    scopes: adminScopes,
+    methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+    agents: [
+      agent({
+        agentRuntime: runtime,
+        ...(options.model ? { workspaceGit: false, model: { primary: options.model } } : {}),
+      }),
+    ],
+    request: replies({
+      "environments.list": async () => ({
+        environments: [
+          {
+            id: `node:${id}`,
+            type: "node",
+            status: "available",
+            sessionHost: true,
+            ...(options.deviceFolders ? { workerHost: { deviceFolders: true } } : {}),
+            workerSlots: { total: 1, available: options.available?.() ?? 1 },
+          },
+        ],
+        profiles: [],
+      }),
+    }),
+  });
+}
+function restoreCreate(
+  flow: Fixture["flow"],
+  options: Pick<RecoveryCreate, "target" | "message" | "createParams">,
+) {
+  const params = flow.pendingPlacement.stageCreate({
+    agentId: "main",
+    gatewayUrl: "ws://gateway.example",
+    recoveryScope: "principal-a",
+    ...options,
+  });
+  flow.releasePendingPlacementOwner();
+  flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
+  return params;
+}
+const replies = (methods: Record<string, () => Promise<unknown>>) => (method: string) =>
+  methods[method]?.() ?? Promise.resolve({});
+function withMessage(options: FixtureOptions = {}, setup?: (fixture: Fixture) => void) {
+  const fixture = createDraftFixture(options);
+  fixture.flow.setMessage("hello");
+  setup?.(fixture);
+  return fixture;
+}
+function unavailableModel(reason: "missing-auth" | "auth-failed" | "cooldown") {
+  return { id: "gpt-5.6-luna", provider: "openai", available: false, unavailableReason: reason };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -19,6 +97,79 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each(["registered", "cloned"] as const)(
+    "submits a guest's path-redacted %s project as an isolated worktree",
+    async (source) => {
+      const availability = createDeferred<ProjectsCheckoutOptionsResult>();
+      const { place, flow, context, request } = withMessage({
+        scopes: ["operator.sessions.read", "operator.sessions.write"],
+        methods: projectMethods,
+        selfUser: { id: "guest" },
+        request: replies({
+          "projects.list": async () => ({
+            projects: [{ id: "registered", displayName: "Registered Project", source }],
+          }),
+          "projects.checkoutOptions": () => availability.promise,
+          "worktrees.branches": async () => {
+            throw new Error("missing scope: operator.write");
+          },
+        }),
+      });
+      await place.browser.refreshProjects();
+      place.selectProjectId("registered");
+      expect(place.checkoutVisible).toBe(true);
+      expect(flow.canSubmit()).toBe(false);
+      availability.resolve({ current: false, worktree: true });
+      await availability.promise;
+      expect(place.worktree).toBe(true);
+      expect(flow.submitBlock()).toBeUndefined();
+      vi.mocked(context.sessions.createResult).mockRejectedValueOnce(
+        new Error("project registered is unavailable; re-register the project"),
+      );
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      expect(params).toMatchObject({ projectId: "registered", worktree: true });
+      expect(params).not.toHaveProperty("worktreeBaseRef");
+      expect(params).not.toHaveProperty("cwd");
+      expect(flow.error).toContain("re-register the project");
+      expect(place.worktree).toBe(true);
+      expect(place.browser.projectId).toBe("registered");
+      expect(flow.submitBlock()).toBeUndefined();
+      expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toEqual([]);
+    },
+  );
+
+  it("retries a restored existing-folder create after its device stops offering free slots", async () => {
+    let freeSlots = 1;
+    const { place, flow, gateway } = deviceFixture(
+      "runner",
+      {
+        id: "openclaw",
+        source: "agent",
+        cloudPlacementExecutionMode: "worker-turn",
+        devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      },
+      { available: () => freeSlots, deviceFolders: true },
+    );
+    await gateway.refreshCloudProfiles();
+    restoreCreate(flow, {
+      target: { kind: "device", deviceId: "runner" },
+      message: "Keep my folder",
+      createParams: {
+        agentId: "main",
+        message: "",
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    });
+    expect(place.deviceFolder).toEqual({ deviceId: "runner", path: "/srv/project" });
+    // The pending session itself can hold the device's only slot.
+    freeSlots = 0;
+    await gateway.refreshCloudProfiles();
+    expect(place.deviceFolderAvailable).toBe(false);
+    expect(flow.submitBlock()).toBeUndefined();
+  });
+
   it.each(["retry", "choose-workspace"] as const)(
     "retains a saved project after failed discovery until %s resolves the choice",
     async (recovery) => {
@@ -28,16 +179,18 @@ describe("DraftSubmissionFlow submit gates", () => {
         projectId: "registered",
       });
       const discovery = createDeferred<ProjectsListResult>();
+      const availability = createDeferred<ProjectsCheckoutOptionsResult>();
       let projects = discovery.promise;
-      const { place, flow, context } = createDraftFixture({
-        methods: ["sessions.create", "projects.list", "worktrees.branches"],
+      const { place, flow, context } = withMessage({
+        methods: projectMethods,
         request: (method) =>
           method === "projects.list"
             ? projects
-            : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
+            : method === "projects.checkoutOptions"
+              ? availability.promise
+              : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
       });
       const read = place.browser.refreshProjects();
-      flow.setMessage("work in the saved project");
       await flow.submit();
       expect(context.sessions.createResult).not.toHaveBeenCalled();
       discovery.reject(new Error("Project discovery unavailable"));
@@ -54,13 +207,12 @@ describe("DraftSubmissionFlow submit gates", () => {
         place.applyFolder("/workspace");
       } else {
         projects = Promise.resolve({
-          projects:
-            recovery === "retry"
-              ? [{ id: "registered", displayName: "Registered", source: "registered" }]
-              : [],
+          projects: [{ id: "registered", displayName: "Registered", source: "registered" }],
         });
         await place.browser.refreshProjects();
         place.restorePreferenceSelections();
+        availability.resolve({ current: true, worktree: true });
+        await availability.promise;
       }
       expect(flow.canSubmit()).toBe(true);
       await flow.submit();
@@ -76,12 +228,11 @@ describe("DraftSubmissionFlow submit gates", () => {
 
   it("waits for the configured default repository before admitting the first session", async () => {
     const discovery = createDeferred<ProjectsListResult>();
-    const { place, flow, context } = createDraftFixture({
+    const { place, flow, context } = withMessage({
       methods: ["sessions.create", "projects.list"],
       request: (method) => (method === "projects.list" ? discovery.promise : Promise.resolve({})),
     });
     const read = place.browser.refreshProjects();
-    flow.setMessage("inspect the repository");
     expect(place.browser.projectsLoading).toBe(true);
     expect(flow.canSubmit()).toBe(false);
     await flow.submit();
@@ -118,35 +269,21 @@ describe("DraftSubmissionFlow submit gates", () => {
   ] as const)(
     "blocks new sessions only for actionable $reason model availability",
     async ({ reason, message }) => {
-      const { context, flow, place } = createDraftFixture({
+      const { context, flow, place } = withMessage({
         modelCatalog: async () => ({
-          models: [
-            {
-              id: "gpt-5.6-luna",
-              name: "GPT-5.6 Luna",
-              provider: "openai",
-              available: false,
-              unavailableReason: reason,
-            },
-          ],
+          models: [{ ...unavailableModel(reason), name: "GPT-5.6 Luna" }],
         }),
       });
-      place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
+      const modelControl = place.modelControl;
+      modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
         expect(
-          renderControl(
-            place.modelControl,
-            context,
-            "main",
-            place.selectedAgent(),
-          ).querySelectorAll("[data-chat-model-option]"),
+          renderControl(modelControl, context, "main", place.selectedAgent()).querySelectorAll(
+            "[data-chat-model-option]",
+          ),
         ).toHaveLength(1),
       );
-      flow.setMessage("Start this session");
-      expect(flow.submitBlock()).toEqual(
-        message ? { gate: "model-unavailable", reason: message } : undefined,
-      );
-      expect(flow.canSubmit()).toBe(message === undefined);
+      expectGate(flow, message ? "model-unavailable" : undefined, message);
     },
   );
 
@@ -155,30 +292,18 @@ describe("DraftSubmissionFlow submit gates", () => {
     async (phase) => {
       const { context, flow, place } = createDraftFixture({
         methods: ["sessions.create", "sessions.dispatch"],
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        modelCatalog: async () => ({
-          models: [
-            {
-              id: "gpt-5.6-luna",
-              provider: "openai",
-              available: false,
-              unavailableReason: "missing-auth",
-            },
-          ],
-        }),
+        scopes: adminScopes,
+        modelCatalog: async () => ({ models: [unavailableModel("missing-auth")] }),
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
-        expect(place.modelControl.modelUnavailableReason(place.selectedAgent())).toBe(
-          "missing-auth",
+        expect(place.modelControl.modelSelectionBlockedReason(place.selectedAgent())).toContain(
+          "No provider credential",
         ),
       );
-      const createParams = flow.pendingPlacement.stageCreate({
-        agentId: "main",
+      const createParams = restoreCreate(flow, {
         target: { kind: "profile", profileId: "cloud" },
         message: "Resume the original personal-account task",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
         createParams: {
           agentId: "main",
           message: "",
@@ -187,8 +312,6 @@ describe("DraftSubmissionFlow submit gates", () => {
         },
       });
       expect(createParams).not.toBeNull();
-      flow.releasePendingPlacementOwner();
-      flow.restorePendingPlacementRecovery("ws://gateway.example", "principal-a");
       const key = flow.pendingPlacement.sessionKey;
       if (phase === "dispatching") {
         expect(flow.pendingPlacement.promoteToDispatching(key)).toBe(true);
@@ -200,7 +323,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const hello = context.gateway.snapshot.hello!;
       hello.auth!.scopes = ["operator.read"];
       expect(flow.submitBlock()?.gate).toBe("access");
-      hello.auth!.scopes = ["operator.admin", "operator.read", "operator.write"];
+      hello.auth!.scopes = adminScopes;
 
       context.placementStartup.start = vi.fn();
       vi.mocked(context.sessions.createResult).mockResolvedValue({
@@ -215,6 +338,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       if (phase === "creating") {
         expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(createParams, {
           reconciliation: "background",
+          signal: expect.any(AbortSignal),
         });
       } else {
         expect(context.sessions.createResult).not.toHaveBeenCalled();
@@ -233,73 +357,36 @@ describe("DraftSubmissionFlow submit gates", () => {
     },
   );
 
-  it("keeps every blocking gate visible: canSubmit and the reason derive from one table", () => {
-    const scenarios: Array<{ name: string; build: () => ReturnType<typeof createDraftFixture> }> = [
-      { name: "empty draft", build: () => createDraftFixture() },
-      {
-        name: "gateway disconnected",
-        build: () => {
-          const fixture = createDraftFixture({ phase: "connecting" });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
-      },
-      {
-        name: "attachment reads pending",
-        build: () => {
-          const fixture = createDraftFixture();
-          fixture.flow.setMessage("hello");
-          fixture.flow.attachmentDraft.reads.updatePending(
-            fixture.flow.attachmentDraft.reads.readSignal,
-            1,
-          );
-          return fixture;
-        },
-      },
-      {
-        name: "no agents on the gateway",
-        build: () => {
-          const fixture = createDraftFixture({ agents: [] });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
-      },
-      {
-        name: "sessions.create not advertised",
-        build: () => {
-          const fixture = createDraftFixture({ methods: [] });
-          fixture.flow.setMessage("hello");
-          return fixture;
-        },
-      },
-      {
-        name: "submission outcome unknown",
-        build: () => {
-          const fixture = createDraftFixture();
-          fixture.flow.setMessage("hello");
-          fixture.flow.markPendingPlacementUnavailable("gateway-changed");
-          return fixture;
-        },
-      },
-    ];
-    for (const scenario of scenarios) {
-      const { flow } = scenario.build();
-      const block = flow.submitBlock();
-      expect(block, scenario.name).toBeDefined();
-      expect(flow.canSubmit(), scenario.name).toBe(false);
-      if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
-        // A reasoned gate must explain itself, and the Start tooltip must
-        // report the same first-gate reason canSubmit blocks on.
-        expect(block?.reason, scenario.name).toBeTruthy();
-        expect(flow.submitDisabledReason(), scenario.name).toBe(block?.reason);
-      }
+  it.each([
+    ["empty draft", () => createDraftFixture()],
+    ["gateway disconnected", () => withMessage({ phase: "connecting" })],
+    [
+      "attachment reads pending",
+      () =>
+        withMessage({}, ({ flow }) =>
+          flow.attachmentDraft.reads.updatePending(flow.attachmentDraft.reads.readSignal, 1),
+        ),
+    ],
+    ["no agents", () => withMessage({ agents: [] })],
+    ["sessions.create absent", () => withMessage({ methods: [] })],
+    [
+      "outcome unknown",
+      () => withMessage({}, ({ flow }) => flow.markPendingPlacementUnavailable("gateway-changed")),
+    ],
+  ] as const)("keeps the %s gate visible", (_name, build) => {
+    const { flow } = build();
+    const block = flow.submitBlock();
+    expect(block).toBeDefined();
+    expect(flow.canSubmit()).toBe(false);
+    if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
+      expect(block?.reason).toBeTruthy();
+      expect(flow.submitDisabledReason()).toBe(block?.reason);
     }
+  });
 
-    const ready = createDraftFixture();
-    ready.flow.setMessage("hello");
-    expect(ready.flow.submitBlock()).toBeUndefined();
-    expect(ready.flow.canSubmit()).toBe(true);
-    expect(ready.flow.submitDisabledReason()).toBeUndefined();
+  it("admits a ready draft without a disabled reason", () => {
+    const { flow } = withMessage();
+    expectGate(flow);
   });
 
   it.each(["unavailable", "rejected"] as const)(
@@ -311,28 +398,12 @@ describe("DraftSubmissionFlow submit gates", () => {
       });
       const discovery = createDeferred<unknown>();
       let branches = discovery.promise;
-      const fixture = createDraftFixture({
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-        agents: [
-          {
-            id: "main",
-            workspace: "/workspace",
-            workspaceGit: true,
-            model: { primary: "openai/gpt-5.6-luna" },
-          },
-        ],
-        request: (method) => {
-          if (method === "worktrees.branches") {
-            return branches;
-          }
-          return Promise.resolve({});
-        },
+      const { context, flow, place } = withMessage({
+        scopes: adminScopes,
+        agents: [agent({ workspaceGit: true, model: { primary: "openai/gpt-5.6-luna" } })],
+        request: replies({ "worktrees.branches": () => branches }),
       });
-      const { context, flow, place } = fixture;
-      flow.setMessage("start something");
 
-      // The async preference restore is still in flight: submission is gated,
-      // but the gate must be visible, not a silent no-op.
       expect(flow.canSubmit()).toBe(false);
       expect(flow.submitDisabledReason()).toBeTruthy();
       expect(flow.blockedSubmitNotice()).toBeUndefined();
@@ -368,7 +439,6 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.clearProjectSelection();
       await branches;
       await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
-      // The transient gate lifted; the notice retires itself.
       expect(flow.blockedSubmitNotice()).toBeUndefined();
       expect(flow.submitDisabledReason()).toBeUndefined();
       await flow.submit();
@@ -380,53 +450,21 @@ describe("DraftSubmissionFlow submit gates", () => {
   );
 
   it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
-    const fixture = createDraftFixture({
-      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      agents: [
-        {
-          id: "main",
-          workspace: "/workspace",
-          workspaceGit: false,
-          model: { primary: "openai/gpt-5.6-sol" },
-          agentRuntime: {
-            id: "cloud-only",
-            cloudPlacementSupported: true,
-            devicePlacementSupported: false,
-            source: "model",
-          },
-        },
-      ],
-      request: async (method) =>
-        method === "environments.list"
-          ? {
-              environments: [
-                {
-                  id: "node:build-mac",
-                  type: "node",
-                  label: "Build Mac",
-                  status: "available",
-                  sessionHost: true,
-                  workerSlots: { total: 1, available: 1 },
-                },
-              ],
-              profiles: [],
-            }
-          : {},
-    });
+    const fixture = deviceFixture(
+      "build-mac",
+      {
+        id: "cloud-only",
+        cloudPlacementSupported: true,
+        devicePlacementSupported: false,
+        source: "model",
+      },
+      { model: "openai/gpt-5.6-sol" },
+    );
     await fixture.gateway.refreshCloudProfiles();
     await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
     fixture.place.selectDevice("build-mac");
-    fixture.flow.setMessage("run on the device");
 
-    expect(fixture.flow.submitBlock()).toEqual({
-      gate: "device-runtime",
-      reason: "This runtime does not support paired devices",
-    });
-    expect(fixture.flow.canSubmit()).toBe(false);
-    expect(fixture.flow.submitDisabledReason()).toBe(
-      "This runtime does not support paired devices",
-    );
+    expectGate(fixture.flow, "device-runtime", "This runtime does not support paired devices");
     expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
   });
 });

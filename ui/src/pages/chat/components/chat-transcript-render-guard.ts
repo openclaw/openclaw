@@ -1,27 +1,24 @@
-import type { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
-import type { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import type { StreamGroup, WorkGroupSummary } from "./chat-message-stream-view.tsx";
+import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
+import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
-
-export type NativeTranscriptView =
-  | ({ kind: "group" } & Parameters<typeof MessageGroup>[0])
-  | ({ kind: "activity" } & Parameters<typeof ActivityGroup>[0])
-  | ({ kind: "stream" } & Parameters<typeof StreamGroup>[0])
-  | ({ kind: "work" } & Parameters<typeof WorkGroupSummary>[0]);
+type ChatRenderItem = SystemEventRenderItem;
 
 /** The keyed virtual row owns the dependency memo and its rendered content. */
 export class GuardedTranscriptItem {
   constructor(
     readonly dependencies: readonly unknown[],
     readonly native: NativeTranscriptView | undefined,
-    readonly legacy?: () => unknown,
   ) {}
 }
 
 function itemDependencies(item: ChatRenderItem): readonly unknown[] {
+  if (item.kind === "system-event-group") {
+    return [item.key, ...item.events];
+  }
   if (item.kind === "stream-run") {
     return [item.key, ...item.parts];
   }
@@ -45,6 +42,22 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   return [item];
 }
 
+export function transcriptReplyDependencies(
+  item: ChatRenderItem,
+  loadedSources: ReadonlyMap<string, LoadedReplySource>,
+): unknown[] {
+  const dependencies: unknown[] = [];
+  for (const group of chatItemGroups(item)) {
+    for (const source of group.messages) {
+      if (source.replyTarget?.kind === "id") {
+        const loaded = loadedSources.get(source.replyTarget.id);
+        dependencies.push(source.replyTarget.id, loaded?.message, loaded?.senderLabel);
+      }
+    }
+  }
+  return dependencies;
+}
+
 export function trackTranscriptRenderDependencies(
   state: ChatThreadState,
   dependencies: unknown[],
@@ -60,7 +73,6 @@ export function guardChatRenderItems(
   // Reply sources and live status can change without replacing the row itself.
   presentationDependencies: (item: ChatRenderItem) => readonly unknown[],
   nativeFor: (item: ChatRenderItem) => NativeTranscriptView | undefined,
-  legacyFor?: (item: ChatRenderItem) => GuardedTranscriptItem["legacy"],
 ) {
   return (item: ChatRenderItem) =>
     new GuardedTranscriptItem(
@@ -70,6 +82,5 @@ export function guardChatRenderItems(
         ...presentationDependencies(item),
       ],
       nativeFor(item),
-      legacyFor?.(item),
     );
 }

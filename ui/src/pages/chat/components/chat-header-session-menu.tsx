@@ -1,9 +1,18 @@
-import { createSignal, For, merge, onSettled, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  createMemo,
+  createProjection,
+  createSignal,
+  flush,
+  merge,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
-import { BoardWidgetMenuItems } from "../../../components/board/board-widget-cell-render.solid.tsx";
-import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-render.ts";
-import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
+import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
+import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
+import { activateMenuShortcut } from "../../../components/menu-shortcut-activation.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
@@ -14,18 +23,26 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
-import { useSessionMenuControllers } from "../../../components/session-menu-controllers.ts";
-import { useSessionMenuView } from "../../../components/session-menu-view.tsx";
-import type { SessionCreatedActor } from "../../../components/session-owner-chip.ts";
+import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
+import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { useOptionalApplication } from "../../../lib/reactive/context.ts";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuItem,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { LitContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
+import { useChatQuickActionEntries, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {
   canManageChatSessionSharing,
-  ChatSessionSharing,
+  useChatSessionSharingMenu,
   selectChatSessionSharingItem,
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.solid.tsx";
@@ -36,30 +53,16 @@ export type HeaderMenuAction =
   | { kind: "stop-cloud-worker" }
   | { kind: "plugin"; id: string };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
-export type HeaderMenuQuickAction = {
-  id: string;
-  label: string;
-  icon: LegacyTemplateResult;
-  description?: string;
-  variant?: "danger";
-} & (
-  | { kind: "status" }
-  | {
-      kind?: "action";
-      active?: boolean;
-      badge?: number;
-      disabled?: boolean;
-      onActivate: () => void;
-    }
-);
+export type { HeaderMenuQuickAction, HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 
-type CompactMenuView = CompactSessionMenuView | "panels" | "layout" | "sharing" | "view";
+type CompactMenuView = CompactSessionMenuView | "sharing" | "view";
 type HeaderMenuProps = {
   session: SessionMenuData;
   worktreePath: string | null;
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
+  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -72,9 +75,7 @@ type HeaderMenuProps = {
     | "chatBubbleSessionKeys"
     | "chatBubbleDisabledSessionKeys"
   >;
-  panelActions: HeaderMenuQuickAction[];
-  layoutActions: HeaderMenuQuickAction[];
-  sessionActions: HeaderMenuQuickAction[];
+  sessionActions: HeaderMenuSessionAction[];
   boardWidgetMenu?: BoardWidgetPageMenu;
   sharing: ChatSessionSharingProps | null;
   groups: readonly string[];
@@ -87,65 +88,293 @@ type HeaderMenuProps = {
   deleteAllowed: boolean;
   onOpen: () => void;
   onOpenCommandPalette: () => void;
+  onOpenDetails?: (source: HTMLElement) => void;
   onSettingsChange: (patch: Partial<UiSettings>) => void;
   onAction: (action: HeaderMenuAction) => void;
 };
 
 const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
-  "compact:open-layout": "layout",
-  "compact:open-panels": "panels",
   "compact:open-sharing": "sharing",
   "compact:open-view": "view",
 };
 
+const VIEW_SETTINGS = [
+  ["reasoning", "chatShowThinking", "chat.view.reasoning", false],
+  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true],
+  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
+] as const;
+
+type HeaderMenuMethods = { openMenu(): boolean };
+const openMenus = new WeakMap<HTMLElement, () => boolean>();
+let nextMenuId = 0;
+
 function ChatHeaderSessionMenuContent(
-  props: HeaderMenuProps,
-  host: SolidBridgeElement<HeaderMenuProps>,
+  liveProps: HeaderMenuProps,
+  host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>,
 ) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
-  let dropdown: HTMLElement & { open: boolean };
+  const [open, setOpen] = createSignal(false);
+  const preparation = () => liveProps.prewarm;
+  const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
+  const props = createProjection(presentation, {}, { key: "id" });
+  const controls = createMenuControls();
+  let menu: MenuHandle | undefined;
+  let stopShortcut: (() => void) | undefined;
+  const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
-  const controllerHost = useSessionMenuControllers(
-    host,
-    useOptionalApplication(),
-    () => setRevision((value) => value + 1),
-    () => {
-      revision();
-      return Object.values(props);
-    },
-  );
   const close = () => {
-    dropdown.open = false;
+    menu?.close();
   };
   const actions = new SessionMenuActions(
-    controllerHost,
+    {
+      get updateComplete() {
+        return host.updateComplete;
+      },
+      focusCurrentView() {
+        if (compactView() === "icon") {
+          view.appearance.focusFirst();
+        } else {
+          menu?.focusFirst();
+        }
+      },
+    },
     readState,
     (action) => props.onAction(action),
     close,
+    createSessionOwnerMenu(open, preparation),
   );
-  const view = useSessionMenuView(host, actions, readState, revision, {
-    renderOpenInExtra: (inline) => (
-      <wa-dropdown-item
-        slot={inline ? undefined : "submenu"}
-        class="session-menu__item"
-        value="continue-in-terminal"
-        prop:disabled={Boolean(props.actionDisabledReasons["continue-in-terminal"])}
-        title={props.actionDisabledReasons["continue-in-terminal"]}
-      >
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">
-          <Icon name="terminal" />
-        </span>
-        <span class="session-menu__text">{t("chat.sessionHeader.continueInTerminal.action")}</span>
-      </wa-dropdown-item>
-    ),
+  const view = useSessionMenuEntries(actions, readState, {
+    controls,
+    openInExtra: () => [
+      {
+        id: "continue-in-terminal",
+        label: t("chat.sessionHeader.continueInTerminal.action"),
+        class: "session-menu__item",
+        labelClass: "session-menu__text",
+        disabled: Boolean(props.actionDisabledReasons["continue-in-terminal"]),
+        attributes: { title: props.actionDisabledReasons["continue-in-terminal"] },
+        icon: (
+          <span class="session-menu__icon" aria-hidden="true">
+            <Icon name="terminal" />
+          </span>
+        ),
+      },
+    ],
   });
-  const handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
-    const value = event.detail.item.value;
-    if (!value) {
-      return;
+  const sharing = useChatSessionSharingMenu(
+    merge(
+      {
+        session: undefined,
+        state: undefined,
+        onOpen: () => {},
+        onVisibilityChange: () => {},
+        onMemberChange: () => {},
+      },
+      () => props.sharing ?? {},
+    ),
+    controls,
+  );
+  openMenus.set(host, () => menu?.open() ?? false);
+  const shortcut = (event: KeyboardEvent) => {
+    if (!actions.handleKeydown(event, view.appearance)) {
+      activateMenuShortcut(menu?.overlay.surface, event);
     }
+  };
+  onCleanup(() => {
+    openMenus.delete(host);
+    stopShortcut?.();
+  });
+  const content = (id: string, value: JSX.Element): MenuEntry => ({
+    kind: "content",
+    id,
+    content: value,
+  });
+  const separator = (id: string) =>
+    content(id, <div class="session-menu__separator" role="separator" />);
+  // Replacing a divider can move adjacent branches and close their native popovers.
+  const paletteDivider = separator("palette-divider");
+  const boardDivider = separator("board-divider");
+  const viewDivider = separator("view-divider");
+  const primaryDivider = separator("primary-divider");
+  const organizationDivider = separator("organization-divider");
+  const browserOnlyInfo = content(
+    "browser-only",
+    <div class="session-menu__info" role="note">
+      {t("quickSettings.personal.browserOnly")}
+    </div>,
+  );
+  function viewOptions(): MenuEntry[] {
+    return [
+      ...VIEW_SETTINGS.map(([value, key, label, onboarding]) => ({
+        id: `view:${value}`,
+        label: t(label),
+        class: "session-menu__item",
+        labelClass: "session-menu__text",
+        type: "checkbox" as const,
+        checked:
+          props.onboarding && onboarding !== undefined ? onboarding : props.settings[key] !== false,
+        disabled: props.onboarding,
+        attributes: { title: props.onboarding ? t("chat.onboardingDisabled") : undefined },
+        closeOnSelect: false,
+      })),
+      ...(props.bubbleModeEnabled
+        ? [
+            {
+              id: "view:speech-bubbles",
+              label: t("chat.view.speechBubbles"),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              type: "checkbox" as const,
+              checked: isChatBubbleMode(
+                props.settings,
+                props.session.target?.key ?? "",
+                true,
+                props.mainKey,
+              ),
+              disabled: props.onboarding,
+              attributes: { title: props.onboarding ? t("chat.onboardingDisabled") : undefined },
+              closeOnSelect: false,
+            },
+          ]
+        : []),
+      ...(props.preferencesBrowserOnly ? [browserOnlyInfo] : []),
+    ];
+  }
+  function group(
+    viewName: "view" | "sharing",
+    label: string,
+    icon: IconName,
+    disabled = false,
+  ): MenuItem {
+    return {
+      id: props.compact ? `compact:open-${viewName}` : `submenu:${viewName}`,
+      label,
+      labelClass: "session-menu__text",
+      class: "session-menu__item",
+      disabled,
+      icon: (
+        <span class="session-menu__icon" aria-hidden="true">
+          <Icon name={icon} />
+        </span>
+      ),
+      details: props.compact ? (
+        <span class="session-menu__icon session-menu__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      ) : undefined,
+      children: props.compact
+        ? undefined
+        : viewName === "sharing"
+          ? sharing.items()
+          : viewOptions(),
+      closeOnSelect: false,
+    };
+  }
+  function root(): MenuEntry[] {
+    const board = props.boardWidgetMenu;
+    return [
+      {
+        id: "open-command-palette",
+        label: t("chat.openCommandPalette"),
+        class: "session-menu__item",
+        labelClass: "session-menu__text",
+        icon: (
+          <span class="session-menu__icon" aria-hidden="true">
+            <Icon name="search" />
+          </span>
+        ),
+      },
+      ...(props.onOpenDetails
+        ? [
+            {
+              id: "session-details",
+              label: t("chat.sessionDetails.menu"),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="listChecks" />
+                </span>
+              ),
+            },
+          ]
+        : []),
+      paletteDivider,
+      ...(board
+        ? [
+            content(
+              "board-heading",
+              <>
+                <div class="board-widget__page-menu-heading">
+                  <strong>{board.widget.title || board.widget.name}</strong>
+                </div>
+                <BoardGrantedCapabilities widget={board.widget} presentation="details" />
+              </>,
+            ),
+            ...(board.canMutate
+              ? boardWidgetMenuEntries({
+                  widget: board.widget,
+                  tabs: board.tabs,
+                  disabled: false,
+                }).map((entry) => Object.assign(entry, { id: `board-widget:${entry.id}` }))
+              : []),
+            boardDivider,
+          ]
+        : []),
+      ...(props.compact &&
+      props.sharing?.session &&
+      canManageChatSessionSharing(props.sharing.session)
+        ? [
+            group(
+              "sharing",
+              t("chat.sessionSharing.menu"),
+              "users",
+              Boolean(props.sharing.openDisabledReason),
+            ),
+          ]
+        : []),
+      group("view", t("chat.view.menu"), "eye"),
+      viewDivider,
+      ...view.primary(),
+      primaryDivider,
+      ...view.organization(),
+      ...quickActions(),
+      organizationDivider,
+      ...view.advanced(),
+    ];
+  }
+  const backDivider = separator("back-divider");
+  const items = createMemo(
+    (): MenuEntry[] => {
+      const current = compactView();
+      if (!props.compact || current === "root") {
+        return root();
+      }
+      if (current !== "sharing" && current !== "view") {
+        return view.compact(current);
+      }
+      return [
+        {
+          id: "compact:back",
+          label: t("common.back"),
+          class: "session-menu__item session-menu__back",
+          icon: (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name="arrowLeft" />
+            </span>
+          ),
+          closeOnSelect: false,
+        },
+        backDivider,
+        ...(current === "sharing" && props.sharing ? sharing.items() : viewOptions()),
+      ];
+    },
+    { lazy: true },
+  );
+  function select(item: MenuItem, event: CustomEvent<MenuItem>) {
+    const value = item.id;
     if (value.startsWith("board-widget:")) {
       props.boardWidgetMenu?.onSelect(value.slice("board-widget:".length));
       return;
@@ -163,20 +392,26 @@ function ChatHeaderSessionMenuContent(
       onSettled(() => actions.focusCurrentView());
       return;
     }
+    if (value === "session-details") {
+      event.preventDefault();
+      close();
+      const trigger = menu?.overlay.trigger;
+      if (trigger) {
+        props.onOpenDetails?.(trigger);
+      }
+      return;
+    }
     if (value === "open-command-palette") {
+      close();
       props.onOpenCommandPalette();
       return;
     }
     if (value.startsWith("quick:")) {
-      const [, group, id] = value.split(":");
-      const entries =
-        group === "panels"
-          ? props.panelActions
-          : group === "session"
-            ? props.sessionActions
-            : props.layoutActions;
-      const action = entries.find((candidate) => candidate.id === id);
-      if (action && action.kind !== "status" && !action.disabled) {
+      const action = props.sessionActions.find(
+        (candidate) => candidate.id === value.slice("quick:".length),
+      );
+      if (action && !action.disabled) {
+        close();
         action.onActivate();
       }
       return;
@@ -187,25 +422,24 @@ function ChatHeaderSessionMenuContent(
         return;
       }
       const setting = value.slice("view:".length);
-      if (setting === "reasoning") {
-        props.onSettingsChange({ chatShowThinking: !props.settings.chatShowThinking });
-      } else if (setting === "tool-calls") {
-        props.onSettingsChange({ chatShowToolCalls: !props.settings.chatShowToolCalls });
-      } else if (setting === "commentary") {
-        props.onSettingsChange({
-          chatPersistCommentary: props.settings.chatPersistCommentary === false,
-        });
+      const option = VIEW_SETTINGS.find(([id]) => id === setting);
+      if (option) {
+        props.onSettingsChange({ [option[1]]: props.settings[option[1]] === false });
       } else if (
         setting === "speech-bubbles" &&
         props.bubbleModeEnabled &&
         props.session.target?.key
       ) {
-        const sessionKey = props.session.target.key;
         props.onSettingsChange(
           setChatBubbleMode(
             props.settings,
-            sessionKey,
-            !isChatBubbleMode(props.settings, sessionKey, props.bubbleModeEnabled, props.mainKey),
+            props.session.target.key,
+            !isChatBubbleMode(
+              props.settings,
+              props.session.target.key,
+              props.bubbleModeEnabled,
+              props.mainKey,
+            ),
           ),
         );
       }
@@ -229,239 +463,14 @@ function ChatHeaderSessionMenuContent(
       close();
       props.onAction({ kind: value });
     }
-  };
-  const QuickActions = (input: {
-    group: "panels" | "layout" | "session";
-    entries: HeaderMenuQuickAction[];
-    inline?: boolean;
-  }) => (
-    <For each={input.entries}>
-      {(action) => {
-        const label = (
-          <span class="session-menu__text">
-            {action.label}
-            {action.description ? (
-              <span class="session-menu__description">{action.description}</span>
-            ) : undefined}
-          </span>
-        );
-        return action.kind === "status" ? (
-          <div
-            slot={input.inline ? undefined : "submenu"}
-            class="session-menu__status"
-            data-menu-status={action.id}
-            role="note"
-          >
-            <span class="session-menu__check" aria-hidden="true">
-              <LitContent value={action.icon} />
-            </span>
-            {label}
-          </div>
-        ) : (
-          <wa-dropdown-item
-            slot={input.inline ? undefined : "submenu"}
-            class="session-menu__item"
-            value={`quick:${input.group}:${action.id}`}
-            type={action.active === undefined ? undefined : "checkbox"}
-            prop:checked={action.active ?? false}
-            prop:disabled={action.disabled}
-            variant={action.variant}
-          >
-            <span slot="icon" class="session-menu__icon" aria-hidden="true">
-              <LitContent value={action.icon} />
-            </span>
-            {label}
-            {typeof action.badge === "number" && action.badge > 0 ? (
-              <span slot="details" class="session-menu__sub">
-                {action.badge}
-              </span>
-            ) : undefined}
-          </wa-dropdown-item>
-        );
-      }}
-    </For>
-  );
-  const ViewOption = (input: {
-    inline?: boolean;
-    value: string;
-    label: string;
-    checked: boolean;
-  }) => (
-    <wa-dropdown-item
-      slot={input.inline ? undefined : "submenu"}
-      class="session-menu__item"
-      type="checkbox"
-      value={`view:${input.value}`}
-      prop:checked={input.checked}
-      prop:disabled={props.onboarding}
-      title={props.onboarding ? t("chat.onboardingDisabled") : undefined}
-    >
-      <span class="session-menu__text">{input.label}</span>
-    </wa-dropdown-item>
-  );
-  const ViewOptions = (input: { inline?: boolean }) => (
-    <>
-      <ViewOption
-        inline={input.inline}
-        value="reasoning"
-        label={t("chat.view.reasoning")}
-        checked={props.onboarding ? false : props.settings.chatShowThinking}
-      />
-      <ViewOption
-        inline={input.inline}
-        value="tool-calls"
-        label={t("chat.view.toolCalls")}
-        checked={props.onboarding ? true : props.settings.chatShowToolCalls}
-      />
-      <ViewOption
-        inline={input.inline}
-        value="commentary"
-        label={t("chat.view.commentary")}
-        checked={props.settings.chatPersistCommentary !== false}
-      />
-      {props.bubbleModeEnabled ? (
-        <ViewOption
-          inline={input.inline}
-          value="speech-bubbles"
-          label={t("chat.view.speechBubbles")}
-          checked={isChatBubbleMode(
-            props.settings,
-            props.session.target?.key ?? "",
-            true,
-            props.mainKey,
-          )}
-        />
-      ) : undefined}
-      {props.preferencesBrowserOnly ? (
-        <div slot={input.inline ? undefined : "submenu"} class="session-menu__info" role="note">
-          {t("quickSettings.personal.browserOnly")}
-        </div>
-      ) : undefined}
-    </>
-  );
-  const Submenu = (input: {
-    group: "panels" | "layout" | "view" | "sharing";
-    label: string;
-    icon: IconName;
-    disabled?: boolean;
-  }) => (
-    <wa-dropdown-item
-      class="session-menu__item"
-      value={props.compact ? `compact:open-${input.group}` : undefined}
-      prop:disabled={input.disabled}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">
-        <Icon name={input.icon} />
-      </span>
-      <span class="session-menu__text">{input.label}</span>
-      {props.compact ? (
-        <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
-      ) : input.group === "view" ? (
-        <ViewOptions />
-      ) : (
-        <QuickActions
-          group={input.group === "panels" ? "panels" : "layout"}
-          entries={input.group === "panels" ? props.panelActions : props.layoutActions}
-        />
-      )}
-    </wa-dropdown-item>
-  );
-  const Compact = () => (
-    <Show when={compactView()} keyed>
-      {(current) => {
-        if (
-          current !== "panels" &&
-          current !== "layout" &&
-          current !== "sharing" &&
-          current !== "view"
-        ) {
-          return <view.Compact view={current} />;
-        }
-        return (
-          <>
-            <wa-dropdown-item class="session-menu__item session-menu__back" value="compact:back">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                <Icon name="arrowLeft" />
-              </span>
-              <span class="session-menu__text">{t("common.back")}</span>
-            </wa-dropdown-item>
-            <div class="session-menu__separator" role="separator" />
-            {current === "panels" ? (
-              <QuickActions group="panels" entries={props.panelActions} inline />
-            ) : current === "layout" ? (
-              <QuickActions group="layout" entries={props.layoutActions} inline />
-            ) : current === "sharing" && props.sharing ? (
-              <ChatSessionSharing {...props.sharing} inline />
-            ) : (
-              <ViewOptions inline />
-            )}
-          </>
-        );
-      }}
-    </Show>
-  );
-  const Root = () => (
-    <>
-      <wa-dropdown-item class="session-menu__item" value="open-command-palette">
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">
-          <Icon name="search" />
-        </span>
-        <span class="session-menu__text">{t("chat.openCommandPalette")}</span>
-      </wa-dropdown-item>
-      <div class="session-menu__separator" role="separator" />
-      <Show when={props.boardWidgetMenu}>
-        {(menu) => (
-          <>
-            <div class="board-widget__page-menu-heading">
-              <strong>{menu().widget.title || menu().widget.name}</strong>
-            </div>
-            <BoardGrantedCapabilities widget={menu().widget} presentation="details" />
-            {menu().canMutate ? (
-              <BoardWidgetMenuItems
-                widget={menu().widget}
-                tabs={menu().tabs}
-                disabled={false}
-                prefix="board-widget:"
-              />
-            ) : undefined}
-            <div class="session-menu__separator" role="separator" />
-          </>
-        )}
-      </Show>
-      {props.panelActions.length ? (
-        <Submenu group="panels" label={t("chat.sessionHeader.panels")} icon="panelRightOpen" />
-      ) : undefined}
-      {props.layoutActions.length ? (
-        <Submenu group="layout" label={t("chat.sessionHeader.layout")} icon="columns2" />
-      ) : undefined}
-      {props.compact &&
-      props.sharing?.session &&
-      canManageChatSessionSharing(props.sharing.session) ? (
-        <Submenu
-          group="sharing"
-          label={t("chat.sessionSharing.menu")}
-          icon="users"
-          disabled={Boolean(props.sharing.openDisabledReason)}
-        />
-      ) : undefined}
-      <Submenu group="view" label={t("chat.view.menu")} icon="eye" />
-      <div class="session-menu__separator" role="separator" />
-      <view.Primary />
-      <div class="session-menu__separator" role="separator" />
-      <view.Organization />
-      <QuickActions group="session" entries={props.sessionActions} inline />
-      <div class="session-menu__separator" role="separator" />
-      <view.Advanced />
-    </>
-  );
-  const menuLabel = () => t("chat.sidebar.sessionMenu", { session: props.session.label });
+  }
+  const label = () => t("chat.sidebar.sessionMenu", { session: liveProps.session.label });
   return (
-    <wa-dropdown
-      ref={(element) => {
-        dropdown = element;
-      }}
+    <Menu
+      controls={controls}
+      id={menuId}
+      lazy
+      prewarm={liveProps.prewarm && !liveProps.compact}
       class={[
         "session-menu chat-header-session-menu",
         {
@@ -469,47 +478,49 @@ function ChatHeaderSessionMenuContent(
           "chat-header-session-menu--compact-sharing": props.compact && compactView() === "sharing",
         },
       ]}
+      panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
-      aria-label={menuLabel()}
-      onKeyDown={(event) => {
-        if (!actions.handleKeydown(event, view.appearance)) {
-          activateMenuShortcut(host, event);
+      label={label()}
+      triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
+      trigger={<Icon name="moreHorizontal" />}
+      items={items()}
+      onSelect={select}
+      ref={(handle) => {
+        menu = handle;
+        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
+      }}
+      onEscape={(event) => actions.handleKeydown(event, view.appearance)}
+      onBeforeShow={() => {
+        setOpen(true);
+        // Native opening reads the prepared items for validation and initial focus synchronously.
+        flush();
+      }}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        if (isOpen) {
+          actions.loadOwners();
+          props.onOpen();
+        } else {
+          setCompactView("root");
+          actions.advanced.close();
         }
       }}
-      onWa-show={() => {
-        setCompactView("root");
-        actions.loadOwners();
-        props.onOpen();
-      }}
-      onWa-after-hide={actions.advanced.close}
-      onWa-select={handleSelect}
-    >
-      <button
-        slot="trigger"
-        class="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
-        type="button"
-        aria-label={menuLabel()}
-        aria-haspopup="menu"
-      >
-        <Icon name="moreHorizontal" />
-      </button>
-      <Show when={props.compact && compactView() !== "root"} fallback={<Root />}>
-        <Compact />
-      </Show>
-    </wa-dropdown>
+    />
   );
 }
 
-defineSolidBridge<HeaderMenuProps>(
+export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
   "openclaw-chat-header-session-menu",
   ChatHeaderSessionMenuContent,
   {
+    methods: { openMenu: (host) => openMenus.get(host)?.() ?? false },
     properties: {
       session: { default: EMPTY_SESSION_MENU_DATA, attribute: false },
       worktreePath: { default: null, attribute: false },
       onboarding: { default: false, attribute: false },
       preferencesBrowserOnly: { default: false, attribute: false },
       compact: { default: false, attribute: false },
+      prewarm: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },
@@ -518,8 +529,6 @@ defineSolidBridge<HeaderMenuProps>(
         default: { chatShowThinking: false, chatShowToolCalls: false },
         attribute: false,
       },
-      panelActions: { default: [], attribute: false },
-      layoutActions: { default: [], attribute: false },
       sessionActions: { default: [], attribute: false },
       boardWidgetMenu: { default: undefined, attribute: false },
       sharing: { default: null, attribute: false },
@@ -533,6 +542,7 @@ defineSolidBridge<HeaderMenuProps>(
       deleteAllowed: { default: false, attribute: false },
       onOpen: { default: () => {}, attribute: false },
       onOpenCommandPalette: { default: () => {}, attribute: false },
+      onOpenDetails: { default: undefined, attribute: false },
       onSettingsChange: { default: () => {}, attribute: false },
       onAction: { default: () => {}, attribute: false },
     },
@@ -541,6 +551,6 @@ defineSolidBridge<HeaderMenuProps>(
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-chat-header-session-menu": SolidBridgeElement<HeaderMenuProps>;
+    "openclaw-chat-header-session-menu": SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>;
   }
 }

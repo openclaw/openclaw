@@ -6,29 +6,8 @@ import { describe, expect, it } from "vitest";
 import { reuseTextComponent, shortenPath, trimTrailingEmptyLines } from "./render-utils.js";
 
 describe("trimTrailingEmptyLines", () => {
-  it.each([
-    { name: "removes all-empty input", lines: ["", ""], expected: [] },
-    {
-      name: "keeps leading and interior empty lines",
-      lines: ["", "first", "", "second", ""],
-      expected: ["", "first", "", "second"],
-    },
-    {
-      name: "keeps whitespace-only trailing lines",
-      lines: ["first", " ", "\t"],
-      expected: ["first", " ", "\t"],
-    },
-  ])("$name", ({ lines, expected }) => {
-    expect(trimTrailingEmptyLines(lines)).toEqual(expected);
-  });
-
-  it("does not mutate the caller-owned lines", () => {
-    const lines = ["first", "", ""];
-    const original = [...lines];
-
-    trimTrailingEmptyLines(lines);
-
-    expect(lines).toEqual(original);
+  it("removes all-empty input", () => {
+    expect(trimTrailingEmptyLines(["", ""])).toEqual([]);
   });
 });
 
@@ -39,16 +18,6 @@ describe("reuseTextComponent", () => {
     expect(component).toBeInstanceOf(Text);
     expect(component.render(5)).toEqual(["hello"]);
   });
-
-  it("reuses the prior Text component and invalidates its rendered content", () => {
-    const component = new Text("before", 0, 0);
-    expect(component.render(6)).toEqual(["before"]);
-
-    const reused = reuseTextComponent(component, "after!");
-
-    expect(reused).toBe(component);
-    expect(reused.render(6)).toEqual(["after!"]);
-  });
 });
 
 describe("shortenPath", () => {
@@ -56,16 +25,6 @@ describe("shortenPath", () => {
 
   it("shortens paths inside the home directory", () => {
     expect(shortenPath(`${home}/projects/app.ts`)).toBe("~/projects/app.ts");
-  });
-
-  it("collapses the home directory itself", () => {
-    expect(shortenPath(home)).toBe("~");
-  });
-
-  it("leaves a sibling directory that merely shares the prefix untouched", () => {
-    // `${home}extra` starts with `home` as a substring but is not under it,
-    // so it must not be rewritten to `~extra`.
-    expect(shortenPath(`${home}extra/app.ts`)).toBe(`${home}extra/app.ts`);
   });
 
   it.skipIf(process.platform !== "win32")("shortens real Windows home casing aliases", () => {

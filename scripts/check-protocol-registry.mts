@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -155,8 +155,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 73 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 73-module owner list",
+  ownerModules.length === 75 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 75-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,

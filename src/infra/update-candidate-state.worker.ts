@@ -8,10 +8,46 @@ import type {
   UpdateCandidatePluginHashRequest,
 } from "./update-candidate-plugin-hash.js";
 
-// Internal one-shot subprocess: a hard process deadline can interrupt SQLite
-// integrity checks and backup/VACUUM, which expose no AbortSignal contract.
+// Internal one-shot subprocess: a hard process deadline can interrupt synchronous
+// SQLite inspection, backup/VACUUM, and retained-runtime file verification.
 async function snapshotCandidateState(): Promise<unknown> {
-  // File workers must not retain the subprocess's database/config inspection graph.
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  // SAFETY: Only the updater's typed state inspection launchers serialize this private worker's stdin.
+  const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
+    | (Parameters<
+        typeof import("./update-retained-runtime-files.js").prepareRetainedRuntimeFiles
+      >[0] & {
+        mode: "runtime-retention";
+      })
+    | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
+        mode: "snapshot";
+        streamProgress?: boolean;
+      })
+    | (Parameters<typeof discoverUpdateStateSchemaInspectionInProcess>[0] & { mode: "discover" })
+    | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & { mode: "versions" })
+    | (Parameters<typeof readUpdateCandidateStateInventoryInProcess>[0] & {
+        mode: "inventory";
+        streamProgress?: boolean;
+      })
+    | (Parameters<
+        typeof import("./update-database-backup.js").createUpdateDatabaseBackupInProcess
+      >[0] & { mode: "database-backup" })
+    | (Parameters<
+        typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
+      >[0] & { mode: "database-restore-preparation" })
+    | {
+        mode: "database-generations";
+        paths: string[];
+        pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+      };
+  if (input.mode === "runtime-retention") {
+    const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
+    return prepareRetainedRuntimeFiles(input);
+  }
+  // Runtime retention needs no database/config inspection graph.
   const { createUpdateStateInspectionReporter } =
     await import("./update-candidate-state.diagnostics.js");
   const {
@@ -20,31 +56,6 @@ async function snapshotCandidateState(): Promise<unknown> {
     readUpdateStateSchemaVersionsInProcess,
     snapshotUpdateCandidateState,
   } = await import("./update-candidate-state.js");
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  // SAFETY: Only the updater's typed state inspection launchers serialize this private worker's stdin.
-  const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
-    | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
-        mode: "snapshot";
-        streamProgress?: boolean;
-        streamEntryProgress?: boolean;
-      })
-    | (Parameters<typeof discoverUpdateStateSchemaInspectionInProcess>[0] & { mode: "discover" })
-    | (Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0] & { mode: "versions" })
-    | (Parameters<typeof readUpdateCandidateStateInventoryInProcess>[0] & {
-        mode: "inventory";
-        streamProgress?: boolean;
-        streamEntryProgress?: boolean;
-      })
-    | (Parameters<
-        typeof import("./update-database-backup.js").createUpdateDatabaseBackupInProcess
-      >[0] & { mode: "database-backup" })
-    | (Parameters<
-        typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
-      >[0] & { mode: "database-restore-preparation" })
-    | { mode: "database-generations"; paths: string[] };
   switch (input.mode) {
     case "database-restore-preparation": {
       const { prepareUpdateDatabaseRestoreSourceInProcess } =
@@ -52,18 +63,26 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
-      return readUpdateDatabaseGenerations(input.paths);
+      const { readUpdatePhysicalDatabaseGenerations } =
+        await import("./update-physical-database-generations.js");
+      return readUpdatePhysicalDatabaseGenerations(input.paths, input.pluginOwners);
     }
     case "inventory": {
+      const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
         ...input,
-        onProgress: createUpdateStateInspectionReporter(
-          !input.streamProgress,
-          input.streamEntryProgress,
-        ),
+        onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
-      return { ...inventory, databases: [...databases] };
+      return {
+        ...inventory,
+        databases: [...databases],
+        // PostgreSQL snapshots retain portable exports alongside their private copies.
+        // External stores still follow the global engine when built-in families override it.
+        ...(input.config.database?.engine !== "postgres" &&
+        !Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
+          ? { snapshotSpace: "single-generation" }
+          : {}),
+      };
     }
     case "database-backup": {
       const { createUpdateDatabaseBackupInProcess } = await import("./update-database-backup.js");
@@ -75,10 +94,8 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "snapshot":
       return snapshotUpdateCandidateState({
         ...input,
-        onProgress: createUpdateStateInspectionReporter(
-          !input.streamProgress,
-          input.streamEntryProgress,
-        ),
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
     case "discover":
       return discoverUpdateStateSchemaInspectionInProcess({
@@ -88,6 +105,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "versions":
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
     default:

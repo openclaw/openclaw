@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -36,6 +36,47 @@ vi.mock("../model-catalog/remote-refresh.js", () => ({
   REMOTE_MODEL_CATALOG_TTL_MS: 6 * 60 * 60_000,
   refreshRemoteModelCatalog: async () => ({ status: "disabled" }),
 }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+it("reports a failed background update check and keeps its next check scheduled", async () => {
+  const state = await createOpenClawTestState({
+    label: "update-startup-failure-visibility",
+    env: { NODE_ENV: "production", VITEST: undefined, OPENCLAW_NO_AUTO_UPDATE: undefined },
+  });
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const lifecycle = createGatewayUpdateLifecycle(scheduler);
+  const info = vi.fn();
+  vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+  vi.mocked(checkUpdateStatus).mockRejectedValue(new Error("synthetic update discovery failure"));
+  const check = createGatewayUpdateCheck({
+    lifecycle,
+    getConfig: () => ({}),
+    log: { info },
+    isNixMode: false,
+    applyRemoteCatalogUpdate: async () => "unchanged",
+  });
+  try {
+    check.start();
+    await clock.advanceBy(0);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      "update check failed; retrying at the next scheduled check",
+      { error: "Error: synthetic update discovery failure" },
+    );
+    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    await clock.advanceBy(24 * 60 * 60_000);
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenCalledTimes(2);
+  } finally {
+    await Promise.all([check.stop(), scheduler.stop()]);
+    resetUpdateAvailableStateForTest(scheduler);
+    await closeStateDatabaseForTest();
+    await state.cleanup();
+  }
+});
 
 it("returns cleanup before slow dev git discovery schedules a campaign", async ({ signal }) => {
   const remoteFetchDelayMs = 65_653;
@@ -90,6 +131,7 @@ it("returns cleanup before slow dev git discovery schedules a campaign", async (
       onGitProbeTimeout: expect.any(Function),
       fetchGit: false,
       includeRegistry: false,
+      useDetachedDevUpstream: true,
     });
     expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, {
       root: "/opt/openclaw",

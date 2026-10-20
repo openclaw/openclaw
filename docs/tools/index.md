@@ -97,11 +97,12 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                              |
 | Plugin lifecycle        | Inspect, install, enable, disable, remove, or reload plugins                                 | `plugins`                                                                                                           | [Agent plugin management](/plugins/manage-plugins#manage-plugins-from-an-agent-conversation)                                  |
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                       |
-| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search`, `tool_describe`, `tool_call`                                                         | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
+| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search`, `tool_describe`, `dispatch_action`                                                   | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
 
-Session tools and `sessions_spawn` accept `user` (the requester's verified `requester_profile.id`) and
-act with that person's authority. It is required when several people have steered
-the turn. See [Session tools](/concepts/session-tool) and [Sub-agent tool reference](/tools/subagents/tool-reference).
+Session tools and `sessions_spawn` accept optional `user` (an admitted participant's
+verified `requester_profile.id`) and act with that person's authority. Omitting it
+keeps the execution's original requester, including after collaborative steering.
+Selection does not establish that the person requested or approved the action. See [Session tools](/concepts/session-tool) and [Sub-agent tool reference](/tools/subagents/tool-reference).
 
 On multi-user Gateways, `personal_instructions` reads and updates
 the authenticated requester’s personal `USER.md` through the Gateway, even when
@@ -156,6 +157,17 @@ configured-channel discovery. This reduces prompt overhead without a new setting
 bindings select what the schema advertises, while normal delivery permissions
 still govern execution. Unchanged bindings and capabilities produce stable schema
 bytes regardless of plugin registration order.
+
+Completion and settle turns with a source-bound `message` grant may send text,
+`media`, or `attachments`, including media-only replies, the optional `caption`,
+and file metadata (`filename`, `contentType`, or `mimeType`).
+`MEDIA:` directives and remote Markdown images use the normal outbound media policy.
+Local files supplied through `media`, `attachments`, or `MEDIA:` must be within
+the allowed `mediaAccess.localRoots`; local Markdown image paths stay literal text.
+The action stays `send`; channel, account, destination, and thread stay locked to
+the current conversation. `replyTo` may name the current message or thread, but
+cannot select another reply target. Inline reply and `audio_as_voice` directives
+remain unavailable on this restricted grant.
 
 OpenClaw exposes one semantic image inspection capability named `view_image`.
 When the active harness supplies its own loader, OpenClaw suppresses its

@@ -1,9 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SqliteAuthProfileReadOptions } from "./sqlite-readonly-worker-protocol.js";
-import type {
-  createSqliteReadOnlyWorkerSession,
-  SqliteReadOnlyWorkerLaunch,
-} from "./sqlite-readonly-worker-session.js";
+import type { SqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session-types.js";
 
 export type SqliteReadOnlyWorkerScope = {
   active: boolean;
@@ -11,27 +7,34 @@ export type SqliteReadOnlyWorkerScope = {
   controller: AbortController;
   pending: Set<Promise<unknown>>;
   deadlineOwnedByCaller: boolean;
-  worker?: ReturnType<typeof createSqliteReadOnlyWorkerSession>;
-  readWorker?: {
-    source: SqliteAuthProfileReadOptions["source"];
-    launch: SqliteReadOnlyWorkerLaunch;
-    session: ReturnType<typeof createSqliteReadOnlyWorkerSession>;
-  };
-  readTail: Promise<void>;
+  worker?: SqliteReadOnlyWorkerSession;
+  releaseReadWorker?: () => Promise<void>;
 };
 export const readOnlyWorkerScope = new AsyncLocalStorage<SqliteReadOnlyWorkerScope>();
+
+export class SqliteReadOnlyWorkerScopeClosedError extends Error {
+  readonly code = "SQLITE_READONLY_WORKER_SCOPE_CLOSED";
+
+  constructor() {
+    super("SQLite read-only worker scope closed");
+  }
+}
 
 /** Carry the owning readers into callbacks without retaining startup or request authority. */
 export function captureSqliteReadOnlyWorkerScope(): <T>(operation: () => T) => T {
   const scope = readOnlyWorkerScope.getStore();
   return (operation) => {
     if (!scope) {
-      return readOnlyWorkerScope.exit(operation);
+      return readOnlyWorkerScope.getStore() === undefined
+        ? operation()
+        : readOnlyWorkerScope.exit(operation);
     }
     if (!scope.active) {
-      throw new Error("SQLite read-only worker scope closed");
+      throw new SqliteReadOnlyWorkerScopeClosedError();
     }
     scope.controller.signal.throwIfAborted();
-    return readOnlyWorkerScope.run(scope, operation);
+    return readOnlyWorkerScope.getStore() === scope
+      ? operation()
+      : readOnlyWorkerScope.run(scope, operation);
   };
 }

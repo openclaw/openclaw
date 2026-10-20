@@ -11,6 +11,12 @@ export const DEFAULT_NATIVE_TOOLS = [
 
 export const agentsApiConfigSchema = z.strictObject({
   nativeTools: z.array(z.looseObject({ type: z.string().min(1) })).default(DEFAULT_NATIVE_TOOLS),
+  forwarding: z
+    .strictObject({
+      gatewayTools: z.boolean().default(true),
+      mcpServers: z.boolean().default(true),
+    })
+    .default({ gatewayTools: true, mcpServers: true }),
   plugins: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -31,7 +37,13 @@ export const agentsApiConfigSchema = z.strictObject({
     })
     .optional(),
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
-  executorController: z.string().trim().min(1).optional(),
+  // Recognize retired configuration so repair cannot silently discard its owner.
+  executorController: z
+    .never({
+      error:
+        "Agents API executorController is no longer supported. Retire controlled sessions with the previous OpenClaw version and original controller plugin, then remove executorController and configure an external executor lifecycle owner before upgrading.",
+    })
+    .optional(),
   openai_host: z
     .strictObject({
       network: z
@@ -97,12 +109,14 @@ export function requireAgentsApiSessionFingerprint({
   environment,
   mcpTools,
   webSearchEnabled,
+  forwarding,
 }: {
   existingFingerprint?: string;
   model: string;
   environment: AgentsApiEnvironment;
   mcpTools: AgentToolParam.AgentToolConfigParamMcp[];
   webSearchEnabled: boolean;
+  forwarding: AgentsApiConfig["forwarding"];
 }): string {
   const identity = [
     model,
@@ -111,11 +125,13 @@ export function requireAgentsApiSessionFingerprint({
     ...(mcpTools.length ? [mcpTools] : []),
     // Legacy bindings have no restriction marker; never assume their tools are disabled.
     ...(!webSearchEnabled ? [{ webSearch: false }] : []),
+    // Default forwarding keeps the exact legacy identity, including when explicitly enabled.
+    ...(!forwarding.gatewayTools || !forwarding.mcpServers ? [{ forwarding }] : []),
   ];
   const fingerprint = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
   if (existingFingerprint && existingFingerprint !== fingerprint) {
     throw new Error(
-      "Agents API model, environment, MCP, or web-search policy changed; reset the OpenClaw session before continuing",
+      "Agents API model, environment, MCP, web-search, or forwarding policy changed; reset the OpenClaw session before continuing",
     );
   }
   return fingerprint;

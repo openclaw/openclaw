@@ -1,17 +1,20 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   findPersistedAuthProfileCredential,
+  findPersistedAuthProfileCredentialAsync,
   loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForRuntimeAsync,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -26,6 +29,7 @@ import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
 import {
   sanitizeHostExecEnv,
   withHostExecInheritedEnvOmitted,
@@ -70,10 +74,10 @@ describe("agent exec stored auth", () => {
         started.resolve();
         return pendingRows.promise;
       });
-      const signals = new EventEmitter();
       const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
-        createSignalBridge(signals),
+      const signals = captureNativeSignalBridge(createSignalBridge);
+      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+        signals.create,
       );
       const runAgent = vi.fn(async () => success());
       const runtime = createTestRuntime();
@@ -93,8 +97,12 @@ describe("agent exec stored auth", () => {
         expect(runAgent).not.toHaveBeenCalled();
         expect((await fs.stat(stateDir)).isDirectory()).toBe(true);
       } finally {
-        pendingRows.resolve(emptyRows);
-        await executing;
+        try {
+          pendingRows.resolve(emptyRows);
+          await executing;
+        } finally {
+          signals.dispose();
+        }
       }
     });
   });
@@ -168,21 +176,22 @@ describe("agent exec stored auth", () => {
         };
         writePersistedAuthProfileStoreRaw(sharedStore);
         writePersistedAuthProfileStoreRaw(localStore, state.agentDir());
+        await prepareSharedAuthStoreOwnership(state.env);
         setRuntimeAuthProfileStoreSnapshot(sharedStore, state.agentDir());
         const result = await run({
           runAgent: async () => {
             expect(process.env.OPENCLAW_STATE_DIR).not.toBe(state.stateDir);
-            const store = ensureAuthProfileStore(undefined, noExternal);
+            const store = await ensureAuthProfileStoreAsync(undefined, noExternal);
             expect(Object.keys(store.profiles).toSorted()).toEqual([
               "openai:shared",
               "openai:token",
             ]);
-            expect(loadAuthProfileStoreForRuntime(undefined, noExternal).profiles).toEqual(
-              store.profiles,
-            );
-            expect(findPersistedAuthProfileCredential({ profileId: "openai:token" })).toEqual(
-              sharedStore.profiles["openai:token"],
-            );
+            expect(
+              (await loadAuthProfileStoreForRuntimeAsync(undefined, noExternal)).profiles,
+            ).toEqual(store.profiles);
+            expect(
+              await findPersistedAuthProfileCredentialAsync({ profileId: "openai:token" }),
+            ).toEqual(sharedStore.profiles["openai:token"]);
             expect(store).toMatchObject({ runtimeLocalProfileIds: ["openai:shared"] });
             expect(resolveAuthProfileOrder({ store, provider: "openai", cfg: {} })).toEqual([
               "openai:shared",
@@ -207,7 +216,7 @@ describe("agent exec stored auth", () => {
     );
   });
 
-  it("uses one system-agent owner for credentials, the run, and its SQLite scope", async () => {
+  it("uses an overridden system-agent owner for credentials, the run, and its SQLite scope", async () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-cfg-auth-");
     const customAgentDir = path.join(stateDir, "custom-home");
     await fs.mkdir(customAgentDir);
@@ -217,7 +226,7 @@ describe("agent exec stored auth", () => {
       JSON.stringify({
         agents: {
           ownership: "explicit",
-          defaults: { systemAgent: { agentId: "alpha" } },
+          defaults: { systemAgent: { agentId: "beta" } },
           entries: { alpha: { agentDir: customAgentDir }, beta: {} },
         },
       }),
@@ -244,7 +253,10 @@ describe("agent exec stored auth", () => {
           return success();
         },
       },
-      { config },
+      {
+        config,
+        configOverride: ['{"agents":{"defaults":{"systemAgent":{"agentId":"alpha"}}}}'],
+      },
     );
     expect(result.exitCode).toBe(0);
   });

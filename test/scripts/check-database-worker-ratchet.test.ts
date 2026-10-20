@@ -4,21 +4,83 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
 import { inventory } from "../../scripts/database-worker-inventory.mjs";
+import * as databaseWorkerCompat from "../../scripts/lib/database-worker-compat.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("reuses the historical inventory while keeping head analysis fresh and invalidating changed bases", () => {
+  const root = tempDirs.make("openclaw-sqlite-cached-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/runtime.ts");
+  const source = "executeSqliteQuerySync(query);\n";
+  fs.writeFileSync(file, source);
+  git("init");
+  git("add", "src");
+  git("commit", "-m", "base");
+  const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(file, source.repeat(2));
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(inspect).toHaveBeenCalledTimes(3);
+
+  git("add", "src");
+  git("commit", "-m", "changed base");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(5);
+
+  // Simulate an edit after module load without changing the running test's source files.
+  const analyzerFile = path.resolve("scripts/lib/database-worker-compat.mts");
+  const readFile = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+    const bytes = readFile(filePath, options);
+    return filePath !== analyzerFile
+      ? bytes
+      : typeof bytes === "string"
+        ? `${bytes}\n`
+        : Buffer.concat([bytes, Buffer.from("\n")]);
+  });
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(inspect).toHaveBeenCalledTimes(9);
+});
+
+it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
+  const root = tempDirs.make("openclaw-sqlite-suite-ratchet-");
+  const directory = path.join(root, "src/gateway");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "server.auth.default-token.suite.ts"),
+    'import { test } from "vitest"; test("profiles", () => executeSqliteQuerySync(query));',
+  );
+  fs.writeFileSync(
+    path.join(directory, "runtime.suite.ts"),
+    "export function readRuntime() { return executeSqliteQuerySync(query); }",
+  );
+  expect(inventory(root).map(({ file, tier }) => ({ file, tier }))).toEqual([
+    { file: "src/gateway/runtime.suite.ts", tier: "T1" },
+  ]);
+});
+
 it("does not exempt a kernel through an unregistered worker-named runtime wrapper", () => {
   const root = tempDirs.make("openclaw-sqlite-entry-ratchet-");
   const relative = "src/state/openclaw-state-db-maintenance.ts";
   const sources = {
-    [relative]: `export function writeCurrentStateSchemaMetadata() {
+    [relative]: `export function writeUnreviewedStateMetadata() {
       return executeSqliteQuerySync(query);
     }`,
     "src/unregistered.worker.ts": `
-      import { writeCurrentStateSchemaMetadata } from './state/openclaw-state-db-maintenance.js';
-      export function writeSchema() { return writeCurrentStateSchemaMetadata(); }
+      import { writeUnreviewedStateMetadata } from './state/openclaw-state-db-maintenance.js';
+      export function writeSchema() { return writeUnreviewedStateMetadata(); }
     `,
     "src/gateway/consumer.ts": `
       import { writeSchema } from '../unregistered.worker.js';
@@ -32,7 +94,34 @@ it("does not exempt a kernel through an unregistered worker-named runtime wrappe
   }
   expect(inventory(root).find((row) => row.file === relative)).toMatchObject({
     tier: "T1",
-    calls: [expect.objectContaining({ operation: "writeCurrentStateSchemaMetadata" })],
+    calls: [expect.objectContaining({ operation: "writeUnreviewedStateMetadata" })],
+  });
+});
+
+it("classifies only the synchronous Doctor enrollment branch as one-shot", () => {
+  const root = tempDirs.make("openclaw-sqlite-doctor-enrollment-");
+  const relative = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    `export function enrollOwnedAuthProfileAuthorization(params) {
+      if (params.context.maintenanceScope?.ownsSchemaMaintenance) {
+        runOpenClawAgentWriteTransaction(callback);
+        return () => runOpenClawAgentWriteTransaction(callback);
+      } else {
+        runOpenClawAgentWriteTransaction(callback);
+      }
+    }`,
+  );
+  const rows = inventory(root);
+  expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 2],
+    ["T3", 1],
+  ]);
+  expect(rows.find(({ tier }) => tier === "T3")?.calls[0]).toMatchObject({
+    operation: "enrollOwnedAuthProfileAuthorization",
+    guards: ["params.context.maintenanceScope?.ownsSchemaMaintenance"],
   });
 });
 
@@ -158,7 +247,7 @@ function anotherFactory() {
   fs.mkdirSync(path.dirname(eventFile), { recursive: true });
   const eventSource = `
 import { executeSqliteQuerySync as query } from "./queries.js";
-function recordSessionStateEventInDatabase() {
+function recordSessionStateEventsInDatabase() {
   query(sql);
   const registeredWatcherKeys = notify
     ? query(sql).rows.map(() => query(sql))
@@ -184,7 +273,7 @@ function anotherRecorder() {
     operation: "createPlacementTurnClaimOps.releaseTurn",
   });
   expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
-    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventsInDatabase" })),
   );
   expect(
     rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],
@@ -208,9 +297,10 @@ it("separates deprecated-only calls and rejects bundled callers even without T1 
       cwd: root,
       stdio: "pipe",
     });
-  const relative = "src/plugin-sdk/sqlite-runtime-legacy.ts";
+  const relative = "extensions/matrix/auth-presence.ts";
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.mkdirSync(path.join(root, "src/plugin-sdk"), { recursive: true });
   fs.writeFileSync(path.join(root, "src/runtime.ts"), "executeSqliteQuerySync(query);\n");
   git("init");
   git("add", ".");
@@ -218,12 +308,9 @@ it("separates deprecated-only calls and rejects bundled callers even without T1 
   const wrappers = `
 import * as queries from "../infra/kysely-sync.js";
 /** @deprecated Use the worker backend. */
-function executeSqliteQueryTakeFirstSyncLegacy(database, query) {
+export function hasAnyMatrixAuth(database, query) {
   return queries.executeSqliteQueryTakeFirstSync(database, query);
 }
-export {
-  executeSqliteQueryTakeFirstSyncLegacy as executeSqliteQueryTakeFirstSync,
-};
 `;
   fs.writeFileSync(file, wrappers);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -235,7 +322,7 @@ export {
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   fs.writeFileSync(
     path.join(root, "src/plugin-sdk/sqlite-runtime.ts"),
-    'export { executeSqliteQueryTakeFirstSync as legacyQuery } from "./sqlite-runtime-legacy.js";\n',
+    'export { hasAnyMatrixAuth as legacyQuery } from "../../extensions/matrix/auth-presence.js";\n',
   );
   fs.writeFileSync(
     path.join(root, "src/runtime.ts"),
@@ -243,4 +330,38 @@ export {
   );
   expect(main(root, ["--base", "HEAD"])).toBe(1);
   expect(errors).toHaveBeenCalledWith(expect.stringContaining("src/runtime.ts"));
+});
+
+it("validates credential writers in current and staged sources while comparing historical counts", () => {
+  const root = tempDirs.make("openclaw-sqlite-writer-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  fs.mkdirSync(path.join(root, "src"));
+  const file = path.join(root, "src/writer.ts");
+  const unreviewed = "export function write() { scope.execute({ type: 'machineState.write' }); }";
+  fs.writeFileSync(file, unreviewed);
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "historical writer");
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  fs.writeFileSync(file, "export function read() {} ");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  expect(main(root, ["--base", "HEAD", "--staged"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
+  );
+  errors.mockClear();
+  fs.writeFileSync(file, unreviewed);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "machineState.write credential writes require the host publication adapter",
+    ),
+  );
 });

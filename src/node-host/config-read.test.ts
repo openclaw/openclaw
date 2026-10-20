@@ -37,36 +37,32 @@ function seed(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function withoutParentSql(operation: () => Promise<void>): Promise<void> {
+async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
   requireNodeSqlite();
   const sql = observeMainThreadSql();
   try {
-    await operation();
+    const result = await operation();
     expect(sql.count()).toBe(0);
+    return result;
   } finally {
     vi.restoreAllMocks();
   }
 }
 
-it.each(["cached", "fresh"] as const)(
-  "loads %s node-host configuration without parent-thread SQL",
-  async (mode) => {
-    expect(isMainThread).toBe(true);
-    const { env } = fixture();
-    const expected = await seed(env);
-    const source = openOpenClawStateDatabase({ env });
-    if (mode === "fresh") {
-      await closeOpenClawStateDatabaseAsync();
-    }
-    await withoutParentSql(async () => {
-      expect(await loadNodeHostConfig(env)).toEqual(expected);
-    });
-    expect(source.db.isOpen).toBe(mode === "cached");
-  },
-);
+it.each(["cached", "fresh"] as const)("loads %s config without parent SQL", async (mode) => {
+  expect(isMainThread).toBe(true);
+  const { env } = fixture();
+  const expected = await seed(env);
+  const source = openOpenClawStateDatabase({ env });
+  if (mode === "fresh") {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  expect(await withoutParentSql(() => loadNodeHostConfig(env))).toEqual(expected);
+  expect(source.db.isOpen).toBe(mode === "cached");
+});
 
 it.each(["fresh", "cached"] as const)(
-  "loads %s managed node-host configuration without host SQL or schema repair",
+  "reads %s managed schema without repair/SQL",
   async (mode) => {
     const { env, databasePath } = fixture();
     const expected = await seed(env);
@@ -79,9 +75,7 @@ it.each(["fresh", "cached"] as const)(
       if (mode === "cached") {
         openOpenClawStateDatabase({ env });
       }
-      await withoutParentSql(async () => {
-        expect(await loadNodeHostConfig(env)).toEqual(expected);
-      });
+      expect(await withoutParentSql(() => loadNodeHostConfig(env))).toEqual(expected);
       await closeOpenClawStateDatabaseAsync();
       fs.renameSync(databasePath, `${databasePath}.template`);
       fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
@@ -112,21 +106,18 @@ it.each(["fresh", "cached"] as const)(
   },
 );
 
-it.each([false, true])(
-  "reads an absent store only after the legacy gate (legacy=%s)",
-  async (legacy) => {
-    const { env, root, databasePath } = fixture();
-    const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    if (legacy) {
-      fs.writeFileSync(path.join(root, "node.json"), "{}\n");
-      await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
-      expect(execute).not.toHaveBeenCalled();
-    } else {
-      expect(await loadNodeHostConfig(env)).toBeNull();
-    }
-    expect(fs.existsSync(databasePath)).toBe(false);
-  },
-);
+it.each([false, true])("gates absent store reads on legacy=%s", async (legacy) => {
+  const { env, root, databasePath } = fixture();
+  const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  if (legacy) {
+    fs.writeFileSync(path.join(root, "node.json"), "{}\n");
+    await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
+    expect(execute).not.toHaveBeenCalled();
+  } else {
+    expect(await loadNodeHostConfig(env)).toBeNull();
+  }
+  expect(fs.existsSync(databasePath)).toBe(false);
+});
 
 it("joins admitted node-host configuration reads before their disposable scope exits", async () => {
   const { env, databasePath } = fixture();
@@ -141,31 +132,22 @@ it("joins admitted node-host configuration reads before their disposable scope e
   expect(outcomes).toEqual([expected]);
 });
 
+const validRow = '{"version":1,"nodeId":"fixture-node"}';
 it.each([
-  { value_json: "{", updated_at_ms: 1, error: SyntaxError, message: /JSON/u },
-  {
-    value_json: '{"version":1,"nodeId":"fixture-node"}',
-    updated_at_ms: -1,
-    error: Error,
-    message: /updated_at_ms must be a non-negative integer/u,
-  },
-  {
-    value_json: '{"version":2,"nodeId":"fixture-node"}',
-    updated_at_ms: 1,
-    error: Error,
-    message: /unsupported version 2/u,
-  },
-])("preserves node-host row decoding errors ($value_json, $updated_at_ms)", async (row) => {
+  ["{", 1, SyntaxError, /JSON/u],
+  [validRow, -1, Error, /updated_at_ms must be a non-negative integer/u],
+  ['{"version":2,"nodeId":"fixture-node"}', 1, Error, /unsupported version 2/u],
+] as const)("preserves row errors (%s, %s)", async (json, time, kind, message) => {
   const { env } = fixture();
   vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockResolvedValue({
     ok: true,
     type: "nodeHost.config",
     sourceAdmitted: true,
-    row: { value_json: row.value_json, updated_at_ms: row.updated_at_ms },
+    row: { value_json: json, updated_at_ms: time },
   });
   const failure = await loadNodeHostConfig(env).catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(row.error);
-  expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
+  expect(failure).toBeInstanceOf(kind);
+  expect(failure).toMatchObject({ message: expect.stringMatching(message) });
 });
 
 it("configures without host SQL and refreshes previously read configuration", async () => {
@@ -173,20 +155,21 @@ it("configures without host SQL and refreshes previously read configuration", as
   const initial = await seed(env);
   expect(await loadNodeHostConfig(env)).toEqual(initial);
   await withoutParentSql(async () => {
-    const configured = await configureNodeHost({
-      env,
+    const update = {
       displayName: "Updated Node",
-      fallbackDisplayName: "fallback",
       gateway: { host: "new.gateway.example", port: 19443, tls: true },
       commands: ["fixture.updated"],
+    };
+    const configured = await configureNodeHost({
+      ...update,
+      env,
+      fallbackDisplayName: "fallback",
       nowMs: 5678,
     });
     expect(configured).toMatchObject({
+      ...update,
       nodeId: initial.nodeId,
-      displayName: "Updated Node",
-      commands: ["fixture.updated"],
       installedAppsSharing: true,
-      gateway: { host: "new.gateway.example", port: 19443, tls: true },
     });
     expect(await loadNodeHostConfig(env)).toEqual(configured);
   });

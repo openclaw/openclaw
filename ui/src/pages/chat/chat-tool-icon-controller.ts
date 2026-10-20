@@ -1,46 +1,59 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginActivityIconBlobUrl } from "../plugins/icon-loader.ts";
-import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner } from "../plugins/plugin-icon-owner.ts";
 
-export type PluginToolIcon = { url: string; onError: () => void };
+type PluginToolIcon = { url: string; onError: () => void };
 export type PluginToolIcons = Pick<ReadonlyMap<string, PluginToolIcon>, "get">;
 
-type ToolIconSession = { sessionKey: string; agentId?: string };
+type ToolIconSource = {
+  context: Pick<ApplicationContext, "resourceBasePath"> & {
+    gateway: Pick<ApplicationContext["gateway"], "snapshot" | "connection" | "connectionRevision">;
+  };
+  session: { sessionKey: string; agentId?: string } | undefined;
+};
 
-export class ChatToolIconController implements ReactiveController {
-  icons: PluginToolIcons = { get: (name) => this.getIcon(name) };
-  private owner: {
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-    session: ToolIconSession;
-    revision: number;
-    controller: AbortController;
-    plugins?: Promise<PluginListResult>;
-    loading?: boolean;
-  } | null = null;
-  private readonly toolIcons = new Map<string, string | undefined>();
-  private readonly activityIcons = new Map<string, { pluginId: string; tool?: string }>();
-  private readonly requested = new Set<string>();
-  private readonly pending = new Set<string>();
-  private urls: Record<string, string> = {};
-  private readonly loader: PluginIconController;
-
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly getContext: () => Pick<ApplicationContext, "resourceBasePath"> & {
-      gateway: Pick<
-        ApplicationContext["gateway"],
-        "snapshot" | "connection" | "connectionRevision"
-      >;
-    },
-    private readonly getSession: () => ToolIconSession | undefined,
-  ) {
-    host.addController(this);
-    this.loader = new PluginIconController({
+export function createChatToolIcons(readSource: () => ToolIconSource): PluginToolIcons {
+  const readBinding = () => {
+    const { context, session } = readSource();
+    const { snapshot, connectionRevision: revision } = context.gateway;
+    return snapshot.phase === "connected" && snapshot.client && session
+      ? { client: snapshot.client, session, revision }
+      : null;
+  };
+  type Binding = ReturnType<typeof readBinding>;
+  const sameBinding = (a: Binding, b: Binding) =>
+    a?.client === b?.client &&
+    a?.revision === b?.revision &&
+    a?.session.sessionKey === b?.session.sessionKey &&
+    a?.session.agentId === b?.session.agentId;
+  const binding = createMemo(readBinding, { equals: sameBinding });
+  const icons = createMemo(() => {
+    const current = binding();
+    if (!current) {
+      return undefined;
+    }
+    const owner: NonNullable<Binding> & {
+      controller: AbortController;
+      plugins?: Promise<PluginListResult>;
+      loading?: boolean;
+    } = { ...current, controller: new AbortController() };
+    let disposed = false;
+    const [toolKeys, setToolKeys] = createSignal(new Map<string, string | undefined>());
+    const [urls, setUrls] = createSignal<Record<string, string>>({});
+    const activityIcons = new Map<string, { pluginId: string; tool?: string }>();
+    // Request admission must see same-turn misses before Solid publishes icon data.
+    const known = new Set<string>();
+    const requested = new Set<string>();
+    const pending = new Set<string>();
+    const isCurrent = () => !disposed && sameBinding(owner, readBinding());
+    const loader = new PluginIconOwner({
       getFetchContext: () => {
-        const { gateway, resourceBasePath } = getContext();
+        const {
+          context: { gateway, resourceBasePath },
+        } = readSource();
         return {
           resourceBasePath,
           gatewayUrl: gateway.connection.gatewayUrl,
@@ -51,166 +64,123 @@ export class ChatToolIconController implements ReactiveController {
           },
         };
       },
-      isConnected: () => this.isCurrent(),
+      isConnected: isCurrent,
       fetchIcon: (key, context, signal) => {
-        const icon = this.activityIcons.get(key);
+        const icon = activityIcons.get(key);
         return icon
           ? fetchPluginActivityIconBlobUrl({ ...context, ...icon, signal })
           : Promise.resolve(null);
       },
-      onUrlsChange: (urls) => this.publish(urls),
+      onUrlsChange: (next) => {
+        if (!disposed) {
+          setUrls(next);
+        }
+      },
     });
-  }
+    // Computation cleanup retires requests without publishing presentation state.
+    onCleanup(() => {
+      disposed = true;
+      owner.controller.abort();
+      loader.reset();
+    });
 
-  private publish(urls = this.urls) {
-    this.urls = urls;
-    this.icons = { get: (name) => this.getIcon(name) };
-    this.host.requestUpdate();
-  }
-
-  private getIcon(name: string): PluginToolIcon | undefined {
-    const owner = this.owner;
-    if (!owner || !this.isCurrent()) {
-      return undefined;
-    }
-    this.requested.add(name);
-    if (!this.toolIcons.has(name)) {
-      const scheduled = this.pending.size > 0;
-      this.pending.add(name);
-      if (!scheduled) {
-        queueMicrotask(() => this.refresh());
+    function refresh() {
+      const active = owner;
+      if (!isCurrent() || active.loading || pending.size === 0) {
+        return;
       }
-    }
-    const iconKey = this.toolIcons.get(name);
-    if (!iconKey) {
-      return undefined;
-    }
-    this.loader.load(iconKey);
-    const url = this.urls[iconKey];
-    return url
-      ? {
-          url,
-          onError: () => {
-            // Removed images can fail after reconnect; only the current owner
-            // and URL may retire the replacement plugin's image.
-            if (this.owner === owner && this.isCurrent() && this.urls[iconKey] === url) {
-              this.loader.handleError(iconKey);
+      // Remember misses and core/iconless tools. Newly displayed names refresh inventory.
+      for (const name of pending) {
+        known.add(name);
+      }
+      pending.clear();
+      active.loading = true;
+      const options = { signal: active.controller.signal };
+      void Promise.all([
+        active.client.request<ToolsEffectiveResult>("tools.effective", active.session, options),
+        (active.plugins ??= active.client
+          .request<PluginListResult>("plugins.list", {}, options)
+          .catch((error: unknown) => {
+            // A later newly displayed tool can recover metadata after a failed read.
+            active.plugins = undefined;
+            throw error;
+          })),
+      ])
+        .then(([tools, plugins]) => {
+          if (!isCurrent()) {
+            return;
+          }
+          const availableIcons = new Map(
+            plugins.plugins.map((plugin) => [
+              plugin.id,
+              { default: plugin.hasActivityIcon, tools: new Set(plugin.activityIconTools) },
+            ]),
+          );
+          const keys = new Map<string, string | undefined>();
+          activityIcons.clear();
+          // Effective inventory retains plugin ownership for built-ins such as Browser and Canvas.
+          for (const group of tools.groups) {
+            for (const tool of group.tools) {
+              const pluginId = tool.pluginId;
+              const available = pluginId ? availableIcons.get(pluginId) : undefined;
+              const override = available?.tools.has(tool.id) ? tool.id : undefined;
+              const key =
+                pluginId && (override || available?.default)
+                  ? JSON.stringify([pluginId, override ?? null])
+                  : undefined;
+              if (key && pluginId) {
+                activityIcons.set(key, { pluginId, tool: override });
+              }
+              keys.set(tool.id, key);
+              known.add(tool.id);
+              pending.delete(tool.id);
             }
-          },
-        }
-      : undefined;
-  }
-
-  private isCurrent() {
-    const { snapshot, connectionRevision } = this.getContext().gateway;
-    const session = this.getSession();
-    return Boolean(
-      this.owner &&
-      snapshot.phase === "connected" &&
-      snapshot.client === this.owner.client &&
-      connectionRevision === this.owner.revision &&
-      session?.sessionKey === this.owner.session.sessionKey &&
-      session?.agentId === this.owner.session.agentId,
-    );
-  }
-
-  hostUpdate() {
-    if (this.isCurrent()) {
-      return;
-    }
-    const { snapshot, connectionRevision: revision } = this.getContext().gateway;
-    const { client, phase } = snapshot;
-    const session = this.getSession();
-    this.hostDisconnected();
-    if (phase === "connected" && client && session) {
-      this.owner = { client, session, revision, controller: new AbortController() };
-      this.publish();
-    }
-  }
-
-  private refresh() {
-    const owner = this.owner;
-    if (!owner || !this.isCurrent() || owner.loading || this.pending.size === 0) {
-      return;
-    }
-    // Remember misses as well as core/iconless tools. Only newly rendered names
-    // refresh the inventory, including names arriving while a request is active.
-    for (const name of this.pending) {
-      this.toolIcons.set(name, undefined);
-    }
-    this.pending.clear();
-    owner.loading = true;
-    const options = { signal: owner.controller.signal };
-    void Promise.all([
-      owner.client.request<ToolsEffectiveResult>("tools.effective", owner.session, options),
-      (owner.plugins ??= owner.client
-        .request<PluginListResult>("plugins.list", {}, options)
-        .catch((error: unknown) => {
-          // A later newly displayed tool can recover metadata after a failed read.
-          owner.plugins = undefined;
-          throw error;
-        })),
-    ])
-      .then(([tools, plugins]) => {
-        if (this.owner !== owner || !this.isCurrent()) {
-          return;
-        }
-        const availableIcons = new Map(
-          plugins.plugins.map((plugin) => [
-            plugin.id,
-            { default: plugin.hasActivityIcon, tools: new Set(plugin.activityIconTools) },
-          ]),
-        );
-        this.activityIcons.clear();
-        // Effective inventory retains plugin ownership for built-ins such as
-        // Browser and Canvas that the static catalog groups with core tools.
-        for (const group of tools.groups) {
-          for (const tool of group.tools) {
-            const pluginId = tool.pluginId;
-            const available = pluginId ? availableIcons.get(pluginId) : undefined;
-            const override = available?.tools.has(tool.id) ? tool.id : undefined;
-            const key =
-              pluginId && (override || available?.default)
-                ? JSON.stringify([pluginId, override ?? null])
-                : undefined;
-            if (key && pluginId) {
-              this.activityIcons.set(key, { pluginId, tool: override });
+          }
+          setToolKeys((previous) => new Map([...previous, ...keys]));
+          loader.reconcileKeys(new Set(activityIcons.keys()));
+          for (const name of requested) {
+            const key = keys.get(name);
+            if (key) {
+              loader.load(key);
             }
-            this.toolIcons.set(tool.id, key);
-            this.pending.delete(tool.id);
+          }
+        })
+        .catch(() => {
+          // Optional presentation keeps the existing symbol after a failed lookup.
+        })
+        .finally(() => {
+          if (disposed) {
+            return;
+          }
+          active.loading = false;
+          refresh();
+        });
+    }
+
+    return {
+      get(name: string) {
+        const keys = toolKeys();
+        const images = urls();
+        if (!isCurrent()) {
+          return undefined;
+        }
+        requested.add(name);
+        if (!known.has(name)) {
+          const scheduled = pending.size > 0;
+          pending.add(name);
+          if (!scheduled) {
+            queueMicrotask(refresh);
           }
         }
-        this.loader.reconcileKeys(new Set(this.activityIcons.keys()));
-        for (const name of this.requested) {
-          const key = this.toolIcons.get(name);
-          if (key) {
-            this.loader.load(key);
-          }
+        const key = keys.get(name);
+        if (!key) {
+          return undefined;
         }
-        this.publish();
-      })
-      .catch(() => {
-        // Optional presentation keeps the existing symbol after a failed lookup.
-      })
-      .finally(() => {
-        if (this.owner !== owner) {
-          return;
-        }
-        owner.loading = false;
-        this.refresh();
-      });
-  }
-
-  hostDisconnected() {
-    if (!this.owner) {
-      return;
-    }
-    this.owner.controller.abort();
-    this.owner = null;
-    this.toolIcons.clear();
-    this.activityIcons.clear();
-    this.requested.clear();
-    this.pending.clear();
-    this.loader.reset();
-  }
+        loader.load(key);
+        const url = images[key];
+        return url ? { url, onError: () => loader.handleError(key) } : undefined;
+      },
+    };
+  });
+  return { get: (name) => icons()?.get(name) };
 }

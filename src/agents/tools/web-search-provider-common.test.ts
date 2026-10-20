@@ -1,13 +1,73 @@
 // Shared web-search tests cover HTTP error ownership and module-local cache isolation.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { redactToolPayloadText } from "../../logging/redact.js";
+import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
+import { redactLogRecordForTransport, redactToolPayloadText } from "../../logging/redact.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
-import { postTrustedWebToolsJson, throwWebSearchApiError } from "./web-search-provider-common.js";
+import { withEnv } from "../../test-utils/env.js";
+import {
+  postTrustedWebToolsJson,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
+  throwWebSearchApiError,
+} from "./web-search-provider-common.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+describe("web search input boundaries", () => {
+  it("keeps configured credentials ahead of ordered environment fallbacks", () => {
+    withEnv({ TEST_SEARCH_PRIMARY: "  primary  ", TEST_SEARCH_SECONDARY: "secondary" }, () => {
+      const envVars = ["TEST_SEARCH_PRIMARY", "TEST_SEARCH_SECONDARY"];
+      expect(readWebSearchApiKey(" configured ", "test.apiKey", envVars)).toBe("configured");
+      expect(readWebSearchApiKey(undefined, "test.apiKey", envVars)).toBe("primary");
+      withEnv({ TEST_SEARCH_PRIMARY: " " }, () => {
+        expect(readWebSearchApiKey(" ", "test.apiKey", envVars)).toBe("secondary");
+      });
+    });
+  });
+
+  it.each(["env", "file", "exec"] as const)(
+    "does not hide unresolved %s references behind an ambient key",
+    (source) => {
+      withEnv({ TEST_SEARCH_PRIMARY: "ambient" }, () => {
+        expect(() =>
+          readWebSearchApiKey(
+            { source, provider: "default", id: "TEST_SEARCH_REFERENCE" },
+            "test.apiKey",
+            ["TEST_SEARCH_PRIMARY"],
+          ),
+        ).toThrow(UnresolvedSecretInputError);
+      });
+    },
+  );
+
+  it("reads a required query and keeps count fallback resolution with the caller", () => {
+    expect(readWebSearchQueryAndCount({ query: "  test  ", count: 2 }, { maxResults: 7 })).toEqual({
+      query: "test",
+      count: 2,
+    });
+    expect(readWebSearchQueryAndCount({ query: "test" }, { maxResults: 7 })).toEqual({
+      query: "test",
+      count: 7,
+    });
+    expect(readWebSearchQueryAndCount({ query: "test" })).toEqual({
+      query: "test",
+      count: undefined,
+    });
+    expect(() => readWebSearchQueryAndCount({})).toThrow("query required");
+  });
+
+  it.each([0, -1, 1.5, 11, "invalid"])(
+    "rejects invalid count %s rather than using config",
+    (count) => {
+      expect(() => readWebSearchQueryAndCount({ query: "test", count }, { maxResults: 7 })).toThrow(
+        "count must be an integer from 1 to 10.",
+      );
+    },
+  );
 });
 
 function postSearch(overrides: Partial<Parameters<typeof postTrustedWebToolsJson>[0]> = {}) {
@@ -29,7 +89,7 @@ describe("web provider HTTP errors", () => {
   it.each([
     ["short body credential", "s7Key", "rejected $key", "", undefined, "rejected ***"],
     ["short reason credential", "s7Key", "", "rejected $key", undefined, "rejected ***"],
-    ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "Bearer ***"],
+    ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "***"],
     ["truncated credential", "synthetic-web-key-long", "rejected $key", "", 15, "rejected ***"],
     ["ordinary detail", "s7Key", "quota exceeded", "", undefined, "quota exceeded"],
   ] as const)(
@@ -57,6 +117,11 @@ describe("web provider HTTP errors", () => {
             status: 401,
             statusCode: 401,
           });
+          const diagnostic = redactLogRecordForTransport({ error: String(error) });
+          expect(diagnostic).toEqual({
+            error: `ProviderHttpError: Search API error (401): ${expected}`,
+          });
+          expect(String(diagnostic.error)).not.toContain(apiKey);
         },
       );
     },

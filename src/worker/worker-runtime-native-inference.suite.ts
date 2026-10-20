@@ -62,7 +62,7 @@ export function registerWorkerNativeInferenceTests({ setup }: NativeInferenceFix
 
       gateway.disconnectClients();
 
-      await expect(result).resolves.toMatchObject({ status: "failed", reason: "turn-failed" });
+      await expect(result).resolves.toMatchObject({ status: "failed", reason: "node-lost" });
       await requestClosed.promise;
       expect(providerRequests).toBe(1);
       expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({

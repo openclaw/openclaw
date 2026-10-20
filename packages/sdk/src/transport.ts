@@ -19,7 +19,7 @@ type GatewayClientLike = Pick<GatewayClient, "request" | "stopAndWait">;
 const RAW_EVENT_REPLAY_LIMIT = 1000;
 export const RUN_SUBMISSION_METHODS = new Set(["agent", "chat.send", "sessions.send"]);
 type GatewayConnectionEpoch = { current: boolean };
-export type GatewayEventReceipt = { epoch: GatewayConnectionEpoch; order: number };
+export type GatewayEventReceipt = { epoch: GatewayConnectionEpoch };
 export type GatewayReconnectContext = {
   epoch: GatewayConnectionEpoch;
   signal: AbortSignal;
@@ -114,7 +114,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private closed = false;
   private connectedOnce = false;
   private lastDisconnectedEvent: GatewayEvent | undefined;
-  private readonly responseObservers = new Map<string, (receipt: GatewayResponseReceipt) => void>();
+  private lastEventReceipt: GatewayResponseReceipt | undefined;
 
   constructor(options: GatewayClientTransportOptions = {}) {
     this.options = options;
@@ -130,8 +130,8 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     this.connectPromise = new Promise<void>((resolve, reject) => {
       this.rejectPendingConnect = reject;
       let connectionEpoch: GatewayConnectionEpoch = { current: true };
+      this.lastEventReceipt = { epoch: connectionEpoch };
       let connectionAbort = new AbortController();
-      let eventOrder = 0;
       let lastEvent: GatewayEvent | undefined;
       const client = new GatewayClient({
         ...this.options,
@@ -142,7 +142,8 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
             ...(seq !== undefined ? { seq } : {}),
             ...(stateVersion ? { stateVersion } : {}),
           };
-          eventReceipts.set(normalized, { epoch: connectionEpoch, order: ++eventOrder });
+          eventReceipts.set(normalized, { epoch: connectionEpoch });
+          this.lastEventReceipt = { epoch: connectionEpoch, event: normalized };
           lastEvent = normalized;
           this.eventsHub.publish(normalized);
           this.options.onEvent?.(normalized);
@@ -218,22 +219,10 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           connectionEpoch.current = false;
           connectionAbort.abort();
           connectionEpoch = { current: true };
+          this.lastEventReceipt = { epoch: connectionEpoch };
           connectionAbort = new AbortController();
-          eventOrder = 0;
           lastEvent = undefined;
           this.options.onClose?.(code, reason);
-        },
-        onRequestTiming: (
-          timing: Parameters<NonNullable<GatewayClientOptions["onRequestTiming"]>>[0],
-        ) => {
-          if (timing.ok) {
-            this.responseObservers.get(timing.id)?.({
-              epoch: connectionEpoch,
-              order: ++eventOrder,
-              event: lastEvent,
-            });
-          }
-          this.options.onRequestTiming?.(timing);
         },
         onGap: this.options.onGap,
       } as never);
@@ -253,30 +242,11 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (!this.client) {
       throw new Error("gateway transport is not connected");
     }
-    if (method !== "sessions.messages.unsubscribe" && !RUN_SUBMISSION_METHODS.has(method)) {
-      return await this.client.request<T>(method, params, options);
+    const result = await this.client.request<T>(method, params, options);
+    if (method === "sessions.messages.unsubscribe" && this.lastEventReceipt && isRecord(result)) {
+      responseReceipts.set(result, this.lastEventReceipt);
     }
-    let requestId: string | undefined;
-    let receipt: GatewayResponseReceipt | undefined;
-    try {
-      const result = await this.client.request<T>(method, params, {
-        ...options,
-        onSent: (id) => {
-          requestId = id;
-          this.responseObservers.set(id, (observed) => {
-            receipt = observed;
-          });
-        },
-      });
-      if (receipt && isRecord(result)) {
-        responseReceipts.set(result, receipt);
-      }
-      return result;
-    } finally {
-      if (requestId) {
-        this.responseObservers.delete(requestId);
-      }
-    }
+    return result;
   }
 
   events(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
@@ -287,9 +257,6 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (this.closePromise) {
       return await this.closePromise;
     }
-    if (this.closed) {
-      return;
-    }
     this.closed = true;
     this.eventsHub.close();
     const client = this.client;
@@ -299,8 +266,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     rejectPendingConnect?.(new Error("gateway transport closed before connect completed"));
     this.connectPromise = null;
     this.closePromise = client?.stopAndWait() ?? Promise.resolve();
-    await this.closePromise;
-    this.closePromise = null;
+    return this.closePromise;
   }
 }
 

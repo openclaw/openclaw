@@ -126,7 +126,6 @@ describe("plugin capability summaries", () => {
   it("includes every manifest contract family in the reviewed capability surface", () => {
     const contracts = {
       codeModeExecutors: ["quickjs"],
-      embeddedExtensionFactories: ["embedded"],
       agentToolResultMiddleware: ["middleware"],
       trustedToolPolicies: ["trusted-policy"],
       externalAuthProviders: ["external-auth"],
@@ -144,6 +143,7 @@ describe("plugin capability summaries", () => {
       webFetchProviders: ["web-fetch"],
       webSearchProviders: ["web-search"],
       workerProviders: ["worker"],
+      workerProfileSuggestions: ["worker"],
       storageProviders: ["storage"],
       decisionProviders: ["decision"],
       usageProviders: ["usage"],

@@ -16,7 +16,7 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -57,7 +57,7 @@ export async function messageCommand(
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);

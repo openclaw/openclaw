@@ -34,6 +34,8 @@ export type CodexNativeSubagentSubmission = z.infer<typeof submissionSchema>;
 export type CodexNativeSubagentSubmissions = z.infer<typeof submissionsSchema>;
 
 export type CodexNativeSubagentSubmissionStore = {
+  /** Retained source facts belong to the monitor until detached work settles. */
+  release?: () => void;
   /** In-process binding ownership; use the async check before recovered work escapes. */
   assertCurrent(): void;
   assertCurrentAsync(): Promise<void>;
@@ -72,8 +74,7 @@ export function mutateCodexNativeSubagentSubmissions(params: {
   consume: boolean;
 }): { applied: boolean; next?: CodexNativeSubagentSubmissions } {
   const current = readCodexNativeSubagentSubmissions(params.current);
-  const owner = codexNativeSubagentHistoryOwnerSchema.parse(params.owner);
-  const receipt = submissionSchema.parse(params.receipt);
+  const { owner, receipt } = params;
   if (current && !matchesCodexNativeSubagentSubmissionOwner(current.owner, owner)) {
     return { applied: false };
   }

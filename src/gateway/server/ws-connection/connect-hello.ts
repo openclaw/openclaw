@@ -1,6 +1,8 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
+  ErrorCodes,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
@@ -14,10 +16,11 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
-import { commitPresence, listSystemPresence } from "../../../infra/system-presence.js";
+import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
-import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
@@ -26,6 +29,7 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { normalizeControlUiBasePath } from "../../control-ui-shared.js";
 import {
   broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
@@ -34,6 +38,8 @@ import {
   type SetupHandoff,
 } from "../../device-pair-setup-completion.js";
 import { canReadDetailedUpdateMetadata } from "../../events.js";
+import { projectHealthSummary } from "../../health/presentation.js";
+import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { operatorSessionCap } from "../../operator-role-policy.js";
@@ -119,17 +125,8 @@ export async function sendGatewayHello(
       ? sha256Base64Url(JSON.stringify(recoveryScopeMaterial))
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
+  const snapshotStartedAt = performance.now();
   const sessionRowProjection = getSessionRowProjection(buildRequestContext());
-  if (
-    listSystemPresence({ includeConnectionId: connId }).some((row) => row.watchedSessions?.length)
-  ) {
-    while (sessionRowProjection?.needsMembershipPreparation()) {
-      await sessionRowProjection.prepareMembership();
-      if (context.handler.isClosed() || context.handler.getClient()?.invalidated) {
-        throw new Error("Gateway connection closed before hello");
-      }
-    }
-  }
   const snapshot = buildGatewaySnapshot({
     client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
@@ -138,10 +135,14 @@ export async function sendGatewayHello(
     sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
-  if (cachedHealth) {
-    snapshot.health = cachedHealth;
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
+    snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
+      ? projectHealthSummary(cachedHealth)
+      : cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
+  context.recordAttachTiming?.("snapshotMs", snapshotStartedAt);
+  const descriptorsStartedAt = performance.now();
   const controlUiTabs = listControlUiPluginTabs(scopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
@@ -150,7 +151,13 @@ export async function sendGatewayHello(
     scopes,
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
-  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
+  const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiLocation = ingress
+    ? {
+        origin: ingress.publicOrigin,
+        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
+      }
+    : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
@@ -178,6 +185,7 @@ export async function sendGatewayHello(
         : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
       events,
       capabilities: [
+        GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
@@ -194,12 +202,15 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
         GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
         GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RECOVER_REMOVAL_OWNER,
         GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS,
+        GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
@@ -225,6 +236,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
       ],
     },
     snapshot,
@@ -258,9 +270,10 @@ export async function sendGatewayHello(
       tickIntervalMs: TICK_INTERVAL_MS,
       attachments: resolveChatAttachmentPolicy(context.configSnapshot),
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      hasMultipleSessionSharingIdentities: hasMultipleSessionSharingIdentities(),
+      hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
   let bootstrapHandoff: SetupHandoff | undefined;
@@ -282,7 +295,11 @@ export async function sendGatewayHello(
           if (!consumed) {
             await releasePendingNodePairingCleanup();
             setCloseCause("bootstrap-token-consume-failed");
-            close();
+            context.sendHandshakeErrorResponse(
+              ErrorCodes.UNAVAILABLE,
+              "bootstrap token unavailable",
+            );
+            close(1008, "bootstrap token unavailable");
             return;
           }
           bootstrapHandoff = consumed;
@@ -293,11 +310,10 @@ export async function sendGatewayHello(
         `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
       );
       await releasePendingNodePairingCleanup();
-      setCloseCause("bootstrap-token-consume-failed", { error: formatForLog(err) });
-      close();
-      return;
+      throw err;
     }
   }
+  let helloWriteStarted = false;
   try {
     // Bootstrap bookkeeping can await; read live ingress and suspension at delivery.
     if (role === "operator") {
@@ -318,17 +334,8 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
-    const client = context.handler.getClient();
-    if (
-      client?.presenceKey &&
-      !client.invalidated &&
-      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
-      !context.handler.isClosed()
-    ) {
-      commitPresence(client.presenceKey, connId);
-    }
-    onHelloDelivered();
   } catch (err) {
     if (bootstrapHandoff) {
       if (bootstrapHandoff.completion) {
@@ -353,9 +360,37 @@ export async function sendGatewayHello(
       }
     }
     await releasePendingNodePairingCleanup();
+    if (!helloWriteStarted) {
+      throw err;
+    }
     setCloseCause("hello-send-failed", { error: formatForLog(err) });
-    close();
+    logGateway.warn(`hello delivery failed conn=${connId}: ${formatForLog(err)}`);
+    close(1011, "gateway hello delivery failed");
     return;
+  }
+  onHelloDelivered();
+  const metadata = context.pendingDeviceMetadata;
+  if (metadata) {
+    context.runDetachedConnectWork(
+      () => recordPairedDeviceAccess(metadata.deviceId, metadata.patch, metadata.identity),
+      (err) =>
+        logGateway.warn(
+          `device access metadata refresh failed conn=${connId}: ${formatForLog(err)}`,
+        ),
+    );
+  }
+  try {
+    const client = context.handler.getClient();
+    if (
+      client?.presenceKey &&
+      !client.invalidated &&
+      client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+      !context.handler.isClosed()
+    ) {
+      commitPresence(client.presenceKey, connId);
+    }
+  } catch (err) {
+    logGateway.warn(`presence commit failed conn=${connId}: ${formatForLog(err)}`);
   }
   if (bootstrapHandoff) {
     try {

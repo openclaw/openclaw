@@ -1,49 +1,47 @@
-/** Config preflight for Doctor: legacy migration, recovery, and snapshot loading. */
+import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import { resolveFutureConfigActionBlock } from "../config/future-version-guard.js";
 import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveIsConfigReadOnly, resolveStateDir } from "../config/paths.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
-import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
-import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import {
-  readConfigPreflightSnapshot,
+  createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
-import {
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
-  listReferencedLegacyOAuthSidecarPaths,
-} from "./doctor-auth-legacy-paths.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import {
-  createDoctorConfigRepairPlanner,
   migrateLegacyDoctorConfig,
   prepareDoctorConfigRecovery,
 } from "./doctor-config-preflight-legacy-config.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
-import {
-  assertDoctorPreflightMigrationsComplete,
-  prepareDoctorMigrationPlugins,
-} from "./doctor-config-preflight-migrations.js";
-import {
-  createDoctorRehearsalSnapshotPreparation,
-  shouldSkipPluginValidationForDoctorConfigPreflight,
-} from "./doctor-config-preflight-plugin-index.js";
+import { assertDoctorPreflightMigrationsComplete } from "./doctor-config-preflight-migrations.js";
+import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
+import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
+import { assertDoctorRetiredStateAdmission } from "./doctor-retired-state-admission.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
-import { commitAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
+import {
+  canPlanAutomaticConfigRepair,
+  commitAutomaticConfigRepair,
+  planAutomaticConfigRepair,
+} from "./doctor/shared/automatic-config-repair.js";
 import type {
   DoctorConfigPreflightOptions,
   DoctorConfigPreflightResult,
@@ -59,36 +57,44 @@ const loadCronRepair = createLazyRuntimeModule(() => import("./doctor/cron/legac
 export async function runDoctorConfigPreflight(
   options: DoctorConfigPreflightOptions = {},
 ): Promise<DoctorConfigPreflightResult> {
+  await using snapshots = createConfigPreflightSnapshotReader();
+  let result: DoctorConfigPreflightResult;
   // Reuse child imports for this state operation; every read still acquires fresh admission.
   if (options.migrateState !== false && options.doctorOnlyStateMigrations === true) {
     const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-    return await withSqliteReadOnlyWorkerScope(() => runDoctorConfigPreflightOperation(options));
+    result = await withSqliteReadOnlyWorkerScope(() =>
+      runDoctorConfigPreflightOperation(options, snapshots),
+    );
+  } else {
+    result = await runDoctorConfigPreflightOperation(options, snapshots);
   }
-  return await runDoctorConfigPreflightOperation(options);
+  return { ...result, pluginCache: await snapshots.takePluginCache(result.pluginMetadataSnapshot) };
 }
 
 async function runDoctorConfigPreflightOperation(
   options: DoctorConfigPreflightOptions,
+  snapshots: ReturnType<typeof createConfigPreflightSnapshotReader>,
 ): Promise<DoctorConfigPreflightResult> {
-  assertNoRetiredRuntimeStateFiles(resolveStateDir(process.env));
-  assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env: process.env });
-  const { config: inspectionConfig, env: inspectionEnv } = readCurrentConfigForResolution();
-  assertNoRetiredStateFiles(
-    "OAuth credential sidecars",
-    listReferencedLegacyOAuthSidecarPaths(inspectionEnv, inspectionConfig),
-  );
+  if (!options.retiredStateAdmitted) {
+    assertDoctorRetiredStateAdmission();
+  }
   const stateMigrationsRequested = options.migrateState !== false;
   const skipLegacyParentConfigWrite = shouldSkipLegacyUpdateDoctorConfigWrite(process.env);
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   if (stateMigrationsRequested) {
-    await measurePreflightStep("state-write-admission", () =>
-      assertOpenClawStateWriteAllowedAtPath({
-        databasePath: resolveOpenClawStateSqlitePath(process.env),
+    await measurePreflightStep("state-write-admission", async () => {
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      await assertOpenClawStateWriteAllowedAtPath({
+        databasePath,
         env: process.env,
         recoverOrphanedSidecars: true,
-      }),
-    );
+      });
+      if (existsSync(databasePath)) {
+        // Harden before SQLite can retain a read-only handle for an owned 0444 file.
+        ensureOpenClawStatePermissions(databasePath, process.env);
+      }
+    });
   }
   await measurePreflightStep("stale-update-runs", () =>
     noteStaleUpdateRuns({ migrateState: stateMigrationsRequested }),
@@ -108,6 +114,7 @@ async function runDoctorConfigPreflightOperation(
     measure: measurePreflightStep,
     runWithPluginMetadataSnapshot: (scope, run) => pluginMetadata.run(scope, run),
     doctorOnlyStateMigrations: options.doctorOnlyStateMigrations === true,
+    integrityCheck: options.integrityCheck,
   });
   await using pluginMetadata = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,
@@ -118,18 +125,55 @@ async function runDoctorConfigPreflightOperation(
     pluginMigrations.observe(result);
     noteDoctorMigrationResult(result, { prefix: "- " });
   };
-  const getSnapshotPreparation = createDoctorRehearsalSnapshotPreparation(
-    noteDoctorStateMigrationResult,
-  );
-  const { planScopedConfigRepair, planAdmittedConfigRepair } = createDoctorConfigRepairPlanner({
-    options,
-    stateMigrationsRequested,
-    skipLegacyParentConfigWrite,
-    runWithPluginMetadataSnapshot: pluginMetadata.run,
-  });
+  // One preflight owns completion; each read still checks the current update phase.
+  let rehearsalCompleted = false;
+  const prepareSnapshot = async (configSnapshot: ConfigFileSnapshot) => {
+    if (rehearsalCompleted) {
+      return;
+    }
+    const { completeUpdateCandidatePluginRehearsal } =
+      await import("../infra/update-candidate-plugin-repair.js");
+    const result = await completeUpdateCandidatePluginRehearsal({
+      config: configSnapshot.sourceConfig ?? configSnapshot.config ?? {},
+      env: process.env,
+      installRecords: loadInstalledPluginIndexInstallRecordsSync({ env: process.env }),
+    });
+    rehearsalCompleted = true;
+    noteDoctorStateMigrationResult({
+      changes:
+        result.copiedFiles > 0
+          ? [`Update rehearsal: copied ${result.copiedFiles} missing plugin dependency files.`]
+          : [],
+      warnings: result.warnings,
+    });
+  };
+  const getSnapshotPreparation = (enabled: boolean) =>
+    enabled &&
+    resolveUpdateRehearsalRoot(process.env) &&
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
+      ? prepareSnapshot
+      : undefined;
+  const planScopedConfigRepair = (configSnapshot: ConfigFileSnapshot) =>
+    pluginMetadata.run({ config: configSnapshot.sourceConfig ?? configSnapshot.config ?? {} }, () =>
+      planAutomaticConfigRepair(configSnapshot),
+    );
+  const planAdmittedConfigRepair = (
+    configSnapshot: ConfigFileSnapshot,
+    prepared: Awaited<ReturnType<typeof planAutomaticConfigRepair>> = null,
+  ) =>
+    (options.repairPrefixedConfig === true ||
+      (stateMigrationsRequested && options.migrateLegacyConfig !== false)) &&
+    canPlanAutomaticConfigRepair(configSnapshot) &&
+    !skipLegacyParentConfigWrite &&
+    (options.repairPrefixedConfig === true ||
+      !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
+    !resolveIsConfigReadOnly(process.env) &&
+    !resolveFutureConfigActionBlock({ action: "normalize legacy config", snapshot: configSnapshot })
+      ? (prepared ?? planScopedConfigRepair(configSnapshot))
+      : null;
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
     await measurePreflightStep("config-snapshot", async () =>
-      readConfigPreflightSnapshot({
+      snapshots.read({
         purpose: "doctor",
         allowCurrentPluginMetadata,
         includePluginMetadata: options.preparePluginMetadataSnapshot === true,
@@ -158,6 +202,7 @@ async function runDoctorConfigPreflightOperation(
   configSnapshotRead = await readConfigSnapshotForPreflight(!stateDirMigrations);
   const recovery = await prepareDoctorConfigRecovery({
     enabled: options.repairPrefixedConfig === true && !skipLegacyParentConfigWrite,
+    stateMigrationsRequested,
     snapshotRead: configSnapshotRead,
     planRepair: planScopedConfigRepair,
     readSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -176,9 +221,11 @@ async function runDoctorConfigPreflightOperation(
     // Pending plugin obligations need current SQL even if a later repair fails.
     const { prepareLegacyStateDatabaseSchema } =
       await import("../infra/state-migrations.doctor.js");
-    const receipt = await measurePreflightStep("state-schema", () =>
-      prepareLegacyStateDatabaseSchema(process.env),
-    );
+    const receipt =
+      options.stateSchemaPreparation ??
+      (await measurePreflightStep("state-schema", () =>
+        prepareLegacyStateDatabaseSchema(process.env, options.integrityCheck),
+      ));
     if (receipt.outcome !== "skipped") {
       stateMigrationStepReceipts.push(receipt);
       noteDoctorStateMigrationResult({
@@ -188,6 +235,12 @@ async function runDoctorConfigPreflightOperation(
       });
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
+  }
+  if (options.doctorOnlyStateMigrations === true && stateDirMigrations) {
+    const { repairRetiredDoctorState } = await import("./doctor-retired-state-repair.js");
+    noteDoctorStateMigrationResult(
+      await measurePreflightStep("retired-state-repair", () => repairRetiredDoctorState()),
+    );
   }
   if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
     // Plugin and legacy-state repairs can inspect sessions during config preflight.
@@ -199,6 +252,7 @@ async function runDoctorConfigPreflightOperation(
         cfg: automaticConfigRepair?.config ?? baseConfig,
         env: process.env,
         deferSchemaRepair: repair,
+        integrityCheck: options.integrityCheck,
       }),
     );
     if (!repair && entryState.found > 0) {
@@ -210,22 +264,23 @@ async function runDoctorConfigPreflightOperation(
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
+  let pluginConvergenceWarnings: string[] = [];
   if (stateDirMigrations) {
-    const refreshed = await prepareDoctorMigrationPlugins({
+    const convergence = await runDoctorPluginConvergence({
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
       retainedPluginIds: pluginMigrations.retainedPluginIds(),
       measure: options.measure,
-      snapshotRead: { ...configSnapshotRead, snapshot },
-      readRefreshedSnapshot: () => readConfigSnapshotForPreflight(false),
-      onDeferredPlugins: (pending, inspection) =>
-        pluginMigrations.converged(
-          pending,
-          snapshot,
-          configSnapshotRead?.pluginMetadataSnapshot,
-          inspection,
-        ),
     });
+    setActiveDegradedPlugins(convergence.quarantinedPlugins);
+    await pluginMigrations.converged(
+      convergence.deferredPlugins ?? [],
+      snapshot,
+      configSnapshotRead?.pluginMetadataSnapshot,
+      convergence.migrationInspection,
+    );
+    const refreshed = await readConfigSnapshotForPreflight(false);
+    pluginConvergenceWarnings = convergence.warnings ?? [];
     configSnapshotRead = refreshed;
     pluginMetadata.invalidate();
     snapshot = refreshed.snapshot;
@@ -291,6 +346,7 @@ async function runDoctorConfigPreflightOperation(
               env: process.env,
               doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
               invocationPurpose: options.invocationPurpose,
+              integrityCheck: options.integrityCheck,
               ...(options.agentDatabaseMigrationDiscovery
                 ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
                 : {}),
@@ -331,7 +387,7 @@ async function runDoctorConfigPreflightOperation(
       await import("../infra/state-migrations.media-persistence.js");
     noteDoctorStateMigrationResult(
       await measurePreflightStep("media-persistence-migration", () =>
-        migrateLegacyMediaPersistence({ env: process.env }),
+        migrateLegacyMediaPersistence({ env: process.env, integrityCheck: options.integrityCheck }),
       ),
     );
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
@@ -339,6 +395,7 @@ async function runDoctorConfigPreflightOperation(
       apply: true,
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
+      integrityCheck: options.integrityCheck,
     });
   }
   // Import retired locators before removing them from the authored config.
@@ -368,6 +425,7 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
+    ...(pluginConvergenceWarnings.length > 0 ? { warnings: pluginConvergenceWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),

@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   composeSessionSourceAssertion,
@@ -11,6 +12,7 @@ import { resolveContextEngine } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
@@ -26,7 +28,7 @@ import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
 } from "../embedded-agent-runner/compact-reasons.js";
-import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.queued-execution.js";
+import type { QueuedCompactionHostOptions } from "../embedded-agent-runner/compact.types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -51,7 +53,7 @@ import {
   buildCliCompactionRuntimeContext,
   type CliCompactionContext,
 } from "./cli-compaction-context.js";
-import { normalizeSessionTokenCount, recordCliCompactionInStore } from "./session-store.js";
+import { recordCliCompactionInStore } from "./session-store.js";
 
 const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
 
@@ -363,7 +365,7 @@ export async function runCliTurnCompactionLifecycle(
   host: QueuedCompactionHostOptions,
 ): Promise<SessionEntry | undefined> {
   const storePath = input.storePath;
-  const contextTokenBudget = normalizeSessionTokenCount(input.sessionEntry?.contextTokens);
+  const contextTokenBudget = floorPositiveFiniteNumber(input.sessionEntry?.contextTokens);
   if (!storePath || !contextTokenBudget) {
     return input.sessionEntry;
   }
@@ -417,9 +419,17 @@ export async function runCliTurnCompactionLifecycle(
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      sessionId: params.sessionId,
       cwd: params.cwd ?? params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.cfg,
+      pluginMetadataSnapshot:
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        getCurrentPluginMetadataSnapshot({
+          config: params.cfg,
+          env: process.env,
+          workspaceDir: params.workspaceDir,
+        }),
       contextTokenBudget,
     });
     assertActive();
@@ -435,7 +445,7 @@ export async function runCliTurnCompactionLifecycle(
     });
     const currentTokenCount = Math.max(
       preemptiveCompaction.estimatedPromptTokens,
-      normalizeSessionTokenCount(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
+      floorPositiveFiniteNumber(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
     );
     if (
       !preemptiveCompaction.shouldCompact &&

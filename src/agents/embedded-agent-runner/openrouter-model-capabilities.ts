@@ -209,7 +209,6 @@ async function doFetch(store: PreparedCacheStore | null): Promise<void> {
 
     cache = map;
     await writeSqliteCache(store, map);
-    log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
@@ -237,7 +236,6 @@ function ensureOpenRouterModelCache(): void {
   const stored = readSqliteCache();
   if (stored) {
     cache = stored;
-    log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`);
     return;
   }
 
@@ -262,7 +260,6 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
         const stored = prepared ? parseSqliteCache(await prepared.entries()) : undefined;
         if (stored && !cache) {
           cache = stored;
-          log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`);
         }
       } catch (err: unknown) {
         log.debug(`Failed to read OpenRouter SQLite cache: ${formatErrorMessage(err)}`);
@@ -291,7 +288,7 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  * The cold synchronous read is retained for the v2026.9.8 provider-stream SDK contract.
  *
  * @deprecated Await loadOpenRouterModelCapabilities, then use getLoadedOpenRouterModelCapabilities.
- * This synchronous SQLite lookup will be removed in the next Plugin SDK major.
+ * Supported through 2026-12-31; removal ships in the first January 2027 stable.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,

@@ -1,9 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeResponsesFailedEvent,
   ResponsesStreamFailure,
   summarizeResponsesPayload,
+  summarizeOpenAITransportError,
 } from "./openai-responses-debug.js";
 
 const failedEventModel = {
@@ -13,6 +14,93 @@ const failedEventModel = {
 } as unknown as Model;
 
 describe("OpenAI Responses payload debug summary", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["summary", "tools", "full-redacted"])(
+    "keeps %s diagnostics free of prompt, tool, and nested provider-error content",
+    (mode) => {
+      vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", mode);
+      const privateText = "synthetic private prompt and tool result";
+      const summary = summarizeResponsesPayload({
+        apiKey: privateText,
+        instructions: privateText,
+        input: [
+          { type: "message", role: "user", content: privateText },
+          { type: "function_call", name: "exec", arguments: privateText },
+          { type: "function_call_output", output: privateText },
+        ],
+        tools: [{ type: "function", name: "exec", description: privateText }],
+      });
+      expect(summary).toContain("tools=count=1 names=exec");
+      expect(summary).toContain("inputItems=3");
+      expect(summary).not.toContain(privateText);
+      const failure = normalizeResponsesFailedEvent(
+        { response: { error_details: { text: privateText } } },
+        failedEventModel,
+      );
+      expect(failure.observation?.failureFieldNames).toEqual(["error_details"]);
+      expect(JSON.stringify(failure.observation)).not.toContain(privateText);
+      const error = Object.assign(new Error(privateText), {
+        status: 503,
+        code: "service_unavailable",
+        cause: Object.assign(new Error(privateText), { code: "ECONNRESET" }),
+      });
+      const diagnostic = summarizeOpenAITransportError(error);
+      expect(diagnostic).toContain("status=503 code=service_unavailable");
+      expect(diagnostic).toContain("causeCode=ECONNRESET");
+      expect(diagnostic).not.toContain(privateText);
+      expect(summarizeOpenAITransportError(privateText)).not.toContain(privateText);
+      expect(summarizeOpenAITransportError({ message: privateText })).not.toContain(privateText);
+      const controller = new AbortController();
+      controller.abort(new Error(privateText));
+      expect(summarizeOpenAITransportError(error, controller.signal)).not.toContain(privateText);
+      expect(
+        summarizeOpenAITransportError({
+          code: { output: privateText },
+          type: privateText,
+          cause: { name: privateText, code: { tool_arguments: privateText } },
+        }),
+      ).not.toContain(privateText);
+    },
+  );
+
+  it.each([
+    [{ name: "LlmIdleTimeoutError" }, "idle_timeout"],
+    [{ name: "LlmNoProgressError" }, "no_progress"],
+    [{ name: "FirstStreamEventTimeoutError" }, "first_event_timeout"],
+    [new DOMException("private timeout text", "TimeoutError"), "request_deadline"],
+    [{ code: "OPENCLAW_SESSION_WATCHDOG" }, "session_watchdog"],
+    [{ code: "OPENCLAW_RESTART_ABORT" }, "restart"],
+    [{ code: "ERR_STALE_GATEWAY_LIFECYCLE" }, "restart"],
+    [{ code: "AGENT_RUN_SUPERSEDED_ABORT" }, "superseded"],
+    [{ code: "OPENCLAW_DIRECT_ABORT" }, "caller_abort"],
+    ["private caller text", "caller_abort"],
+  ])(
+    "classifies an aborted request as %j -> %s without copying reason text",
+    (reason, expected) => {
+      const controller = new AbortController();
+      const error = new Error("private provider text");
+      expect(summarizeOpenAITransportError(error, controller.signal)).not.toContain("abortReason=");
+      controller.abort(reason);
+      const summary = summarizeOpenAITransportError(error, controller.signal);
+      expect(summary).toContain(`abortReason=${expected}`);
+      expect(summary).not.toContain("private");
+    },
+  );
+
+  it("reports function and hosted tool names without naming an empty function entry", () => {
+    const summary = summarizeResponsesPayload({
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", function: { name: "wait" } },
+        { type: "web_search" },
+        { type: "function" },
+      ],
+    });
+
+    expect(summary).toContain("tools=count=4 names=exec,wait,web_search");
+  });
+
   it("reports compaction replay identities without exposing opaque content", () => {
     const summary = summarizeResponsesPayload({
       model: "gpt-5.6-sol",

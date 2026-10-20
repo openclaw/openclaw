@@ -1,45 +1,46 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { persistSessionTranscriptTurn } from "./session-accessor.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
+import {
+  expectRows,
+  markRebuild,
+  seedTranscript,
+  useReconcileTestRuntime,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
   type SessionTranscriptReconcileResult,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
 );
 
-const observer = useReconcileWorkerObserver();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { observer, tempDirs } = useReconcileTestRuntime();
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 async function seedPendingBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<string, number>) {
   for (const [agentId, count] of Object.entries(backlogs)) {
     const options = { agentId, env };
     for (let index = 0; index < count; index++) {
-      await persistSessionTranscriptTurn(
+      await seedTranscript(
         { ...options, sessionId: `s${index}`, sessionKey: `agent:${agentId}:s${index}` },
-        {
-          messages: [{ eventId: `e${index}`, message: { role: "user", content: agentId } }],
-          touchSessionEntry: false,
-        },
+        `e${index}`,
+        agentId,
       );
     }
     await waitForSessionTranscriptIndexReconcile(options);
-    openOpenClawAgentDatabase(options)
-      .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
-      .run();
+    markRebuild(openOpenClawAgentDatabase(options).db);
   }
   await reconcilePool.closeSessionTranscriptReconcileWorkerPool();
 }
@@ -47,25 +48,17 @@ async function seedPendingBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<stri
 function expectIndexedBacklogs(env: NodeJS.ProcessEnv, backlogs: Record<string, number>) {
   for (const [agentId, count] of Object.entries(backlogs)) {
     const { db } = openOpenClawAgentDatabase({ agentId, env });
-    expect(
-      db
-        .prepare(
-          "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
-        )
-        .all(),
-    ).toEqual(
+    expectRows(
+      db,
+      "SELECT session_id, needs_rebuild FROM session_transcript_index_state ORDER BY session_id",
       Array.from({ length: count }, (_, index) => ({
         session_id: `s${index}`,
         needs_rebuild: 0,
       })),
     );
-    expect(
-      db
-        .prepare(
-          "SELECT session_id, message_id, text FROM session_transcript_fts ORDER BY session_id",
-        )
-        .all(),
-    ).toEqual(
+    expectRows(
+      db,
+      "SELECT session_id, message_id, text FROM session_transcript_fts ORDER BY session_id",
       Array.from({ length: count }, (_, index) => ({
         session_id: `s${index}`,
         message_id: `e${index}`,
@@ -168,11 +161,9 @@ it("gives another agent a turn at a session boundary without a priority queue", 
     await withinTest(queued.promise, signal);
     releaseAcknowledgement?.();
     releaseAcknowledgement = undefined;
-    await expect(Promise.all(operations)).resolves.toEqual([
-      { reconciledSessions: 4 },
-      { reconciledSessions: 1 },
-      { reconciledSessions: 3 },
-    ]);
+    await expect(Promise.all(operations)).resolves.toEqual(
+      [4, 1, 3].map((reconciledSessions) => ({ reconciledSessions })),
+    );
     expect(planStarts[0]).toBe("a:s0");
     expect(planStarts.indexOf("small:s0")).toBeLessThan(planStarts.indexOf("a:s3"));
     expect(planStarts.indexOf("small:s0")).toBeLessThan(planStarts.indexOf("b:s2"));
@@ -190,5 +181,6 @@ it("gives another agent a turn at a session boundary without a priority queue", 
     await reconcilePool.closeSessionTranscriptReconcileWorkerPool();
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
   }
 });

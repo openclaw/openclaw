@@ -20,6 +20,7 @@ import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
 import {
   createBoundSpawnInvocation,
+  recordSpawnBoundaryFinal,
   type createSpawnBoundaryParent,
   type createSpawnOperatorSource,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -98,10 +99,29 @@ export function registerGuestSpawnCases(options: {
             prompt: params.prompt,
             internalEvents: params.internalEvents,
           });
-          return { payloads: [{ text: "Parent received the result" }], meta: { durationMs: 1 } };
+          await recordSpawnBoundaryFinal({
+            storePath: bound.storePath,
+            sessionKey: bound.parentSessionKey,
+            runId: params.runId,
+            text: "Parent received the result",
+          });
+          return {
+            payloads: [{ text: "Parent received the result" }],
+            meta: {
+              durationMs: 1,
+              terminalReply: { disposition: "visible", text: "Parent received the result" },
+            },
+          };
         }
         started.resolve();
-        return await modelResult.promise;
+        const result = await modelResult.promise;
+        await recordSpawnBoundaryFinal({
+          storePath: bound.storePath,
+          sessionKey: expectDefined(params.sessionKey, "child session"),
+          runId: params.runId,
+          text: "guest child complete",
+        });
+        return result;
       });
       let childRunId: string | undefined;
       const failures: unknown[] = [];
@@ -138,7 +158,10 @@ export function registerGuestSpawnCases(options: {
         source.closeRequest();
         modelResult.resolve({
           payloads: [{ text: "guest child complete" }],
-          meta: { durationMs: 1, finalAssistantVisibleText: "guest child complete" },
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "guest child complete" },
+          },
         });
         expect(await withinTest(delivered.promise, signal)).toBe("delivered");
         expect(parentTurns).toHaveLength(1);
@@ -152,7 +175,10 @@ export function registerGuestSpawnCases(options: {
       } finally {
         modelResult.resolve({
           payloads: [{ text: "guest child complete" }],
-          meta: { durationMs: 1 },
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "guest child complete" },
+          },
         });
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
         options.throwBoundFailures(failures);

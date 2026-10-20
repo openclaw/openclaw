@@ -6,6 +6,12 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
+
+// mock-isolation: Use fixed discovery policy without opening machine state for snapshot fixtures.
+vi.mock("../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
+}));
 import {
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
@@ -34,14 +40,6 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
 }));
 
-function createCustomSearchTool() {
-  return {
-    description: "custom",
-    parameters: {},
-    execute: async (args: Record<string, unknown>) => ({ ...args, ok: true }),
-  };
-}
-
 function getCustomSearchApiKey(config?: OpenClawConfig): unknown {
   const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
     | TestPluginWebSearchConfig
@@ -58,26 +56,18 @@ function createCustomSearchProvider(
     credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
     autoDetectOrder: 1,
     getConfiguredCredentialValue: getCustomSearchApiKey,
-    createTool: createCustomSearchTool,
+    createTool: ({ config }) => ({
+      description: "custom",
+      parameters: {},
+      execute: async (args) => ({ ...args, apiKey: getCustomSearchApiKey(config) }),
+    }),
     ...overrides,
   });
 }
 
 function createCustomSearchConfig(apiKey: unknown): OpenClawConfig {
-  return {
-    plugins: {
-      entries: {
-        "custom-search": {
-          enabled: true,
-          config: {
-            webSearch: {
-              apiKey,
-            },
-          },
-        },
-      },
-    },
-  };
+  const entry = { enabled: true, config: { webSearch: { apiKey } } };
+  return { plugins: { entries: { "custom-search": entry } } };
 }
 
 function createGoogleSearchProvider(
@@ -100,6 +90,26 @@ describe("web search runtime snapshots", () => {
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
   let clearRuntimeConfigSnapshot: typeof import("../config/runtime-snapshot.js").clearRuntimeConfigSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
+
+  function activateSnapshot(
+    selectedProvider: string,
+    sourceConfig: OpenClawConfig = {},
+    config: OpenClawConfig = structuredClone(sourceConfig),
+  ) {
+    activateSecretsRuntimeSnapshot({
+      sourceConfig,
+      config,
+      authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "auto-detect", selectedProvider, diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    });
+  }
 
   beforeAll(async () => {
     ({ runWebSearch } = await import("./runtime.js"));
@@ -124,16 +134,7 @@ describe("web search runtime snapshots", () => {
   });
 
   it("uses the active resolved runtime config for matching source config callers", async () => {
-    const provider = createCustomSearchProvider({
-      createTool: ({ config }) => ({
-        description: "custom",
-        parameters: {},
-        execute: async (args) => ({
-          ...args,
-          apiKey: getCustomSearchApiKey(config),
-        }),
-      }),
-    });
+    const provider = createCustomSearchProvider();
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
     resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
@@ -144,26 +145,7 @@ describe("web search runtime snapshots", () => {
     });
     const resolvedConfig = createCustomSearchConfig("resolved-custom-key");
 
-    activateSecretsRuntimeSnapshot({
-      sourceConfig,
-      config: resolvedConfig,
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "custom",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
+    activateSnapshot("custom", sourceConfig, resolvedConfig);
 
     await expect(
       runWebSearch({
@@ -180,16 +162,7 @@ describe("web search runtime snapshots", () => {
   });
 
   it("can prefer an explicitly resolved input config over a pinned config snapshot", async () => {
-    const provider = createCustomSearchProvider({
-      createTool: ({ config }) => ({
-        description: "custom",
-        parameters: {},
-        execute: async (args) => ({
-          ...args,
-          apiKey: getCustomSearchApiKey(config),
-        }),
-      }),
-    });
+    const provider = createCustomSearchProvider();
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
     resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
@@ -219,63 +192,28 @@ describe("web search runtime snapshots", () => {
   });
 
   it("prefers the active runtime-selected provider when callers omit runtime metadata", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createWebSearchTestProvider({
-        pluginId: "alpha-search",
-        id: "alpha",
-        credentialPath: "tools.web.search.alpha.apiKey",
-        autoDetectOrder: 1,
-        getConfiguredCredentialValue: () => "alpha-configured",
-        getCredentialValue: () => "alpha-configured",
-        createTool: ({ runtimeMetadata }) => ({
-          description: "alpha",
-          parameters: {},
-          execute: async (args) => ({
-            ...args,
-            provider: "alpha",
-            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue(
+      ["alpha", "beta"].map((id, index) =>
+        createGoogleSearchProvider({
+          pluginId: `${id}-search`,
+          id,
+          credentialPath: `tools.web.search.${id}.apiKey`,
+          autoDetectOrder: index + 1,
+          getConfiguredCredentialValue: () => `${id}-configured`,
+          getCredentialValue: () => `${id}-configured`,
+          createTool: ({ runtimeMetadata }) => ({
+            description: id,
+            parameters: {},
+            execute: async (args) => ({
+              ...args,
+              provider: id,
+              runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
+            }),
           }),
         }),
-      }),
-      createWebSearchTestProvider({
-        pluginId: "beta-search",
-        id: "beta",
-        credentialPath: "tools.web.search.beta.apiKey",
-        autoDetectOrder: 2,
-        getConfiguredCredentialValue: () => "beta-configured",
-        getCredentialValue: () => "beta-configured",
-        createTool: ({ runtimeMetadata }) => ({
-          description: "beta",
-          parameters: {},
-          execute: async (args) => ({
-            ...args,
-            provider: "beta",
-            runtimeSelectedProvider: runtimeMetadata?.selectedProvider,
-          }),
-        }),
-      }),
-    ]);
-
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: {},
-      config: {},
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "beta",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
+      ),
+    );
+    activateSnapshot("beta");
 
     await expect(
       runWebSearch({
@@ -299,26 +237,7 @@ describe("web search runtime snapshots", () => {
       }),
     ]);
 
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: {},
-      config: {},
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "parallel-free",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
+    activateSnapshot("parallel-free");
 
     await expect(
       runWebSearch({
@@ -329,42 +248,18 @@ describe("web search runtime snapshots", () => {
   });
 
   it("ignores auto-detected runtime metadata after config names an unknown provider", async () => {
-    const createTool = vi.fn(() => createCustomSearchTool());
+    const createTool = vi.fn(() => ({
+      description: "custom",
+      parameters: {},
+      execute: async (args: Record<string, unknown>) => ({ ...args, ok: true }),
+    }));
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
         createTool,
       }),
     ]);
-    const config = {
-      tools: {
-        web: {
-          search: {
-            provider: "missing-id",
-          },
-        },
-      },
-    };
-
-    activateSecretsRuntimeSnapshot({
-      sourceConfig: config,
-      config: structuredClone(config),
-      authStores: [],
-      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-      warnings: [],
-      webTools: {
-        search: {
-          providerSource: "auto-detect",
-          selectedProvider: "google",
-          diagnostics: [],
-        },
-        fetch: {
-          providerSource: "none",
-          diagnostics: [],
-        },
-        diagnostics: [],
-      },
-    });
+    const config = { tools: { web: { search: { provider: "missing-id" } } } };
+    activateSnapshot("google", config);
 
     await expect(
       runWebSearch({

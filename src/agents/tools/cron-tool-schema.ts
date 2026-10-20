@@ -5,6 +5,7 @@ import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
 import { isRecord } from "../../utils.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -36,7 +37,10 @@ const CRON_ACTIONS = [
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs", "next_check"] as const;
 
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
+// Scheduler status exposes global metadata; recovery inspects caller-visible records only.
+export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs"];
+
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
 // stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
@@ -48,6 +52,7 @@ const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
 type CronToolSchemaOptions = {
+  readOnly?: boolean;
   agentSessionKey?: string;
   management?: "only" | "also";
   selfRemoveOnly?: boolean;
@@ -88,6 +93,18 @@ function createCronScheduleSchema(params: {
           ],
           { description: "Schedule kind" },
         ),
+        ...(params.triggersEnabled
+          ? {
+              source: Type.Optional(
+                Type.String({ description: "Installed event-source plugin ID (kind=event)" }),
+              ),
+              options: Type.Optional(
+                Type.Record(Type.String(), Type.Unknown(), {
+                  description: "Event source options from its plugin catalog (kind=event)",
+                }),
+              ),
+            }
+          : {}),
         at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
         everyMs: optionalPositiveIntegerSchema({
           description: "Interval ms (kind=every)",
@@ -100,13 +117,13 @@ function createCronScheduleSchema(params: {
         expr: Type.Optional(
           Type.String({
             description:
-              'Cron wall-time expr; never UTC-convert. Missing tz=Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
+              'Cron wall-time expr; never UTC-convert. Missing tz preserves the existing cron timezone on update; otherwise Gateway local. Example "0 18 * * *", "Asia/Shanghai".',
           }),
         ),
         tz: Type.Optional(
           Type.String({
             description:
-              'IANA timezone for wall-clock fields; missing=Gateway host local timezone. Example "Asia/Shanghai".',
+              'IANA timezone for wall-clock fields. Omit on update to preserve the existing cron timezone; otherwise defaults to Gateway host local timezone. Example "Asia/Shanghai".',
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({
@@ -128,9 +145,15 @@ function createCronScheduleSchema(params: {
                 ),
               ),
               cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
-              mode: optionalStringEnum(["line", "match"] as const),
+              mode: optionalStringEnum(["line", "match"] as const, {
+                description:
+                  "Stream output: line accepts every line; match uses the match regex without a trigger script",
+              }),
               match: Type.Optional(
-                Type.String({ description: "Regex source (stream match mode)" }),
+                Type.String({
+                  description:
+                    "Regex source for mode=match, e.g. ERROR; matching output is appended to the payload",
+                }),
               ),
               batchMs: optionalNonNegativeIntegerSchema(),
               maxBatchBytes: optionalNonNegativeIntegerSchema(),
@@ -328,19 +351,38 @@ function createCronFailureAlertSchema(): TSchema {
 
 // Flattened schema: runtime validates per-action requirements.
 export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
+  return cronToolSchemas(options);
+}
+
+const cronToolSchemas = createCachedToolSchema({
+  key: (options?: CronToolSchemaOptions) =>
+    JSON.stringify([
+      options?.triggersEnabled !== false,
+      options?.management ?? null,
+      options?.selfRemoveOnly === true,
+      options?.readOnly === true,
+      Boolean(options?.agentSessionKey?.trim()),
+    ]),
+  build: buildCronToolSchema,
+});
+
+function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
   const triggersEnabled = options?.triggersEnabled !== false;
   const management = Boolean(options?.management);
   const managementOnly = options?.management === "only";
-  const actions = managementOnly
+  const availableActions = managementOnly
     ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5))
     : CRON_ACTIONS;
+  const actions = options?.readOnly
+    ? availableActions.filter((action) => CRON_SCOPED_READ_ACTIONS.includes(action))
+    : availableActions;
   const job = Type.Optional(
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
         declarationKey: Type.Optional(
           Type.String({
-            description: "Idempotent declaration key (add only).",
+            description: "Key to avoid duplicate declarations (add only).",
             minLength: 1,
             maxLength: 200,
           }),
@@ -401,7 +443,9 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : actions,
       ),
       ...gatewayCallOptionSchemaProperties(),
-      includeDisabled: Type.Optional(Type.Boolean()),
+      includeDisabled: Type.Optional(
+        Type.Boolean({ description: "List: false by default; true includes disabled saved jobs." }),
+      ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
         description: 'Maximum jobs returned by action="list"',
@@ -433,9 +477,10 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       agentId: Type.Optional(
         Type.String({
-          description: managementOnly
-            ? 'Agent filter for action="list".'
-            : 'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
+          description:
+            managementOnly || options?.readOnly
+              ? 'Agent filter for action="list".'
+              : 'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
         }),
       ),
       sessionKey: Type.Optional(
@@ -447,6 +492,18 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
     },
     { additionalProperties: true },
   );
+  if (options?.readOnly) {
+    return Type.Pick(schema, [
+      "action",
+      "gatewayUrl",
+      "gatewayToken",
+      "timeoutMs",
+      "includeDisabled",
+      "jobId",
+      "id",
+      ...(!options.selfRemoveOnly ? ["limit", "offset", "agentId"] : []),
+    ]);
+  }
   if (options?.selfRemoveOnly) {
     return Type.Pick(schema, [
       "action",

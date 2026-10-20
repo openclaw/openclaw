@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
@@ -14,7 +15,14 @@ import {
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-admission-fence-");
+const tempDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-admission-fence-",
+);
 describe("SQLite admitted input reset fence", () => {
   let scope: {
     agentId: string;
@@ -29,6 +37,7 @@ describe("SQLite admitted input reset fence", () => {
       sessionId: "admission-fence-test",
       sessionKey: "agent:main:admission-fence-test",
     };
+    setRuntimeConfigSnapshot({});
   });
 
   it("rejects a retained completion source reset before admission", async () => {

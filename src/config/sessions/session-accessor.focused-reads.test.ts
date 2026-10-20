@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionEntryCandidateTarget } from "./session-accessor.entry.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
@@ -55,8 +56,10 @@ it("does not parse unrelated blobs across focused child, candidate, and transcri
     .run("agent:main:unrelated-session", "unrelated-session", unrelatedEntryJson, 1);
 
   const parse = vi.spyOn(JSON, "parse");
-  const participantReads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-    sql.includes('from "session_participants"') ? "participants" : null,
+  const participantReads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["participants"],
+    (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
   );
   try {
     const children = await listSessionChildEntriesReadOnly({

@@ -1,6 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { resolveGatewayLockDirForCanonicalStateDir } from "../config/paths.js";
+import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { normalizeWindowsPathForComparison } from "./path-guards.js";
 import { applyPrivateModeSync } from "./private-mode.js";
 
 export type StateOwnerDirectoryIdentity = { path: string; dev: bigint; ino: bigint };
@@ -71,4 +77,39 @@ export function removeCreatedProjectionDirectories(
     directories.shift();
     directory = directories[0];
   }
+}
+
+/** In-process identity is independent of the on-disk lock spelling used by older versions. */
+export function resolveStateOwnerIdentity(databasePath: string) {
+  const canonicalPath = resolveIdentityPathViaExistingAncestorSync(databasePath);
+  return {
+    canonicalPath,
+    ownerPath: resolveCanonicalStateOwnerPath(canonicalPath),
+    key:
+      process.platform === "win32"
+        ? normalizeWindowsPathForComparison(canonicalPath)
+        : canonicalPath,
+  };
+}
+
+function resolveCanonicalStateOwnerPath(canonical: string): string {
+  const uid = process.getuid?.();
+  // The state directory is an ancestor of the freshly canonical database path.
+  const directory =
+    process.platform === "win32"
+      ? path.join(
+          os.homedir(),
+          "AppData",
+          "Local",
+          "OpenClaw",
+          "locks",
+          uid === undefined ? "openclaw-state-owners" : `openclaw-state-owners-${uid}`,
+        )
+      : resolveGatewayLockDirForCanonicalStateDir(
+          resolveOpenClawStateDirForDatabasePath(canonical),
+        );
+  return path.join(
+    resolveIdentityPathViaExistingAncestorSync(directory),
+    `state.${sha256HexPrefixCore(canonical, 16)}.lock`,
+  );
 }

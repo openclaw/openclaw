@@ -1,5 +1,5 @@
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
   const maxDimensionPx = resolveOptionalIntegerOption(

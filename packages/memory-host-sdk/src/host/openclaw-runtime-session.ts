@@ -8,14 +8,15 @@ import {
   readTranscriptStatsBatchReadOnlySync as readAccessorTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../../../../src/config/sessions/session-actor-storage-binding.js";
+import type { SessionTranscriptReadScope } from "../../../../src/config/sessions/session-accessor.types.js";
 import {
-  captureIncognitoSessionSource,
-  captureIncognitoSessionHistoryBinding,
-  withIncognitoSessionBinding,
-} from "../../../../src/config/sessions/session-incognito-binding.js";
-import { captureSessionTranscriptStorageEnvironment } from "../../../../src/config/sessions/transcript-target-binding.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+  type SelectedSessionActorStorageBinding,
+} from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
+import { getAsyncWorkSignal } from "../../../../src/shared/async-work-scope.js";
+import { createLazyRuntimeMethodBinder } from "../../../../src/shared/lazy-runtime.js";
 import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
@@ -29,25 +30,20 @@ export {
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
 } from "../../../../src/config/sessions/session-accessor.js";
-export { isIncognitoSessionKey } from "../../../../src/routing/session-key.js";
-export { isIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 export { cloneEnvWithPlatformSemantics };
 
-/** Native sync compatibility stays available until production actor acquisition. */
+/** Synchronous SDK calls cannot open memory-only session storage. */
 export function assertBoundIncognitoMemorySyncAccess(
-  scope: Parameters<typeof captureIncognitoSessionSource>[0],
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "storePath" | "sessionKey">,
   method: string,
   replacement: string,
 ) {
-  if (
-    getSessionActorStorageBinding({ agentId: scope?.agentId, storePath: scope?.storePath }) ||
-    captureIncognitoSessionSource(scope)
-  ) {
+  if (captureMemoryOwner(scope)) {
     throw new IncognitoSessionSyncAccessError(method, replacement);
   }
 }
 
-/** @deprecated Use readTranscriptStatsBatchReadOnlyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
@@ -68,35 +64,52 @@ export function readTranscriptStatsBatchReadOnlySync(
   return readAccessorTranscriptStatsBatchReadOnlySync(scopes);
 }
 
-/** Capture the physical source before loading the optional compute adapter. */
-export function captureIncognitoMemoryReader(
-  scope: Parameters<typeof captureIncognitoSessionHistoryBinding>[0],
+function captureMemoryOwner(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "storePath" | "sessionKey">,
 ) {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.agentId,
-    storePath: scope.storePath,
-  });
-  if (memory) {
-    const selectedId = scope.sessionId ?? scope.sessionEntry?.sessionId;
-    const selectedKey = scope.sessionKey;
-    const storage = memory.actor.storage!;
-    const selection = { sessionId: selectedId, sessionKey: selectedKey };
-    const assertDisclosure = (sessionId: string) => {
-      const selected = storage.readCurrent(
-        { type: "session.entry.readById", input: { sessionId } },
-        memory.authority,
-      );
-      if (!selected) {
-        throw new Error("Incognito Memory session is no longer available");
-      }
-    };
-    return {
-      async memoryEntry(
-        absPath: string,
-        options: import("./session-files.js").BuildSessionEntryOptions,
-      ) {
+  const signal = getAsyncWorkSignal();
+  const assertCurrent = () => signal?.throwIfAborted();
+  return captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent });
+}
+
+/** Capture the memory namespace once; reads never create a missing owner or session. */
+export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) {
+  const namespace = captureMemoryOwner(scope);
+  if (!namespace) {
+    return undefined;
+  }
+  const selected = namespace.binding?.agentId === namespace.agentId ? namespace.binding : undefined;
+  const read = async <T>(
+    consume: (binding: SelectedSessionActorStorageBinding) => Promise<T>,
+    missing: T,
+  ): Promise<T> => {
+    if (!namespace.owner && !selected) {
+      namespace.authority.assertCurrent();
+      return missing;
+    }
+    return (
+      (await withSessionActorStorage(
+        { ...scope, agentId: namespace.agentId, storePath: namespace.path, sessionActor: selected },
+        {
+          authority: namespace.authority,
+          lifetime: {
+            assertCurrent: () => namespace.authority.assertCurrent(),
+            assertReadable: () => namespace.authority.assertCurrent(),
+          },
+        },
+        consume,
+      )) ?? missing
+    );
+  };
+  const selection = {
+    sessionId: scope.sessionId ?? scope.sessionEntry?.sessionId,
+    sessionKey: scope.sessionKey,
+  };
+  return {
+    memoryEntry(absPath: string, options: import("./session-files.js").BuildSessionEntryOptions) {
+      return read(async (memory) => {
         const { buildSessionEntryFromSnapshot } = await import("./session-files.js");
-        const snapshot = await storage.read(
+        const snapshot = await memory.actor.storage.read(
           {
             type: "session.memory.entry",
             input: { ...selection, includeMessages: Boolean(options.onTranscriptMessage) },
@@ -116,317 +129,56 @@ export function captureIncognitoMemoryReader(
             sessionKey: snapshot.sessionKey,
           },
           snapshot,
-          () => assertDisclosure(snapshot.sessionId),
+          // A plugin callback is a disclosure effect; use the captured actor's live permission.
+          () => {
+            memory.actor.snapshot(memory.authority);
+          },
         );
-      },
-      memoryResetRecall() {
-        return storage.read(
-          { type: "session.memory.resetRecall", input: selection },
-          memory.authority,
-        );
-      },
-    };
-  }
-  const shared = captureIncognitoSessionSource(scope);
-  if (!shared) {
-    return undefined;
-  }
-  if ("kind" in shared) {
-    const readAbsent = <T>(value: T) =>
-      Promise.resolve().then(() => {
-        shared.assertCurrent();
-        return value;
-      });
-    return {
-      memoryEntry() {
-        return readAbsent(null);
-      },
-      memoryResetRecall() {
-        return readAbsent({ state: "invalid" as const });
-      },
-    };
-  }
-  const { actor, admissionSignal } = shared;
-  const memorySessionId = scope.sessionId ?? scope.sessionEntry?.sessionId;
-  const authority = {
-    assertCurrent() {
-      admissionSignal?.throwIfAborted();
-      actor.assertReadable();
+      }, null);
     },
-  };
-  const capture = (sessionKey: string) =>
-    withIncognitoSessionBinding(shared, () => {
-      const binding = captureIncognitoSessionHistoryBinding({
-        agentId: actor.agentId,
-        storePath: actor.path,
-        sessionKey,
-      });
-      if (!binding) {
-        throw new Error("Incognito Memory lost its captured binding");
-      }
-      return binding;
-    });
-  const currentKey =
-    scope.sessionKey ??
-    actor.sessions.deadlines().find((entry) => entry.sessionId === memorySessionId)?.sessionKey;
-  const current =
-    currentKey && actor.sessions.readSharing(currentKey)?.entry ? capture(currentKey) : undefined;
-  const missingClaim =
-    !current && currentKey ? actor.sessions.captureCurrent(currentKey) : undefined;
-  const read = <T>(
-    operation: (
-      reader: ReturnType<
-        typeof import("../../../../src/config/sessions/session-incognito-compute-read.js").bindIncognitoSessionComputeReader
-      >,
-    ) => Promise<T>,
-    missing: T,
-  ) => {
-    let resolved = current;
-    let selectedAbsent = false;
-    let assertReadCurrent: (() => void) | undefined;
-    const consume = async (binding: NonNullable<typeof current>, assertSource: () => void) => {
-      const { bindIncognitoSessionComputeReader } =
-        await import("../../../../src/config/sessions/session-incognito-compute-read.js");
-      assertSource();
-      return operation(
-        bindIncognitoSessionComputeReader({
-          ...binding,
-          memorySessionId,
-          onMemoryRead: (assertCurrent) => {
-            assertReadCurrent = assertCurrent;
-          },
-          authority: {
-            assertCurrent() {
-              assertSource();
-              binding.authority.assertCurrent();
-            },
-            authorize: (stage, facts) => binding.authority.authorize?.(stage, facts),
-          },
-        }),
+    memoryResetRecall() {
+      return read(
+        (memory) =>
+          memory.actor.storage.read(
+            { type: "session.memory.resetRecall", input: selection },
+            memory.authority,
+          ),
+        { state: "invalid" as const },
       );
-    };
-    return actor.sessions
-      .withSharedState(() =>
-        current
-          ? consume(current, () => current.authority.assertCurrent())
-          : actor.sessions.withCompute(
-              authority,
-              undefined,
-              async (compute) => {
-                const inventory = await compute.execute({
-                  type: "session.compute.store.inventory",
-                  input: {},
-                });
-                compute.assertCurrent();
-                missingClaim?.assertCurrent();
-                const selected = inventory.find(
-                  (entry) =>
-                    entry.sessionId === memorySessionId &&
-                    (!currentKey || entry.sessionKey === currentKey),
-                );
-                if (!selected) {
-                  selectedAbsent = true;
-                  return missing;
-                }
-                resolved = capture(selected.sessionKey);
-                return consume(resolved, compute.assertCurrent);
-              },
-              admissionSignal,
-            ),
-      )
-      .then((result) => {
-        authority.assertCurrent();
-        missingClaim?.assertCurrent();
-        resolved?.authority.assertCurrent();
-        assertReadCurrent?.();
-        if (
-          selectedAbsent &&
-          actor.sessions
-            .deadlines()
-            .some(
-              (entry) =>
-                entry.sessionId === memorySessionId &&
-                (!currentKey || entry.sessionKey === currentKey),
-            )
-        ) {
-          throw new Error("Incognito Memory transcript appeared during preparation");
-        }
-        return result;
-      });
-  };
-  return {
-    memoryEntry(absPath: string, options: import("./session-files.js").BuildSessionEntryOptions) {
-      const { onTranscriptMessage, ...serializable } = options;
-      const captured = {
-        ...structuredClone(serializable),
-        storePath: actor.path,
-        onTranscriptMessage,
-      };
-      return read((reader) => reader.memoryEntry(absPath, captured), null);
-    },
-    memoryResetRecall(input: {
-      agentId: string;
-      sessionId: string;
-      sessionKey?: string;
-      storePath: string;
-    }) {
-      const captured = { ...structuredClone(input), storePath: actor.path };
-      return read((reader) => reader.memoryResetRecall(captured), { state: "invalid" });
     },
   };
-}
-
-/** Read the captured memory-only corpus without opening an absent actor. */
-export function readBoundIncognitoMemoryCorpus(
-  scope: import("./session-transcript-corpus.types.js").SessionTranscriptCorpusScope,
-  options: import("./session-transcript-corpus.types.js").SessionTranscriptCorpusOptions,
-) {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.normalizedAgentId,
-    storePath: scope.storePath,
-  });
-  if (memory) {
-    return memory.actor.storage!.read(
-      { type: "session.corpus.list", input: { options } },
-      memory.authority,
-    );
-  }
-  const binding = captureIncognitoSessionSource({
-    agentId: scope.normalizedAgentId,
-    // Corpus discovery captures ambient env; the configured sentinel owns its physical root.
-    storePath: scope.storePath,
-  });
-  if (!binding) {
-    return undefined;
-  }
-  if ("kind" in binding) {
-    return Promise.resolve().then(() => {
-      binding.assertCurrent();
-      return [];
-    });
-  }
-  const selected = binding.actor.sessions.deadlines();
-  const claims = new Map(
-    selected.map(({ sessionKey }) => [
-      sessionKey,
-      binding.actor.sessions.captureCurrent(sessionKey),
-    ]),
-  );
-  const assertSelection = () => {
-    binding.admissionSignal?.throwIfAborted();
-    binding.actor.assertReadable();
-    const current = binding.actor.sessions.deadlines();
-    if (
-      current.length !== claims.size ||
-      current.some(({ sessionKey }) => !claims.has(sessionKey))
-    ) {
-      throw new Error("Incognito Memory corpus changed during preparation");
-    }
-    for (const claim of claims.values()) {
-      claim.assertCurrent();
-    }
-  };
-  let assertReadCurrent: (() => void) | undefined;
-  const disclose = <T>(value: T): T => {
-    assertSelection();
-    assertReadCurrent?.();
-    return value;
-  };
-  assertSelection();
-  const target = selected[0];
-  if (!target) {
-    return binding.actor.sessions
-      .withCompute(
-        { assertCurrent: assertSelection },
-        undefined,
-        async (compute) => {
-          await compute.execute({ type: "session.compute.store.inventory", input: {} });
-          return [];
-        },
-        binding.admissionSignal,
-      )
-      .then(disclose);
-  }
-  const history = captureIncognitoSessionHistoryBinding({
-    agentId: scope.normalizedAgentId,
-    storePath: scope.storePath,
-    ...target,
-  });
-  if (!history) {
-    throw new Error("Incognito Memory corpus lost its captured binding");
-  }
-  const captured = structuredClone({
-    scope: { ...scope, env: captureSessionTranscriptStorageEnvironment(scope.env) },
-    options,
-  });
-  return binding.actor.sessions
-    .withSharedState(async () => {
-      const { readIncognitoMemoryCorpus } =
-        await import("../../../../src/config/sessions/session-incognito-memory-corpus.js");
-      assertSelection();
-      return readIncognitoMemoryCorpus(
-        {
-          ...history,
-          authority: {
-            assertCurrent() {
-              assertSelection();
-              history.authority.assertCurrent();
-            },
-            authorize: (stage, facts) => history.authority.authorize?.(stage, facts),
-          },
-        },
-        captured.scope,
-        captured.options,
-        binding.admissionSignal,
-        (assertCurrent) => {
-          assertReadCurrent = assertCurrent;
-        },
-      );
-    })
-    .then(disclose);
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
-export async function prepareSessionEntryInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
-  >
-) {
-  const { prepareSessionEntryInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
+const bindTranscriptRead = createLazyRuntimeMethodBinder(
+  () => import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js"),
+);
+const bindTranscriptInventory = createLazyRuntimeMethodBinder(
+  () => import("../../../../src/config/sessions/session-transcript-inventory-runtime.js"),
+);
 
-export async function readSessionEntrySnapshotInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionEntrySnapshotInWorker
-  >
-) {
-  const { readSessionEntrySnapshotInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
-}
+export const prepareSessionEntriesInWorker = bindTranscriptRead(
+  (runtime) => runtime.prepareSessionEntriesInWorker,
+);
 
-export async function readSessionTranscriptCorpusInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-inventory-runtime.js").readSessionTranscriptCorpusInWorker
-  >
-) {
-  const { readSessionTranscriptCorpusInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-inventory-runtime.js");
-  return read(...args);
-}
+export const prepareSessionEntryInWorker = bindTranscriptRead(
+  (runtime) => runtime.prepareSessionEntryInWorker,
+);
+
+export const readSessionEntrySnapshotInWorker = bindTranscriptRead(
+  (runtime) => runtime.readSessionEntrySnapshotInWorker,
+);
+
+export const readSessionTranscriptCorpusInWorker = bindTranscriptInventory(
+  (runtime) => runtime.readSessionTranscriptCorpusInWorker,
+);
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
 export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
 export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-export {
-  HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
-  isSilentReplyPayloadText,
-} from "../../../../src/auto-reply/tokens.js";
+export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../../src/auto-reply/tokens.js";
 export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
@@ -450,16 +202,29 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
+export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
-/** Returns an opaque revision that changes for every canonical transcript mutation. */
+/**
+ * Returns an opaque revision that changes for every canonical transcript mutation.
+ * Read-only callers stay on the read-only reader; a missing transcript has no revision.
+ */
 export function readTranscriptContentRevisionSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): string {
-  const stats = readAccessorTranscriptStatsSync(params);
+  readOnly?: boolean;
+}): string | undefined {
+  const { readOnly, ...scope } = params;
+  // Inventory runs in pooled history Workers; a writable open there would claim an
+  // agent-database lease that only that Worker's process exit could release.
+  const stats = readOnly
+    ? readTranscriptStatsBatchReadOnlySync([scope])[0]
+    : readAccessorTranscriptStatsSync(scope);
+  if (!stats) {
+    return undefined;
+  }
   return [
     "sqlite",
     stats.maxSeq,
@@ -517,14 +282,8 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
 export {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
-} from "./session-transcript-corpus-policy.js";
+} from "./openclaw-runtime-paths.js";
 
-export async function readSessionResetRecallCutoffInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionResetRecallCutoffInWorker
-  >
-) {
-  const { readSessionResetRecallCutoffInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
-}
+export const readSessionResetRecallCutoffInWorker = bindTranscriptRead(
+  (runtime) => runtime.readSessionResetRecallCutoffInWorker,
+);

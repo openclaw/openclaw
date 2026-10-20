@@ -86,7 +86,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     `models.providers.*.request`: transport overrides for model-provider HTTP requests.
 
     - `request.headers`: extra headers (merged with provider defaults). Values accept SecretRef.
-    - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`).
+    - `request.auth`: auth strategy override. Modes: `"provider-default"` (use provider's built-in auth), `"authorization-bearer"` (with `token`), `"header"` (with `headerName`, `value`, optional `prefix`). An explicitly selected bearer/header override must resolve to a non-empty credential; an empty or unavailable credential is an error, not a request to fall back to provider defaults or send anonymously.
     - `request.proxy`: HTTP proxy override. Modes: `"env-proxy"` (use `HTTP_PROXY`/`HTTPS_PROXY` env vars), `"explicit-proxy"` (with `url`). Both modes accept an optional `tls` sub-object.
     - `request.tls`: TLS override for direct connections. Fields: `ca`, `cert`, `key`, `passphrase` (all accept SecretRef), `serverName`, `insecureSkipVerify`.
     - `request.allowPrivateNetwork`: when `true`, allow guarded model-provider HTTP and WebSocket requests to private, CGNAT, or similar ranges through the shared private-network policy. Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins, which remain blocked without explicit opt-in. Set this to `false` to opt out of exact-origin trust. Default `false`.
@@ -97,6 +97,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native context-window metadata for that model.
     - `models.providers.*.models.*.contextTokens`: optional active-input cap for that model; use it when you want an effective budget distinct from the model's native `contextWindow`; `openclaw models list` shows both when they differ.
+    - `models.providers.*.models.*.responseModelEquivalent`: optional boolean for a user-authored custom-provider row in config. Set `true` when a router or broker resolves this model id itself and reports the concrete model it served. OpenClaw then treats any response model from that endpoint as the requested route, including endpoint-internal substitutions. The served model id and usage remain visible in metadata, but no model route change is announced to parent agents. OpenClaw fallbacks and overrides to another configured model or provider still produce a notice. Bundled and official provider policy remains authoritative; this key cannot override it, even if the provider has no equivalence hook. Plugin/catalog rows, agent `models.json` rows, and rows marked `metadataSource: "models-add"` cannot grant equivalence. Omitted or `false` preserves normal route detection. This optional key requires no Doctor migration.
 
     #### Custom provider capability declarations
 

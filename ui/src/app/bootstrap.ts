@@ -19,6 +19,7 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { i18n, isSupportedLocale } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
@@ -34,7 +35,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import type { ShellRouteState } from "./app-host-route-state.ts";
+import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { AssistantDock } from "./assistant-dock.ts";
 import { readBootRecord } from "./boot-record.ts";
@@ -52,12 +53,13 @@ import {
   subscribeBootRecordPersistence,
   subscribeWarmBootConnection,
 } from "./bootstrap-warm-boot.ts";
-import { startBrowserAuthRecovery } from "./browser-auth-recovery.ts";
+import { startBrowserAuthRecovery } from "./browser-auth-recovery.tsx";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
+import type { MountedApplicationShell } from "./context-types.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
@@ -67,9 +69,16 @@ import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
-import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { prepareNativeUpdateFallback, startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import {
+  rememberProfileAppearanceIdentity,
+  seedProfileAppearancePrefs,
+} from "./server-prefs-profile.ts";
+import { applyServerUiPrefs } from "./server-prefs-reconcile.ts";
+import { extractProfileUiPrefs, PROFILE_UI_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadGatewaySessionSelection,
@@ -87,6 +96,7 @@ import {
 } from "./startup-settings.ts";
 import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
+import { seedUserPreferences } from "./user-prefs-cache.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 export type ApplicationRuntime = {
@@ -101,6 +111,7 @@ export type ApplicationRuntime = {
   } | null;
   readonly confirmPendingGatewayConnection: () => void;
   readonly cancelPendingGatewayConnection: () => void;
+  readonly setShell: (shell: MountedApplicationShell | undefined) => void;
   start: () => Promise<void>;
   stop: () => void;
 };
@@ -149,6 +160,8 @@ export function bootstrapApplication(): ApplicationRuntime {
   // Focus documents render before the shell; starting the application router
   // would rewrite their reserved presentation route into an ordinary page.
   const startsApplicationRouter = documentMode === null && focusLocation === null;
+  // The live grant determines the person; a previous relay visitor's credential cannot warm-admit it.
+  const ownsWarmBoot = startsApplicationRouter && !isRemoteControlUiIngress();
   const firstRunDefaultLanding =
     startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
@@ -159,7 +172,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
-      ownsWarmBoot: startsApplicationRouter,
+      ownsWarmBoot,
       resourceBasePath,
       getModelCatalogTarget: (gatewayUrl) =>
         resolveBootstrapModelCatalogTarget(history.location(), basePath, gatewayUrl),
@@ -186,7 +199,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
   const bootRecord =
-    startsApplicationRouter && !hasPendingGateway
+    ownsWarmBoot && !hasPendingGateway
       ? readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
           if (startup.pendingBootstrapToken || startup.password) {
             return null;
@@ -207,7 +220,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey);
   }
-  const stopWarmBootConnection = startsApplicationRouter
+  const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {
         warmBoot = false;
       })
@@ -251,6 +264,47 @@ export function bootstrapApplication(): ApplicationRuntime {
   const initialRoutingLocationReady = firstRunDefaultLanding
     ? Promise.resolve(initialRoutingLocation)
     : resolveInitialLocation();
+  const config = createApplicationConfigCapability({
+    resourceBasePath,
+    getAuth: getGatewayAuth,
+  });
+  const canUseDocumentPreferences = () =>
+    gatewayCredentialScope(gateway.connection.gatewayUrl) === documentGatewayScope;
+  const documentPreferences = canUseDocumentPreferences() ? config.preferences : undefined;
+  if (documentPreferences) {
+    const scope = gateway.connection.gatewayUrl;
+    const { profileId, entries } = documentPreferences;
+    rememberProfileAppearanceIdentity(scope, profileId ?? null);
+    if (profileId && entries) {
+      seedProfileAppearancePrefs(scope, profileId, extractProfileUiPrefs(entries));
+    }
+    applyServerUiPrefs(documentPreferences.config ?? {}, {
+      scope,
+      profileId,
+      navigationConfirmed: entries !== undefined,
+      onApplied: (patch) => Object.assign(settings, patch),
+    });
+    if (isSupportedLocale(settings.locale)) {
+      void i18n.setLocale(settings.locale);
+    }
+  }
+  let firstPreferencesConnection = true;
+  // Seed profile preferences before later connected observers start their reads.
+  const stopBootstrapPreferences = gateway.subscribe((snapshot) => {
+    if (snapshot.phase !== "connected" || !snapshot.client || !firstPreferencesConnection) {
+      return;
+    }
+    firstPreferencesConnection = false;
+    const { profileId, entries } = documentPreferences ?? {};
+    if (
+      canUseDocumentPreferences() &&
+      profileId === snapshot.selfUser?.id &&
+      profileId &&
+      entries
+    ) {
+      seedUserPreferences(snapshot.client, profileId, PROFILE_UI_PREFERENCE_KEYS, entries);
+    }
+  });
   const agentIdentity = createAgentIdentityCapability(gateway);
   const theme = createApplicationTheme(settings, gateway);
   const agentSelection = createAgentSelectionCapability(
@@ -294,18 +348,24 @@ export function bootstrapApplication(): ApplicationRuntime {
       sessionRefFromPath(applicationLocation.pathname, basePath) !== null,
   });
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
-  const config = createApplicationConfigCapability({
-    resourceBasePath,
-    getAuth: getGatewayAuth,
-  });
   const sessions = createSessionCapability(gateway, agentSelection, {
     bootRecord,
     connectionBootstrap,
   });
-  const bootRecordPersistence = startsApplicationRouter
+  const bootRecordPersistence = ownsWarmBoot
     ? subscribeBootRecordPersistence({ gateway, agents, sessions }, bootRecord)
     : undefined;
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const runtimeConfig = createRuntimeConfigCapability(gateway, {
+    current: () => {
+      const preferences = config.preferences;
+      return canUseDocumentPreferences() &&
+        (gateway.snapshot.phase !== "connected" ||
+          preferences?.profileId === gateway.snapshot.selfUser?.id)
+        ? (preferences?.config ?? null)
+        : null;
+    },
+    subscribe: config.subscribe,
+  });
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
     getActiveSessionKey: () => gateway.snapshot.sessionKey || undefined,
@@ -324,6 +384,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);
   const navigation = createApplicationNavigationPreferences(theme);
   const nativeChatDrafts = createNativeChatDrafts();
+  let shell: MountedApplicationShell | undefined;
   const shouldOpenExternally = () => theme.settings.openLinksExternally === true;
   const mcpAppRouting = startMcpAppRouting({
     navigate: (route, options) => context.navigate(route, options),
@@ -335,26 +396,16 @@ export function bootstrapApplication(): ApplicationRuntime {
     shouldOpenExternally,
     signal: startupLifecycle.signal,
     canPresentBrowserPanel: () => {
-      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
-        "openclaw-app-shell",
+      return (
+        shell?.element.isConnected === true &&
+        !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
       );
-      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
     },
-    onNativeUpdateDeclined: () => {
-      const snapshot = overlays.snapshot;
-      const campaign = snapshot.updateSchedule?.campaign;
-      const busy =
-        snapshot.updateRunning ||
-        snapshot.updateReconciliationPending ||
-        campaign?.state === "applying";
-      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
-        void overlays.runUpdate();
-      }
-    },
+    prepareNativeUpdateFallback: () => prepareNativeUpdateFallback(overlays),
     shouldOpenInControlUiBrowser: () =>
       loadSettings().openLinksInControlUiBrowser === true &&
       isBrowserPanelAvailable(gateway.snapshot) &&
-      document.querySelector("openclaw-app-shell")?.isConnected === true,
+      shell?.element.isConnected === true,
   });
   let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   let nativeNotifications: ApplicationContext["nativeNotifications"] = null;
@@ -387,6 +438,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const initialConnectionRevision = gateway.connectionRevision;
   let firstConfigConnection = true;
+  // Start shared reads and connection recovery independently of mounted views.
   const stopPostConnect = gateway.subscribe((snapshot) => {
     if (snapshot.phase === "connected") {
       browserBootstrapAttempted = true;
@@ -504,6 +556,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     resourceBasePath,
     lifecycleAbortSignal: startupLifecycle.signal,
     router,
+    get routeOutlet() {
+      return shell?.routeOutlet;
+    },
     gateway,
     connectionBootstrap,
     agents,
@@ -563,6 +618,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
+    setShell: (owner) => {
+      shell = owner;
+    },
     start: () => {
       if (!startupLifecycle.signal.aborted) {
         void config.refresh({ ifNeeded: true });
@@ -684,6 +742,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       placementStartup.dispose();
       sessions.dispose();
       stopConfigWriteSuspension();
+      stopBootstrapPreferences();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();

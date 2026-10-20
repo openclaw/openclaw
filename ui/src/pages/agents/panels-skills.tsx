@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { For, createMemo } from "solid-js";
-import type { SkillStatusReport } from "../../api/types.ts";
 import {
   SettingsSection,
   SettingsRow,
@@ -15,41 +14,39 @@ import {
   computeSkillMissing,
   computeSkillReasons,
   isWorkshopSkill,
-  renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
+import { SkillStatusChips } from "../skills/skill-status.tsx";
+import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { AgentPanelAction } from "./panel-ui.tsx";
 
 registerSettingsEnglish();
 
 export function AgentSkills(
-  params: AgentConfigActions & {
-    agentId: string;
-    report: SkillStatusReport | null;
-    loading: boolean;
-    error: string | null;
-    activeAgentId: string | null;
-    configForm: Record<string, unknown> | null;
-    filter: string;
-    canPatchConfig: boolean;
-    onFilterChange: (next: string) => void;
-    onRefresh: () => void;
-    onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
-    onClear: (agentId: string) => void;
-    onDisableAll: (agentId: string) => void;
-  },
+  params: AgentConfigActions &
+    AgentsPageView["agentSkills"] &
+    Pick<AgentsPageView, "readData"> & {
+      agentId: string;
+      configForm: Record<string, unknown> | null;
+      canPatchConfig: boolean;
+    },
 ) {
   const configReady = () =>
     Boolean(params.configForm) && !params.configLoading && !params.configSaving;
   const editable = () => params.canUpdateConfig && configReady();
   const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
-  const hasExplicitAllowlist = createMemo(() => Array.isArray(config().entry?.skills));
+  const hasExplicitAllowlist = () => Array.isArray(config().entry?.skills);
   const allowlist = createMemo(() => resolveAgentSkillsFilter(params.configForm, params.agentId));
   const allowSet = createMemo(() => new Set(allowlist() ?? []));
   const usingAllowlist = () => allowlist() !== undefined;
-  const reportReady = () => Boolean(params.report && params.activeAgentId === params.agentId);
-  const rawSkills = createMemo(() => (reportReady() ? (params.report?.skills ?? []) : []));
+  const reportReady = () =>
+    Boolean(
+      params.readData().agentSkillsReport &&
+      params.readData().agentSkillsAgentId === params.agentId,
+    );
+  const rawSkills = createMemo(() =>
+    reportReady() ? (params.readData().agentSkillsReport?.skills ?? []) : [],
+  );
   const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
   const filtered = createMemo(() =>
     filter()
@@ -81,10 +78,12 @@ export function AgentSkills(
             : "agents.skillsPanel.allEnabled",
         )}
       </div>
-      {!reportReady() && !params.loading ? (
+      {!reportReady() && !params.readData().agentSkillsLoading ? (
         <div class="callout info">{t("agents.skillsPanel.loadAgent")}</div>
       ) : undefined}
-      {params.error ? <div class="callout danger">{params.error}</div> : undefined}
+      {params.readData().agentSkillsError ? (
+        <div class="callout danger">{params.readData().agentSkillsError}</div>
+      ) : undefined}
       <SettingsSection
         title={t("agents.skillsPanel.title")}
         description={
@@ -111,8 +110,10 @@ export function AgentSkills(
             />
             <AgentConfigButtons {...params}>
               <AgentPanelAction
-                label={params.loading ? t("common.loading") : t("common.refresh")}
-                disabled={params.loading}
+                label={
+                  params.readData().agentSkillsLoading ? t("common.loading") : t("common.refresh")
+                }
+                disabled={params.readData().agentSkillsLoading}
                 onClick={params.onRefresh}
               />
             </AgentConfigButtons>
@@ -164,9 +165,7 @@ export function AgentSkills(
                                 {skill().name}
                               </span>
                               <span class="settings-row__desc">{skill().description}</span>
-                              <LitContent
-                                render={() => renderSkillStatusChips({ skill: skill() })}
-                              />
+                              <SkillStatusChips skill={skill()} />
                               <For
                                 each={
                                   [

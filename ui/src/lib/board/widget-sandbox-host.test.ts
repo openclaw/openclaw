@@ -1,6 +1,32 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
 
 const SANDBOX_URL = "https://sandbox.example/mcp-app-sandbox";
 
@@ -740,14 +766,25 @@ describe("BoardWidgetSandboxHost", () => {
   it("reloads a deleted and recreated widget without reloading routine ticket renewals", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
-    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>generation</p>"));
-    vi.stubGlobal("fetch", fetchMock);
+    const sourceUrl = "https://gateway.example/__openclaw__/board/session/weather/index.html";
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response("<!doctype html><p>generation</p>"),
+    );
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      // Other resources can load in the shared worker while this widget settles.
+      return url.split(/[?#]/u, 1)[0] === sourceUrl
+        ? fetchMock(input, init)
+        : originalFetch(input, init);
+    });
     const onLoaded = vi.fn();
     const baseOptions = hostOptions(frame, {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=ticket",
       onLoaded,
     });
     const host = new BoardWidgetSandboxHost(baseOptions);
+    onTestFinished(() => host.dispose());
     notifyProxyReady(host, frame);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
 
@@ -757,7 +794,13 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=renewed-ticket",
     });
     await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(
+      fetchMock,
+      JSON.stringify({
+        requests: fetchMock.mock.calls,
+        frameUrls: vi.mocked(baseOptions.onFrameUrl).mock.calls,
+      }),
+    ).toHaveBeenCalledOnce();
 
     host.update({
       ...baseOptions,
@@ -935,5 +978,53 @@ describe("BoardWidgetSandboxHost", () => {
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
     expect(reloadSpy).toHaveBeenCalledOnce();
     expect(onLoadFailed).not.toHaveBeenCalled();
+  });
+
+  it("rejects Gateway widget HTML that advertises more than the protocol byte cap", async () => {
+    const socketClosed = Promise.withResolvers<void>();
+    let requestCount = 0;
+    const advertised = WIDGET_HTML_MAX_UTF8_BYTES + 1;
+    const server = createServer((request, response) => {
+      requestCount += 1;
+      request.socket.once("close", () => socketClosed.resolve());
+      // Advertise oversize Content-Length and leave the body open so cancel is
+      // visible as a closed TCP socket instead of a full download.
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": String(advertised),
+      });
+      response.write("<!doctype html><p>partial</p>");
+    });
+    const origin = await listenOnLoopback(server);
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const rejected = Promise.withResolvers<void>();
+    const onError = vi.fn<(error: unknown) => void>(() => rejected.resolve());
+    const onLoadFailed = vi.fn();
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost(
+      hostOptions(frame, {
+        onError,
+        onLoadFailed,
+        onLoaded,
+        sourceOrigin: origin,
+        resolveFrameUrl: () => "/widget",
+      }),
+    );
+    notifyProxyReady(host, frame);
+    try {
+      await rejected.promise;
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onLoaded).not.toHaveBeenCalled();
+      expect(onLoadFailed).not.toHaveBeenCalled();
+      expect(onError.mock.calls[0]?.[0]).toMatchObject({
+        message: "widget HTML exceeds 10 MiB; regenerate a smaller widget",
+      });
+      expect(requestCount).toBe(1);
+      await socketClosed.promise;
+    } finally {
+      host.dispose();
+      await closeServer(server);
+    }
   });
 });

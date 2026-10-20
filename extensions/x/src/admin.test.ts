@@ -45,13 +45,14 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
     },
   );
   const stateDir = `synthetic-x-admin-${gatewaySequence++}`;
+  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const runtime = {
     state: {
       openKeyedStore: createKeyedState(undefined, beforeWrite),
       resolveStateDir: () => stateDir,
     },
+    logging: { getChildLogger: () => logger },
   };
-  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
   registerXAllowlistMethods({
     runtime,
     logger,

@@ -9,6 +9,20 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+After an interrupted legacy session import, rerun `openclaw doctor --fix` against
+the same state directory. Doctor compares retained transcripts with the importer's
+repaired representation, including legacy provider names and duplicate session
+headers. Already imported events succeed without duplication; a verified missing
+suffix can be appended. Matching stores finish archival with the original bytes
+preserved. Genuine content conflicts retain the affected store and its originals;
+Doctor displays the blocking finding and records archive validation as failed.
+
+Session-key repair treats paths that resolve to the same physical database as one
+store, including case variants on case-insensitive filesystems. For example, an
+existing `agents/BA-EA` directory can serve the configured `ba-ea` agent without
+copying or deleting its transcript history. Later repairs, including Telegram
+SQLite update-offset migration, can then continue normally.
+
 For a named channel account no longer present in account discovery, Doctor moves
 its legacy `credentials/<channel>-<account>-allowFrom.json` file to the existing
 `.migrated` archive path (numbered if occupied), reports both paths as a warning,
@@ -36,25 +50,35 @@ you still need their state, restore a complete pre-update backup and run
 Telegram JSON ingress-spool migration still imports pending updates, processing
 claims, and failed tombstones with verified backups.
 
-Pre-July Voice Wake settings, update-check state, plugin-binding approvals,
-current-conversation bindings, ACP replay, and restart-sentinel JSON are also
-retired. Doctor preserves these sources and interrupted ACP/restart import
-claims, then directs you to upgrade through `2026.9.7` and run its Doctor first.
-Update admission checks the original files before activation. Current SQLite
-state remains supported.
+Doctor repairs pre-July Voice Wake settings, current-conversation bindings, and
+plugin-binding approvals into current SQLite state. Existing current values win.
+It also imports referenced OAuth credential sidecars and legacy `credentials/oauth.json`
+through the auth migration owner. Original bytes are preserved in `.migrated`
+archives. Doctor tries the historical key files and, in an interactive terminal,
+the existing macOS Keychain entry.
+If a credential cannot be decrypted, sign in again with
+`openclaw models auth login --provider openai`. The named archive preserves the
+original encrypted material, but restoring it does not replay a completed migration.
 
-Retired `subagents/runs.json` files are also ignored and left untouched;
+Retired delivery queues, ACP replay ledgers, restart notifications, the JSON plugin
+install index, and sandbox container/browser registries are archived byte-for-byte.
+Doctor reports each archive path and recovery instructions. Delivery payloads are
+never replayed automatically: inspect the archive and explicitly resend any
+still-needed message, because an earlier attempt may already have delivered it.
+Missing plugins can be reinstalled using the package spec in the index archive.
+Sandbox containers can be recreated through `openclaw sandbox recreate --all`.
+
+Doctor also imports old cron job definitions and matching runtime state. Current
+SQLite jobs win on ID collisions. Historical `cron/runs/*.jsonl` files are archived
+for inspection; new runs use current SQLite history. These JSON formats no longer
+require an intermediate OpenClaw release. Run `openclaw doctor --fix` before
+updating when these importable sources are present. If a SQLite load or commit
+fails, Doctor keeps the live source files for retry and reports the database error.
+Update admission refuses until that import succeeds. Malformed input is archived
+with recovery instructions; transient archives remain nonblocking.
+
+Retired `subagents/runs.json` files are ignored and left untouched;
 transient runs are never restored from them.
-
-The pre-July plugin install index at `plugins/installs.json` is no longer imported
-or archived. Doctor preserves it and stops with the same intermediate-upgrade
-guidance. July-era SQLite plugin install records remain supported.
-
-Sandbox container and browser JSON registries, including their sharded JSON
-directories, are retired pre-July state. Doctor reports the retained paths and
-refuses `--fix` without reading or changing their contents. Upgrade through
-OpenClaw `2026.9.7` and run `openclaw doctor --fix` on the original host before
-retrying. Current SQLite sandbox registries remain supported.
 
 Session records that need the retired `room` → `groupChannel` conversion are refused
 without changing their original bytes. Preserve the state, install OpenClaw
@@ -79,8 +103,8 @@ to relocate.
 If both directories exist, Doctor names both and leaves them for manual
 reconciliation. It never merges them or leaves a legacy alias. Explicit
 `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH` selectors are
-unchanged. A retired JSON plugin install index blocks relocation until the
-intermediate release has migrated it.
+unchanged. A retired JSON plugin install index is moved with the state directory
+and archived by Doctor before plugin discovery.
 
 The installed updater runs this same Doctor repair. Published `2026.9.7` retains
 its original rollback paths, so a later failed update can refuse automatic
@@ -316,6 +340,13 @@ Media and historical transcript migrations still complete, retain the stored
 SQLite blobs, and leave deleted copies absent. These warnings do not block the
 remaining migration steps or database readiness.
 
+Media and historical-directive archive inspection and repair decode one JSONL
+record at a time, so a large zstd archive does not need to fit in one JavaScript
+string. Unchanged archives retain their exact encoded bytes. Changed archives
+keep their original codec; memory still includes the stored blob, the largest
+record, and the encoded replacement. Cancellation during decoding or compression
+leaves uncommitted blobs and cursor progress available for retry.
+
 SQLite archive repairs commit changed blobs in bounded batches before repairing
 their file copies. Publication metadata and the historical migration cursor commit
 together after that batch is verified. Enumeration advances through the complete
@@ -384,3 +415,37 @@ If the installed plugin still has not reported migration completion, run
 remaining warning to the plugin maintainer. Repeating a package update alone
 does not prove that the plugin migrated its retained state. Keep the retained
 state and config inputs until the migration owner reports completion.
+
+## Plugin migration recovery coverage
+
+The message that pre-repair state was retained at a `manifest.json` path confirms
+that Doctor saved a recovery copy. It is informational: keep that copy for manual
+recovery; no repair is needed just because the copy exists.
+
+A warning that a plugin's migration recovery coverage is unknown means the plugin
+has not declared its additional recovery resources. It does not mean data was
+lost or that the plugin's shared SQLite records were excluded. This warning can
+reappear on each new recovery inventory until the plugin supplies a declaration.
+Deleting an old recovery copy does not fix it.
+
+Update the plugin to a version with migration backup support. Until then, keep a
+separate backup of its configured data before relying on recovery, and ask its
+maintainer to add backup support. Plugin authors should declare external files
+and databases through `collectBackupResources`; an explicit empty list is
+appropriate for migrations that change only core-captured state or have no data
+resources. See the [plugin migration contract](/plugins/sdk-migration/compatibility-policy).
+
+Bundled Canvas and Memory Core migrations declare their legacy data sources.
+Codex declares its legacy thread-binding sidecars, and Voice Call declares its
+existing SQLite call store, including a configured custom location.
+Crabbox's shared SQLite records are core-captured; the retired Workboard check
+leaves its legacy rows unchanged. QMD retirement removes only empty directories
+and disposable stale coordination locks, so it has no additional data to retain.
+These declarations prevent misleading missing-inventory warnings without hiding
+warnings about failed migrations or unresolved state.
+
+Declarations apply when the installed Doctor or updater creates a new recovery
+copy. They do not add resources to an original capture already created by an
+older installed updater. Keep those retained copies, and do not assume an older
+capture includes newly declared external resources. A recovery copy is evidence
+for manual recovery; its existence alone does not guarantee automatic rollback.

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   bindDeliveryQueueEntry,
@@ -14,6 +13,7 @@ import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "../../../infra/session-delivery-queue.records.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -28,14 +28,13 @@ import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
 } from "../registry/subagent-registry.store.codec.js";
-import {
-  conflictingSubagentRunVersions,
-  writeSubagentRunValuesInDatabase,
-} from "../registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
-import type { SubagentRegistryWrite } from "../registry/subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  isSubagentRunGenerationCandidate,
+} from "../registry/subagent-run-generation.js";
 import {
   decodeSubagentCompletionRecord,
   mutateSubagentCompletionInDatabase,
@@ -46,23 +45,18 @@ import type {
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 
-type SubagentCompletionVersionConflict = { writeId: string; conflictRunIds: string[] };
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 
 function commitCompletionWrite<T extends object>(
-  input: Pick<SubagentRegistryWrite, "writeId" | "versions">,
+  input: { writeId: string },
   database: OpenClawStateDatabase,
   operationLabel: string,
   mutate: () => T,
-): (T & { writeId: string }) | SubagentCompletionVersionConflict {
-  const { writeId, versions } = input;
+): T & { writeId: string } {
+  const { writeId } = input;
   return runOpenClawStateWriteTransaction(
     () => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const conflictRunIds = conflictingSubagentRunVersions(database, versions);
-      if (conflictRunIds.length > 0) {
-        return { writeId, conflictRunIds };
-      }
       const receipt = { writeId, ...mutate() };
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
       deferSqliteWorkerCommitReceipt(database.db, receipt);
@@ -77,20 +71,17 @@ function commitCompletionWrite<T extends object>(
 export function admitSubagentCompletionInWorker(
   input: {
     writeId: string;
-    versions: SubagentRegistryWrite["versions"];
     queueEntry: QueuedSessionDelivery;
     expected: SubagentRunRecord;
     subagent: SubagentRunRecord;
   },
   database: OpenClawStateDatabase,
-):
-  | SubagentCompletionVersionConflict
-  | {
-      writeId: string;
-      claimed: boolean;
-      status: DeliveryQueueStoredStatus;
-      record: SubagentCompletionRecord;
-    } {
+): {
+  writeId: string;
+  claimed: boolean;
+  status: DeliveryQueueStoredStatus;
+  record: SubagentCompletionRecord;
+} {
   const { expected, subagent, queueEntry } = input;
   const owner = queueEntry.kind === "agentTurn" ? queueEntry.owner : undefined;
   const delivery = subagent.delivery;
@@ -133,7 +124,15 @@ export function admitSubagentCompletionInWorker(
     ).rows;
     for (const row of siblings) {
       const candidate = rowToSubagentRunRecord(row);
-      if (!candidate || compareSubagentRunGeneration(candidate, expected) > 0) {
+      if (
+        !candidate ||
+        (isSubagentRunGenerationCandidate(
+          candidate,
+          expected.childSessionKey,
+          expected.childAgentId,
+        ) &&
+          compareSubagentRunGeneration(candidate, expected) > 0)
+      ) {
         throw new Error("subagent completion owner was replaced before admission");
       }
     }
@@ -187,10 +186,9 @@ export function mutateSubagentCompletionInWorker(
   input: {
     writeId: string;
     mutation: SubagentCompletionMutation;
-    versions: SubagentRegistryWrite["versions"];
   },
   database: OpenClawStateDatabase,
-): (SubagentCompletionMutationResult & { writeId: string }) | SubagentCompletionVersionConflict {
+): SubagentCompletionMutationResult & { writeId: string } {
   return commitCompletionWrite(input, database, "subagent completion " + input.mutation.kind, () =>
     mutateSubagentCompletionInDatabase(database, input.mutation),
   );

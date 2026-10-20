@@ -94,11 +94,14 @@ export function resolveEstimatedSessionCostUsd(params: {
   model?: string;
   entry?: Pick<
     SessionEntry,
-    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
+    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "usageReport"
   >;
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
+  if (params.entry?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
   const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
@@ -173,6 +176,7 @@ const sessionChildOwners = new WeakMap<
 /** Reuse owner identities, but recheck time and live authority on every read. */
 export function resolveSessionChildOwners(params: {
   key: string;
+  parsedKey?: ReturnType<typeof parseAgentSessionKey>;
   entry: SessionEntry;
   now: number;
   subagentRuns: SessionListRowContext["subagentRuns"];
@@ -197,7 +201,11 @@ export function resolveSessionChildOwners(params: {
     : undefined;
   // Persistent dashboard navigation outlives the individual run, including forks.
   const parent =
-    keep || parseAgentSessionKey(key)?.rest.startsWith("dashboard:")
+    keep ||
+    (params.parsedKey === undefined
+      ? parseAgentSessionKey(key)
+      : params.parsedKey
+    )?.rest.startsWith("dashboard:")
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
   const cached = sessionChildOwners.get(entry);

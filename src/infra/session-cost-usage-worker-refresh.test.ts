@@ -1,59 +1,73 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
 const timestamp = Date.parse("2026-09-23T12:00:00.000Z");
 type Row = { seq: number; event: Record<string, unknown> };
-function message(id: string, parentId: string | null, tokens: number): Row["event"] {
+function makeRow(
+  seq: number,
+  id: string,
+  parentId: string | null,
+  tokens: number,
+  incomplete = false,
+): Row {
+  const usage = {
+    input: tokens,
+    output: 0,
+    totalTokens: tokens,
+    cost: { total: tokens },
+    ...(incomplete ? { usageReport: { state: "unavailable" } } : {}),
+  };
   return {
-    type: "message",
-    id,
-    parentId,
-    timestamp: new Date(timestamp).toISOString(),
-    message: {
-      role: "assistant",
-      usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens } },
+    seq,
+    event: {
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(timestamp).toISOString(),
+      message: { role: "assistant", usage },
     },
   };
 }
-const initial: Row[] = [
-  { seq: 1, event: message("root", null, 1) },
-  { seq: 4, event: message("a", "root", 2) },
-];
+const control = (
+  seq: number,
+  type: string,
+  id: string,
+  parentId: string | null,
+  targetId?: string,
+): Row => ({ seq, event: { type, id, parentId, ...(targetId ? { targetId } : {}) } });
+const initial = [makeRow(1, "root", null, 1), makeRow(4, "a", "root", 2)];
+const appended = [...initial, makeRow(9, "b", "a", 4), makeRow(12, "c", "b", 8)];
 async function scan(
   rows: Row[],
   previous?: UsageCostRollupEntry,
   generation = "initial",
   readSequences?: number[],
+  checkProgress?: () => void,
 ) {
-  const storePath = path.resolve("synthetic-usage-paging.sqlite");
   const filePath = formatSqliteSessionFileMarker({
     agentId: "main",
     sessionId: "paging",
-    storePath,
+    storePath: path.resolve("synthetic-usage-paging.sqlite"),
   });
-  const maxSeq = rows.at(-1)?.seq ?? 0;
-  const sizeBytes = rows.reduce(
-    (sum, row) => sum + Buffer.byteLength(JSON.stringify(row.event)) + 1,
-    0,
-  );
   return scanUsageCostRollupInWorker({
     file: {
       kind: "sqlite",
       filePath,
       sourcePath: filePath,
       sessionId: "paging",
-      maxSeq,
+      maxSeq: rows.at(-1)?.seq ?? 0,
       eventCount: rows.length,
-      size: sizeBytes,
+      size: rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row.event)) + 1, 0),
       mtimeMs: timestamp,
     },
     previous,
     pricingFingerprint: "synthetic-pricing",
     resolveCosts: async (pairs) => pairs.map(() => undefined),
     readGeneration: async () => generation,
+    checkProgress,
     // A short page does not mean end-of-range; decoded byte limits can cut any page.
     readRows: async (_marker, afterSeq, throughSeq) => {
       const page = rows.filter((row) => row.seq > afterSeq && row.seq <= throughSeq).slice(0, 2);
@@ -63,152 +77,125 @@ async function scan(
   });
 }
 function expectUsage(entry: UsageCostRollupEntry, tokens: number, records: number, leaf: string) {
-  expect(entry.parsedRecords).toBe(records);
-  expect(entry.countedRecords).toBe(records);
+  expect(entry).toMatchObject({
+    parsedRecords: records,
+    countedRecords: records,
+    checkpoint: { kind: "sqlite", visibleLeafId: leaf },
+  });
   expect(
-    Object.values(entry.rollup.buckets).reduce(
-      (total, bucket) => total + bucket.totals.totalTokens,
-      0,
-    ),
+    Object.values(entry.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
   ).toBe(tokens);
-  expect(entry.checkpoint).toMatchObject({ kind: "sqlite", visibleLeafId: leaf });
 }
 
-describe("paged SQLite usage rollups", () => {
-  it("selects a branch after reading all short pages and preserves sparse sequence numbers", async () => {
-    const result = await scan([
-      { seq: 1, event: message("root", null, 1) },
-      { seq: 4, event: message("hidden", "root", 100) },
-      { seq: 5, event: message("hidden-tail", "hidden", 100) },
-      { seq: 8, event: { type: "leaf", id: "switch", parentId: "hidden-tail", targetId: "root" } },
-      { seq: 13, event: message("chosen", "switch", 2) },
-      { seq: 20, event: message("chosen-tail", "chosen", 3) },
-    ]);
-    expectUsage(result, 6, 3, "chosen-tail");
-    expect(result.checkpoint).toMatchObject({ maxSeq: 20, eventCount: 6 });
+it("stops reading subsequent transcript pages when its owner cancels", async () => {
+  const controller = new AbortController();
+  const reason = new Error("usage client disconnected");
+  const readSequences: number[] = [];
+  await expect(
+    scan([...initial, makeRow(9, "b", "a", 4)], undefined, "initial", readSequences, () => {
+      if (readSequences.length > 0) {
+        controller.abort(reason);
+      }
+      controller.signal.throwIfAborted();
+    }),
+  ).rejects.toBe(reason);
+  expect(readSequences).toEqual([1, 4]);
+});
+
+it("keeps known billing separate from unavailable usage across incremental refreshes", async () => {
+  const before = await scan(initial);
+  const interrupted = [...initial, makeRow(9, "aborted", "a", 100, true)];
+  const afterAbort = await scan(interrupted, before);
+  expect(afterAbort.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
+    usageReport: { state: "unavailable" },
+    totalTokens: 3,
+    totalCost: 3,
+    missingCostEntries: 1,
   });
 
-  it.each([
-    {
-      kind: "append",
-      suffix: [{ seq: 16, event: message("d", "c", 16) }],
-      tokens: 31,
-      records: 5,
-      leaf: "d",
-    },
-    {
-      kind: "leaf",
-      suffix: [{ seq: 20, event: { type: "leaf", id: "switch", parentId: "c", targetId: "root" } }],
-      tokens: 1,
-      records: 1,
-      leaf: "root",
-    },
-    {
-      kind: "reset",
-      suffix: [
-        { seq: 20, event: { type: "reset", id: "reset", parentId: null } },
-        { seq: 25, event: message("after-reset", "root", 16) },
-      ],
-      tokens: 16,
-      records: 1,
-      leaf: "after-reset",
-    },
-  ])(
-    "preserves the selected rollup through later $kind pages",
-    async ({ suffix, tokens, records, leaf }) => {
-      const previous = await scan(initial);
-      const result = await scan(
-        [
-          ...initial,
-          { seq: 9, event: message("b", "a", 4) },
-          { seq: 12, event: message("c", "b", 8) },
-          ...suffix,
-        ],
-        previous,
-      );
-      expectUsage(result, tokens, records, leaf);
-    },
+  const afterSuccess = await scan(
+    [...interrupted, makeRow(12, "completed", "aborted", 4)],
+    afterAbort,
   );
-
-  it("reads only appended rows once while retaining the full-scan totals", async () => {
-    const previous = await scan(initial);
-    const rows = [...initial, { seq: 9, event: message("b", "a", 4) }];
-    const readSequences: number[] = [];
-    const incremental = await scan(rows, previous, "initial", readSequences);
-    expectUsage(incremental, 7, 3, "b");
-    expect(readSequences).toEqual([9]);
-    expect(incremental.rollup).toEqual((await scan(rows)).rollup);
+  expect(afterSuccess.rollup.buckets[String(timestamp)]?.totals).toMatchObject({
+    usageReport: { state: "unavailable" },
+    totalTokens: 7,
+    totalCost: 7,
+    missingCostEntries: 1,
   });
+});
 
-  it.each([
-    {
-      change: "rewrite an earlier row then append",
-      generation: "rewritten",
-      rows: [
-        { seq: 1, event: message("root", null, 8) },
-        initial[1]!,
-        { seq: 9, event: message("b", "a", 4) },
-      ],
-      tokens: 14,
-      records: 3,
-      leaf: "b",
-    },
-    {
-      change: "rewind",
-      generation: "rewound",
-      rows: [initial[0]!],
-      tokens: 1,
-      records: 1,
-      leaf: "root",
-    },
-    {
-      change: "compact",
-      generation: "compacted",
-      rows: [
-        { seq: 1, event: { type: "compaction", id: "compact", parentId: null } },
-        { seq: 4, event: message("a", "compact", 2) },
-        { seq: 9, event: message("b", "a", 4) },
-      ],
-      tokens: 6,
-      records: 2,
-      leaf: "b",
-    },
-  ])(
-    "rebuilds after $change without counting retired usage",
-    async ({ generation, rows, tokens, records, leaf }) => {
-      const previous = await scan(initial);
-      const readSequences: number[] = [];
-      const rebuilt = await scan(rows, previous, generation, readSequences);
-      expectUsage(rebuilt, tokens, records, leaf);
-      expect(rebuilt.rollup).toEqual((await scan(rows, undefined, generation)).rollup);
-      expect(readSequences).toEqual(rows.map((row) => row.seq));
-    },
-  );
+it("selects a branch after reading all short pages and preserves sparse sequence numbers", async () => {
+  const result = await scan([
+    makeRow(1, "root", null, 1),
+    makeRow(4, "hidden", "root", 100),
+    makeRow(5, "hidden-tail", "hidden", 100),
+    control(8, "leaf", "switch", "hidden-tail", "root"),
+    makeRow(13, "chosen", "switch", 2),
+    makeRow(20, "chosen-tail", "chosen", 3),
+  ]);
+  expectUsage(result, 6, 3, "chosen-tail");
+  expect(result.checkpoint).toMatchObject({ maxSeq: 20, eventCount: 6 });
+});
 
-  it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
-    const user = (at: number) => ({
-      type: "message",
-      id: "user",
-      parentId: null,
-      timestamp: new Date(at).toISOString(),
-      message: { role: "user", content: "synthetic" },
-    });
-    const result = await scan([
-      { seq: 1, event: user(timestamp) },
-      {
-        seq: 2,
-        event: {
-          ...message("answer", "user", 3),
-          timestamp: new Date(timestamp + 2000).toISOString(),
-        },
-      },
-      { seq: 3, event: user(timestamp + 1000) },
-      { seq: 4, event: { type: "leaf", id: "switch", parentId: "user", targetId: "answer" } },
-    ]);
-    expectUsage(result, 3, 1, "answer");
-    expect(result.rollup.lastUserTimestamp).toBe(timestamp + 1000);
-    expect(
-      Object.values(result.rollup.buckets).find((bucket) => bucket.latency.count > 0)?.latency,
-    ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
+it.each<[string, Row[], [number, number, string], string?]>([
+  ["append", [...appended, makeRow(16, "d", "c", 16)], [31, 5, "d"]],
+  ["leaf", [...appended, control(20, "leaf", "switch", "c", "root")], [1, 1, "root"]],
+  [
+    "reset",
+    [...appended, control(20, "reset", "reset", null), makeRow(25, "after-reset", "root", 16)],
+    [16, 1, "after-reset"],
+  ],
+  [
+    "rewrite then append",
+    [makeRow(1, "root", null, 8), initial[1]!, makeRow(9, "b", "a", 4)],
+    [14, 3, "b"],
+    "rewritten",
+  ],
+  ["rewind", [initial[0]!], [1, 1, "root"], "rewound"],
+  [
+    "compact",
+    [
+      control(1, "compaction", "compact", null),
+      makeRow(4, "a", "compact", 2),
+      makeRow(9, "b", "a", 4),
+    ],
+    [6, 2, "b"],
+    "compacted",
+  ],
+])("preserves selected usage after %s", async (_change, rows, expected, generation = "initial") => {
+  const previous = await scan(initial);
+  const readSequences: number[] = [];
+  const result = await scan(rows, previous, generation, readSequences);
+  expectUsage(result, ...expected);
+  if (generation !== "initial") {
+    expect(result.rollup).toEqual((await scan(rows, undefined, generation)).rollup);
+    expect(readSequences).toEqual(rows.map((row) => row.seq));
+  } else if (_change === "append") {
+    expect(readSequences).toEqual([9, 12, 16]);
+    expect(result.rollup).toEqual((await scan(rows)).rollup);
+  }
+});
+
+it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
+  const user = (at: number) => ({
+    type: "message",
+    id: "user",
+    parentId: null,
+    timestamp: new Date(at).toISOString(),
+    message: { role: "user", content: "synthetic" },
   });
+  const answer = makeRow(2, "answer", "user", 3);
+  answer.event.timestamp = new Date(timestamp + 2000).toISOString();
+  const result = await scan([
+    { seq: 1, event: user(timestamp) },
+    answer,
+    { seq: 3, event: user(timestamp + 1000) },
+    control(4, "leaf", "switch", "user", "answer"),
+  ]);
+  expectUsage(result, 3, 1, "answer");
+  expect(result.rollup.lastUserTimestamp).toBe(timestamp + 1000);
+  expect(
+    Object.values(result.rollup.buckets).find((bucket) => bucket.latency.count > 0)?.latency,
+  ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
 });

@@ -2,8 +2,8 @@
 
 // Enforces Kysely and SQLite guardrails in infrastructure code.
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
+import type { Expression, ImportDeclaration, Node, SourceFile } from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -25,6 +25,8 @@ const nodeSqliteConstructorOwnerPaths = new Set([
   // Native conformance must observe raw driver close on disposable probe databases.
   "src/infra/bun-sqlite-close-probe.worker.ts",
   "src/infra/node-sqlite.ts",
+  // The native library probe opens only a disposable in-memory database.
+  "src/infra/sqlite-native-runtime.ts",
   "src/infra/sqlite-runtime-version.ts",
 ]);
 
@@ -33,6 +35,9 @@ const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
+  "offline canonical port preserves native cell bytes and 64-bit allocation state": [
+    "src/infra/database-engine/port.worker.ts",
+  ],
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",
   ],
@@ -41,7 +46,18 @@ const rawSqliteAllowPathGroups = {
     "src/infra/kysely-sync-cache-state.ts",
     "src/infra/kysely-sync.ts",
   ],
+  "admitted search indexes own native FTS schema, triggers, and rebuilds": [
+    "src/infra/database-engine/sqlite-search-schema.ts",
+  ],
+  "sqlite-vec native extension probe, candidate queries, and index writes": [
+    "src/infra/database-engine/sqlite-vec.ts",
+    "src/infra/database-engine/sqlite-vector.ts",
+  ],
+  "isolated vector reader owns connection-local query-only and busy-timeout pragmas": [
+    "src/infra/database-engine/sqlite-vector.child.ts",
+  ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
+    "src/daemon/runtime-pin-store.ts",
     // Engine admission owns anchor metadata and schema bootstrap, not application queries.
     "src/infra/database-engine/adapters.ts",
     "src/infra/database-engine/open.ts",
@@ -49,6 +65,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-catalog.ts",
     "src/infra/sqlite-schema-contract.ts",
     // Cross-store reservations own native BEGIN/ROLLBACK, without application queries.
     "src/infra/sqlite-source-fence.ts",
@@ -71,13 +88,21 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
+    // The outbox rebuild preserves historical rowids and stored schema-object SQL.
+    "src/state/openclaw-agent-outbox-sequence-migration.ts",
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
+    // Versioned trajectory storage owns payload columns and its retention index.
+    "src/state/openclaw-agent-trajectory-storage-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
+    // Versioned physical-layout migrations own captured schema and table reconstruction.
+    "src/state/openclaw-agent-write-layout-migration.ts",
+    "src/state/sqlite-table-layout-migration.ts",
     "src/state/openclaw-state-db-audit-migration.ts",
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
     "src/state/openclaw-state-db-maintenance.ts",
+    "src/state/openclaw-state-db-meeting-chronology-migration.ts",
     "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
@@ -98,11 +123,12 @@ const rawSqliteAllowPathGroups = {
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
+    // The scoped archive preserves native cell types, rowids, and SQLite schema SQL.
+    "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],
   "read-only shared state database access": [
-    "src/claws/package-resume.ts",
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],
@@ -122,6 +148,7 @@ const rawSqliteAllowPathGroups = {
     "extensions/memory-core/src/memory/manager-status-presence.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/infra/state-migrations.daemon-runtime-pins.ts",
     "src/commands/doctor-agent-memory-schema.ts",
     "src/commands/doctor-sqlite-compact.ts",
     // Exclusive Doctor maintenance reads auto-vacuum and page-size PRAGMAs.
@@ -138,7 +165,6 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.debug-proxy.ts",
     "src/infra/state-migrations.meeting-transcripts-detection.ts",
     "src/infra/state-migrations.meeting-transcripts-files.ts",
-    "src/infra/state-migrations.meeting-transcripts-verify.ts",
     "src/infra/state-migrations.media-persistence.ts",
     // Doctor FK PRAGMAs classify repair eligibility; row operations still use Kysely.
     "src/infra/state-migrations.session-window-repair.ts",

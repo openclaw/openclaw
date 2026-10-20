@@ -1,17 +1,18 @@
-/** Doctor check for configured model references that have no installed provider owner. */
 import { resolveKnownModelRefMigrationTarget } from "../commands/doctor/shared/codex-route-warnings.js";
+import { readModelCatalogWarnings } from "../commands/models/catalog-warnings.js";
+import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 export function createModelReferenceCheck(): HealthCheck {
   return {
     id: "core/doctor/model-references",
     kind: "core",
-    description: "Configured model references have installed or configured provider owners.",
+    description: "Configured model references have known providers and server catalog diagnostics.",
     source: "doctor",
     async detect(ctx) {
       const { inspectConfiguredModelReferences } =
         await import("../commands/models/model-reference-validation.js");
-      return inspectConfiguredModelReferences({
+      const findings = inspectConfiguredModelReferences({
         cfg: ctx.cfg,
         env: ctx.env,
         workspaceDir: ctx.cwd,
@@ -61,6 +62,31 @@ export function createModelReferenceCheck(): HealthCheck {
           },
         ];
       });
+      if (
+        ctx.allowExecSecretRefs !== true &&
+        (await hasActiveGatewayExecCredential({ cfg: ctx.cfg, env: ctx.env }))
+      ) {
+        findings.push({
+          checkId: "core/doctor/model-references",
+          severity: "info",
+          source: "doctor",
+          message:
+            "Server catalog inspection skipped because the selected Gateway uses an exec SecretRef.",
+          fixHint: "Run openclaw doctor --allow-exec to permit configured secret execution.",
+        });
+        return findings;
+      }
+      for (const warning of await readModelCatalogWarnings(ctx.cfg)) {
+        findings.push({
+          checkId: "core/doctor/model-references",
+          severity: "warning",
+          source: "doctor",
+          target: warning.ref,
+          message: warning.message,
+          fixHint: warning.fixHint,
+        });
+      }
+      return findings;
     },
   };
 }

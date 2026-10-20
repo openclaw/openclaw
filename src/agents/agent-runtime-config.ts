@@ -1,14 +1,16 @@
 /** Resolves agent runtime config, including SecretRef materialization for agent command use. */
+
+import { collectClawToolPolicyCandidates } from "../claws/tool-policy-candidates.js";
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getAgentRuntimeOptionalCommandSecretPaths,
   getScopedChannelsCommandSecretTargets,
 } from "../cli/command-secret-targets.js";
-import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
+import { captureRuntimeConfigAsyncReader, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -24,7 +26,7 @@ export async function resolveAgentRuntimeConfig(
     runtimeChannelSecretScope?: { channel: string; accountId?: string };
   },
 ): Promise<OpenClawConfig> {
-  const loadedRaw = getRuntimeConfig();
+  const loadedRaw = await captureRuntimeConfigAsyncReader()();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
   const channelSecretScope = params?.runtimeChannelSecretScope;
   const hasRuntimeSecretRefs = hasAgentRuntimeSecretRefs({
@@ -48,7 +50,7 @@ export async function resolveAgentRuntimeConfig(
           } catch {
             // Fall back to runtime-loaded config when source snapshot is unavailable.
           }
-          pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
+          pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({ config: loadedRaw });
           return loadedRaw;
         },
         { config: loadedRaw },
@@ -89,18 +91,31 @@ export async function resolveAgentRuntimeConfig(
       () => import("../secrets/runtime.js"),
       { config: cfg },
     );
-    const snapshot = await measureAgentStartup(
-      "secrets-snapshot",
-      () =>
-        secretsRuntime.prepareSecretsRuntimeSnapshot({
-          config: sourceConfig,
-          assignmentConfig: cfg,
-          includeConfigRefs: false,
-          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-        }),
-      { config: cfg },
-    );
+    const hasClawToolPolicies = collectClawToolPolicyCandidates(cfg).length > 0;
+    const [snapshot, provenance, clawToolPolicyRuntime] = await Promise.all([
+      measureAgentStartup(
+        "secrets-snapshot",
+        () =>
+          secretsRuntime.prepareSecretsRuntimeSnapshot({
+            config: sourceConfig,
+            assignmentConfig: cfg,
+            includeConfigRefs: false,
+            ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+          }),
+        { config: cfg },
+      ),
+      hasClawToolPolicies
+        ? import("../claws/provenance-runtime-read.js").then(
+            ({ prepareClawInstallSchemaVersions }) =>
+              prepareClawInstallSchemaVersions({ artifactPreservingReadOnly: false }),
+          )
+        : undefined,
+      hasClawToolPolicies ? import("../claws/tool-policy-runtime.js") : undefined,
+    ]);
+    provenance?.publish();
     secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
+    // Activation publishes a clone; this caller retains the captured config.
+    clawToolPolicyRuntime?.prepareCapturedClawToolPolicyConsent(cfg, {});
   }
   return cfg;
 }

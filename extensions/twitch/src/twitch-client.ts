@@ -10,7 +10,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { resolveTwitchToken } from "./token.js";
 import type {
@@ -24,10 +23,11 @@ import { normalizeToken } from "./utils/twitch.js";
 const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
 
 export class TwitchClientManager {
-  private clients = new Map<string, ChatClient>();
-  private pendingClients = new Map<string, ChatClient>();
-  private connectionPromises = new Map<string, Promise<ChatClient>>();
-  private messageHandlers = new Map<string, { handler: (message: TwitchChatMessage) => void }>();
+  // The registry gives each account its own manager and transport lifetime.
+  private client: ChatClient | undefined;
+  private pendingClient: ChatClient | undefined;
+  private connectionPromise: Promise<ChatClient> | undefined;
+  private messageHandler: { handler: (message: TwitchChatMessage) => void } | undefined;
 
   constructor(
     private logger: ChannelLogSink,
@@ -60,7 +60,7 @@ export class TwitchClientManager {
       });
 
       try {
-        const userId = await authProvider.addUserForToken(
+        await authProvider.addUserForToken(
           {
             accessToken: normalizedToken,
             refreshToken: account.refreshToken ?? null,
@@ -69,7 +69,6 @@ export class TwitchClientManager {
           },
           TWITCH_CHAT_AUTH_INTENTS,
         );
-        this.logger.info(`Added user ${userId} to RefreshingAuthProvider for ${account.username}`);
       } catch (err) {
         throw new Error(
           `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
@@ -79,25 +78,13 @@ export class TwitchClientManager {
         );
       }
 
-      authProvider.onRefresh((userId, token) => {
-        this.logger.info(
-          `Access token refreshed for user ${userId} (expires in ${token.expiresIn ? `${token.expiresIn}s` : "unknown"})`,
-        );
-      });
-
       authProvider.onRefreshFailure((userId, error) => {
         this.logger.error(`Failed to refresh access token for user ${userId}: ${error.message}`);
       });
 
-      const refreshStatus = account.refreshToken
-        ? "automatic token refresh enabled"
-        : "token refresh disabled (no refresh token)";
-      this.logger.info(`Using RefreshingAuthProvider for ${account.username} (${refreshStatus})`);
-
       return authProvider;
     }
 
-    this.logger.info(`Using StaticAuthProvider for ${account.username} (no clientSecret provided)`);
     return new StaticAuthProvider(clientId, normalizedToken);
   }
 
@@ -106,36 +93,30 @@ export class TwitchClientManager {
     cfg?: OpenClawConfig,
     accountId?: string,
   ): Promise<ChatClient> {
-    const key = this.getAccountKey(account);
-
-    const existing = this.clients.get(key);
-    if (existing) {
-      return existing;
+    if (this.client) {
+      return this.client;
     }
-    const pending = this.connectionPromises.get(key);
-    if (pending) {
-      return pending;
+    if (this.connectionPromise) {
+      return this.connectionPromise;
     }
 
     const connection: Promise<ChatClient> = this.createConnectedClient(
-      key,
       account,
-      () => this.connectionPromises.get(key) === connection,
+      () => this.connectionPromise === connection,
       cfg,
       accountId,
     );
-    this.connectionPromises.set(key, connection);
+    this.connectionPromise = connection;
     try {
       return await connection;
     } finally {
-      if (this.connectionPromises.get(key) === connection) {
-        this.connectionPromises.delete(key);
+      if (this.connectionPromise === connection) {
+        this.connectionPromise = undefined;
       }
     }
   }
 
   private async createConnectedClient(
-    key: string,
     account: TwitchAccountConfig,
     ownsConnection: () => boolean,
     cfg?: OpenClawConfig,
@@ -155,11 +136,8 @@ export class TwitchClientManager {
       );
     }
 
-    this.logger.debug?.(`Using ${tokenResolution.source} token source for ${account.username}`);
-
     if (!account.clientId) {
-      this.logger.error(`Missing Twitch client ID for account ${account.username}`);
-      throw new Error("Missing Twitch client ID");
+      throw new Error(`Missing Twitch client ID for account ${account.username}`);
     }
 
     const normalizedToken = normalizeToken(tokenResolution.token);
@@ -181,7 +159,12 @@ export class TwitchClientManager {
             switch (level) {
               case LogLevel.CRITICAL:
               case LogLevel.ERROR:
-                this.logger.error(message);
+                // ircv3 parser errors can quote the raw incoming line or parameter.
+                this.logger.error(
+                  message.startsWith("Error parsing message: ")
+                    ? "Twitch IRC message parsing failed"
+                    : message,
+                );
                 break;
               case LogLevel.WARNING:
                 this.logger.warn(message);
@@ -199,21 +182,21 @@ export class TwitchClientManager {
       },
     });
 
-    this.pendingClients.set(key, client);
+    this.pendingClient = client;
     try {
       await this.connectClient(client, account);
-      if (this.pendingClients.get(key) !== client) {
+      if (this.pendingClient !== client) {
         client.quit();
         throw new Error(`Twitch connection cancelled for ${account.username}`);
       }
     } finally {
-      if (this.pendingClients.get(key) === client) {
-        this.pendingClients.delete(key);
+      if (this.pendingClient === client) {
+        this.pendingClient = undefined;
       }
     }
 
-    this.setupClientHandlers(client, account);
-    this.clients.set(key, client);
+    this.setupClientHandlers(client);
+    this.client = client;
     this.logger.info(`Connected to Twitch as ${account.username}`);
 
     return client;
@@ -262,9 +245,6 @@ export class TwitchClientManager {
             this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
           }
           if (authRetryPending && !manual) {
-            this.logger.debug?.(
-              `Twitch disconnected during auth retry for ${account.username}: ${formatErrorMessage(reason)}`,
-            );
             return;
           }
           finish(
@@ -290,18 +270,10 @@ export class TwitchClientManager {
     });
   }
 
-  private setupClientHandlers(client: ChatClient, account: TwitchAccountConfig): void {
-    const key = this.getAccountKey(account);
-
+  private setupClientHandlers(client: ChatClient): void {
     client.onMessage((channelName, _user, messageText, msg) => {
-      const handler = this.messageHandlers.get(key)?.handler;
+      const handler = this.messageHandler?.handler;
       if (handler) {
-        const from = `twitch:${msg.userInfo.userName}`;
-        const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
-        this.logger.debug?.(
-          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length} preview="${preview}"`,
-        );
-
         handler({
           username: msg.userInfo.userName,
           displayName: msg.userInfo.displayName,
@@ -328,56 +300,27 @@ export class TwitchClientManager {
         this.publishRecovering(reason ? formatErrorMessage(reason) : "Twitch connection lost");
       }
     });
-
-    this.logger.info(`Set up handlers for ${key}`);
   }
 
-  onMessage(
-    account: TwitchAccountConfig,
-    handler: (message: TwitchChatMessage) => void,
-  ): () => void {
-    const key = this.getAccountKey(account);
+  onMessage(handler: (message: TwitchChatMessage) => void): () => void {
     const registration = { handler };
-    this.messageHandlers.set(key, registration);
+    this.messageHandler = registration;
     return () => {
       // Only remove the exact registration this cleanup closure owns. A later
       // onMessage() may reuse the same callback function for the same account.
-      if (this.messageHandlers.get(key) === registration) {
-        this.messageHandlers.delete(key);
+      if (this.messageHandler === registration) {
+        this.messageHandler = undefined;
       }
     };
   }
 
-  async disconnect(account: TwitchAccountConfig): Promise<void> {
-    const key = this.getAccountKey(account);
-    const client = this.clients.get(key);
-    const pendingClient = this.pendingClients.get(key);
-    const pendingConnection = this.connectionPromises.delete(key);
-
-    if (pendingClient) {
-      pendingClient.quit();
-      this.pendingClients.delete(key);
-    }
-
-    if (client) {
-      client.quit();
-      this.clients.delete(key);
-      this.logger.info(`Disconnected ${key}`);
-    }
-
-    if (pendingConnection || pendingClient || client) {
-      this.messageHandlers.delete(key);
-    }
-  }
-
   async disconnectAll(): Promise<void> {
-    this.pendingClients.forEach((client) => client.quit());
-    this.clients.forEach((client) => client.quit());
-    this.pendingClients.clear();
-    this.connectionPromises.clear();
-    this.clients.clear();
-    this.messageHandlers.clear();
-    this.logger.info(" Disconnected all clients");
+    this.pendingClient?.quit();
+    this.client?.quit();
+    this.pendingClient = undefined;
+    this.connectionPromise = undefined;
+    this.client = undefined;
+    this.messageHandler = undefined;
   }
 
   async sendMessage(
@@ -421,12 +364,7 @@ export class TwitchClientManager {
         throw error;
       }
       const errorMessage = formatErrorMessage(error);
-      this.logger.error(`Failed to send message: ${errorMessage}`);
       return { ok: false, error: errorMessage };
     }
-  }
-
-  public getAccountKey(account: TwitchAccountConfig): string {
-    return `${account.username}:${account.channel}`;
   }
 }

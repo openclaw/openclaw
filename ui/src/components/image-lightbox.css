@@ -31,22 +31,33 @@ openclaw-image-lightbox {
   }
 
   .actions .action,
+  .lightbox-footer .action,
   .action.zoom-control {
     color: var(--media-foreground);
     background-color: var(--media-control-bg);
-    -webkit-backdrop-filter: blur(16px) saturate(140%);
     backdrop-filter: blur(16px) saturate(140%);
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
   }
 
-  .actions .action {
+  .actions .action,
+  .lightbox-footer .action {
     border-radius: 999px;
     transition: background-color 180ms ease;
   }
 
   .actions .action:hover,
+  .lightbox-footer .action:hover,
   .zoom-control:hover:not([aria-disabled="true"]) {
     background-color: var(--media-control-bg-hover);
+  }
+
+  openclaw-modal-actions.lightbox-footer {
+    position: fixed;
+    z-index: 1;
+    right: max(16px, calc(12px + var(--safe-area-right, 0px)));
+    bottom: max(14px, calc(10px + var(--safe-area-bottom, 0px)));
+    /* Leave the centered zoom chrome unobstructed, including wrapped labels. */
+    max-width: max(44px, calc(50vw - 110px));
   }
 
   .title {
@@ -81,6 +92,42 @@ openclaw-image-lightbox {
 
   .action:focus:not(:focus-visible) {
     outline: none;
+  }
+
+  .download-image {
+    gap: 8px;
+    min-height: 44px;
+  }
+
+  .download-image svg,
+  .external-image svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .external-image {
+    position: fixed;
+    top: max(16px, calc(12px + var(--safe-area-top, 0px)));
+    right: max(68px, calc(64px + var(--safe-area-right, 0px)));
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .image-quality-status {
+    position: fixed;
+    z-index: 1;
+    top: max(20px, calc(16px + var(--safe-area-top, 0px)));
+    left: max(16px, calc(12px + var(--safe-area-left, 0px)));
+    max-width: calc(100vw - 96px);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    color: var(--media-foreground);
+    background: var(--media-control-bg);
+    font-size: 12px;
   }
 
   .open-original {
@@ -275,6 +322,15 @@ openclaw-image-lightbox {
         calc(64px + var(--safe-area-bottom, 0px)) calc(12px + var(--safe-area-left, 0px));
     }
 
+    .download-image {
+      width: 44px;
+      padding: 0;
+    }
+
+    .download-image span {
+      display: none;
+    }
+
     .open-original {
       width: 44px;
       padding: 0;
@@ -300,12 +356,8 @@ openclaw-image-lightbox {
   }
 
   @media (prefers-reduced-motion: reduce) {
-    openclaw-modal-dialog {
-      --show-duration: 0ms;
-      --hide-duration: 0ms;
-    }
-
     .actions .action,
+    .lightbox-footer .action,
     .navigation {
       transition: none;
     }

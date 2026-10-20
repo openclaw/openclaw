@@ -13,15 +13,14 @@ import {
   createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_INFERENCE_SETUP_ERROR,
   NODE_WORKER_STATUS_WAIT_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
-import type { SpawnResult } from "../../process/exec.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
   NODE_WORKER_STATUS_WAIT_MAX_MS,
-  parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
@@ -32,6 +31,7 @@ import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,
 } from "../../worker/worker-connection-contract.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
@@ -39,13 +39,18 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
-import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
+import {
+  WorkerRunnerCapacityError,
+  WorkerRunnerUnavailableError,
+  type WorkerTurnProcessResult,
+} from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function nodeWorkerSpawnResultFromReceipt(
   receipt: TerminalNodeWorkerSupervisorReceipt,
-): SpawnResult {
+): WorkerTurnProcessResult {
   return {
+    ...(receipt.state === "interrupted" ? { nodeLoss: new WorkerNodeLostError() } : {}),
     stdout: receipt.state === "completed" ? receipt.resultJson : "",
     stderr: receipt.state === "completed" ? "" : receipt.errorText,
     code: receipt.state === "completed" ? 0 : 1,
@@ -88,6 +93,8 @@ type DeviceWorkerLaunchRequest = {
   timeoutMs: number;
   credentialExpiresAtMs?: number;
   signal?: AbortSignal;
+  /** Shutdown bounds receipt waits independently of the turn's cancellation. */
+  cancellationSignal?: AbortSignal;
   onDispatchReady?: () => void;
 };
 
@@ -119,16 +126,6 @@ function isTerminalReceipt(
   receipt: NodeWorkerSupervisorReceipt,
 ): receipt is TerminalNodeWorkerSupervisorReceipt {
   return receipt.state !== "pending" && receipt.state !== "running";
-}
-
-function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInput {
-  let encoded: string;
-  try {
-    encoded = JSON.stringify(input);
-  } catch {
-    throw new Error("node worker launch input is not serializable");
-  }
-  return parseNodeWorkerLaunchInput(encoded);
 }
 
 function rearmNodeWorkerLaunchInput(
@@ -428,6 +425,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const deadline = createDeadline({
       now,
       timeoutMs: cancellationTimeoutMs,
+      signal: params.request.cancellationSignal,
       label: "node worker cancellation",
     });
     let delayMs = pollIntervalMs;
@@ -476,7 +474,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
     const restartSignal = getGatewayRestartDrainSignal();
-    const originalInput = snapshotLaunchInput(request.input);
+    // The tunnel owns the prepared descriptor; only negotiated launch options change here.
+    const originalInput = { ...request.input };
     let input = originalInput;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);
@@ -534,10 +533,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                       input.descriptor.assignment.inference === "runtime-local" &&
                       node.workerHost.nativeInference !== 1
                     ) {
-                      throw createNodeRunnerInventoryIssueError(
-                        node.nodeId,
-                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-                      );
+                      throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
                     }
                     if (
                       node.workerHost.idleRetention === true &&
@@ -665,11 +661,16 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       try {
         terminal = await cancelUntilTerminal({ request: stableRequest, expected });
       } catch (cancelError) {
-        throw new AggregateError(
+        const failure = new AggregateError(
           [error, cancelError],
           "node worker launch failed and cancellation could not be confirmed",
           { cause: cancelError },
         );
+        throw error instanceof NodeWorkerLaunchTransportError &&
+          (error.code === "DISCONNECTED" || error.code === "NOT_CONNECTED") &&
+          !request.signal?.aborted
+          ? new WorkerNodeLostError({ cause: failure })
+          : failure;
       }
       if (deadline.signal.aborted || !stableRequest.isDispatchAuthorized()) {
         return terminal;

@@ -23,6 +23,7 @@ import {
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
+  readAuthProfileUsageStats,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -31,7 +32,6 @@ import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
@@ -119,16 +119,11 @@ function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): voi
   Object.assign(entry, latest);
 }
 
-async function persistSessionAuthProfileOverrideState(params: {
-  agentId: string;
-  sessionEntry: SessionEntry;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  state: SessionAuthProfileOverrideState;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
-}): Promise<SessionEntry | undefined> {
+async function persistSessionAuthProfileOverrideState(
+  params: Parameters<typeof clearSessionAuthProfileOverride>[0] & {
+    state: SessionAuthProfileOverrideState;
+  },
+): Promise<SessionEntry | undefined> {
   const { sessionEntry, sessionStore, sessionKey, state, storePath, expectedSnapshot } = params;
   params.assertCommitAllowed?.();
   const updatedAt = Date.now();
@@ -251,7 +246,7 @@ function isProfileGloballyInCooldown(store: AuthProfileStore, profileId: string)
   if (!isProfileInCooldown(store, profileId)) {
     return false;
   }
-  const usage = store.usageStats?.[profileId];
+  const usage = readAuthProfileUsageStats(store, profileId);
   if (!usage) {
     return true;
   }
@@ -285,22 +280,11 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-async function resolveSessionAuthProfileOverride(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-  agentId: string;
-  agentDir: string;
-  reader?: SessionEntryCohortReader;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-  assertCommitAllowed?: SessionSourceAssertion;
-  isNewSession: boolean;
-  acceptedProviderIds?: string[];
-  requesterProfileId?: string;
-}): Promise<SessionAuthProfileOverrideResult> {
+async function resolveSessionAuthProfileOverride(
+  params: Omit<Parameters<typeof resolveSessionAuthSelection>[0], "configuredProfileId"> & {
+    acceptedProviderIds?: string[];
+  },
+): Promise<SessionAuthProfileOverrideResult> {
   const {
     agentId,
     cfg,
@@ -590,7 +574,6 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
-  harnessRuntime?: string;
   agentDir: string;
   reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
@@ -607,16 +590,10 @@ export async function resolveSessionAuthSelection(params: {
     provider: params.provider,
     modelId,
   });
-  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: params.provider,
-    harnessRuntime: params.harnessRuntime,
-    config: params.cfg,
-  });
   const { profileId: rotatedProfileId, store } = await resolveSessionAuthProfileOverride({
     ...params,
     cfg,
     modelId,
-    acceptedProviderIds,
   });
   const rotatedSource = rotatedProfileId
     ? params.sessionEntry?.authProfileOverride?.trim() === rotatedProfileId
@@ -657,7 +634,7 @@ export async function resolveSessionAuthSelection(params: {
     profileId === configuredProfileId &&
     !isProfileForProvider({
       cfg,
-      providers: uniqueProviders(params.provider, acceptedProviderIds),
+      providers: uniqueProviders(params.provider),
       profileId,
       store: authStore,
     })

@@ -22,10 +22,8 @@ export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-registry-maintenance.js";
 export * from "./sessions/session-sharing-store.js";
-export {
-  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
-  type StoredSessionSuggestion,
-} from "./sessions/session-suggestion-store.js";
+export { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "./sessions/session-suggestion-policy.js";
+export type { StoredSessionSuggestion } from "./sessions/session-sharing-store.types.js";
 export { listSessionSuggestions } from "./sessions/session-suggestion-store.read.js";
 export * from "./sessions/session-reaction-store.js";
 export * from "./sessions/delivery-info.js";

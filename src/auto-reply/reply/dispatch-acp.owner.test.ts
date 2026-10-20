@@ -7,6 +7,7 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   listSessionPendingInputs,
@@ -306,7 +307,9 @@ it.each(scenarios)(
               reason: pendingQuestion ? "acp_question_answer_refused" : "acp_error:acp_turn_failed",
             }),
           );
-          expect(claim?.isResolving() ?? false).toBe(false);
+          if (claim) {
+            await expectPendingQuestionAnswerClaimable(sessionKey, true);
+          }
         } else if (confirmedQuestion) {
           expect(resolveQuestion).toHaveBeenCalledOnce();
           expect(delivered).toEqual([]);

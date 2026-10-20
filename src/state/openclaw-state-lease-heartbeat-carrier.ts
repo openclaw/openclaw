@@ -4,11 +4,13 @@ import {
   type Transferable,
   type Worker,
 } from "node:worker_threads";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type {
-  LeaseHeartbeatReply,
-  LeaseHeartbeatWorkerData,
+import {
+  LEASE_CONTENTION_RETRY_MS,
+  type LeaseHeartbeatReply,
+  type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 
 type CarrierReply = LeaseHeartbeatReply | { closed: true } | { startupError: string } | null;
@@ -17,7 +19,6 @@ type Member = {
   closed: ReturnType<typeof createDeferredCore<number>>;
   message?: (reply: CarrierReply) => void;
   failure?: (error: unknown, exitCode?: number, registrationClosed?: boolean) => void;
-  service: () => void;
   stopping: boolean;
 };
 type Carrier = {
@@ -38,7 +39,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
   key: string;
   data: LeaseHeartbeatWorkerData;
   createWorker(): Worker;
-  service: () => void;
 }) {
   let carrier = carriers.get(params.key);
   const primary = carrier === undefined;
@@ -83,7 +83,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
   const member: Member = {
     channel: ports?.port1 ?? owned.worker,
     closed: createDeferredCore<number>(),
-    service: params.service,
     stopping: false,
   };
   owned.members.add(member);
@@ -93,6 +92,14 @@ export function acquireLeaseHeartbeatCarrier(params: {
         carriers.delete(params.key);
       }
       owned.stopping = (async () => {
+        // Closed members admit no new SQLite work. Join the in-flight operation:
+        // terminating inside a native write can strand its connection's write lock.
+        const progress = new BigInt64Array(owned.renewalProgress);
+        let observed = Atomics.load(progress, 0);
+        while (observed % 2n === 1n && owned.exitCode === undefined) {
+          await Atomics.waitAsync(progress, 0, observed, LEASE_CONTENTION_RETRY_MS).value;
+          observed = Atomics.load(progress, 0);
+        }
         return owned.exitCode ?? owned.worker.terminate();
       })();
       void owned.stopping.catch(() => {
@@ -116,6 +123,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   };
   const receive = (reply: CarrierReply) => {
+    if (ports) {
+      recordWorkerMessage("lifecycle", "from_worker");
+    }
     if (reply && "closed" in reply) {
       closed();
     } else if (reply && "startupError" in reply && member.stopping) {
@@ -142,7 +152,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   }
   return {
-    renewalProgress: owned.renewalProgress,
     online: owned.online.promise,
     closed: member.closed.promise,
     get pending() {
@@ -158,11 +167,8 @@ export function acquireLeaseHeartbeatCarrier(params: {
     },
     postMessage(value: unknown, transferList: Transferable[]) {
       member.channel.postMessage(value, transferList);
-    },
-    service() {
-      // Synchronous lease verification must also service a sibling's admission.
-      for (const active of owned.members) {
-        active.service();
+      if (ports) {
+        recordWorkerMessage("lifecycle", "to_worker");
       }
     },
     close(): Promise<number> {
@@ -172,6 +178,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
       }
       if (owned.members.has(member)) {
         member.channel.postMessage({ close: true }, []);
+        if (ports) {
+          recordWorkerMessage("lifecycle", "to_worker");
+        }
       }
       return member.closed.promise;
     },

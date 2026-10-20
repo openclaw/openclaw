@@ -66,6 +66,42 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     vi.unstubAllGlobals();
   });
 
+  it("publishes negotiated scopes without a device token and retires them on disconnect", async () => {
+    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    const { ws, connectFrame } = await startConnect(client);
+    const auth = { role: "operator", scopes: ["operator.sessions.read"] };
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: PROTOCOL_VERSION,
+        auth,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.auth).toEqual(auth);
+    ws.emitClose(1006, "disconnected");
+    expect(client.auth).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const next = await startConnect(client);
+    next.ws.emitMessage({
+      type: "res",
+      id: next.connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: PROTOCOL_VERSION,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.auth?.scopes).toEqual(["operator.admin"]);
+    client.stop();
+    expect(client.auth).toBeNull();
+  });
+
   it.each(["rejected", "expired"])(
     "waits on the exact pairing request and stops reconnecting when %s",
     async (decision) => {
@@ -140,6 +176,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
+      includeSessionMessageBodies: true,
     });
 
     const { connectFrame } = await startConnect(client);
@@ -148,6 +185,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.client.buildId).toBe("build-a");
+    expect(connectFrame.params?.includeSessionMessageBodies).toBe(true);
     expect(connectFrame.params?.caps).toEqual([
       GATEWAY_CLIENT_CAPS.AGENT_KIND,
       GATEWAY_CLIENT_CAPS.APPROVALS,
@@ -157,14 +195,44 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+      GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
+      GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
+      GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
+      GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS,
+      GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS,
+      GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
+      GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
       GATEWAY_CLIENT_CAPS.ULTRAFAST,
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("leaves the native-auth capability list unchanged", async () => {
+    client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      includeSessionMessageBodies: true,
+      nativeConnectAuth: async ({ nonce, signedAt }) => ({
+        client: { id: "openclaw-macos", mode: "ui", platform: "darwin", version: "test" },
+        scopes: ["operator.read"],
+        auth: { deviceToken: "native-device-token" },
+        device: { id: "native-device", publicKey: "test", signature: "test", nonce, signedAt },
+      }),
+    });
+    const { connectFrame } = await startConnect(client);
+    expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS);
+    expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS);
+    expect(connectFrame.params.caps).not.toContain(
+      GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+    );
+    expect(connectFrame.params).not.toHaveProperty("includeSessionMessageBodies");
+    expect(connectFrame.params.client.id).toBe("openclaw-macos");
+    expect(connectFrame.params.auth).toEqual({ deviceToken: "native-device-token" });
   });
 
   it.each([

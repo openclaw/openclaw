@@ -2,7 +2,13 @@ import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
 );
+const pinMigrationMock = vi.hoisted(() => vi.fn(async () => {}));
+// mock-isolation: Planning tests replace pin storage and migration to avoid touching disk state.
 vi.mock("../../daemon/runtime-pin-state.js", () => ({
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, run: () => T) => {
+    await pinMigrationMock();
+    return run();
+  },
   readDaemonRuntimePin: pinSnapshotMock,
 }));
 // Start repair tests cover stale service repair install-plan wiring.
@@ -133,6 +139,7 @@ function stoppedServiceState(
 describe("repairLoadedGatewayServiceForStart", () => {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
+    pinMigrationMock.mockReset().mockResolvedValue(undefined);
     vi.stubEnv("HOME", "/home/openclaw");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
@@ -165,6 +172,30 @@ describe("repairLoadedGatewayServiceForStart", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("leaves the service untouched when runtime-pin migration is pending", async () => {
+    const failure = new Error("Runtime pin migration pending; run openclaw doctor.");
+    pinMigrationMock.mockRejectedValueOnce(failure);
+    const service = { install: vi.fn(), isLoaded: vi.fn(async () => true) };
+
+    await expect(
+      repairLoadedGatewayServiceForStart({
+        service,
+        state: stoppedServiceState({
+          programArguments: ["/usr/bin/node", "/fixture/openclaw.mjs", "gateway"],
+          environment: { HOME: "/home/openclaw" },
+        }),
+        issues: [{ message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(pinSnapshotMock).not.toHaveBeenCalled();
+    expect(resolveGatewayInstallTokenMock).not.toHaveBeenCalled();
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -202,7 +233,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const params = {
         service,
         state,
-        issues: [{ code: "missing-program" as const, message: "missing" }],
+        issues: [{ message: "missing" }],
         json: true,
         stdout: process.stdout,
       };
@@ -275,7 +306,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     await repairLoadedGatewayServiceForStart({
       service,
       state,
-      issues: [{ code: "port-mismatch", message: "old port" }],
+      issues: [{ message: "old port" }],
       json: true,
       stdout: process.stdout,
     });
@@ -329,7 +360,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const repair = repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "port-mismatch", message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       });
@@ -385,7 +416,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
             repairLoadedGatewayServiceForStart({
               service,
               state,
-              issues: [{ code: "missing-program", message: "missing program" }],
+              issues: [{ message: "missing program" }],
               json: true,
               stdout: process.stdout,
             }),
@@ -455,7 +486,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const repairParams = {
         service,
         state,
-        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       };
@@ -493,7 +524,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "missing-program", message: "missing program" }],
+        issues: [{ message: "missing program" }],
         json: true,
         stdout: process.stdout,
       }),
@@ -517,7 +548,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const params = {
         service,
         state,
-        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       };

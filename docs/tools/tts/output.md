@@ -28,6 +28,8 @@ turn settles may send the fallback after their buffered replies. `tagged` mode
 keeps its normal streaming behavior, and text
 inside a `[[tts:text]]` block remains audio-only.
 
+Visible captions and their text fallbacks preserve whitespace inside code blocks.
+
 After synthesis, OpenClaw persists batch TTS output in the media store under
 `tool-speech-synthesis`. The reply uses that stable media path instead of a
 provider temporary file, and normal media maintenance prunes expired output.
@@ -83,6 +85,10 @@ When `tts.auto` is enabled, OpenClaw:
   within its caption limit on the voice note and sends overflow as follow-up
   text. Generated media goes through the same channel media normalization as
   normal reply attachments.
+
+In the Control UI, delayed speech attaches to its original answer, including
+after a reload. Publishing the answer text does not consume its pending speech
+supplement; a final message-tool reply retains its separate delivery custody.
 
 If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
 

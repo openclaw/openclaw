@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
+import { delegateEvents } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -13,7 +16,7 @@ function fixture(shadow = false) {
   const owner = shadow ? pane.attachShadow({ mode: "open" }) : pane;
   const trigger = owner.appendChild(document.createElement("a"));
   const dismiss = vi.fn(() => controller.reset());
-  const controller = new PortaledHovercardController(dismiss);
+  const controller = createPortaledHovercardOwner(dismiss);
   controller.markTrigger(trigger);
   const mount = () => {
     controller.mount(trigger, createPortaledHovercard("preview", "preview"), "vertical");
@@ -23,6 +26,90 @@ function fixture(shadow = false) {
 }
 
 describe("portaled hovercard presentation ownership", () => {
+  it.each(["Tab", "Escape"])("enters registered controls and returns focus on %s", (key) => {
+    const view = fixture();
+    view.trigger.href = "#trigger";
+    const card = createPortaledHovercard("keyboard-preview", "preview");
+    const unrelated = document.createElement("button");
+    const first = document.createElement("button");
+    const last = document.createElement("button");
+    card.append(unrelated, first, last);
+    const controls = controlsForHovercard(card);
+    const releaseFirst = controls.registerSource(() => [first]);
+    const releaseLast = controls.registerSource(() => [last]);
+    view.controller.mount(view.trigger, card, "vertical", true, () => {
+      releaseFirst();
+      releaseLast();
+    });
+    onTestFinished(() => view.controller.reset());
+    view.trigger.addEventListener("keydown", view.controller.handleTriggerKeyDown);
+    view.trigger.focus();
+    const enter = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    view.trigger.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(first);
+
+    const interior = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    first.dispatchEvent(interior);
+    expect(interior.defaultPrevented).toBe(false);
+    last.focus();
+    const exit = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    last.dispatchEvent(exit);
+    expect(exit.defaultPrevented).toBe(true);
+    expect(view.controller.card).toBeNull();
+    expect(document.activeElement).toBe(view.trigger);
+    document.body.append(card);
+    expect(controls.read()).toEqual([]);
+  });
+
+  it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    const card = createPortaledHovercard("solid-preview", "preview");
+    const content = document.createElement("div");
+    const first = document.createElement("a");
+    first.href = "#first";
+    const second = document.createElement("a");
+    second.href = "#second";
+    content.append(first, second);
+    const controls = controlsForHovercard(card);
+    onTestFinished(controls.registerSource(() => [first]));
+    onTestFinished(controls.registerSource(() => [second]));
+    // The application delegates these events before the portal installs native listeners.
+    delegateEvents(["focusin", "focusout"]);
+    mountSolid(() => content, { container: card });
+    const showPopover = card.showPopover.bind(card);
+    vi.spyOn(card, "showPopover").mockImplementation(() => {
+      showPopover();
+      first.focus();
+    });
+    view.controller.mount(view.trigger, card, "vertical");
+    onTestFinished(() => view.controller.reset());
+
+    expect(document.activeElement).toBe(first);
+    view.controller.handleCardPointerLeave();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(first);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    second.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(second);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    view.trigger.href = "#outside";
+    view.trigger.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(view.controller.card).toBeNull();
+    expect(view.dismiss).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "retires animated exits without waiting for reduced motion (%s)",
     async (reduced) => {
@@ -50,6 +137,28 @@ describe("portaled hovercard presentation ownership", () => {
       }
     },
   );
+
+  it("retires card listeners before an animated card is replaced", () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    view.mount();
+    const previous = view.controller.card!;
+    view.controller.reset(100);
+    view.controller.markTrigger(view.trigger);
+    view.mount();
+    onTestFinished(() => view.controller.reset());
+
+    previous.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(view.dismiss).not.toHaveBeenCalled();
+    expect(view.controller.card?.isConnected).toBe(true);
+    expect(previous.isConnected).toBe(false);
+
+    view.controller.card?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(view.dismiss).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it.each([false, true])(
     "ignores unrelated scrolls and coalesces anchor movement (shadow=%s)",
@@ -131,22 +240,4 @@ describe("portaled hovercard presentation ownership", () => {
     await Promise.resolve();
     expect(first.dismiss).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "keeps a modal's card with its trigger and retires it when the modal disconnects (shadow=%s)",
-    async (shadow) => {
-      const modal = document.body.appendChild(document.createElement("openclaw-modal-dialog"));
-      const content = modal.appendChild(document.createElement("section"));
-      const root = shadow ? content.attachShadow({ mode: "open" }) : content;
-      const trigger = root.appendChild(document.createElement("a"));
-      const controller = new PortaledHovercardController(() => controller.reset());
-      controller.markTrigger(trigger);
-      controller.mount(trigger, createPortaledHovercard("modal-preview", "preview"), "vertical");
-      await Promise.resolve();
-      expect(controller.card?.parentElement).toBe(modal);
-      modal.remove();
-      await Promise.resolve();
-      expect(controller.card).toBeNull();
-    },
-  );
 });

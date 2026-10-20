@@ -1,5 +1,8 @@
 import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
-import { applyHistoricalWebhookPins } from "../commands/doctor/shared/legacy-webhook-pins.js";
+import {
+  createHistoricalWebhookPinMigration,
+  type HistoricalWebhookCompletion,
+} from "../commands/doctor/shared/legacy-webhook-pins.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -15,6 +18,14 @@ export type PluginDoctorCompatibilityResult = {
   config: OpenClawConfig;
   changes: string[];
   warnings?: string[];
+};
+
+export type PluginDoctorCompatibilityOptions = {
+  env?: NodeJS.ProcessEnv;
+  startup?: boolean;
+  historicalWebhookListeners?: boolean;
+  historicalWebhookCompletion?: HistoricalWebhookCompletion;
+  onInspectedPlugin?: (pluginId: string, hasConfigRepair: boolean) => void;
 };
 
 /** Selection and order belong to callers; every hook transforms a private candidate. */
@@ -69,15 +80,14 @@ export function applyResolvedPluginDoctorCompatibilityMigrations(
     historicalWebhookListener?: PluginDoctorHistoricalWebhookListener;
     historicalWebhookNormalizer?: PluginDoctorCompatibilityNormalizer;
   }[],
-  params: {
-    env?: NodeJS.ProcessEnv;
-    startup?: boolean;
-    historicalWebhookListeners?: boolean;
-    onInspectedPlugin?: (pluginId: string, hasConfigRepair: boolean) => void;
+  params: PluginDoctorCompatibilityOptions & {
     isDeferred: (pluginId: string) => boolean;
   },
 ): PluginDoctorCompatibilityResult {
-  const initialized = params.historicalWebhookListeners
+  const applyHistoricalWebhookPins = params.historicalWebhookListeners
+    ? createHistoricalWebhookPinMigration(params.env, params.historicalWebhookCompletion)
+    : undefined;
+  const initialized = applyHistoricalWebhookPins
     ? applyHistoricalWebhookPins({ config: cfg, changes: [] }, undefined, params)
     : { config: cfg, changes: [] };
   const result = applyPluginDoctorCompatibilitySequence(
@@ -94,7 +104,7 @@ export function applyResolvedPluginDoctorCompatibilityMigrations(
       return {
         pluginId: entry.pluginId,
         normalizeCompatibilityConfig: entry.normalizeCompatibilityConfig,
-        transform: params.historicalWebhookListeners
+        transform: applyHistoricalWebhookPins
           ? (mutation: ChannelDoctorConfigMutation) => {
               if (entry.historicalWebhookNormalizer) {
                 mutation.historicalWebhookAccountIds = entry.historicalWebhookNormalizer({

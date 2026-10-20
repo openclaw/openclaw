@@ -93,7 +93,7 @@ jobs:
 
       - name: Setup supported Node runtime
         timeout-minutes: 3
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -202,12 +202,14 @@ jobs:
         timeout-minutes: 3
         uses: ./.github/actions/setup-security-review
 
-      - name: Detect dependency changes
+      # Preparation is limited to direct PR events. CI-completion, scheduled,
+      # and command reviews retain their own fresh enforcement/publication step.
+      - name: Prepare security review
         id: detect
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          OPENCLAW_SECURITY_REVIEW_MODE: detect
+          OPENCLAW_SECURITY_REVIEW_MODE: prepare
         run: node scripts/github/security-review.mjs
 
       - name: Create autoscrub app token
@@ -247,7 +249,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: enforce
-        run: node scripts/github/security-review.mjs
+        run: |
+          if [ "${{ steps.detect.outputs.completed }}" = "true" ]; then
+            echo "Security review completed during preparation."
+          else
+            node scripts/github/security-review.mjs
+          fi
 
       # Bootstrap failures cannot load the repository's normal status publisher.
       # This checkout-independent path can only fail the scheduled head closed.

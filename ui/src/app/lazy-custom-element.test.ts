@@ -1,25 +1,45 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   ensureCustomElementDefined,
-  LazyCustomElementRequestController,
+  createLazyCustomElementRequests,
 } from "./lazy-custom-element.ts";
+import * as staleRecovery from "./stale-chunk-reload.ts";
 
 let tagSequence = 0;
 
-function uniqueTag(): string {
-  tagSequence += 1;
-  return `openclaw-lazy-test-${tagSequence}`;
+const uniqueTag = () => `openclaw-lazy-test-${++tagSequence}`;
+
+function definedElement(gate?: Promise<unknown>) {
+  const tagName = uniqueTag();
+  return {
+    tagName,
+    label: "test panel",
+    loadModule: vi.fn(async () => {
+      if (gate) {
+        await gate;
+      }
+      customElements.define(tagName, class extends HTMLElement {});
+    }),
+  };
+}
+
+function failedElement(error: Error, recover = false) {
+  const element = definedElement();
+  if (recover) {
+    element.loadModule.mockRejectedValueOnce(error);
+  } else {
+    element.loadModule.mockRejectedValue(error);
+  }
+  return element;
 }
 
 describe("ensureCustomElementDefined", () => {
   it("deduplicates concurrent module loads", async () => {
-    const tagName = uniqueTag();
-    const loadModule = vi.fn(async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    });
+    const { tagName, loadModule } = definedElement();
 
     await Promise.all([
       ensureCustomElementDefined(tagName, loadModule),
@@ -41,121 +61,122 @@ describe("ensureCustomElementDefined", () => {
 
 describe("optional custom element requests", () => {
   function createRequestHarness() {
-    const requestUpdate = vi.fn();
-    const host = { requestUpdate, updateComplete: Promise.resolve(true) };
     const retryStale = vi
-      .fn<(canReload: () => boolean) => Promise<boolean>>()
+      .spyOn(staleRecovery, "retryStaleChunkReloadWhenReachable")
       .mockResolvedValue(false);
-    const requests = new LazyCustomElementRequestController(host, undefined, retryStale);
-    return { requests, retryStale };
+    const cancelStale = vi
+      .spyOn(staleRecovery, "cancelStaleChunkRecovery")
+      .mockImplementation(() => {});
+    onTestFinished(() => {
+      retryStale.mockRestore();
+      cancelStale.mockRestore();
+    });
+    const requests = createLazyCustomElementRequests({ updateComplete: Promise.resolve(true) });
+    return { requests, retryStale, cancelStale };
   }
 
-  it("publishes loading and error before retrying the canonical load and replaying once", async () => {
-    const firstError = new Error("chunk unavailable");
-    const { requests } = createRequestHarness();
+  it.each([false, true])("retries a failed load and replays once (stale: %s)", async (stale) => {
+    const error = new Error(
+      stale ? "Failed to fetch dynamically imported module: panel-abc.js" : "chunk unavailable",
+    );
+    const { requests, retryStale } = createRequestHarness();
+    const observed: Array<string | undefined> = [];
+    const unsubscribe = requests.subscribe(() => observed.push(requests.visibleState?.status));
     const continuation = vi.fn();
-    const tagName = uniqueTag();
-    const element = {
-      tagName,
-      label: "test panel",
-      loadModule: vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(firstError)
-        .mockImplementationOnce(async () => {
-          customElements.define(tagName, class extends HTMLElement {});
-        }),
-    };
-
+    const element = failedElement(error, true);
     requests.request(element, continuation);
-
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
     await waitForFast(() =>
-      expect(requests.visibleState).toMatchObject({
-        status: "error",
-        element,
-        error: firstError,
-        stale: false,
-      }),
+      expect(requests.visibleState).toMatchObject({ status: "error", element, error, stale }),
     );
     expect(continuation).not.toHaveBeenCalled();
-
+    expect(observed).toContain("error");
     requests.retry();
-
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
+    if (stale) {
+      expect(retryStale.mock.calls[0]?.[0]?.canReload?.()).toBe(true);
+    }
     await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
+    expect(retryStale).toHaveBeenCalledTimes(stale ? 1 : 0);
+    if (stale) {
+      expect(retryStale.mock.calls[0]?.[0]?.canReload?.()).toBe(false);
+    }
     expect(element.loadModule).toHaveBeenCalledTimes(2);
+    expect(requests.visibleState).toBeUndefined();
+    expect(observed.at(-1)).toBeUndefined();
+    unsubscribe();
+  });
+
+  it("waits for the render commit and retains a replacement requested by the replay", async () => {
+    const committed = createDeferred();
+    const replacementLoad = createDeferred();
+    const requests = createLazyCustomElementRequests({ updateComplete: committed.promise });
+    const replacementAction = vi.fn();
+    const replacement = definedElement(replacementLoad.promise);
+    const action = vi.fn(() => requests.request(replacement, replacementAction));
+    const first = definedElement();
+
+    requests.request(first, action);
+    await waitForFast(() => expect(customElements.get(first.tagName)).toBeDefined());
+    expect(action).not.toHaveBeenCalled();
+    committed.resolve();
+    await waitForFast(() => expect(replacement.loadModule).toHaveBeenCalledOnce());
+    expect(requests.visibleState).toMatchObject({ status: "loading", element: replacement });
+    replacementLoad.resolve();
+    await waitForFast(() => expect(replacementAction).toHaveBeenCalledOnce());
+    expect(action).toHaveBeenCalledOnce();
+    expect(requests.visibleState).toBeUndefined();
+  });
+
+  it("publishes successful preload registration without a visible request", async () => {
+    const requests = createLazyCustomElementRequests();
+    const published = vi.fn();
+    requests.subscribe(published);
+    const element = definedElement();
+
+    requests.preload(element);
+    await waitForFast(() => expect(published).toHaveBeenCalledOnce());
+    expect(customElements.get(element.tagName)).toBeDefined();
     expect(requests.visibleState).toBeUndefined();
   });
 
   it("skips the action replay while the host has not rendered the element", async () => {
-    // Regression: replaying while the shell is still splash-gated re-dispatches
-    // an event nothing handles, which re-enters the controller in a microtask
-    // cycle that starves the boot (Gateway socket included).
-    const requestUpdate = vi.fn();
+    // Replaying into a splash-gated shell can re-enter the loader and starve boot.
     const rendered = new Map<string, Element>();
     const host = {
-      requestUpdate,
       updateComplete: Promise.resolve(true),
       queryRenderedElement: (tagName: string) => rendered.get(tagName) ?? null,
     };
-    const requests = new LazyCustomElementRequestController(host, undefined, async () => false);
+    const requests = createLazyCustomElementRequests(host);
     const action = vi.fn();
-    const tagName = uniqueTag();
-    const element = {
-      tagName,
-      label: "test panel",
-      loadModule: async () => {
-        customElements.define(tagName, class extends HTMLElement {});
-      },
-    };
+    const element = definedElement();
 
     requests.request(element, action);
     await waitForFast(() => expect(requests.visibleState).toBeUndefined());
     expect(action).not.toHaveBeenCalled();
 
-    rendered.set(tagName, document.createElement(tagName));
+    rendered.set(element.tagName, document.createElement(element.tagName));
     requests.request(element, action);
     await waitForFast(() => expect(action).toHaveBeenCalledOnce());
     expect(requests.visibleState).toBeUndefined();
   });
 
   it("resumes an active request after a foreground request replaces its visible slot", async () => {
-    let rejectActive: ((error: Error) => void) | undefined;
-    let resolveForeground: (() => void) | undefined;
+    const activeLoad = createDeferred();
+    const foregroundLoad = createDeferred();
     const { requests } = createRequestHarness();
-    const activeElement = {
-      tagName: uniqueTag(),
-      label: "active panel",
-      loadModule: vi.fn(
-        () =>
-          new Promise<void>((_resolve, reject) => {
-            rejectActive = reject;
-          }),
-      ),
-    };
-    const foregroundElement = {
-      tagName: uniqueTag(),
-      label: "command palette",
-      loadModule: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveForeground = () => {
-              customElements.define(foregroundElement.tagName, class extends HTMLElement {});
-              resolve();
-            };
-          }),
-      ),
-    };
+    const activeElement = definedElement(activeLoad.promise);
+    const foregroundElement = definedElement(foregroundLoad.promise);
 
     requests.requestWhileActive(activeElement, true);
     await waitForFast(() => expect(activeElement.loadModule).toHaveBeenCalledOnce());
     requests.request(foregroundElement);
     await waitForFast(() => expect(foregroundElement.loadModule).toHaveBeenCalledOnce());
-    resolveForeground?.();
+    foregroundLoad.resolve();
     await waitForFast(() => expect(requests.visibleState?.element).toBe(activeElement));
 
     const error = new Error("active chunk unavailable");
-    rejectActive?.(error);
+    activeLoad.reject(error);
     await waitForFast(() =>
       expect(requests.visibleState).toMatchObject({
         element: activeElement,
@@ -168,17 +189,7 @@ describe("optional custom element requests", () => {
   it("keeps an active request dismissed until its lifecycle restarts", async () => {
     const error = new Error("active chunk unavailable");
     const { requests } = createRequestHarness();
-    const tagName = uniqueTag();
-    const element = {
-      tagName,
-      label: "active panel",
-      loadModule: vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(error)
-        .mockImplementationOnce(async () => {
-          customElements.define(tagName, class extends HTMLElement {});
-        }),
-    };
+    const element = failedElement(error, true);
 
     requests.requestWhileActive(element, true);
     await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
@@ -193,108 +204,71 @@ describe("optional custom element requests", () => {
     await waitForFast(() => expect(element.loadModule).toHaveBeenCalledTimes(2));
   });
 
-  it("delegates stale recovery before falling back to the same in-place load", async () => {
+  it("cancels pending page recovery only when a stale failure surface is retired", async () => {
     const staleError = new Error("Failed to fetch dynamically imported module: panel-abc.js");
-    const { requests, retryStale } = createRequestHarness();
-    const continuation = vi.fn();
-    const tagName = uniqueTag();
-    const element = {
-      tagName,
-      label: "stale panel",
-      loadModule: vi
-        .fn<() => Promise<void>>()
-        .mockRejectedValueOnce(staleError)
-        .mockImplementationOnce(async () => {
-          customElements.define(tagName, class extends HTMLElement {});
-        }),
-    };
+    const { requests, cancelStale } = createRequestHarness();
+    const stalePanel = failedElement(staleError);
 
-    requests.request(element, continuation);
+    requests.request(stalePanel);
     await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
-    expect(requests.visibleState).toMatchObject({ stale: true });
+    requests.abandon();
+    expect(cancelStale).toHaveBeenCalledOnce();
 
+    requests.request(stalePanel);
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     requests.retry();
-    expect(retryStale.mock.calls[0]?.[0]?.()).toBe(true);
+    requests.close();
+    expect(cancelStale).toHaveBeenCalledTimes(2);
 
-    await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
-    expect(retryStale).toHaveBeenCalledOnce();
-    expect(retryStale.mock.calls[0]?.[0]?.()).toBe(false);
-    expect(element.loadModule).toHaveBeenCalledTimes(2);
+    const brokenPanel = failedElement(new Error("render failed"));
+    requests.request(brokenPanel);
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
+    requests.close();
+    expect(cancelStale).toHaveBeenCalledTimes(2);
   });
 
   it("closes a loading request without replaying after its late definition", async () => {
-    let resolveLoad: (() => void) | undefined;
+    const load = createDeferred();
     const { requests } = createRequestHarness();
     const continuation = vi.fn();
-    const tagName = uniqueTag();
-    const element = {
-      tagName,
-      label: "slow panel",
-      loadModule: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveLoad = () => {
-              customElements.define(tagName, class extends HTMLElement {});
-              resolve();
-            };
-          }),
-      ),
-    };
+    const element = definedElement(load.promise);
 
     requests.request(element, continuation);
     expect(requests.visibleState?.status).toBe("loading");
     await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
 
     requests.close();
-    resolveLoad?.();
+    load.resolve();
 
     await waitForFast(() => expect(customElements.get(element.tagName)).toBeDefined());
     expect(requests.visibleState).toBeUndefined();
     expect(continuation).not.toHaveBeenCalled();
   });
 
-  it("keeps preload failures silent until an explicit request owns visibility", async () => {
-    const error = new Error("chunk unavailable");
-    const { requests } = createRequestHarness();
-    const element = {
-      tagName: uniqueTag(),
-      label: "preloaded panel",
-      loadModule: vi.fn(async () => {
-        throw error;
-      }),
-    };
-
-    requests.preload(element);
-    requests.preload(element);
-
-    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
-    expect(requests.visibleState).toBeUndefined();
-
-    requests.request(element);
-    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
-    expect(element.loadModule).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports a preload failure when an active surface opts into recovery", async () => {
-    const error = new Error("chunk unavailable");
-    const { requests } = createRequestHarness();
-    const element = {
-      tagName: uniqueTag(),
-      label: "active panel",
-      loadModule: vi.fn(async () => {
-        throw error;
-      }),
-    };
-
-    requests.preload(element, { reportError: true });
-
-    await waitForFast(() =>
-      expect(requests.visibleState).toMatchObject({
-        element,
-        error,
-        stale: false,
-        status: "error",
-      }),
-    );
-  });
+  it.each([false, true])(
+    "publishes preload failures only when requested (reportError: %s)",
+    async (reportError) => {
+      const error = new Error("chunk unavailable");
+      const { requests } = createRequestHarness();
+      const element = failedElement(error);
+      requests.preload(element, { reportError });
+      requests.preload(element, { reportError });
+      await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
+      if (reportError) {
+        await waitForFast(() =>
+          expect(requests.visibleState).toMatchObject({
+            element,
+            error,
+            stale: false,
+            status: "error",
+          }),
+        );
+      } else {
+        expect(requests.visibleState).toBeUndefined();
+        requests.request(element);
+        await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
+        expect(element.loadModule).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 });

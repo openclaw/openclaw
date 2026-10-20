@@ -6,12 +6,70 @@ import {
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
-import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryDetailResult,
+  PluginsInspectResult,
+} from "../../lib/plugins/index.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
+import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 import { renderPluginSecurityAudit } from "./security-audit.tsx";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
+
+export function renderPluginCompatibilityNotices(
+  notices: PluginCatalogItem["compatibilityNotices"],
+  showApis = false,
+): JSX.Element {
+  return (
+    <For each={notices}>
+      {(notice) =>
+        renderPluginRowMessage({
+          kind: "info",
+          get text() {
+            return notice.removalDate
+              ? t("pluginsPage.compatibilityDeprecatedDated", {
+                  date: formatDateMs(Date.parse(`${notice.removalDate}T00:00:00Z`), {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                    timeZone: "UTC",
+                  }),
+                })
+              : t("pluginsPage.compatibilityDeprecatedUndated");
+          },
+          link: notice.migrationGuideUrl
+            ? {
+                href: notice.migrationGuideUrl,
+                get text() {
+                  return t("pluginsPage.compatibilityDetails");
+                },
+              }
+            : undefined,
+          details:
+            showApis && notice.apis.length ? (
+              <dl class="plugin-compatibility-apis" aria-label={t("pluginsPage.compatibilityApis")}>
+                <For each={notice.apis}>
+                  {(api) => (
+                    <div>
+                      <dt>
+                        <code>{api.displayName}</code>
+                      </dt>
+                      <dd>{api.replacement}</dd>
+                    </div>
+                  )}
+                </For>
+              </dl>
+            ) : undefined,
+        })
+      }
+    </For>
+  );
+}
 
 function pluginWebUrl(value: string | undefined): URL | null {
   const url = value ? URL.parse(value) : null;
@@ -40,25 +98,36 @@ function pluginRepository(
   return { href: url.href, name: url.hostname + url.pathname.replace(/\/$/u, ""), github };
 }
 
-export function renderPluginPublisher(
-  result: PluginDiscoveryDetailResult | undefined,
-  localName?: string,
-): JSX.Element | undefined {
-  const author = result?.detail.author;
-  const handle = author?.handle ?? result?.plugin.catalog.author;
-  const name = author?.displayName ?? localName;
+export function renderPublisherIdentity(options: {
+  name?: string;
+  handle?: string;
+  official?: boolean;
+}): JSX.Element | undefined {
+  const { name, handle, official } = options;
   if (!name && !handle) {
     return undefined;
   }
   return (
     <div class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-name">
-        {name ? <strong>{name}</strong> : renderPluginAuthor(handle, { linked: true })}
-        {author?.official === true ? renderPluginOfficialBadge() : undefined}
+        {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
+        {official ? renderPluginOfficialBadge() : undefined}
       </span>
-      {name ? renderPluginAuthor(handle, { linked: true }) : undefined}
+      {name ? renderPluginAuthor(handle) : undefined}
     </div>
   );
+}
+
+export function renderPluginPublisher(
+  result: PluginDiscoveryDetailResult | undefined,
+  localName?: string,
+): JSX.Element | undefined {
+  const author = result?.detail.author;
+  return renderPublisherIdentity({
+    name: author?.displayName ?? localName,
+    handle: author?.handle ?? result?.plugin.catalog.author,
+    official: author?.official === true,
+  });
 }
 
 export function renderPluginMetadata(
@@ -171,63 +240,59 @@ export function renderPluginCapabilitySection(
   }>,
   icon: () => JSX.Element,
 ): JSX.Element {
-  return (
-    <>
-      {values.length ? (
-        <section class="plugin-capabilities">
-          <h2>
-            {title}
-            <span>{values.length}</span>
-          </h2>
-          <div>
-            <For each={values}>
-              {(value) => {
-                const open = value.onOpen;
-                const content = (
-                  <>
-                    <span class="plugin-capability__icon" aria-hidden="true">
-                      {icon()}
-                    </span>
-                    <span class="plugin-capability__copy">
-                      <strong>{value.name}</strong>
-                      {value.description ? <span>{value.description}</span> : undefined}
-                    </span>
-                    {value.trailing ? (
-                      <span class="plugin-capability__trailing">{value.trailing}</span>
-                    ) : undefined}
-                    {open || value.details ? (
-                      <span class="plugin-capability__chevron" aria-hidden="true">
-                        {<Icon name="chevronRight" />}
-                      </span>
-                    ) : undefined}
-                  </>
-                );
-                return (
-                  <div class="plugin-capability">
-                    {value.details ? (
-                      <details class="plugin-capability__disclosure">
-                        <summary>{content}</summary>
-                        <div class="plugin-capability__details">{value.details}</div>
-                      </details>
-                    ) : open ? (
-                      <button type="button" onClick={open}>
-                        {content}
-                      </button>
-                    ) : (
-                      <div class="plugin-capability__static">{content}</div>
-                    )}
-                  </div>
-                );
-              }}
-            </For>
-          </div>
-        </section>
-      ) : undefined}
-    </>
-  );
+  return values.length ? (
+    <section class="plugin-capabilities">
+      <h2>
+        {title}
+        <span>{values.length}</span>
+      </h2>
+      <div>
+        <For each={values}>
+          {(value) => {
+            const open = value.onOpen;
+            const content = (
+              <>
+                <span class="plugin-capability__icon" aria-hidden="true">
+                  {icon()}
+                </span>
+                <span class="plugin-capability__copy">
+                  <strong>{value.name}</strong>
+                  {value.description ? <span>{value.description}</span> : undefined}
+                </span>
+                {value.trailing ? (
+                  <span class="plugin-capability__trailing">{value.trailing}</span>
+                ) : undefined}
+                {open || value.details ? (
+                  <span class="plugin-capability__chevron" aria-hidden="true">
+                    {<Icon name="chevronRight" />}
+                  </span>
+                ) : undefined}
+              </>
+            );
+            return (
+              <div class="plugin-capability">
+                {value.details ? (
+                  <details class="plugin-capability__disclosure">
+                    <summary>{content}</summary>
+                    <div class="plugin-capability__details">{value.details}</div>
+                  </details>
+                ) : open ? (
+                  <button type="button" onClick={open}>
+                    {content}
+                  </button>
+                ) : (
+                  <div class="plugin-capability__static">{content}</div>
+                )}
+              </div>
+            );
+          }}
+        </For>
+      </div>
+    </section>
+  ) : undefined;
 }
 
-export function renderPluginMcpServers(
+function renderPluginMcpServers(
   names: readonly string[],
   details: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"] = [],
 ): JSX.Element {
@@ -293,7 +358,7 @@ const overviewContractFamilies = [
   "migrationProviders",
 ] as const;
 
-export function renderPluginDeclaredCapabilities(
+function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
   uiCapabilities?: readonly PluginUiCapability[],
 ): JSX.Element {
@@ -311,6 +376,30 @@ export function renderPluginDeclaredCapabilities(
       description: t(`pluginsPage.${key}.description`),
     })),
     () => <Icon name="layers" />,
+  );
+}
+
+export function renderPluginContentCapabilities(params: {
+  contracts: Readonly<Record<string, readonly string[]>> | undefined;
+  uiCapabilities?: readonly PluginUiCapability[];
+  skillsSection?: JSX.Element;
+  skills: Array<{ name: string; description?: string }>;
+  tools: Array<{ name: string; description?: string; onOpen?: () => void }>;
+  mcpServers: readonly string[];
+  mcpServerDetails?: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"];
+}): JSX.Element {
+  return (
+    <>
+      {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
+      {params.skillsSection ??
+        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
+          <Icon name="bookOpenText" />
+        ))}
+      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
+        <Icon name="wrench" />
+      ))}
+      {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails)}
+    </>
   );
 }
 

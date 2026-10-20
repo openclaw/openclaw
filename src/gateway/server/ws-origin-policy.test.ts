@@ -87,6 +87,8 @@ describe("committed browser origin policy", () => {
     "retires only clients no longer admitted after $policy changes ($transport)",
     ({ policy, transport }) => {
       const revoked = {
+        connId: "revoked",
+        connect: { client: { id: "openclaw-control-ui" }, role: "operator" },
         browserOrigin: {
           origin: "https://revoked.example.test",
           requestHost: "revoked.example.test",
@@ -97,6 +99,8 @@ describe("committed browser origin policy", () => {
         socket: { close: vi.fn() },
       };
       const retained = {
+        connId: "retained",
+        connect: { client: { id: "openclaw-control-ui" }, role: "operator" },
         browserOrigin: {
           origin: "https://retained.example.test",
           requestHost: "gateway.example.test",
@@ -104,7 +108,11 @@ describe("committed browser origin policy", () => {
         },
         socket: { close: vi.fn() },
       };
-      const backend = { socket: { close: vi.fn() } };
+      const backend = {
+        connId: "backend",
+        connect: { client: { id: "gateway-client" }, role: "operator" },
+        socket: { close: vi.fn() },
+      };
       const registry = new GatewayClientRegistry([revoked, retained, backend] as never);
       const release = registry.retainRequest(revoked as unknown as GatewayWsClient);
       onTestFinished(release);
@@ -235,6 +243,22 @@ describe("committed authentication policy", () => {
       principal: null,
       revoked: false,
     })),
+    ...(
+      [
+        ["operator.admin", "operator.read"],
+        ["operator.write", "operator.read", "operator.talk"],
+        ["operator.read", "operator.sessions.read"],
+        ["operator.sessions.write", "operator.sessions.read"],
+      ] satisfies OperatorScope[][]
+    ).map<AuthPolicyTransition>((scopes) => ({
+      name: `redundant implied identity scopes ${scopes.join(", ")}`,
+      initial: { gateway: { auth: { identityScopes: { [identity]: scopes } } } },
+      next: {
+        gateway: { auth: { identityScopes: { [identity]: [scopes[0]!] } } },
+      },
+      principal: { role: "operator", verifiedIdentity: identity },
+      revoked: false,
+    })),
     ...[
       "allowUsers",
       "proxy removed",
@@ -296,6 +320,37 @@ describe("committed authentication policy", () => {
     }
   });
 
+  it("preserves serialized grants across equivalent scope edits without accepting malformed or revoked grants", () => {
+    const policy = {
+      generation: "",
+      grantGeneration:
+        '{"browserOriginAllowed":undefined,"fallbackCredentialGeneration":undefined,"grant":["operator.read","operator.write"],"methodEnabled":true,"proxyUserAllowed":true}',
+      role: "operator",
+      authMethod: "trusted-proxy" as const,
+      verifiedIdentity: identity,
+    };
+    const next: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user", allowUsers: [identity] },
+          identityScopes: { [identity]: ["operator.write"] },
+        },
+      },
+    };
+    expect(isGatewayAuthGrantCurrent(policy, next)).toBe(true);
+    for (const grantGeneration of [
+      "invalid-fingerprint",
+      policy.grantGeneration.replace('["operator.read","operator.write"]', "[1]"),
+      policy.grantGeneration.replace('"methodEnabled":true', '"methodEnabled":false'),
+    ]) {
+      expect(isGatewayAuthGrantCurrent({ ...policy, grantGeneration }, next)).toBe(false);
+    }
+    const revoked = structuredClone(next);
+    revoked.gateway!.auth!.identityScopes![identity] = ["operator.read"];
+    expect(isGatewayAuthGrantCurrent(policy, revoked)).toBe(false);
+  });
+
   it.each(["retained@example.test", "other@example.test"])(
     "latches an added then removed grant only for its source: %s",
     (changedIdentity) => {
@@ -316,14 +371,6 @@ describe("committed authentication policy", () => {
   it.each<OpenClawConfig["gateway"]>([
     { trustedProxies: ["192.0.2.10"] },
     { auth: { trustedProxy: { userHeader: "x-user", allowUsers: ["retained@example.test"] } } },
-    {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
-        },
-      },
-    },
   ])(
     "fences transport without revoking accepted work and drains its config response for %j",
     (gateway) => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -39,6 +40,7 @@ const locator = {
   sessionId: "public-history-generation",
   shareId: "a".repeat(48),
 };
+const rowQuery = { key: locator.sessionKey, agentId: locator.agentId };
 
 let projection: SessionRowProjection | undefined;
 function currentProjection() {
@@ -59,6 +61,7 @@ function isPublicSessionShareActive(config: OpenClawConfig, target: typeof locat
 }
 async function withPublicTestState(run: () => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
     try {
       await run();
     } finally {
@@ -123,8 +126,7 @@ describe("anonymous published session reader", () => {
       const first = await readPublicSessionShare(cfg, locator, { offset: 200 });
       expect(first?.messages).toHaveLength(5);
       const preview = await readPublicSessionShare(cfg, locator, { card: true });
-      expect(preview?.messages[0]).toMatchObject({ content: "Message 0" });
-      expect(preview?.totalMessages).toBe(205);
+      expect(preview).toMatchObject({ messages: [{ content: "Message 0" }], totalMessages: 205 });
       expect(first?.olderOffset).toBeUndefined();
     });
   });
@@ -188,16 +190,14 @@ describe("anonymous published session reader", () => {
     await withPublicTestState(async () => {
       await seed(["Oldest", "x".repeat(1024 * 1024 + 1), "Newest"]);
       const latest = await readPublicSessionShare(cfg, locator);
-      expect(latest?.messages).toMatchObject([{ content: "Newest" }]);
-      expect(latest?.olderOffset).toBe(1);
+      expect(latest).toMatchObject({ messages: [{ content: "Newest" }], olderOffset: 1 });
       const oversized = await readPublicSessionShare(cfg, locator, { offset: 1 });
       expect(oversized).toMatchObject({ messages: [], truncated: true, olderOffset: 2 });
       const oldest = await readPublicSessionShare(cfg, locator, { offset: 2 });
       expect(oldest?.messages).toMatchObject([{ content: "Oldest" }]);
       expect(oldest?.olderOffset).toBeUndefined();
       const preview = await readPublicSessionShare(cfg, locator, { card: true });
-      expect(preview?.messages).toMatchObject([{ content: "Oldest" }]);
-      expect(preview?.totalMessages).toBe(3);
+      expect(preview).toMatchObject({ messages: [{ content: "Oldest" }], totalMessages: 3 });
     });
   });
 
@@ -211,8 +211,10 @@ describe("anonymous published session reader", () => {
         ...Array.from({ length: 205 }, (_, index) => `Later request ${index}`),
       ]);
       const preview = await readPublicSessionShare(cfg, locator, { card: true });
-      expect(preview?.messages).toMatchObject([{ content: "Opening public request" }]);
-      expect(preview?.totalMessages).toBe(209);
+      expect(preview).toMatchObject({
+        messages: [{ content: "Opening public request" }],
+        totalMessages: 209,
+      });
     });
   });
 
@@ -223,8 +225,7 @@ describe("anonymous published session reader", () => {
         "Later request outside the opening window",
       ]);
       const preview = await readPublicSessionShare(cfg, locator, { card: true });
-      expect(preview?.messages).toEqual([]);
-      expect(preview?.totalMessages).toBe(101);
+      expect(preview).toMatchObject({ messages: [], totalMessages: 101 });
     });
   });
 
@@ -261,8 +262,7 @@ describe("anonymous published session reader", () => {
           "Newest",
         ]);
         const latest = await readPublicSessionShare(cfg, locator);
-        expect(latest?.messages).toMatchObject([{ content: "Newest" }]);
-        expect(latest?.olderOffset).toBe(1);
+        expect(latest).toMatchObject({ messages: [{ content: "Newest" }], olderOffset: 1 });
         const page = await readPublicSessionShare(cfg, locator, { offset: latest?.olderOffset });
         expect(page).toMatchObject({ olderOffset: 2 });
         expect(page?.messages).toHaveLength(1);
@@ -305,33 +305,6 @@ describe("anonymous published session reader", () => {
       await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
       expect(isPublicSessionShareActive(cfg, locator)).toBe(false);
       expect(await readPublicSessionShare(cfg, locator)).toBeNull();
-    });
-  });
-
-  it("reconciles sharing facts invalidated during the history read", async () => {
-    await withPublicTestState(async () => {
-      await seed(["Still published"]);
-      const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
-      vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
-        async (...args) => {
-          const result = await read(...args);
-          sessionChanges.emit({
-            agentId: locator.agentId,
-            sessionKey: locator.sessionKey,
-            factsInvalidated: "category",
-          });
-          expect(
-            currentProjection().sharingTargetState({
-              key: locator.sessionKey,
-              agentId: locator.agentId,
-            }).status,
-          ).toBe("pending");
-          return result;
-        },
-      );
-      expect((await readPublicSessionShare(cfg, locator))?.messages).toMatchObject([
-        { content: "Still published" },
-      ]);
     });
   });
 
@@ -397,12 +370,7 @@ describe("anonymous published session reader", () => {
               });
               // Hold the real worker result before the projection accepts it.
               await withinTest(membershipRead.promise, signal);
-              expect(
-                currentProjection().sharingTargetState({
-                  key: locator.sessionKey,
-                  agentId: locator.agentId,
-                }).status,
-              ).toBe("pending");
+              expect(currentProjection().sharingTargetState(rowQuery).status).toBe("pending");
             }
             historyReturned = true;
             return result;

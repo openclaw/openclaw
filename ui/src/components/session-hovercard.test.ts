@@ -3,7 +3,10 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequestSnapshot } from "../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../src/gateway/control-ui-contract.js";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -189,23 +192,20 @@ describe("session hovercard", () => {
     },
   );
 
-  it.each<[SidebarRecentSession["placementMachine"], string, boolean?]>([
+  it.each<[SidebarRecentSession["placementMachine"], string]>([
     [
       { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
       "Linux · medium · 4 vCPU · 16 GB",
     ],
-    [{ class: "medium" }, "medium"],
     [{ os: "windows/wsl2", memoryGb: 8 }, "windows/wsl2 · 8 GB"],
     [undefined, ""],
-    [{}, ""],
-    [{ class: "medium" }, "", false],
   ])(
     "shows only known machine facts: %j",
-    (placementMachine: SidebarRecentSession["placementMachine"], summary, hasPlacement = true) => {
+    (placementMachine: SidebarRecentSession["placementMachine"], summary) => {
       const container = renderCard({
         row: row({
-          placementProviderId: hasPlacement ? "machine0" : undefined,
-          placementProfileId: hasPlacement ? "team" : undefined,
+          placementProviderId: "machine0",
+          placementProfileId: "team",
           placementMachine,
         }),
       });
@@ -226,19 +226,16 @@ describe("session hovercard", () => {
     },
   );
 
-  it.each(["purple", undefined, "default"])(
-    "reflects the session color %s without unset chrome",
-    (color) => {
-      const container = renderCard({ row: row({ color }) });
-      const dot = container.querySelector(".session-color-dot");
-      if (color === "purple") {
-        expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
-        expect(dot?.getAttribute("style")).toContain("--session-color-purple");
-      } else {
-        expect(dot).toBeNull();
-      }
-    },
-  );
+  it.each(["purple", undefined])("reflects the session color %s without unset chrome", (color) => {
+    const container = renderCard({ row: row({ color }) });
+    const dot = container.querySelector(".session-color-dot");
+    if (color === "purple") {
+      expect(dot?.getAttribute("aria-label")).toBe("Session color: Purple");
+      expect(dot?.getAttribute("style")).toContain("--session-color-purple");
+    } else {
+      expect(dot).toBeNull();
+    }
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -250,55 +247,21 @@ describe("session hovercard", () => {
     vi.useRealTimers();
   });
 
-  it("renders header and session metadata without inventing optional sections", () => {
-    const container = renderCard({ row: row() });
-
-    expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
-      "Ship the release",
-    );
-    expect(container.querySelector(".session-hovercard__created-age")?.textContent).toBe("2h");
-    expect(container.querySelector(".session-hovercard__meta")).toBeNull();
-    expect(container.querySelector(".session-hovercard__attribution")?.textContent).toContain(
-      "Alice Baker",
-    );
-    expect(
-      [...container.querySelectorAll(".session-hovercard__context-text")].map((node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual(["openclaw", "feature/session-hovercard"]);
-    expect(
-      container
-        .querySelector('[aria-label="Branch: feature/session-hovercard"]')
-        ?.getAttribute("title"),
-    ).toBe("/work/openclaw");
-    expect(container.textContent).not.toContain("/work/openclaw");
-    expect(container.textContent).not.toContain("Worktree");
-    expect(
-      [...container.querySelectorAll(".session-hovercard__section")].map((section) =>
-        [...section.classList].find((name) => name.startsWith("session-hovercard__section--")),
-      ),
-    ).toEqual(["session-hovercard__section--header", "session-hovercard__section--metadata"]);
-    expect(container.querySelector(".session-progress-card")).toBeNull();
-    expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
-    expect(container.querySelector(".session-hovercard__attribution-name")?.tagName).toBe("SPAN");
-    expect(container.querySelector(".person-activity-avatar-link")).toBeNull();
-  });
-
   it.each([
-    { name: "dashboard", facts: { boardFace: "dashboard" }, labels: ["Opens as dashboard"] },
-    { name: "automation", facts: { hasAutomation: true }, labels: ["Automation attached"] },
     {
       name: "both",
       facts: { boardFace: "dashboard", hasAutomation: true },
       labels: ["Opens as dashboard", "Automation attached"],
     },
-    { name: "disabled", facts: { hasAutomation: false }, labels: [] },
   ] satisfies { name: string; facts: Partial<SidebarRecentSession>; labels: string[] }[])(
     "renders $name session facts without other metadata",
     ({ facts, labels }) => {
       const container = renderCard({
         row: row({ createdActor: undefined, workContext: undefined, ...facts }),
         automationLink: {
+          gateway: null,
+          sessionKey: "agent:main:work",
+          agentId: "main",
           href: "/automations?session=agent%3Amain%3Awork&agent=main",
           navigate: vi.fn(),
         },
@@ -322,7 +285,13 @@ describe("session hovercard", () => {
     const href = "/control/automations?session=agent%3Aops%3Anight+watch&agent=ops";
     const container = renderCard({
       row: row({ hasAutomation: true }),
-      automationLink: { href, navigate },
+      automationLink: {
+        href,
+        navigate,
+        gateway: null,
+        sessionKey: "agent:ops:night watch",
+        agentId: "ops",
+      },
     });
     const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__automation-link")!;
     expect(link?.getAttribute("href")).toBe(href);
@@ -333,6 +302,9 @@ describe("session hovercard", () => {
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
     link.dispatchEvent(click);
     expect(click.defaultPrevented).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    const open = container.querySelector<HTMLAnchorElement>(".session-hovercard__automation-open")!;
+    open.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(navigate).toHaveBeenCalledExactlyOnceWith();
   });
 
@@ -398,47 +370,135 @@ describe("session hovercard", () => {
     },
   );
 
-  it("renders one titled PR row with compact diff facts and an overflow count", () => {
+  it("shows task publications without claiming unknown GitHub state or hiding branch actions", () => {
+    const branch = {
+      owner: "example",
+      repo: "project",
+      branch: "coordination",
+      createUrl: "https://github.com/example/project/pull/new/coordination",
+    };
+    const task = {
+      owner: "example",
+      repo: "project",
+      branch: "fix/child",
+      url: "https://github.com/example/project/pull/417",
+      number: 417,
+      title: "Child publication",
+      sourceSessionKey: "agent:main:child",
+      sourceAgentId: "main",
+    };
+    const container = renderCard({
+      pullRequests: snapshot({ branch, taskPullRequests: [task], taskPullRequestCount: 1 }),
+    });
+    const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__pr-row");
+    expect(link?.href).toBe(task.url);
+    expect(link?.dataset.state).toBeUndefined();
+    expect(link?.textContent).toContain("Status unavailable");
+    expect(link?.textContent).toContain("Task branch: fix/child");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".session-hovercard__branch-action")?.href,
+    ).toBe(branch.createUrl);
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 31,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("31");
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("29 more");
+    // The branch PR can also belong to receipts outside the bounded task preview.
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 30,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("30");
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(2);
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("28 more");
+    const known = { ...task, state: "merged" as const };
+    renderCard(
+      {
+        pullRequests: snapshot({
+          pullRequests: [known],
+          taskPullRequests: [{ ...task, pullRequest: known }],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(1);
+    expect(container.querySelector(".session-hovercard__pr-row")?.getAttribute("data-state")).toBe(
+      "merged",
+    );
+  });
+
+  it("shows all supplied PRs with active work first, identities, and checks", () => {
     const container = renderCard({
       pullRequests: snapshot({
-        pullRequests: [
-          {
-            number: 101,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            title: "First",
-            url: "https://github.com/openclaw/openclaw/pull/101",
-            state: "open",
-            changedFiles: 2,
-            additions: 7,
-            deletions: 3,
-            checks: { state: "passing", passed: 2, failed: 0, skipped: 0, running: 0 },
-          },
-          {
-            number: 102,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            title: "Second",
-            url: "https://github.com/openclaw/openclaw/pull/102",
-            state: "draft",
-          },
-          {
-            number: 103,
-            owner: "openclaw",
-            repo: "openclaw",
-            branch: "feature",
-            title: "Third",
-            url: "https://github.com/openclaw/openclaw/pull/103",
-            state: "merged",
-          },
-        ],
+        pullRequests: (
+          [
+            {
+              number: 101,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "First",
+              url: "https://github.com/openclaw/openclaw/pull/101",
+              state: "open",
+              changedFiles: 2,
+              additions: 7,
+              deletions: 3,
+              checks: { state: "passing", passed: 2, failed: 0, skipped: 0, running: 0 },
+            },
+            {
+              number: 102,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Second",
+              url: "https://github.com/openclaw/openclaw/pull/102",
+              state: "draft",
+            },
+            {
+              number: 103,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Third",
+              url: "https://github.com/openclaw/openclaw/pull/103",
+              state: "merged",
+            },
+          ] satisfies ControlUiSessionPullRequest[]
+        ).toReversed(),
       }),
     });
 
     const links = [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")];
-    expect(links).toHaveLength(1);
+    expect(links).toHaveLength(3);
     expect(links[0]?.href).toBe("https://github.com/openclaw/openclaw/pull/101");
     expect(links[0]?.target).toBe("_blank");
     expect(links[0]?.rel).toContain("noopener");
@@ -446,7 +506,9 @@ describe("session hovercard", () => {
     expect(
       links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title"),
     ).toBeNull();
-    expect(links[0]?.querySelector(".session-hovercard__pr-number")).toBeNull();
+    expect(links[0]?.querySelector(".session-hovercard__pr-number")?.textContent).toBe(
+      "openclaw/openclaw#101",
+    );
     expect(links[0]?.querySelector(".session-hovercard__pr-author")).toBeNull();
     expect(
       links[0]?.querySelector(".session-hovercard__pr-state-icon")?.getAttribute("title"),
@@ -458,7 +520,11 @@ describe("session hovercard", () => {
     expect(links[0]?.getAttribute("aria-label")).toContain("First");
     expect(links[0]?.getAttribute("aria-label")).not.toContain("Opened by");
     expect(links[0]?.getAttribute("aria-label")).not.toContain("files");
-    expect(container.querySelector(".session-hovercard__more")?.textContent).toBe("+2 more");
+    expect(links.map((link) => link.dataset.state)).toEqual(["open", "draft", "merged"]);
+    expect(links[0]?.querySelector(".session-hovercard__pr-checks")?.textContent).toBe(
+      "CI checks passing",
+    );
+    expect(container.querySelector("details")).toBeNull();
     expect(container.querySelector(".session-hovercard__section--header")).toBeNull();
   });
 
@@ -747,22 +813,6 @@ describe("session hovercard", () => {
     },
   );
 
-  it("opens the creator's activity feed from the attribution", () => {
-    const navigate = vi.fn();
-    const container = renderCard({ row: row(), personActivity: { basePath: "/ui", navigate } });
-
-    const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__attribution-name");
-    expect(name?.getAttribute("href")).toBe("/ui/activity/alice");
-    expect(
-      container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    name?.dispatchEvent(click);
-    expect(navigate).toHaveBeenCalledWith("alice", "Alice Baker");
-    expect(click.defaultPrevented).toBe(true);
-  });
-
   it.each([true, false])(
     "renders authoritative participant projections (expanded: %s)",
     async (expanded) => {
@@ -826,6 +876,7 @@ describe("session hovercard", () => {
       participantTrigger?.dispatchEvent(touchDown);
       participantTrigger?.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
       participantTrigger?.click();
+      await participantsTooltip?.updateComplete;
       expect(participantsTooltip?.hasAttribute("open")).toBe(true);
       expect(participantTrigger?.textContent).toContain("4 others");
       expect(
@@ -871,6 +922,7 @@ describe("session hovercard", () => {
     trigger.dispatchEvent(pointer);
     trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
     trigger.click();
+    await tooltip.updateComplete;
     expect(tooltip.hasAttribute("open")).toBe(true);
     const name = container.querySelector<HTMLAnchorElement>(
       ".session-hovercard__attribution-name",
@@ -899,12 +951,6 @@ describe("session hovercard", () => {
       "Refreshed session",
     );
     renderCard({}, container);
-    expect(container.childElementCount).toBe(0);
-  });
-
-  it("renders nothing when no session facts are known", () => {
-    const container = renderCard({});
-
     expect(container.childElementCount).toBe(0);
   });
 });

@@ -1,32 +1,32 @@
+import path from "node:path";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
-  assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { shouldSkipDiscoveryError } from "../config/sessions/targets-path-validation.js";
 import {
-  createExistingAgentSessionStoreTargetResolver,
   listConfiguredSessionStoreAgentIds,
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
-  listOpenClawRegisteredAgentDatabases,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+  readOpenClawAgentDatabaseRegistryToken,
 } from "../state/openclaw-agent-db-registry-listing.js";
 import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
-import { resolveGatewaySessionStoreLookupCandidates } from "./session-utils-store-candidates.js";
-import type {
-  GatewaySessionStoreReadSources,
-  GatewaySessionStoreSourceRequest,
-} from "./session-utils-store.types.js";
+import {
+  openClawStateDatabaseCache,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../state/openclaw-state-db-cache.js";
+import { sessionStoreRoutingConfig } from "./session-utils-store-candidates.js";
+import type { GatewaySessionStoreSourceRequest } from "./session-utils-store.types.js";
 
 type SessionStoreRouting = GatewaySessionStoreSourceRequest["routing"];
 
@@ -38,164 +38,191 @@ function captureSessionStoreRouting(cfg: OpenClawConfig): SessionStoreRouting {
   }));
 }
 
-function sessionStoreRoutingConfig(routing: SessionStoreRouting): OpenClawConfig {
-  return {
-    agents: {
-      ownership: "explicit",
-      entries: Object.fromEntries(routing.agentIds.map((agentId) => [agentId, {}])),
-      defaults: { sessionStore: { agentId: routing.compatibilityAgentId } },
-    },
-    session: { store: routing.store },
-  };
-}
-
 function storeChanged(): Error {
   return new Error("Session store changed while preparing its metadata. Retry the request.");
 }
 
-/** Native discovery policy shared by synchronous readers and the admitted history worker. */
-export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStoreSourceRequest) {
-  const cfg = sessionStoreRoutingConfig(params.routing);
-  return withAgentRosterFactsBatch(cfg, () => {
-    const registered = params.registeredDatabases.filter(
-      (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-    const agentIds = new Set([
-      ...listConfiguredSessionStoreAgentIds(cfg),
-      ...registered.map((entry) => entry.agentId),
-    ]);
-    const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
-    const resolveExistingTargets = createExistingAgentSessionStoreTargetResolver(cfg, {
-      env: params.env,
-      registeredDatabases: registered,
-      readCandidates: params.candidates,
-      isSameDatabasePath,
-    });
-    const sources = new Map<string, readonly SessionEntryReadSource[]>();
-    const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource => {
-      if (params.candidates) {
-        assertSessionStoreReadCandidate(source.path, params.candidates);
-      }
-      isSameDatabasePath(source.path, source.path);
-      return source.agentId === params.currentSource.agentId &&
-        isSameDatabasePath(source.path, params.currentSource.path)
-        ? params.currentSource
-        : source;
-    };
-    for (const agentId of agentIds) {
-      let resolved: SessionEntryReadSource[];
-      let exactRegisteredSources = false;
-      try {
-        const { candidates, readSources } = resolveGatewaySessionStoreLookupCandidates({
-          ...params,
-          cfg,
-          agentId,
-          registeredDatabases: registered,
-          resolveExistingTargets,
-        });
-        resolved = [];
-        if (readSources) {
-          exactRegisteredSources = true;
-          resolved = readSources;
-        } else {
-          for (const candidate of candidates) {
-            const target = resolveSqliteTargetFromSessionStorePath(candidate.storePath, {
-              agentId: candidate.agentId,
-              defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
-              env: params.env,
-              registeredDatabases: registered,
-              readCandidates: params.candidates,
-              isSameDatabasePath,
-            });
-            if (target.ownerSource === "ambiguous-registry") {
-              resolved.length = 0;
-              break;
-            }
-            resolved.push({ agentId: target.agentId ?? candidate.agentId, path: target.path });
-          }
-        }
-        const bound: SessionEntryReadSource[] = [];
-        for (const source of resolved) {
-          const current = bindCurrentSource(source);
-          if (
-            !bound.some(
-              (previous) =>
-                (!exactRegisteredSources || previous.agentId === current.agentId) &&
-                isSameDatabasePath(previous.path, current.path),
-            )
-          ) {
-            bound.push(current);
-          }
-        }
-        sources.set(agentId, bound);
-      } catch {
-        // Auxiliary lineage follows the existing unavailable-store-as-no-rows contract.
-        sources.set(agentId, []);
-        continue;
-      }
-    }
-    return {
-      sources: Object.fromEntries(sources),
-      isCurrent: () => isSameDatabasePath.isCurrent(),
-    };
-  });
-}
-
-/** Bind candidate addresses once; registry metadata uses its existing invalidation owner. */
-export function prepareGatewaySessionStoreReadSources(params: {
+type SourcePreparationParams = {
   cfg: OpenClawConfig;
   currentSource: SessionEntryReadSource;
   env: NodeJS.ProcessEnv;
   registryPath: string;
-}): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
-  const registryOptions = {
-    env: cloneEnvWithPlatformSemantics(params.env),
-    path: params.registryPath,
-    includeIncompatibleSchemaVersions: true,
-  };
-  let discoveryIsCurrent = () => true;
-  const sources = withAgentRosterFactsBatch(params.cfg, () => {
-    let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
-    try {
-      registered = listOpenClawRegisteredAgentDatabases(registryOptions);
-    } catch {
-      return {};
-    }
-    const resolved = resolveGatewaySessionStoreReadSources({
-      routing: captureSessionStoreRouting(params.cfg),
-      currentSource: params.currentSource,
-      env: params.env,
-      registeredDatabases: registered,
-    });
-    discoveryIsCurrent = resolved.isCurrent;
-    return resolved.sources;
-  });
-  return {
-    sources,
-    assertCurrent() {
-      if (!discoveryIsCurrent()) {
-        throw storeChanged();
+};
+
+type SourceMemo = {
+  registry: symbol;
+  registryIdentity: string | undefined;
+  current: boolean;
+  observations: Map<string, { close(): void }>;
+  dirty?: boolean;
+  refreshing?: boolean;
+  pathsCurrent?: () => boolean;
+  observedThisTurn?: boolean;
+  prepared: Promise<GatewaySessionStoreSourceRequest | undefined>;
+};
+const sourcePreparations = new Map<string, SourceMemo>();
+registerOpenClawStateDatabaseAsyncResource({
+  close: async (identity) => {
+    for (const [key, memo] of sourcePreparations) {
+      if (!identity || !memo.registryIdentity || memo.registryIdentity === identity.key) {
+        retireSourcePreparation(key, memo);
       }
-    },
-  };
+    }
+  },
+});
+
+function retireSourcePreparation(key: string, memo: SourceMemo): void {
+  memo.current = false;
+  for (const observation of memo.observations.values()) {
+    observation.close();
+  }
+  memo.observations.clear();
+  if (sourcePreparations.get(key) === memo) {
+    sourcePreparations.delete(key);
+  }
 }
 
-/** Capture source routing for the existing history worker; no native discovery runs here. */
+function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>): void {
+  if (!memo.current) {
+    return;
+  }
+  let child = path.resolve(pathname);
+  for (;;) {
+    const directory = path.dirname(child);
+    if (directory === child) {
+      return;
+    }
+    const name = path.basename(child);
+    const observationKey = JSON.stringify([directory, name]);
+    used.add(observationKey);
+    if (!memo.observations.has(observationKey)) {
+      memo.observations.set(
+        observationKey,
+        observeOwnedDirectory(directory, (filename) => {
+          if (!memo.current || memo.observedThisTurn) {
+            return;
+          }
+          if (
+            filename === undefined ||
+            (process.platform === "win32"
+              ? filename.toLowerCase() === name.toLowerCase()
+              : filename === name)
+          ) {
+            // One fallback sweep can notify every ancestor of the same source.
+            memo.observedThisTurn = true;
+            queueMicrotask(() => {
+              memo.observedThisTurn = false;
+            });
+            // The next read refreshes facts without retiring shared watches.
+            try {
+              if (memo.pathsCurrent && !memo.pathsCurrent()) {
+                memo.dirty = true;
+              }
+            } catch {
+              memo.dirty = true;
+            }
+          }
+        }),
+      );
+    }
+    child = directory;
+  }
+}
+
+/** Retain discovery facts and watches; ordinary reads refresh invalidated facts in place. */
 export async function prepareGatewaySessionStoreReadSourcesAsync(
-  params: Parameters<typeof prepareGatewaySessionStoreReadSources>[0],
+  params: SourcePreparationParams,
   signal?: AbortSignal,
-) {
+): Promise<{ request: GatewaySessionStoreSourceRequest | undefined }> {
   signal?.throwIfAborted();
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
+  const registryOptions = { env, path: path.resolve(params.registryPath) };
+  const registry = readOpenClawAgentDatabaseRegistryToken(registryOptions);
+  const key = JSON.stringify([routing, env, params.currentSource, registryOptions.path]);
+  let memo = sourcePreparations.get(key);
+  if (!memo) {
+    memo = {
+      registry,
+      registryIdentity: openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
+        registryOptions.path,
+      )?.key,
+      current: true,
+      observations: new Map(),
+      dirty: true,
+      prepared: Promise.resolve(undefined),
+    };
+    sourcePreparations.set(key, memo);
+  }
+  // One refresh owns the used-watch set; publications during it share its outcome.
+  if (!memo.refreshing && (memo.dirty || memo.registry !== registry)) {
+    const selected = memo;
+    const used = new Set<string>();
+    selected.refreshing = true;
+    selected.dirty = false;
+    selected.registry = registry;
+    selected.prepared = prepareSourceRequest(
+      { ...params, registryPath: registryOptions.path },
+      routing,
+      env,
+      selected,
+      (pathname) => observeSourcePath(selected, pathname, used),
+    )
+      .then(
+        (request) => {
+          // Reuse common watches before dropping paths absent from the refreshed roster.
+          for (const [observationKey, observation] of selected.observations) {
+            if (!used.has(observationKey)) {
+              observation.close();
+              selected.observations.delete(observationKey);
+            }
+          }
+          return request;
+        },
+        (error: unknown) => {
+          retireSourcePreparation(key, selected);
+          throw error;
+        },
+      )
+      .finally(() => {
+        selected.refreshing = false;
+      });
+    while (sourcePreparations.size > 128) {
+      const [oldestKey, oldest] = sourcePreparations.entries().next().value!;
+      retireSourcePreparation(oldestKey, oldest);
+    }
+  }
+  const request = await racePromiseWithAbortSignal(
+    memo.prepared,
+    signal,
+    (aborted) => aborted.reason,
+  );
+  signal?.throwIfAborted();
+  if (!memo.current) {
+    throw storeChanged();
+  }
+  return { request };
+}
+
+async function prepareSourceRequest(
+  params: SourcePreparationParams,
+  routing: SessionStoreRouting,
+  env: NodeJS.ProcessEnv,
+  memo: SourceMemo,
+  observe: (pathname: string) => void,
+): Promise<GatewaySessionStoreSourceRequest | undefined> {
+  const paths = createOpenClawAgentDatabasePathMatcher();
+  memo.pathsCurrent = () => paths.isCurrent();
+  paths(params.registryPath, params.registryPath);
+  observe(params.registryPath);
   const inventory = prepareSessionStoreTargetInventory(
     sessionStoreRoutingConfig(routing),
     routing.agentIds,
     env,
   );
-  const currentSource = { ...params.currentSource };
-  const paths = createOpenClawAgentDatabasePathMatcher();
+  const { currentSource } = params;
   paths(currentSource.path, currentSource.path);
+  observe(currentSource.path);
   const candidates = new Map<string, SessionStoreReadCandidate>();
   const capture = (candidate: SessionStoreReadCandidate) => {
     try {
@@ -206,6 +233,8 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       }
       return;
     }
+    observe(candidate.path);
+    observe(candidate.physicalPath);
     candidates.set(JSON.stringify(candidate), candidate);
   };
   inventory.candidates.forEach(capture);
@@ -215,19 +244,16 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
     path: params.registryPath,
     includeIncompatibleSchemaVersions: true,
   });
-  const assertCurrent = () => {
-    if (!paths.isCurrent()) {
-      throw storeChanged();
-    }
-  };
-  const registry = await registryRead.read(signal);
+  const registry = await registryRead.read();
+  if (!memo.current) {
+    throw storeChanged();
+  }
   const original = registry.result;
-  assertCurrent();
   const registeredDatabases =
     original.status === "available"
-      ? original.entries.map(({ agentId, path, schemaVersion }) => ({
+      ? original.entries.map(({ agentId, path: databasePath, schemaVersion }) => ({
           agentId,
-          path,
+          path: databasePath,
           schemaVersion,
         }))
       : undefined;
@@ -236,7 +262,13 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       capture(captureSessionStoreReadCandidate(registered.path));
     }
   }
-  const request: GatewaySessionStoreSourceRequest | undefined = registeredDatabases
+  // Observation was installed after capture; close that admission window before publication.
+  if (!paths.isCurrent()) {
+    throw storeChanged();
+  }
+  registry.assertCurrent();
+  memo.registry = readOpenClawAgentDatabaseRegistryToken({ env, path: params.registryPath });
+  return registeredDatabases
     ? {
         routing,
         currentSource,
@@ -245,8 +277,4 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
         candidates: [...candidates.values()],
       }
     : undefined;
-  return {
-    request,
-    assertCurrent,
-  };
 }

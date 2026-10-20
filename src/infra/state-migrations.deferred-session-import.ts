@@ -19,6 +19,15 @@ export const DeferredPluginSessionImportSchema = z.object({
   sources: z.array(
     z.object({ path: z.string(), identity: MigrationArtifactSchema.shape.identity }),
   ),
+  settledSources: z
+    .array(
+      z.object({
+        path: z.string(),
+        identity: MigrationArtifactSchema.shape.identity,
+        reason: z.string(),
+      }),
+    )
+    .optional(),
 });
 export type DeferredPluginSessionImport = z.infer<typeof DeferredPluginSessionImportSchema>;
 

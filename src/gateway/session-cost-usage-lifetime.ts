@@ -95,7 +95,11 @@ export function startSessionCostUsageProjectionLifetime(params: {
       ) {
         refreshAll();
       }
-    } else if (change.facts?.kind === "removed" && !isIncognitoSessionKey(change.sessionKey)) {
+    } else if (
+      change.facts?.kind === "removed" &&
+      !change.facts.transcriptInventoryUnchanged &&
+      !isIncognitoSessionKey(change.sessionKey)
+    ) {
       if (change.agentId) {
         refreshAgent(change.agentId, change.storePath);
       } else {
@@ -103,10 +107,10 @@ export function startSessionCostUsageProjectionLifetime(params: {
       }
     }
   });
-  let pricingRevision = getActiveRemoteModelCatalog(params.getConfig(), false)?.revision;
+  let pricingRevision = getActiveRemoteModelCatalog(params.getConfig())?.revision;
   const offModels = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "published" || event.phase === "catalog-published") {
-      const next = getActiveRemoteModelCatalog(params.getConfig(), false)?.revision;
+      const next = getActiveRemoteModelCatalog(params.getConfig())?.revision;
       if (next === pricingRevision) {
         return;
       }

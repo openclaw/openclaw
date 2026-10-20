@@ -5,6 +5,7 @@ import type {
   CronRunLogEntry as CronRunLogWireEntry,
   CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -21,6 +22,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
 } from "./scheduled-tool-policy.js";
+import type { CronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
@@ -150,8 +152,7 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  /** `reportedByAgent`: the run's final answer reported AUTOMATION_FAILED; no runtime fault. */
-  | { kind: "permanent"; reportedByAgent?: true }
+  | { kind: "permanent" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
@@ -171,12 +172,16 @@ export type CronRunOutcome = {
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
+  /** Lifecycle-owned restart fact; transient input to cron settlement, not a public event. */
+  interruptedByRestart?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  /** Producer-authored terminal reply fact without exposing reply text. */
+  replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
@@ -209,7 +214,7 @@ export type CronJobExecutionResult = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
-/** One run's requested delay before the same paced job runs again. */
+/** One run's requested delay before the same paced job or one-shot continuation runs again. */
 export type CronNextCheckProposal = {
   delayMs: number;
 };
@@ -319,7 +324,7 @@ export type CronJobState = Omit<
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number; alerted?: true };
+    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
@@ -367,6 +372,8 @@ export type CronJob = CronJobBase<
 > & {
   declarationKey?: string;
   displayName?: string;
+  /** Read-only execution placement derived from the stored stream target. */
+  streamExecutionHost?: "gateway" | "sandbox";
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -404,13 +411,22 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = CronJob & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
+  /** Original authenticated source for a same-conversation continuation, never a public grant. */
+  operatorSource?: {
+    source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
+    executionRevision: string;
+  };
+  /** Captured inference owner; private and independent of scheduled tool authority. */
+  inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;
     sessionId: string;
     lifecycleRevision?: string;
   };
+  /** Trusted logical sandbox and original access basis, never public create/patch input. */
+  streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
   skillLibrarySelections?: SessionEntry["skillLibrarySelections"];
   /** Immutable creator provenance stamped by the trusted cron creation seam. */
@@ -437,6 +453,7 @@ type CronJobStateInput = Partial<
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
+    | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
   >
@@ -445,7 +462,7 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "streamExecutionHost"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -466,6 +483,7 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
+    | "streamExecutionHost"
     | "pacing"
     | "trigger"
   >

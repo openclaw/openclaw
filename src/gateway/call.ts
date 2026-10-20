@@ -30,7 +30,6 @@ import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
-import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
@@ -49,7 +48,6 @@ import {
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
-  prepareGatewayClientDeviceAuth,
   type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
@@ -75,6 +73,7 @@ import {
 import {
   canSkipGatewayConfigLoad,
   isExplicitGatewayConnection,
+  resolveGatewayConnectionAuth,
 } from "./explicit-connection-policy.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
@@ -377,15 +376,7 @@ function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
 }
 
 export function buildGatewayConnectionDetails(
-  options: {
-    config?: OpenClawConfig;
-    url?: string;
-    configPath?: string;
-    urlSource?: "cli" | "env";
-    ignoreEnvUrlOverride?: boolean;
-    localPortOverride?: number;
-    serviceTargetUrl?: string;
-  } = {},
+  options: Parameters<typeof buildGatewayConnectionDetailsWithResolvers>[0] = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
     getRuntimeConfig: readGatewayDispatchConfig,
@@ -400,6 +391,7 @@ export { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth };
 
 type ResolvedGatewayCallContext = {
   config: OpenClawConfig;
+  configSkipped: boolean;
   configPath: string;
   isRemoteMode: boolean;
   explicitAuth: ExplicitGatewayAuth;
@@ -443,16 +435,13 @@ async function resolveGatewayCallContext(
     ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
     localPortOverride: opts.localPortOverride,
   }).url;
-  const canSkipConfigLoad = canSkipGatewayConfigLoad({
+  const connection = {
     config: opts.config,
     urlOverride,
     explicitAuth,
-  });
-  const explicitConnection = isExplicitGatewayConnection({
-    config: opts.config,
-    urlOverride,
-    explicitAuth,
-  });
+  };
+  const canSkipConfigLoad = canSkipGatewayConfigLoad(connection);
+  const explicitConnection = isExplicitGatewayConnection(connection);
   const config =
     opts.config ??
     (canSkipConfigLoad
@@ -464,6 +453,7 @@ async function resolveGatewayCallContext(
   const isRemoteMode = opts.localPortOverride === undefined && config.gateway?.mode === "remote";
   return {
     config,
+    configSkipped: canSkipConfigLoad,
     configPath,
     isRemoteMode,
     explicitAuth,
@@ -595,10 +585,12 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const deviceAuthScope = bootstrap.deviceAuthScope;
   const token = useStoredDeviceAuth ? undefined : bootstrap.auth.token;
   const password = useStoredDeviceAuth ? undefined : bootstrap.auth.password;
-  const resolvedAuth = resolveGatewayAuthForConfig({
+  // Configured servers retain their inferred mode; config-free ad-hoc targets
+  // use only bootstrap-selected credentials, never unrelated ambient secrets.
+  const resolvedAuth = resolveGatewayConnectionAuth({
     config: context.config,
-    env: process.env,
-    tailscaleMode: context.config.gateway?.tailscale?.mode,
+    configSkipped: context.configSkipped,
+    auth: { token, password },
   });
   const { clientOptions, omitDeviceIdentity, deviceIdentity } = await resolveGatewayCallDeviceAuth({
     opts: input,
@@ -677,29 +669,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         configPath: context.configPath,
       });
     }
-  }
-  try {
-    await prepareGatewayClientDeviceAuth(
-      {
-        url,
-        token,
-        password,
-        edgeAuthHeaders,
-        tlsFingerprint,
-        deviceIdentity,
-        deviceAuthScope,
-        sharedStateMode: opts.sharedStateMode,
-        preparedDeviceAuth: storedAuth ?? undefined,
-        approvalRuntimeToken: opts.approvalRuntimeToken,
-        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
-      },
-      opts.signal,
-    );
-  } catch (error) {
-    if (opts.signal?.aborted) {
-      throw createGatewayRequestAbortError(opts.method);
-    }
-    throw error;
   }
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.

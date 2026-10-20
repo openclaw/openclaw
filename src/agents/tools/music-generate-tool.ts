@@ -2,8 +2,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { Type } from "typebox";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.js";
+import { listMusicGenerationProviders } from "../../media-generation/registry.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
 import type { MusicGenerationOutputFormat } from "../../music-generation/types.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
@@ -136,7 +136,7 @@ export function createMusicGenerateTool(
                 })
               : undefined,
           resolveProviders: (acquired) =>
-            acquired?.providers ?? (() => listRuntimeMusicGenerationProviders({ config: cfg })),
+            acquired?.providers ?? (() => listMusicGenerationProviders(cfg)),
           prepare: async ({
             resources: acquired,
             modelConfig: musicGenerationModelConfig,
@@ -171,8 +171,7 @@ export function createMusicGenerateTool(
               (model === undefined && !primaryModelRef);
             const selectedProvider = shouldResolveSelectedProvider
               ? resolveSelectedCapabilityProvider({
-                  providers:
-                    providers ?? listRuntimeMusicGenerationProviders({ config: effectiveCfg }),
+                  providers: providers ?? listMusicGenerationProviders(effectiveCfg),
                   modelConfig: musicGenerationModelConfig,
                   modelOverride: model,
                 })
@@ -266,6 +265,7 @@ export function createMusicGenerateTool(
                       timeoutMs,
                     },
                     filename,
+                    sandbox: context.acquireOutputSandbox,
                     loadedReferenceImages,
                     taskHandle,
                     timeoutNormalization: timeout.normalization,

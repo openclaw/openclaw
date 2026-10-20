@@ -1,17 +1,15 @@
-import type { DatabaseSync } from "node:sqlite";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readDebugProxyCaptureBlob,
   readDebugProxyCaptureSessionEvents,
 } from "../proxy-capture/store-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 type StateDiagnosticCommand = Extract<
   OpenClawStateReadCommand,
@@ -35,10 +33,7 @@ export function isStateDiagnosticCommand(
   );
 }
 
-export function readStateDiagnosticCommand(
-  db: DatabaseSync,
-  command: StateDiagnosticCommand,
-): OpenClawStateReadResult {
+export function readStateDiagnosticCommand(db: EngineConnection, command: StateDiagnosticCommand) {
   if (command.type === "capture.readOnlyEvents") {
     return {
       type: command.type,
@@ -59,7 +54,7 @@ export function readStateDiagnosticCommand(
       type: command.type,
       result: {
         status: "inspected",
-        inspection: runSqliteDeferredTransactionSync(db, () =>
+        inspection: runSqliteReadSnapshotSync(db, () =>
           inspectExecutionIdentityRunInDatabase(db, command.input, {
             executionIdentityContexts: tableExists(db, "execution_identity_contexts"),
             auditEvents: tableExists(db, "audit_events"),
@@ -67,7 +62,7 @@ export function readStateDiagnosticCommand(
             executionOwnerLifecycleBindings: tableExists(db, "execution_owner_lifecycle_bindings"),
           }),
         ),
-      },
+      } satisfies ExecutionIdentityInspectionOutcome,
     };
   } catch (error) {
     if (!(error instanceof ExecutionDecisionCursorError)) {
@@ -75,7 +70,10 @@ export function readStateDiagnosticCommand(
     }
     return {
       type: command.type,
-      result: { status: "invalid-cursor", message: error.message },
+      result: {
+        status: "invalid-cursor",
+        message: error.message,
+      } satisfies ExecutionIdentityInspectionOutcome,
     };
   }
 }

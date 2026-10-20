@@ -33,6 +33,8 @@ async function runToolContinuity(
     alternateOutboundText?: string;
     alternateDelivery?: { status: string; resultCount: number } | null;
     alternateResponseModel?: string;
+    alternateRerouted?: boolean;
+    alternateEffective?: { provider?: string; model?: string };
     unrelatedPrimaryOutboundText?: string;
     unrelatedLaterOutboundText?: string;
   },
@@ -45,7 +47,12 @@ async function runToolContinuity(
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
       const model = prompt.model ?? "primary-model";
-      const responseModel = call === 2 ? (params?.alternateResponseModel ?? model) : model;
+      const effective = {
+        provider: (call === 2 ? params?.alternateEffective?.provider : undefined) ?? provider,
+        model: (call === 2 ? params?.alternateEffective?.model : undefined) ?? model,
+      };
+      const responseModel =
+        call === 2 ? (params?.alternateResponseModel ?? effective.model) : effective.model;
       const replyText =
         call === 1
           ? "the QA scenario pack verifies source and docs"
@@ -89,9 +96,11 @@ async function runToolContinuity(
             sessionId: "session-tools",
             turnId: `turn-${call}`,
             requested: { provider, model },
-            effective: { provider, model, responseModel },
+            effective: { ...effective, responseModel },
             successfulToolNames: call === 1 ? (params?.primaryTools ?? ["read"]) : alternateTools,
-            rerouted: responseModel !== model,
+            rerouted:
+              (call === 2 ? params?.alternateRerouted : undefined) ??
+              (effective.provider !== provider || responseModel !== model),
             terminalDisposition: "visible",
           },
         },
@@ -126,6 +135,8 @@ describe("model-switch tool continuity terminal evidence", () => {
         "the **model handoff** preserved the QA mission after rereading the scenario pack",
       alternateOutboundText:
         "the model handoff preserved the QA mission after rereading the scenario pack",
+      alternateResponseModel: "alternate-model-concrete",
+      alternateRerouted: false,
     });
 
     expect(result.status).toBe("pass");
@@ -145,6 +156,30 @@ describe("model-switch tool continuity terminal evidence", () => {
     });
     expect(result.steps[0]?.details).toBe(
       "the **model handoff** preserved the QA mission after rereading the scenario pack",
+    );
+  });
+
+  it.each([
+    { changed: "model", alternateEffective: { model: "fallback-model" } },
+    { changed: "provider", alternateEffective: { provider: "fallback-provider" } },
+  ])(
+    "requires a changed alternate effective $changed to be marked rerouted",
+    async ({ alternateEffective }) => {
+      const { result } = await runToolContinuity(["read"], {
+        alternateEffective,
+        alternateRerouted: true,
+      });
+      expect(result.status).toBe("pass");
+
+      await expect(
+        runToolContinuity(["read"], { alternateEffective, alternateRerouted: false }),
+      ).rejects.toThrow("alternate-model run did not return exact owned successful read evidence");
+    },
+  );
+
+  it("rejects an unchanged alternate route reported as rerouted", async () => {
+    await expect(runToolContinuity(["read"], { alternateRerouted: true })).rejects.toThrow(
+      "alternate-model run did not return exact owned successful read evidence",
     );
   });
 

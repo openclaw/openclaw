@@ -176,7 +176,7 @@ restrict this bridge to native bootstrap documents and the configured
 `bootstrap-extra-files` patterns. Check `canList` for directory metadata,
 `canRead` for file bytes, and `canWrite` for the four owner-editable documents.
 Directory access does not grant reads of other files. The underlying bridge
-still enforces filesystem containment and returns the read's canonical source.
+still enforces filesystem containment and returns the read's resolved source.
 
 Workspace access that has not started or has stopped throws
 `WorkspaceAccessUnavailableError`. Use `isWorkspaceAccessUnavailableError(error)`
@@ -186,7 +186,7 @@ The error code is `WORKSPACE_ACCESS_UNAVAILABLE`; do not match message text.
 The optional `memoryFiles` provider keeps workspace Memory files on the host while
 the native index, embedding providers and original sessions stay on Gateway. It
 supplies discovery, file inspection, reads and change notifications. Both indexing
-and `memory_get` use it; index publication rechecks the host file. The canonical
+and `memory_get` use it; index publication rechecks the host file. The resolved
 source returned with a read supplies provenance, without resolving a stale Gateway
 copy. Stopping the workspace binding revokes retained file access and subscriptions.
 The Memory file worker supports `--files <workspace>` for native file
@@ -236,7 +236,7 @@ File-inspecting Gateway policies receive a temporary tree from the existing Skil
 resource reader; Gateway-owned sources remain local. Resource bundle limits apply.
 
 `readWorkspaceSkillResources` lazily reuses the bounded native bundle reader.
-File-transfer adapters can check each file's requested and verified canonical paths
+File-transfer adapters can check each file's requested and verified resolved filesystem paths
 before returning a bundle; admitting the Skill directory alone does not admit every child.
 
 Hosts can provide `watchSkills(request, onChange, signal)` to notify the existing
@@ -310,6 +310,13 @@ and channel-provided joiner before prompt hooks run. Frame ordinary chat
 with prose section labels so a leading file path cannot become a native slash command. Keep
 one admitted user turn while assigning each provider attempt its own request and reply identity.
 
+The result's `developerInstructions` includes plugin system context. When that
+context is present, `threadDeveloperInstructions` contains the policy without
+the context, and `turnDeveloperInstructions` contains the wrapped context.
+Harnesses with separate persistent and per-turn instruction carriers can use
+these fields to refresh context without reloading their session. Hook
+`systemPrompt` replacements remain part of `threadDeveloperInstructions`.
+
 Host `requestApproval` normalizes the title and description within the shared display bounds
 and preserves full action evidence in `detail`. Its response acknowledges the request with
 an ID. Call `waitForApproval` with
@@ -327,8 +334,8 @@ actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
 preparation followed by a conditional worker commit, and `applySessionEntryPatch`
 for already prepared data. `session-transcript-runtime` provides
 `withSessionTranscriptWrite` and duplicate-aware message preparation. Released
-synchronous and opaque transaction callback forms remain deprecated until the
-next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
+synchronous and opaque transaction callback forms remain deprecated through
+2026-12-31, with removal in the first January 2027 stable release. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
 and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
 
 For ordinary session preparation, await `getSessionEntryAsync`,
@@ -337,7 +344,7 @@ For ordinary session preparation, await `getSessionEntryAsync`,
 preparation uses `resolveStoredModelOverrideAsync` and
 `resolveCommandArgMenuAsync` from `command-auth-native`; the menu helper is also
 available from `native-command-registry`. Their synchronous compatibility APIs
-remain deprecated until the next Plugin SDK major. See
+remain deprecated through 2026-12-31. See
 [session and command preparation](/plugins/sdk-migration#session-and-command-preparation).
 
 ## Stateful CLI commands
@@ -347,6 +354,12 @@ Gateway `method`, serializable `params`, a diagnostic `target`, and `runLocal`.
 Open databases and load mutation-capable runtime state only inside `runLocal`;
 its scope supplies the admitted config, environment, abort signal, and current
 owner assertion. Close plugin-owned stores before the callback returns.
+
+Commands that use configured database families set `databaseEngine: "configured"`.
+The helper resolves the selected config's engines after acquiring offline ownership,
+before runtime config can write state, and retains that selection through resource
+settlement. Commands routed to a running Gateway use its engines and do not need
+the PostgreSQL credentials in the CLI process.
 
 The helper routes to the local Gateway with its expected owner ID, or retains
 exclusive offline ownership through resource settlement. It never replays an

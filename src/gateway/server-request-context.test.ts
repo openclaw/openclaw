@@ -8,6 +8,8 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
@@ -152,9 +154,13 @@ describe("createGatewayRequestContext", () => {
 
   it("prepares every recipient before the real merge's first notification and contains resolution failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const source = ensureProfileForEmail("event-source@example.test");
       const target = ensureProfileForEmail("event-target@example.test");
       const third = ensureProfileForEmail("event-third@example.test");
+      using _ = {
+        [Symbol.dispose]: (await userProfileCatalog.prepareUserProfileCatalog()).release,
+      };
       const frames: Array<{ connId: string; event: string; recipientProfileId?: string }> = [];
       const clients = new GatewayClientRegistry();
       for (const [index, profile] of [source, target, third].entries()) {
@@ -189,6 +195,8 @@ describe("createGatewayRequestContext", () => {
         });
       }
       const peers = [...clients];
+      const profiles = await userProfileCatalog.prepareUserProfileCatalog();
+      onTestFinished(profiles.release);
       const broadcaster = createGatewayBroadcaster({
         clients,
         preparePresenceProjection: (presence) => () => presence,
@@ -215,7 +223,6 @@ describe("createGatewayRequestContext", () => {
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: subscribers,
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: () => context.refreshConnectedUserProfile?.(),
       });
@@ -233,7 +240,7 @@ describe("createGatewayRequestContext", () => {
         expect(frames.some((frame) => frame.event === "sessions.changed")).toBe(true);
         const authenticated = peers.map((peer) => peer.authenticatedUserProfile);
         const resolve = vi
-          .spyOn(userProfileCatalog, "readUserProfileIdentity")
+          .spyOn(userProfileCatalog, "readResidentUserProfileIdentity")
           .mockImplementationOnce(() => {
             throw new Error("fixture storage unavailable");
           });
@@ -251,7 +258,7 @@ describe("createGatewayRequestContext", () => {
         }
       } finally {
         subscriptions.lifecycleUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         await subscriptions.agentUnsub();
       }

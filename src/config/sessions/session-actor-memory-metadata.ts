@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import { initializeSessionActorMemoryEntry } from "./session-actor-memory-initialize.js";
@@ -26,7 +27,8 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
     if (
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
       (scope.storePath !== undefined && scope.storePath !== path) ||
-      (scope.sessionKey !== undefined && scope.sessionKey !== state.hot.target.sessionKey)
+      (scope.sessionKey !== undefined &&
+        resolveSqliteSessionKey(scope.sessionKey, agentId) !== state.hot.target.sessionKey)
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
@@ -244,6 +246,7 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
               now: Date.parse(entry.timestamp),
               message: entry.message,
               appendMode: entry.appendMode,
+              supersedesEntryId: source.id,
               idempotencyLookup: "caller-checked",
               custody: pendingInput ? { ...pendingInput, relocation: source.id } : undefined,
             });
@@ -254,6 +257,8 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
               throw new Error("Transcript rewrite produced an invalid message");
             }
             entry.message = appended.result.message;
+            // The returned view must match the stored row for later source comparisons.
+            entry.supersedesEntryId = source.id;
             pendingInputReceipt = appended.receipt ?? pendingInputReceipt;
           } else if (!events.appendRaw(entry).appended) {
             throw new Error("Transcript rewrite entry was not appended");
@@ -305,11 +310,17 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
           ...state.hot.entry!,
           ...projectCompactionAccountingPatch(state.hot.entry!, {
             compactionKind: "context-engine",
+            tokensAfter: command.input.tokensAfter,
             transcriptByteCompactionLatch: command.input.transcriptByteCompactionLatch,
           }),
         };
         return {
-          committed: { result: event, before, after: events.version() },
+          committed: {
+            entry: state.hot.entry,
+            result: event,
+            before,
+            after: events.version(),
+          },
           initialEntry,
           projectionNeedsReconcile: false,
         };

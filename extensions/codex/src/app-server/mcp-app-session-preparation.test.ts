@@ -6,6 +6,7 @@ import type { CodexAppServerBindingStore } from "./session-binding.js";
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
+  releaseBinding: vi.fn(),
   start: vi.fn(),
   bundle: vi.fn(),
   user: vi.fn(),
@@ -72,6 +73,7 @@ vi.mock("./session-binding.js", async (importOriginal) => ({
   resolveCodexSessionBinding: async () => ({
     binding: undefined,
     authority: { assertLegacyCurrent: mocks.assert },
+    release: mocks.releaseBinding,
   }),
 }));
 vi.mock("./thread-ownership.js", () => ({

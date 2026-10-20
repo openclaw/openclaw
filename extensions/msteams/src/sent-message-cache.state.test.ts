@@ -65,8 +65,8 @@ describe("Teams persistent sent-message account authority", () => {
     ).resolves.toBe(true);
 
     const persisted = createDeferred<void>();
-    const openStore = msteamsRuntimeStub.state.openKeyedStore;
-    vi.spyOn(msteamsRuntimeStub.state, "openKeyedStore").mockImplementation(
+    const openStore = msteamsRuntimeStub.state.openKeyedStoreV2;
+    vi.spyOn(msteamsRuntimeStub.state, "openKeyedStoreV2").mockImplementation(
       <T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         const register = store.register.bind(store);

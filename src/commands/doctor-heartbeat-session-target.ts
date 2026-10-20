@@ -3,13 +3,16 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { resolveHeartbeatDeliveryTarget } from "../infra/outbound/targets.js";
 import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
-import { resolveAgentIdFromSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 
 /**
@@ -80,18 +83,15 @@ export async function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig):
       continue;
     }
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-    const source = captureIncognitoSessionSource({
-      agentId,
-      sessionKey: canonicalSession,
-      storePath,
-    });
     const entry =
       (await readSessionEntryReadOnlyInWorker({
         agentId,
         sessionKey: canonicalSession,
         storePath,
       })) ??
-      (!source && !storePath.endsWith(".sqlite") && fs.existsSync(storePath)
+      (!isIncognitoSessionKey(canonicalSession) &&
+      !storePath.endsWith(".sqlite") &&
+      fs.existsSync(storePath)
         ? loadLegacySessionStore(storePath)[canonicalSession]
         : undefined);
     if (entry) {

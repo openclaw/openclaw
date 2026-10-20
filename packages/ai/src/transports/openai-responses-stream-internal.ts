@@ -27,9 +27,14 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
-import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
+import {
+  OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
+  isResponsesTerminalEventType,
+} from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
+import { countToolCallTrailingWhitespace } from "./openai-responses-stream-errors.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
@@ -65,9 +70,12 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallBlock = ToolCall & { partialJson: string };
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
+    // Consumers normalize the shared block; wire validation keeps the provider's name.
+    readonly providerName: string;
     contentIndex: number;
     // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
     previewSchedule: ToolArgumentPreviewSchedule;
+    trailingWhitespaceChars: number;
   };
   type ResponsesOutputSlot = ResponsesStreamOutputSlot<
     ResponsesStreamOutputMessage,
@@ -105,6 +113,7 @@ export async function processResponsesStream<TApi extends Api>(
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
       };
+      terminal.recordPendingReasoning(slot.contentIndex);
     } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
       const block = collapseCandidate ? null : createTextBlock(item, "");
@@ -266,7 +275,7 @@ export async function processResponsesStream<TApi extends Api>(
       if (tracked && !state) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
-      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      const validated = resolveCompletedResponsesToolCall(item, { name: state?.providerName });
       if (state) {
         recovered.push(state);
       }
@@ -322,13 +331,7 @@ export async function processResponsesStream<TApi extends Api>(
       }
       // A rejected call closes output admission; only drain terminal facts.
       // Later async tool completions must not authorize side effects.
-      if (
-        rejectedToolCall &&
-        event.type !== "response.completed" &&
-        event.type !== "response.incomplete" &&
-        event.type !== "response.failed" &&
-        event.type !== "error"
-      ) {
+      if (rejectedToolCall && !isResponsesTerminalEventType(event.type) && event.type !== "error") {
         continue;
       }
       if (event.type === "response.created") {
@@ -355,10 +358,12 @@ export async function processResponsesStream<TApi extends Api>(
           const contentIndex = output.content.length;
           const toolCallState: StreamingToolCallState = {
             block: toolCallBlock,
+            providerName: toolCallBlock.name,
             contentIndex,
             argumentStreamReliable: true,
             argumentsStreamed: false,
             previewSchedule: createToolArgumentPreviewSchedule(),
+            trailingWhitespaceChars: countToolCallTrailingWhitespace(toolCallBlock.partialJson),
             ...readResponsesToolCallItemIdentity(item),
           };
           streamingToolCalls.register(event, toolCallState);
@@ -452,6 +457,10 @@ export async function processResponsesStream<TApi extends Api>(
         }
         let delta: string | undefined;
         if (event.type === "response.function_call_arguments.delta") {
+          toolCall.trailingWhitespaceChars = countToolCallTrailingWhitespace(
+            event.delta,
+            toolCall.trailingWhitespaceChars,
+          );
           toolCall.block.partialJson += event.delta;
           toolCall.argumentsStreamed = true;
           // Preview refresh is geometric; the done event and terminal finalize
@@ -468,6 +477,7 @@ export async function processResponsesStream<TApi extends Api>(
             doneArguments !== undefined &&
             (doneArguments.length > 0 || previousPartialJson === "")
           ) {
+            toolCall.trailingWhitespaceChars = countToolCallTrailingWhitespace(doneArguments);
             toolCall.block.partialJson = doneArguments;
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
             toolCall.argumentStreamReliable = true;
@@ -500,7 +510,9 @@ export async function processResponsesStream<TApi extends Api>(
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
-          outputSlot.block.thinkingSignature = JSON.stringify(item);
+          outputSlot.block.thinkingSignature = JSON.stringify(
+            normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+          );
           outputs.set(
             item,
             outputSlot.contentIndex,
@@ -641,7 +653,7 @@ export async function processResponsesStream<TApi extends Api>(
           let validated: Pick<ToolCall, "name" | "arguments">;
           try {
             validated = resolveCompletedResponsesToolCall(item, {
-              name: streamingToolCall?.block.name,
+              name: streamingToolCall?.providerName,
               arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
             });
           } catch (error) {
@@ -655,10 +667,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
-        if (rejectedToolCall) {
-          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
-        }
+        terminal.finalizeResponse(event.response, event.type, rejectedToolCall);
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
           const completeToolCall =
@@ -710,5 +719,7 @@ export async function processResponsesStream<TApi extends Api>(
         delete block.partialJson;
       }
     }
+    // Completed calls survive interrupted streams, using item.done reasoning if no terminal arrived.
+    terminal.releaseDeferredToolCompletions();
   }
 }

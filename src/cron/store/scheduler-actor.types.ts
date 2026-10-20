@@ -1,7 +1,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
 import type { CronJob } from "../types.js";
-import type { CronRunQueueOperations } from "./run-queue.types.js";
+import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 
 export type CronScheduleMaintenanceOptions = {
@@ -14,6 +14,7 @@ export type CronScheduleMaintenanceOptions = {
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
+  preparingAgentIds?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
@@ -22,16 +23,16 @@ export type CronSchedulerConfig = {
   startupDeferredMissedAgentJobDelayMs?: number;
 };
 
-/** Versions order pushed config only; they never authorize a run. */
-export type CronSchedulerSnapshot = { version: number; config: CronSchedulerConfig };
+export type CronSchedulerSnapshot = { config: CronSchedulerConfig };
 
-export type CronSchedulerResult = CronRunQueueOperations["cron.requestRuns"]["output"] & {
-  jobs: CronJob[];
-  ownerless: CronJob[];
-  notifications: CronNotificationIntent[];
-  logs: CronRunRecoveryOutcome["logs"];
-  nextWakeAtMs?: number;
-};
+export type CronSchedulerResult = CronRunQueueOperations["cron.requestRuns"]["output"] &
+  CronRunQueueOperations["cron.drainQueue"]["output"] & {
+    jobs: CronJob[];
+    ownerless: CronJob[];
+    notifications: CronNotificationIntent[];
+    logs: CronRunRecoveryOutcome["logs"];
+    nextWakeAtMs?: number;
+  };
 
 type CronSchedulerCommand = {
   storeKey: string;
@@ -39,6 +40,7 @@ type CronSchedulerCommand = {
   paused?: boolean;
   nowMs?: number;
   monotonicMs?: number;
+  requests?: CronRunRequestContext[];
   snapshot?: CronSchedulerSnapshot;
 };
 

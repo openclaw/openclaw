@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
   recordInboundSessionMeta,
@@ -20,6 +21,7 @@ describe("sharing owner display", () => {
     { senderName: undefined, label: undefined },
   ])("presents channel owner attribution with name $senderName", async ({ senderName, label }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("channel-id-collision@example.test");
       setDisplayName(profile.id, "Gateway profile name");
       const sessionKey = "agent:main:slack:channel:c-owner:thread:123.456";
@@ -57,6 +59,7 @@ describe("sharing owner display", () => {
 
   it("hydrates persisted profile attribution on every read without changing the access identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("sharing-owner@example.test");
       const sessionKey = "agent:main:sharing-profile-display";
       await upsertSessionEntryCore(
@@ -70,7 +73,13 @@ describe("sharing owner display", () => {
       );
       const context = sessionSharingTestContext(vi.fn());
       const client = identifiedClient(profile.id, "Old login name");
-      for (const name of ["Current owner", "Renamed owner"]) {
+      for (const [index, name] of ["Current owner", "Renamed owner"].entries()) {
+        const directoryEmail = `directory-only-${index}@example.test`;
+        const directoryOnly = ensureProfileForEmail(directoryEmail);
+        expect(setDisplayName(directoryOnly.id, null)).toMatchObject({
+          displayName: null,
+          githubIdentity: null,
+        });
         setDisplayName(profile.id, name);
         const responses = await callSessionSharingHandler(
           "session.members.listEvidence",
@@ -83,6 +92,7 @@ describe("sharing owner display", () => {
           owner: { id: profile.id, label: name, identity: { type: "profile", id: profile.id } },
           identities: expect.arrayContaining([
             expect.objectContaining({ id: profile.id, label: name }),
+            expect.objectContaining({ id: directoryOnly.id, label: directoryEmail }),
           ]),
           role: "owner",
         });

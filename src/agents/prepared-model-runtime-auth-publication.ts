@@ -286,6 +286,14 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           }
         } catch (error) {
           if (this.#transaction?.adoptedBy) {
+            if (
+              error instanceof PreparedModelRuntimePublicationSupersededError &&
+              this.#events.some((event) => event.some((owner) => componentOwners.includes(owner)))
+            ) {
+              // The queued mutation owns the next build; preserve its entire atomic component.
+              this.#events.push(componentOwners);
+              continue;
+            }
             // The replacement transaction exclusively settles adopted gates from its own result.
             throw error;
           }

@@ -1,34 +1,30 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
   readBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
-import {
-  createPluginCache,
-  isPluginCacheFactInvalidatedError,
-  PluginCacheFactInvalidatedError,
-  withPluginCache,
-} from "./plugin-cache.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 const reads = vi.hoisted(() => ({
   snapshot: vi.fn<() => object | undefined>(),
+  snapshotAsync: vi.fn<() => Promise<object | undefined>>(),
   mode: vi.fn<() => unknown>(),
   metadata: vi.fn(),
 }));
 
-vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>();
-  return {
-    ...actual,
-    getActiveOpenClawStateDatabaseReadSnapshot: reads.snapshot,
-    isArtifactPreservingStateRead: () => true,
-    executeExistingOpenClawStateRead: reads.metadata,
-    withArtifactPreservingStateReads: (read: () => unknown) => read(),
-  };
-});
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>()),
+  getActiveOpenClawStateDatabaseReadSnapshot: reads.snapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync: reads.snapshotAsync,
+  isArtifactPreservingStateRead: () => true,
+  executeExistingOpenClawStateRead: reads.metadata,
+  withArtifactPreservingStateReads: <T>(read: () => T): T => read(),
+}));
 vi.mock("../state/config-machine-state.js", () => ({ readConfigMachineState: reads.mode }));
 
 const env = { OPENCLAW_STATE_DIR: "/synthetic/plugin-admission" };
@@ -36,6 +32,7 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/plugin-admission" };
 beforeEach(() => {
   vi.resetAllMocks();
   reads.snapshot.mockReturnValue({});
+  reads.snapshotAsync.mockImplementation(async () => reads.snapshot());
   reads.mode.mockReturnValue("allowlist");
   reads.metadata.mockResolvedValue({
     ok: true,
@@ -61,6 +58,11 @@ const readers = [
     read: () => readBundledDiscoveryModeMemoized(env),
   },
   {
+    name: "asynchronous discovery snapshot row",
+    reject: reads.metadata,
+    read: () => prepareBundledDiscoveryMode(env),
+  },
+  {
     name: "synchronous discovery row",
     reject: reads.mode,
     read: () => readBundledDiscoveryMode({ env }),
@@ -79,7 +81,7 @@ const readers = [
     },
   },
   {
-    name: "metadata worker row",
+    name: "metadata adapter read operation",
     reject: reads.metadata,
     read: () => readPluginMetadataStateRow("bundled-discovery", { env }),
   },
@@ -101,11 +103,8 @@ it.each(readers)(
     });
     await withPluginCache(createPluginCache(), async () => {
       const result = Promise.resolve().then(async () => await read());
-      await expect(result).rejects.toBeInstanceOf(PluginCacheFactInvalidatedError);
-      await result.catch((error: unknown) =>
-        expect(error instanceof Error && error.cause).toBe(cause),
-      );
-      await expect(result.catch(isPluginCacheFactInvalidatedError)).resolves.toBe(true);
+      await expect(result).rejects.toBe(cause);
+      await expect(result.catch(isStateDatabaseReadAdmissionInvalidatedError)).resolves.toBe(true);
     });
     const failure = new Error("Synthetic metadata read failure");
     reject.mockImplementation(() => {
@@ -117,17 +116,32 @@ it.each(readers)(
   },
 );
 
-it("retains typed invalidation when reactivating a prepared discovery snapshot", async () => {
+it("waits for pending snapshot bytes without synchronously acquiring them", async () => {
+  const snapshot = createDeferredCore<object>();
+  reads.snapshotAsync.mockReturnValue(snapshot.promise);
+  reads.snapshot.mockImplementation(() => {
+    throw new Error("Pending snapshot bytes must be prepared asynchronously");
+  });
+  await withPluginCache(createPluginCache(), async () => {
+    const preparing = prepareBundledDiscoveryMode(env);
+    try {
+      expect(reads.snapshot).not.toHaveBeenCalled();
+      expect(reads.metadata).not.toHaveBeenCalled();
+    } finally {
+      snapshot.resolve({});
+      await preparing;
+    }
+    expect(reads.metadata).toHaveBeenCalledOnce();
+  });
+});
+
+it("prepares snapshot policy asynchronously and reuses it for synchronous derivation", async () => {
   await withPluginCache(createPluginCache(), async () => {
     const activate = await prepareBundledDiscoveryMode(env);
-    const cause = invalidatedRead();
-    reads.snapshot.mockImplementation(() => {
-      throw cause;
-    });
-    const result = Promise.resolve().then(activate);
-    await expect(result).rejects.toBeInstanceOf(PluginCacheFactInvalidatedError);
-    await result.catch((error: unknown) =>
-      expect(error instanceof Error && error.cause).toBe(cause),
-    );
+    activate();
+    expect(readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
+    await prepareBundledDiscoveryMode(env);
+    expect(reads.metadata).toHaveBeenCalledTimes(1);
+    expect(reads.mode).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -186,13 +187,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   const candidates = scanPiFileCandidates(env);
   const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
   piFileCandidateCache.set(key, entry);
-  while (piFileCandidateCache.size > PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES) {
-    const oldest = piFileCandidateCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    piFileCandidateCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(piFileCandidateCache, PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES);
   try {
     return await candidates;
   } catch (error) {
@@ -213,7 +208,7 @@ function parsePiJsonLines(content: string): Record<string, unknown>[] {
   });
 }
 
-export function piMessageText(content: unknown): string {
+export function piMessageText(content: unknown, includeImages = false): string {
   if (typeof content === "string") {
     return content;
   }
@@ -221,9 +216,19 @@ export function piMessageText(content: unknown): string {
     return "";
   }
   return content
-    .flatMap((part) =>
-      isRecord(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
-    )
+    .flatMap((part) => {
+      if (!isRecord(part)) {
+        return [];
+      }
+      if (part.type === "text" && typeof part.text === "string") {
+        return [part.text];
+      }
+      if (includeImages && part.type === "image") {
+        const mimeType = readBoundedString(part.mimeType, 128);
+        return [mimeType ? `[image: ${mimeType}]` : "[image]"];
+      }
+      return [];
+    })
     .join("\n");
 }
 
@@ -318,10 +323,7 @@ async function readPiSessionSummary(
     const resumable =
       cached?.identity === candidate.identity && cached.size < candidate.size ? cached : undefined;
     scanState = resumable
-      ? {
-          ...resumable.scanState,
-          pending: Buffer.from(resumable.scanState.pending),
-        }
+      ? { ...resumable.scanState }
       : {
           pending: Buffer.alloc(0),
           discarding: false,
@@ -330,7 +332,7 @@ async function readPiSessionSummary(
     await scanSummaryAppend(candidate, resumable?.size ?? 0, scanState);
     // A complete final record is valid without a newline. Project it from a
     // clone so later appends can still finish the cached pending line once.
-    const projectedState = { ...scanState, pending: Buffer.from(scanState.pending) };
+    const projectedState = { ...scanState };
     if (!projectedState.discarding && projectedState.pending.length > 0) {
       processSummaryLine(projectedState, projectedState.pending);
     }
@@ -382,6 +384,23 @@ function summaryMatches(summary: PiSessionSummary, needle?: string): boolean {
   );
 }
 
+async function* scanPiSummaries(candidates: PiFileCandidate[]) {
+  for (let index = 0; index < candidates.length; index += SUMMARY_SCAN_BATCH_SIZE) {
+    const { results } = await runTasksWithConcurrency({
+      tasks: candidates
+        .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
+        .map((candidate) => () => readPiSessionSummary(candidate)),
+      limit: IO_CONCURRENCY,
+      throwOnError: true,
+    });
+    for (const summary of results) {
+      if (summary) {
+        yield summary;
+      }
+    }
+  }
+}
+
 export async function listPiSummaryPage(
   env: NodeJS.ProcessEnv,
   params: { offset: number; limit: number; searchTerm?: string },
@@ -396,23 +415,11 @@ export async function listPiSummaryPage(
   const target = params.offset + params.limit + 1;
   const matches: PiSessionSummary[] = [];
   const needle = params.searchTerm?.toLocaleLowerCase();
-  for (
-    let index = 0;
-    index < candidates.length && matches.length < target;
-    index += SUMMARY_SCAN_BATCH_SIZE
-  ) {
-    const batch = candidates.slice(index, index + SUMMARY_SCAN_BATCH_SIZE);
-    const { results: summaries } = await runTasksWithConcurrency({
-      tasks: batch.map((candidate) => () => readPiSessionSummary(candidate)),
-      limit: IO_CONCURRENCY,
-      throwOnError: true,
-    });
-    for (const summary of summaries) {
-      if (summary && summaryMatches(summary, needle)) {
-        matches.push(summary);
-        if (matches.length >= target) {
-          break;
-        }
+  for await (const summary of scanPiSummaries(candidates)) {
+    if (summaryMatches(summary, needle)) {
+      matches.push(summary);
+      if (matches.length >= target) {
+        break;
       }
     }
   }
@@ -426,18 +433,9 @@ async function findPiSummary(
   threadId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<PiSessionSummary | undefined> {
-  const candidates = await piFileCandidates(env);
-  for (let index = 0; index < candidates.length; index += SUMMARY_SCAN_BATCH_SIZE) {
-    const { results: summaries } = await runTasksWithConcurrency({
-      tasks: candidates
-        .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
-        .map((candidate) => () => readPiSessionSummary(candidate)),
-      limit: IO_CONCURRENCY,
-      throwOnError: true,
-    });
-    const match = summaries.find((summary) => summary?.threadId === threadId);
-    if (match) {
-      return match;
+  for await (const summary of scanPiSummaries(await piFileCandidates(env))) {
+    if (summary.threadId === threadId) {
+      return summary;
     }
   }
   return undefined;

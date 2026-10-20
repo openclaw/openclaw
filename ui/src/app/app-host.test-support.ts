@@ -2,12 +2,25 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
+import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
 
-export type ShellKeyboardState = {
+export type ShellRouteCommitState = {
   runtime: { context: ApplicationContext };
-  handleDocumentKeydown: (event: KeyboardEvent) => void;
+  activeSessionKey: string;
+  didConsiderNativeRouteRestore: boolean;
+  shellNavigation: ShellNavigationOwner;
+};
+
+export type ShellCustodianRouteState = {
+  custodianMinimizeRequestId: number;
+  shellNavigation: ShellNavigationOwner;
+};
+
+export type ShellKeyboardState = {
+  element: HTMLElement;
+  runtime: { context: ApplicationContext };
 };
 
 export function resetAppHostTestGlobals(): void {

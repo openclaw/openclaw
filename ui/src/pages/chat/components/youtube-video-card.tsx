@@ -1,23 +1,29 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { YouTubeVideo } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import "./youtube-video-card.css";
 
 type YouTubeVideoProps = { video?: YouTubeVideo; videoTitle: string; enabled: boolean };
 const activePlayers = new WeakMap<Document, () => void>();
 
-function YouTubeVideoContent(
-  props: YouTubeVideoProps,
-  host: SolidBridgeElement<YouTubeVideoProps>,
-) {
-  const [playing, setPlaying] = createSignal(false);
-  const [thumbnailFailed, setThumbnailFailed] = createSignal(false);
+export function YouTubeVideoCard(props: YouTubeVideoProps) {
+  let host!: HTMLElement;
   const [wideEnough, setWideEnough] = createSignal(true);
-  const canPlay = () => props.enabled && wideEnough();
+  const canPlay = createMemo(() => props.enabled && wideEnough());
   const title = () => props.videoTitle.trim() || t("chat.youtube.video");
   const sourceUrl = createMemo(() => props.video?.watchUrl);
+  // Source and eligibility changes end playback; a restored policy never auto-plays.
+  const [playing, setPlaying] = createSignal(() => {
+    sourceUrl();
+    canPlay();
+    return false;
+  });
+  const [thumbnailFailed, setThumbnailFailed] = createSignal(() => {
+    sourceUrl();
+    return false;
+  });
+  let previewButton: HTMLButtonElement | undefined;
   const playerUrl = createMemo(() => {
     if (!props.video) {
       return undefined;
@@ -40,15 +46,6 @@ function YouTubeVideoContent(
     activePlayers.set(host.ownerDocument, stopPlayback);
     setPlaying(true);
   };
-  createEffect(sourceUrl, () => {
-    stopPlayback();
-    setThumbnailFailed(false);
-  });
-  createEffect(canPlay, (enabled) => {
-    if (!enabled) {
-      stopPlayback();
-    }
-  });
   onSettled(() => {
     const observer = new ResizeObserver(([entry]) => {
       if (entry) {
@@ -57,9 +54,11 @@ function YouTubeVideoContent(
       }
     });
     observer.observe(host);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      releasePlayback();
+    };
   });
-  onCleanup(releasePlayback);
   const PreviewContents = () => (
     <>
       <Show when={!thumbnailFailed()}>
@@ -77,92 +76,81 @@ function YouTubeVideoContent(
     </>
   );
   return (
-    <Show when={props.video}>
-      <section class="card" aria-label={title()}>
-        <div class="stage">
-          <Show
-            when={playing() && canPlay()}
-            fallback={
-              <Show
-                when={canPlay()}
-                fallback={
-                  <a
+    <openclaw-youtube-video ref={(element) => (host = element)}>
+      <Show when={props.video}>
+        <section class="card" aria-label={title()}>
+          <div class="stage">
+            <Show
+              when={playing() && canPlay()}
+              fallback={
+                <Show
+                  when={canPlay()}
+                  fallback={
+                    <a
+                      class="preview"
+                      href={props.video?.watchUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={t("chat.youtube.openVideo", { title: title() })}
+                    >
+                      <PreviewContents />
+                    </a>
+                  }
+                >
+                  <button
+                    ref={(element) => {
+                      previewButton = element;
+                    }}
                     class="preview"
-                    href={props.video?.watchUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={t("chat.youtube.openVideo", { title: title() })}
+                    type="button"
+                    aria-label={t("chat.youtube.play", { title: title() })}
+                    onClick={startPlayback}
                   >
                     <PreviewContents />
-                  </a>
-                }
-              >
-                <button
-                  class="preview"
-                  type="button"
-                  aria-label={t("chat.youtube.play", { title: title() })}
-                  onClick={startPlayback}
-                >
-                  <PreviewContents />
-                </button>
-              </Show>
-            }
-          >
-            <iframe
-              src={playerUrl()}
-              title={t("chat.youtube.player", { title: title() })}
-              sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"
-              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-              allowfullscreen
-              referrerpolicy="strict-origin-when-cross-origin"
-            />
-          </Show>
-        </div>
-        <div class="footer">
-          <div class="caption">
-            <span class="provider">{t("chat.youtube.provider")}</span>
-            <p class="title">{title()}</p>
-          </div>
-          <a class="watch" href={props.video?.watchUrl} target="_blank" rel="noopener noreferrer">
-            {t("chat.youtube.open")}
-            <Icon name="externalLink" />
-          </a>
-          <Show when={playing()}>
-            <button
-              class="close"
-              type="button"
-              aria-label={t("chat.youtube.close")}
-              onClick={() => {
-                stopPlayback();
-                queueMicrotask(() =>
-                  host.querySelector<HTMLButtonElement>("button.preview")?.focus(),
-                );
-              }}
+                  </button>
+                </Show>
+              }
             >
-              <Icon name="x" />
-            </button>
+              <iframe
+                src={playerUrl()}
+                title={t("chat.youtube.player", { title: title() })}
+                sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"
+                allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                allowfullscreen
+                referrerpolicy="strict-origin-when-cross-origin"
+              />
+            </Show>
+          </div>
+          <div class="footer">
+            <div class="caption">
+              <span class="provider">{t("chat.youtube.provider")}</span>
+              <p class="title">{title()}</p>
+            </div>
+            <a class="watch" href={props.video?.watchUrl} target="_blank" rel="noopener noreferrer">
+              {t("chat.youtube.open")}
+              <Icon name="externalLink" />
+            </a>
+            <Show when={playing()}>
+              <button
+                class="close"
+                type="button"
+                aria-label={t("chat.youtube.close")}
+                onClick={() => {
+                  stopPlayback();
+                  onSettled(() => previewButton?.focus());
+                }}
+              >
+                <Icon name="x" />
+              </button>
+            </Show>
+          </div>
+          <Show when={!canPlay()}>
+            <p class="notice" role="status">
+              {t(!props.enabled ? "chat.youtube.strict" : "chat.youtube.narrow")}
+            </p>
           </Show>
-        </div>
-        <Show when={!canPlay()}>
-          <p class="notice" role="status">
-            {t(!props.enabled ? "chat.youtube.strict" : "chat.youtube.narrow")}
-          </p>
-        </Show>
-      </section>
-    </Show>
+        </section>
+      </Show>
+    </openclaw-youtube-video>
   );
-}
-
-export const YouTubeVideoCard = defineSolidBridge("openclaw-youtube-video", YouTubeVideoContent, {
-  properties: {
-    video: { default: undefined, attribute: false },
-    videoTitle: { default: "" },
-    enabled: { default: true },
-  },
-});
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-youtube-video": SolidBridgeElement<YouTubeVideoProps>;
-  }
 }

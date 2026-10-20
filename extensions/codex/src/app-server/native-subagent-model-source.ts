@@ -22,9 +22,9 @@ import type {
 export const MAX_PENDING_CHILD_ADMISSION_EVIDENCE = 32;
 
 export function notifyNativeModelSourceWaiters(state: ParentState): void {
-  const waiters = [...(state.modelSourceWaiters ?? [])];
-  state.modelSourceWaiters?.clear();
-  for (const resolve of waiters) {
+  const waiters = state.modelSourceWaiters;
+  state.modelSourceWaiters = undefined;
+  for (const resolve of waiters ?? []) {
     resolve();
   }
 }

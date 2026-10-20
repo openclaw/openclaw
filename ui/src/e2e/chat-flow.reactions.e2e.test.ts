@@ -38,24 +38,14 @@ suite.define(() => {
             __openclaw: { id: messageId, seq: 1, senderName: "Riley", senderId: "profile-riley" },
           },
         ],
-        sessionReactions: {
-          [sessionKey]: {
-            [messageId]: [
-              { emoji: "👍", count: 1, identities: [{ id: "profile-sam", label: "Sam" }] },
-            ],
-          },
-        },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const message = page.locator(".chat-group.user", {
         hasText: "Let's keep the launch checklist short.",
       });
       const reactions = page.locator(`.chat-message-reactions[data-message-id="${messageId}"]`);
-      await reactions
-        .locator('.chat-reaction-chip[aria-pressed="false"][aria-label="👍 1"]')
-        .waitFor();
       await message.hover();
-      // The hover row and the chip row each carry a picker; the footer one first.
+      // Without reactions the hover row carries the picker; once reacted, the chip row owns it.
       const footerPicker = message.locator(
         ".chat-group-footer-actions openclaw-message-reaction-picker",
       );
@@ -75,6 +65,7 @@ suite.define(() => {
       await reactions
         .locator('.chat-reaction-chip[aria-pressed="true"][aria-label="🎉 1"]')
         .waitFor();
+      await footerPicker.waitFor({ state: "detached" });
 
       await message.hover();
       await rowPicker.getByRole("button", { name: "Add reaction", exact: true }).click();
@@ -83,7 +74,7 @@ suite.define(() => {
         .getByRole("button", { name: "More…", exact: true })
         .click();
       // A complete emoji applies on input, so the OS picker needs no extra keystroke.
-      await rowPicker.getByRole("textbox", { name: "Emoji", exact: true }).fill("🦞");
+      await rowPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
       expect(
         (await gateway.waitForRequest("session.reactions.set", { after: 1 })).params,
       ).toMatchObject({

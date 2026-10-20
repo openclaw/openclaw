@@ -1,5 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../../bash-process-registry.test-support.js";
@@ -12,10 +11,10 @@ const hostHookStateMocks = vi.hoisted(() => ({
 
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-  forgetPromptBuildDrainCacheForRun,
   mergeOrphanedTrailingUserPrompt,
   resolvePromptBuildHookResult,
 } from "./attempt-prompt-helpers.js";
@@ -39,56 +38,44 @@ it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
   expect(result.prompt).toContain("chars)");
 });
 
-describe("resolvePromptSubmissionSkipReason", () => {
-  const skip = (messages: unknown[] = [], prompt = "   ", imageCount = 0) =>
-    resolvePromptSubmissionSkipReason({ prompt, messages, imageCount });
-
-  it("treats runtime messages and empty conversation placeholders as empty history", () => {
-    expect(
-      skip([
-        { role: "system", content: "runtime-only policy" },
-        { role: "toolResult", content: "old tool output", toolCallId: "call-1" },
-        { role: "user", content: "   " },
-        { role: "assistant", content: [] },
-      ]),
-    ).toBe("empty_prompt_history_images");
-  });
-
-  it("skips a blank current prompt even with visible replay history", () => {
-    expect(skip([{ role: "user", content: "previous turn", timestamp: 1 }])).toBe(
-      "blank_user_prompt",
-    );
-  });
-
-  it("admits current text or images without replay history", () => {
-    expect(skip([], "hello")).toBeNull();
-    expect(skip([], "   ", 1)).toBeNull();
-  });
-});
+const runtimeHistory = [
+  { role: "system", content: "policy" },
+  { role: "toolResult", content: "output", toolCallId: "call-1" },
+  { role: "user", content: "   " },
+  { role: "assistant", content: [] },
+];
+it.each([
+  [runtimeHistory, "   ", 0, "empty_prompt_history_images"],
+  [[{ role: "user", content: "old", timestamp: 1 }], "   ", 0, "blank_user_prompt"],
+  [[], "hello", 0, null],
+  [[], "   ", 1, null],
+] satisfies Array<[unknown[], string, number, string | null]>)(
+  "resolves prompt submission %#",
+  (messages, prompt, imageCount, expected) => {
+    expect(resolvePromptSubmissionSkipReason({ messages, prompt, imageCount })).toBe(expected);
+  },
+);
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  const drain = hostHookStateMocks.drainPluginNextTurnInjectionContext;
   beforeEach(() => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
-      queuedInjections: [],
-    });
+    drain.mockReset().mockResolvedValue({ queuedInjections: [] });
   });
 
-  function build(runId?: string) {
+  function build(overrides: Partial<Parameters<typeof resolvePromptBuildHookResult>[0]> = {}) {
     return resolvePromptBuildHookResult({
       config: {},
       prompt: "hi",
       messages: [],
-      hookCtx: { runId, sessionKey: "global", agentId: "qa" },
+      hookCtx: { sessionKey: "global", agentId: "qa" },
+      ...overrides,
     });
   }
 
   it("preserves an explicit empty per-turn tool allowlist", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));
-    const result = await resolvePromptBuildHookResult({
-      config: {},
+    const result = await build({
       prompt: "answer without tools",
-      messages: [],
       hookCtx: { sessionKey: "agent:main:main" },
       hookRunner: {
         hasHooks: (hookName) => hookName === "before_prompt_build",
@@ -100,136 +87,112 @@ describe("resolvePromptBuildHookResult drain cache", () => {
   });
 
   it("reuses drained injections across retries and releases them when the run ends", async () => {
-    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+    drain.mockResolvedValue({
       queuedInjections: [
         {
           id: "inj-1",
           pluginId: "demo",
-          text: "first attempt context",
+          text: "injected",
           placement: "prepend_context",
           createdAt: 1,
         },
       ],
-      prependContext: "first attempt context",
+      prependContext: "injected",
     });
     const runId = "run-cache-test";
-    expect((await build(runId)).prependContext).toBe("first attempt context");
-    expect((await build(runId)).prependContext).toBe("first attempt context");
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledWith({
-      cfg: {},
-      sessionKey: "global",
-      agentId: "qa",
-    });
+    const retry = () => build({ hookCtx: { runId, sessionKey: "global", agentId: "qa" } });
+    expect((await retry()).prependContext).toBe("injected");
+    expect((await retry()).prependContext).toBe("injected");
+    expect(drain).toHaveBeenCalledTimes(1);
+    expect(drain).toHaveBeenCalledWith({ cfg: {}, sessionKey: "global", agentId: "qa" });
     forgetPromptBuildDrainCacheForRun(runId);
-    await build(runId);
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+    await retry();
+    expect(drain).toHaveBeenCalledTimes(2);
     forgetPromptBuildDrainCacheForRun(runId);
   });
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  afterEach(resetProcessRegistryForTests);
   type RuntimeAttempt = Parameters<typeof buildAfterTurnRuntimeContext>[0]["attempt"];
-  const runtimeDirectories = { workspaceDir: "/tmp/workspace", agentDir: "/tmp/agent" };
-  function runtimeAttempt(overrides: Partial<RuntimeAttempt>): RuntimeAttempt {
-    return {
-      config: {},
-      provider: "openai",
-      modelId: "gpt-5.4",
-      thinkLevel: "off",
-      reasoningLevel: "on",
-      extraSystemPrompt: "extra",
-      ownerNumbers: ["+15555550123"],
-      ...overrides,
-    };
-  }
+  const base: RuntimeAttempt = {
+    config: {},
+    provider: "openai",
+    modelId: "gpt-5.4",
+    thinkLevel: "off",
+  };
+  const runtimeParams = (overrides: Partial<RuntimeAttempt> = {}) => ({
+    attempt: { ...base, ...overrides },
+    workspaceDir: "/tmp/workspace",
+    agentDir: "/tmp/agent",
+  });
+  const runtime = (overrides: Partial<RuntimeAttempt>) =>
+    buildAfterTurnRuntimeContext(runtimeParams(overrides));
 
   it("preserves session-id-scoped processes with borrowed policy", () => {
     resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
+    for (const [id, scopeKey, pid] of [
+      ["sess-session-id", "session-123", 1234],
+      ["sess-other", "agent:main", undefined],
+    ] as const) {
+      addSession({
+        ...createProcessSessionFixture({ id, command: "sleep 600", backgrounded: true, pid }),
+        scopeKey,
       });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: runtimeAttempt({
-          sessionId: "session-123",
-          sandboxSessionKey: "agent:main",
-        }),
-        ...runtimeDirectories,
-        activeAgentId: "main",
-      });
-
-      expect(legacy.activeProcessSessions).toHaveLength(1);
-      expect(legacy.activeProcessSessions).toMatchObject([
-        { sessionId: "sess-session-id", command: "sleep 600", pid: 1234 },
-      ]);
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
-      resetProcessRegistryForTests();
     }
+    const legacy = buildAfterTurnRuntimeContext({
+      ...runtimeParams({ sessionId: "session-123", sandboxSessionKey: "agent:main" }),
+      activeAgentId: "main",
+    });
+    expect(legacy.activeProcessSessions).toHaveLength(1);
+    expect(legacy).toMatchObject({
+      activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],
+      transcriptStorage: { kind: "sqlite" },
+    });
   });
 
   it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:locked",
-        sandboxSessionKey: "global",
-        sandboxAgentId: "main",
-        config: {
-          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-        } as OpenClawConfig,
-        modelId: "gpt-5.5",
-        agentHarnessId: "openclaw",
-        modelSelectionLocked: true,
-      }),
-      ...runtimeDirectories,
+    const runtimeContext = runtime({
+      sessionKey: "agent:main:session:locked",
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      config: { agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } } },
+      modelId: "gpt-5.5",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     });
 
-    expect(runtimeContext.modelSelectionLocked).toBe(true);
-    expect(runtimeContext.sandboxSessionKey).toBe("global");
-    expect(runtimeContext.sandboxAgentId).toBe("main");
-    expect(runtimeContext.provider).toBe("openai");
-    expect(runtimeContext.model).toBe("gpt-5.5");
+    expect(runtimeContext).toMatchObject({
+      modelSelectionLocked: true,
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
   });
 
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
-      attempt: runtimeAttempt({
-        trigger: "heartbeat",
-        inputProvenance: { kind: "external_user" },
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" },
-              },
-              compaction: { model: "summary" },
-            },
+    const legacy = runtime({
+      trigger: "heartbeat",
+      inputProvenance: { kind: "external_user" },
+      sessionKey: "agent:main:session:abc",
+      authProfileId: "openai:p1",
+      config: {
+        agents: {
+          defaults: {
+            models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
+            compaction: { model: "summary" },
           },
-        } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
+        },
+      },
     });
 
-    expect(legacy.provider).toBe("openrouter");
-    expect(legacy.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(legacy).toMatchObject({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      modelCallUrgency: "background",
+    });
     expect(legacy.authProfileId).toBeUndefined();
-    expect(legacy.modelCallUrgency).toBe("background");
   });
   it("derives afterTurn token count from the current assistant usage snapshot", () => {
     const lastCallUsage = {
@@ -242,18 +205,15 @@ describe("buildAfterTurnRuntimeContext", () => {
     } satisfies NormalizedUsage;
     const promptCache = buildContextEnginePromptCacheInfo({ lastCallUsage });
     const legacy = buildAfterTurnRuntimeContextFromUsage({
-      attempt: runtimeAttempt({
-        sessionKey: "agent:main:session:abc",
-        authProfileId: "openai:p1",
-        config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
-      }),
-      ...runtimeDirectories,
+      ...runtimeParams({}),
       tokenBudget: 1050000,
       lastCallUsage,
       promptCache,
     });
 
-    expect(legacy.currentTokenCount).toBe(23);
-    expect(legacy.promptCache?.lastCallUsage?.total).toBe(57);
+    expect(legacy).toMatchObject({
+      currentTokenCount: 23,
+      promptCache: { lastCallUsage: { total: 57 } },
+    });
   });
 });

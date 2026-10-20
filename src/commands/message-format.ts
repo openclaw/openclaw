@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -25,9 +26,9 @@ function firstNonemptyString(
   ...keys: string[]
 ): string {
   for (const key of keys) {
-    const value = typeof record?.[key] === "string" && record?.[key];
-    if (value) {
-      return value as string; // SAFETY: Preserve the old second accessor read after its string check.
+    const value = record?.[key];
+    if (typeof value === "string" && value) {
+      return value;
     }
   }
   return "";
@@ -82,17 +83,33 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
   }).trimEnd();
 }
 
-function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string {
+function renderMessageList(
+  messages: unknown[],
+  opts: FormatOpts,
+  emptyLabel: string,
+  unwrapMessage = false,
+): string {
   const cap = opts.displayLimit ?? 25;
   const rows = messages.slice(0, cap).map((m) => {
-    const msg = m as Record<string, unknown>;
+    const msg = (unwrapMessage && isRecord(m) && isRecord(m.message) ? m.message : m) as Record<
+      string,
+      unknown
+    >;
     const id = firstNonemptyString(msg, "id", "ts", "messageId");
     const authorObj = msg.author as Record<string, unknown> | undefined;
-    const author =
+    let author =
       firstNonemptyString(msg, "authorTag") ||
       firstNonemptyString(authorObj, "username") ||
       firstNonemptyString(msg, "user");
-    const time = firstNonemptyString(msg, "timestamp", "ts");
+    if (!author) {
+      const from = asOptionalObjectRecord(msg.from);
+      author = firstNonemptyString(
+        asOptionalObjectRecord(from?.user ?? from?.application),
+        "displayName",
+        "id",
+      );
+    }
+    const time = firstNonemptyString(msg, "timestamp", "ts", "createdAt");
     const text = firstNonemptyString(msg, "content", "text");
     return {
       Time: shortenText(time, 28),
@@ -106,7 +123,7 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
     return theme.muted(emptyLabel);
   }
 
-  return renderTable({
+  return renderTerminalSafeTable({
     width: opts.width,
     columns: [
       { key: "Time", header: "Time", minWidth: 14 },
@@ -319,12 +336,23 @@ export function formatMessageCliText(
 
   if (result.action === "read" || result.action === "list-pins") {
     const read = result.action === "read";
-    const messages =
+    let messages =
       payload && typeof payload === "object"
         ? (payload as { messages?: unknown; pins?: unknown })[read ? "messages" : "pins"]
         : undefined;
+    if (read && !Array.isArray(messages)) {
+      const message = asOptionalObjectRecord(payload)?.message;
+      if (message && typeof message === "object") {
+        messages = [message];
+      }
+    }
     if (Array.isArray(messages)) {
-      const table = renderMessageList(messages, formatOpts, read ? "No messages." : "No pins.");
+      const table = renderMessageList(
+        messages,
+        formatOpts,
+        read ? "No messages." : "No pins.",
+        !read && result.channel === "slack",
+      );
       const lines = [heading(read ? "Messages" : "Pinned messages"), table];
       const hint = renderPaginationHint(payload, muted);
       if (hint) {
@@ -336,7 +364,13 @@ export function formatMessageCliText(
 
   if (result.action === "search") {
     const results = (payload as { results?: unknown }).results;
-    const list = extractDiscordSearchResultsMessages(results);
+    let list = extractDiscordSearchResultsMessages(results);
+    if (list === null) {
+      const messages = asOptionalObjectRecord(payload)?.messages;
+      if (Array.isArray(messages)) {
+        list = messages;
+      }
+    }
     if (list) {
       const lines = [heading("Search results"), renderMessageList(list, formatOpts, "No results.")];
       // Discord's approximate result count cannot prove another page exists.

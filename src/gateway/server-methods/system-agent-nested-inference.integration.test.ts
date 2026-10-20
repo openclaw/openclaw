@@ -14,6 +14,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import * as embeddedAgent from "../../agents/embedded-agent.js";
+import * as configModule from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -31,8 +37,9 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { runSystemAgentTurnWithDeps } from "../../system-agent/agent-turn.test-support.js";
+import { runSystemAgentTurn } from "../../system-agent/agent-turn.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import * as operations from "../../system-agent/operations.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
@@ -44,9 +51,15 @@ import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent
 import type { GatewayClient } from "./types.js";
 
 const RESPONSE_TEXT = "Synthetic expert response; no action was executed.";
+const nativeExecuteOperation = operations.executeSystemAgentOperation;
 const dispatch = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>>(),
 );
+
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(),
+}));
 
 vi.mock("../../agents/embedded-agent-runner/cli-backend-dispatch.js", () => ({
   // This function is called inside run-orchestrator's admitted global-lane task.
@@ -99,9 +112,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     cleanup();
   }),
 );
@@ -122,6 +137,7 @@ async function createConversation() {
       },
     },
   };
+  setRuntimeConfigSnapshot(config);
   const proof = await metadata.run(
     () => createSystemAgentVerifiedInferenceTestFixture(config),
     config,
@@ -179,10 +195,12 @@ async function createConversation() {
     },
   };
   const deps = {
-    ...proof.deps,
     readConfigFileSnapshot,
     loadOverview: async () => overview,
-    runEmbeddedAgent: async (runnerParams: RunEmbeddedAgentParams) =>
+  };
+  vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+  vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(
+    async (runnerParams) =>
       await runEmbeddedAgent({
         ...runnerParams,
         onLaneWait: (wait) => {
@@ -191,20 +209,22 @@ async function createConversation() {
           }
         },
       }),
-  };
-  const executeOperation = vi.fn(async () => {
-    throw new Error("external operation");
-  });
-  const engine = new SystemAgentChatEngine(
-    {
-      surface: "gateway",
-      verifiedInference: proof.binding,
-      operatorApprovalOnly: true,
-      deps,
-      runAgentTurn: (params) => runSystemAgentTurnWithDeps(params, deps),
-    },
-    { executeOperation },
   );
+  const executeOperation = vi
+    .spyOn(operations, "executeSystemAgentOperation")
+    .mockImplementation((...args) => {
+      if (args[2]?.approved !== true) {
+        return nativeExecuteOperation(...args);
+      }
+      throw new Error("external operation");
+    });
+  const engine = new SystemAgentChatEngine({
+    surface: "gateway",
+    verifiedInference: proof.binding,
+    operatorApprovalOnly: true,
+    deps,
+    runAgentTurn: runSystemAgentTurn,
+  });
   engines.push(engine);
   const sessionId = "nested-inference-integration-conversation";
   const sessions = new Map<string, SystemAgentChatSession>([

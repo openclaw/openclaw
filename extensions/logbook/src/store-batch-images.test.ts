@@ -1,16 +1,18 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { openEngineWorkerStore } from "openclaw/plugin-sdk/database-engine-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { openNodeSqliteDatabase, openSqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { logbookSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { LogbookStore } from "./store.js";
 import type { LogbookFrame } from "./types.js";
 
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
-  return { ...actual, openSqliteWorkerStore: vi.fn(actual.openSqliteWorkerStore) };
+vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
+  return { ...actual, openEngineWorkerStore: vi.fn(actual.openEngineWorkerStore) };
 });
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(logbookSqliteBackendEntrypoint);
@@ -112,7 +114,7 @@ describe("Logbook sampled batch images", () => {
               (_, index) => frames[Math.round(index * ((count - 1) / 15))],
             );
       const before = persistedState(dataDir);
-      const worker = await vi.mocked(openSqliteWorkerStore).mock.results.at(-1)?.value;
+      const worker = await vi.mocked(openEngineWorkerStore).mock.results.at(-1)?.value;
       if (!worker) {
         throw new Error("Expected the actual Logbook worker");
       }

@@ -14,6 +14,29 @@ import { setSynologyRuntime } from "./runtime.js";
 import { sanitizeInput, validateToken } from "./security.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
 import { synologyChatSetupContract, synologyChatSetupWizard } from "./setup-surface.js";
+import type { SynologyChatChannelConfig } from "./types.js";
+
+const config = (channel: SynologyChatChannelConfig): OpenClawConfig => ({
+  channels: { "synology-chat": channel },
+});
+const loneSurrogatePattern =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+
+function setupText(overrides: Record<string, string> = {}) {
+  const answers: Record<string, string> = {
+    "Incoming webhook URL": "https://nas.example.com/webapi/entry.cgi?token=incoming",
+    "Public attachment webhook URL (optional)": "",
+    "Outgoing webhook path (optional)": "",
+    ...overrides,
+  };
+  return vi.fn(async ({ message }: { message: string }) => {
+    const answer = answers[message];
+    if (answer === undefined) {
+      throw new Error(`Unexpected prompt: ${message}`);
+    }
+    return answer;
+  });
+}
 
 const synologyChatSetupPlugin = {
   id: "synology-chat",
@@ -31,23 +54,9 @@ const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatSetup
 
 function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
   return createTestWizardPrompter({
-    text: vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter Synology Chat outgoing webhook token") {
-        return "synology-token";
-      }
-      if (message === "Incoming webhook URL") {
-        return "https://nas.example.com/webapi/entry.cgi?token=incoming";
-      }
-      if (message === "Public attachment webhook URL (optional)") {
-        return "";
-      }
-      if (message === "Outgoing webhook path (optional)") {
-        return "";
-      }
-      if (params.allowedUserIds && message === "Allowed Synology Chat user ids") {
-        return params.allowedUserIds;
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
+    text: setupText({
+      "Enter Synology Chat outgoing webhook token": "synology-token",
+      ...(params.allowedUserIds ? { "Allowed Synology Chat user ids": params.allowedUserIds } : {}),
     }) as WizardPrompter["text"],
   });
 }
@@ -77,42 +86,22 @@ describe("synology-chat core", () => {
     expect(
       synologyChatSetupWizard.textInputs?.find((input) => input.inputKey === "webhookUrl"),
     ).toMatchObject({ sensitive: true });
-    expect(SynologyChatChannelConfigSchema.uiHints?.webhookUrl).toMatchObject({
-      sensitive: true,
-    });
-    expect(SynologyChatChannelConfigSchema.uiHints?.["accounts.*.webhookUrl"]).toMatchObject({
-      sensitive: true,
-    });
-    expect(SynologyChatChannelConfigSchema.uiHints?.incomingUrl).toMatchObject({
-      sensitive: true,
-    });
-    expect(SynologyChatChannelConfigSchema.uiHints?.["accounts.*.incomingUrl"]).toMatchObject({
-      sensitive: true,
+    expect(SynologyChatChannelConfigSchema.uiHints).toMatchObject({
+      webhookUrl: { sensitive: true },
+      "accounts.*.webhookUrl": { sensitive: true },
+      incomingUrl: { sensitive: true },
+      "accounts.*.incomingUrl": { sensitive: true },
     });
   });
 
   it("isolates direct-message sessions by account and user", () => {
-    const alpha = buildSynologyChatInboundSessionKey({
-      agentId: "main",
-      accountId: "alpha",
-      userId: "123",
-    });
-    const beta = buildSynologyChatInboundSessionKey({
-      agentId: "main",
-      accountId: "beta",
-      userId: "123",
-    });
-    const otherUser = buildSynologyChatInboundSessionKey({
-      agentId: "main",
-      accountId: "alpha",
-      userId: "456",
-    });
-
-    expect(alpha).toBe("agent:main:synology-chat:alpha:direct:123");
-    expect(beta).toBe("agent:main:synology-chat:beta:direct:123");
-    expect(otherUser).toBe("agent:main:synology-chat:alpha:direct:456");
-    expect(alpha).not.toBe(beta);
-    expect(alpha).not.toBe(otherUser);
+    const key = (accountId: string, userId: string) =>
+      buildSynologyChatInboundSessionKey({ agentId: "main", accountId, userId });
+    expect([key("alpha", "123"), key("beta", "123"), key("alpha", "456")]).toEqual([
+      "agent:main:synology-chat:alpha:direct:123",
+      "agent:main:synology-chat:beta:direct:123",
+      "agent:main:synology-chat:alpha:direct:456",
+    ]);
   });
 
   it("never sends an existing token-bearing incoming URL back through setup prompts", async () => {
@@ -120,18 +109,7 @@ describe("synology-chat core", () => {
       "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&token=existing-secret";
     const replacementIncomingUrl =
       "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&token=replacement";
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Incoming webhook URL") {
-        return replacementIncomingUrl;
-      }
-      if (message === "Public attachment webhook URL (optional)") {
-        return "";
-      }
-      if (message === "Outgoing webhook path (optional)") {
-        return "";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const text = setupText({ "Incoming webhook URL": replacementIncomingUrl });
     const confirm = vi.fn(async ({ message }: { message: string }) => {
       if (message === "Synology Chat webhook token already configured. Keep it?") {
         return true;
@@ -148,15 +126,11 @@ describe("synology-chat core", () => {
 
     const result = await runSetupWizardConfigure({
       configure: synologyChatConfigure,
-      cfg: {
-        channels: {
-          "synology-chat": {
-            enabled: true,
-            token: "existing-outgoing-token",
-            incomingUrl: existingIncomingUrl,
-          },
-        },
-      } as OpenClawConfig,
+      cfg: config({
+        enabled: true,
+        token: "existing-outgoing-token",
+        incomingUrl: existingIncomingUrl,
+      }),
       prompter,
       options: { secretInputMode: "plaintext" as const },
     });
@@ -185,59 +159,48 @@ describe("synology-chat core", () => {
       forceAllowFrom: true,
     });
 
-    expect(result.cfg.channels?.["synology-chat"]?.dmPolicy).toBe("allowlist");
-    expect(result.cfg.channels?.["synology-chat"]?.allowedUserIds).toEqual(["123456", "789012"]);
+    expect(result.cfg.channels?.["synology-chat"]).toMatchObject({
+      dmPolicy: "allowlist",
+      allowedUserIds: ["123456", "789012"],
+    });
   });
 });
 
 describe("synology-chat account resolution", () => {
   it("inherits dangerous name matching from base config unless explicitly disabled", () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          dangerouslyAllowNameMatching: true,
-          accounts: {
-            work: { token: "work-tok" },
-            safe: {
-              token: "safe-tok",
-              dangerouslyAllowNameMatching: false,
-            },
-          },
+    const cfg = config({
+      dangerouslyAllowNameMatching: true,
+      accounts: {
+        work: { token: "work-tok" },
+        safe: {
+          token: "safe-tok",
+          dangerouslyAllowNameMatching: false,
         },
       },
-    };
+    });
 
     expect(resolveAccount(cfg, "work").dangerouslyAllowNameMatching).toBe(true);
     expect(resolveAccount(cfg, "safe").dangerouslyAllowNameMatching).toBe(false);
   });
 
   it("tracks inherited webhook paths and opt-in inheritance", () => {
-    const base = {
-      channels: {
-        "synology-chat": {
-          token: "base-tok",
-          webhookPath: "/webhook/shared",
-          accounts: {
-            work: { token: "work-tok" },
-          },
-        },
+    const channel = {
+      token: "base-tok",
+      webhookPath: "/webhook/shared",
+      accounts: {
+        work: { token: "work-tok" },
       },
     };
 
-    const inherited = resolveAccount(base, "work");
-    expect(inherited.webhookPath).toBe("/webhook/shared");
-    expect(inherited.webhookPathSource).toBe("inherited-base");
-    expect(inherited.dangerouslyAllowInheritedWebhookPath).toBe(false);
+    const inherited = resolveAccount(config(channel), "work");
+    expect(inherited).toMatchObject({
+      webhookPath: "/webhook/shared",
+      webhookPathSource: "inherited-base",
+      dangerouslyAllowInheritedWebhookPath: false,
+    });
 
     const optedIn = resolveAccount(
-      {
-        channels: {
-          "synology-chat": {
-            ...base.channels["synology-chat"],
-            dangerouslyAllowInheritedWebhookPath: true,
-          },
-        },
-      },
+      config({ ...channel, dangerouslyAllowInheritedWebhookPath: true }),
       "work",
     );
     expect(optedIn.dangerouslyAllowInheritedWebhookPath).toBe(true);
@@ -245,19 +208,15 @@ describe("synology-chat account resolution", () => {
 
   it("does not inherit the base public webhook URL into a named route", () => {
     const account = resolveAccount(
-      {
-        channels: {
-          "synology-chat": {
-            webhookUrl: "https://gateway.example.com/webhook/synology",
-            accounts: {
-              work: {
-                token: "work-tok",
-                webhookPath: "/webhook/synology-work",
-              },
-            },
+      config({
+        webhookUrl: "https://gateway.example.com/webhook/synology",
+        accounts: {
+          work: {
+            token: "work-tok",
+            webhookPath: "/webhook/synology-work",
           },
         },
-      },
+      }),
       "work",
     );
 
@@ -265,28 +224,20 @@ describe("synology-chat account resolution", () => {
   });
 
   it("parses allowedUserIds strings, arrays, and rate limits", () => {
-    const parsedString = resolveAccount({
-      channels: {
-        "synology-chat": { allowedUserIds: "user1, user2, user3" },
-      },
-    });
+    const parsedString = resolveAccount(config({ allowedUserIds: "user1, user2, user3" }));
     expect(parsedString.allowedUserIds).toEqual(["user1", "user2", "user3"]);
 
-    const parsedArray = resolveAccount({
-      channels: {
-        "synology-chat": { allowedUserIds: ["u1", "u2"] },
-      },
-    });
+    const parsedArray = resolveAccount(config({ allowedUserIds: ["u1", "u2"] }));
     expect(parsedArray.allowedUserIds).toEqual(["u1", "u2"]);
 
     process.env.SYNOLOGY_RATE_LIMIT = "0";
-    expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(0);
+    expect(resolveAccount(config({})).rateLimitPerMinute).toBe(0);
 
     process.env.SYNOLOGY_RATE_LIMIT = "0abc";
-    expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+    expect(resolveAccount(config({})).rateLimitPerMinute).toBe(30);
 
     process.env.SYNOLOGY_RATE_LIMIT = "-1";
-    expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+    expect(resolveAccount(config({})).rateLimitPerMinute).toBe(30);
   });
 });
 
@@ -315,8 +266,6 @@ describe("synology-chat security helpers", () => {
   });
 
   it("truncates long inputs without splitting a surrogate pair", () => {
-    const loneSurrogatePattern =
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     const input = "a".repeat(3999) + "\u{1F600}" + "b".repeat(2000);
 
     const result = sanitizeInput(input);
@@ -327,8 +276,6 @@ describe("synology-chat security helpers", () => {
   });
 
   it("keeps complete supplementary-plane characters that fit before truncation", () => {
-    const loneSurrogatePattern =
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     const emoji = "\u{1F600}";
     const input = "a".repeat(3998) + emoji + "b".repeat(2000);
 

@@ -1,12 +1,14 @@
 import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
+import {
+  COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
+  expectOpenAITransportRequestPolicy,
+} from "../../../../test/helpers/openai-transport-request-policy.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
-import type { AssistantMessage, Model, SimpleStreamOptions } from "../types.js";
+import type { AssistantMessage, SimpleStreamOptions } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
-
-const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai completions transport requests", () => {
   it.each([
@@ -17,68 +19,7 @@ describe("openai completions transport requests", () => {
     },
   ])(
     "honors turn timeout and pinned SDK retries over real $api HTTP",
-    async (transport) => {
-      const capturedTimeouts: Array<string | undefined> = [];
-      const server = createServer((request, response) => {
-        const timeout = request.headers["x-stainless-timeout"];
-        capturedTimeouts.push(Array.isArray(timeout) ? timeout[0] : timeout);
-        request.resume();
-        request.on("end", () => {
-          response.writeHead(500, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              error: { type: "server_error", message: "turn retry regression" },
-            }),
-          );
-        });
-      });
-
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing loopback server address");
-        }
-
-        const model = {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          api: transport.api,
-          provider: transport.provider,
-          baseUrl: `http://127.0.0.1:${address.port}/v1`,
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 4_096,
-          requestTimeoutMs: 900_000,
-        } satisfies Model & { requestTimeoutMs: number };
-
-        const stream = await transport.createStream()(
-          model,
-          {
-            messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
-            tools: [],
-          },
-          { apiKey: "test-key", timeoutMs: 1_234 },
-        );
-
-        const eventTypes: string[] = [];
-        for await (const event of stream) {
-          eventTypes.push(event.type);
-        }
-
-        expect(eventTypes).toContain("error");
-        // The SDK advertises request timeouts in whole seconds on the wire.
-        expect(capturedTimeouts).toEqual(["1"]);
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
-      }
-    },
+    expectOpenAITransportRequestPolicy,
     COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   );
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {

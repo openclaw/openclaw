@@ -198,7 +198,6 @@ export async function finalizeTelegramOutbound(params: {
   messageThreadId?: number;
   promptContextProjectionPlan?: TelegramSendOpts["promptContextProjectionPlan"];
   onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
-  beforeActivity?: (result: { messageId: string; chatId: string }) => void;
 }): Promise<TelegramSendResult> {
   const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
@@ -241,7 +240,6 @@ export async function finalizeTelegramOutbound(params: {
       visibleReplySent: true,
     });
   }
-  params.beforeActivity?.(resultIds);
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,

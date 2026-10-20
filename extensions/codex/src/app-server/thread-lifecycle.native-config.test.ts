@@ -67,6 +67,51 @@ describe("Codex native configuration lifecycle", () => {
     throw new Error(`unexpected method: ${method}`);
   }
 
+  it("resumes the bound thread after replacing the inference proxy client", async () => {
+    const createClient = (persistedThreads: string[] = []) =>
+      createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads,
+        respond: async (method) => {
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/start" || method === "thread/resume") {
+            return threadStartResult("proxy-thread");
+          }
+          return readNativeConfig(method);
+        },
+      });
+    const first = await createClient();
+    ownCodexInferenceClient(first.client);
+    let firstUrl: string | undefined;
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(first.client),
+        nativeCodeModeEnabled: false,
+      });
+      firstUrl = getCodexInferenceThread(first.client, binding.threadId)?.baseUrl;
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.restrictedThreadConfigFingerprint).toBeDefined();
+    } finally {
+      first.client.close();
+    }
+    const second = await createClient(["proxy-thread"]);
+    ownCodexInferenceClient(second.client);
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(second.client),
+        nativeCodeModeEnabled: false,
+      });
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.lifecycle.action).toBe("resumed");
+      expect(getCodexInferenceThread(second.client, binding.threadId)?.baseUrl).not.toBe(firstUrl);
+      expect(second.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+    } finally {
+      second.client.close();
+    }
+  });
+
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {
@@ -426,7 +471,7 @@ describe("Codex native configuration lifecycle", () => {
         });
         try {
           await expect(startOrResumeThread(common)).rejects.toThrow(
-            revokeDuringBindingRead ? "Codex warm thread ownership changed" : "active",
+            "Codex warm thread ownership changed",
           );
         } finally {
           bindingRead?.mockRestore();

@@ -1,3 +1,4 @@
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 
 type CommentaryProgressOwnerOptions = Pick<
@@ -28,6 +29,11 @@ export async function resolveTurnCommentaryProgressOwner(params: {
       frozen === undefined ? params.resolveVerboseProgressVisibilityAsync : async () => frozen,
     );
   } else if (params.options?.onVerboseProgressVisibility) {
+    warnPluginSdkDeprecation({
+      family: "reply-visibility",
+      method: "onVerboseProgressVisibility",
+      replacement: "onVerboseProgressVisibilityAsync with awaited visibility predicates",
+    });
     const frozen = shouldDeliverCommentaryPayloads
       ? params.resolveVerboseProgressVisibility()
       : undefined;

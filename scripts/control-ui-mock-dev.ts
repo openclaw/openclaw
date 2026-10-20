@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
-import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { createServer, mergeConfig, type Plugin, type ViteDevServer } from "vite";
 import type {
   Question,
   SystemAgentChatHistoryResult,
@@ -12,7 +12,6 @@ import type {
   UserProfile,
 } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { createSolidControlUiBuildPlugin } from "../src/cli/plugins-build-solid.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
@@ -21,9 +20,7 @@ import {
   controlUiPluginAssetPrefix,
   controlUiPluginAssetRoot,
 } from "../src/gateway/control-ui-plugin-assets-contract.js";
-import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
-import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
 import { sessionActivityTimestamp } from "../src/shared/session-activity-timestamp.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
 import type {
@@ -49,7 +46,7 @@ import { workboardUi } from "../ui/src/test-helpers/control-ui-workboard-fixture
 import { buildWorkboardMocks } from "../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
 import { installWorkboardBoardMock } from "../ui/src/test-helpers/control-ui-workboard-mocks.ts";
 import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
-import {
+import controlUiViteConfig, {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
@@ -155,7 +152,10 @@ type UpdateFixture = {
   statusResponse: unknown;
 };
 
-function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): UpdateFixture | null {
+async function buildUpdateFixture(
+  fixture: CliOptions["fixture"],
+  nowMs: number,
+): Promise<UpdateFixture | null> {
   if (
     fixture !== "update-available" &&
     fixture !== "update-blocked" &&
@@ -293,6 +293,8 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     ],
     durationMs: 11_640,
   };
+  const { buildUpdateRestartSentinelPayload } =
+    await import("../src/infra/update-restart-sentinel-payload.js");
   return {
     available,
     schedule,
@@ -323,8 +325,6 @@ const boardFixtureHtml = `<!doctype html>
         const mode = mediaQuery.matches ? "light" : "dark";
         document.documentElement.dataset.theme = mode;
         document.documentElement.dataset.themeMode = mode;
-        document.documentElement.classList.toggle("wa-light", mode === "light");
-        document.documentElement.classList.toggle("wa-dark", mode === "dark");
         document.documentElement.style.colorScheme = mode;
       };
       applyTheme();
@@ -349,7 +349,7 @@ const boardFixtureHtml = `<!doctype html>
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
+    <script type="module" src="/src/test-helpers/board-fixture.tsx"></script>
   </body>
 </html>`;
 
@@ -1813,6 +1813,8 @@ async function createChatPickerScenario(
       agentId: agent.id,
       isMain: true,
       lastMessagePreview: agent.preview,
+      // The agent roster subtitle reads the last assistant message, not the generic preview.
+      lastAssistantMessage: { text: agent.preview, timestamp: rosterTime - (index + 1) * 720_000 },
     }),
     ...agent.sessionLabels.map((label, sessionIndex) => {
       const working = agent.id === "forge" && sessionIndex === 0;
@@ -2077,7 +2079,7 @@ async function createChatPickerScenario(
     ...(fixture === "sidebar-roster" ? { secondAgentId: "forge" } : {}),
   });
   const updateFixtureNow = Date.now();
-  const updateFixture = buildUpdateFixture(fixture, updateFixtureNow);
+  const updateFixture = await buildUpdateFixture(fixture, updateFixtureNow);
   const updateSchedule = updateFixture?.schedule ?? null;
   const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
     ? {
@@ -3490,8 +3492,6 @@ async function createMockGatewayPlugin(
           root.dataset.theme = mode;
           root.dataset.themeMode = mode;
           root.dataset.themeResolved = mode;
-          root.classList.toggle("wa-light", mode === "light");
-          root.classList.toggle("wa-dark", mode === "dark");
           root.style.colorScheme = mode;
           syncControlUiSystemChrome();
           for (const button of control.querySelectorAll("button")) {
@@ -3597,7 +3597,12 @@ async function createMockGatewayPlugin(
 }
 
 async function buildWorkboardStatesAssets() {
-  const { build } = await import("esbuild");
+  const [{ build }, { createSolidControlUiBuildPlugin }, { buildPluginLoaderAliasMap }] =
+    await Promise.all([
+      import("esbuild"),
+      import("../src/cli/plugins-build-solid.js"),
+      import("../src/plugins/sdk-alias.js"),
+    ]);
   const rootDir = path.join(repoRoot, "extensions/workboard");
   const entry = path.join(rootDir, "browser/index.ts");
   const cardRenderer = fs.realpathSync(path.join(rootDir, "browser/pages/workboard/view-card.tsx"));
@@ -3766,52 +3771,57 @@ const cacheDir = await mkdtemp(path.join(cacheRoot, "server-"));
 process.once("exit", () => rmSync(cacheDir, { recursive: true, force: true }));
 let server: ViteDevServer | undefined;
 try {
-  server = await createServer({
-    base: "/",
-    cacheDir,
-    clearScreen: false,
-    configFile: path.join(uiRoot, "vite.config.ts"),
-    define: {
-      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
-        version: "2026.7.10",
-        commit: "0123456789abcdef0123456789abcdef01234567",
-        commitAt: "2026-07-10T11:22:33.000Z",
-        builtAt: "2026-07-10T12:34:56.000Z",
-        branch: null,
-        dirty: null,
-        release: false,
-        buildId: scenario.serverBuildId,
+  server = await createServer(
+    mergeConfig(
+      controlUiViteConfig({
+        command: "serve",
+        buildInfo: {
+          version: "2026.7.10",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          commitAt: "2026-07-10T11:22:33.000Z",
+          builtAt: "2026-07-10T12:34:56.000Z",
+          branch: null,
+          dirty: null,
+          release: false,
+          buildId: expectDefined(scenario.serverBuildId, "Control UI mock build ID"),
+        },
       }),
-    },
-    logLevel: "error",
-    optimizeDeps: {
-      ...(options.fixture === "board"
-        ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
-        : {}),
-      include: ["diff", "lit/directives/repeat.js"],
-    },
-    plugins: [
-      ...createStandaloneMockIsolationPlugins(),
-      await createMockGatewayPlugin(scenario, options.fixture),
-      createBoardFixturePlugin(),
-      ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
-    ],
-    publicDir: path.join(uiRoot, "public"),
-    resolve: {
-      alias: [
-        ...resolveExternalPackageAliasesForVite(),
-        ...resolveSourcePackageAliasesForVite(),
-        ...resolveTsconfigPathAliasesForVite(),
-      ],
-    },
-    root: uiRoot,
-    server: {
-      allowedHosts: options.allowedHosts,
-      host: options.host,
-      port: options.port,
-      strictPort: true,
-    },
-  });
+      {
+        base: "/",
+        cacheDir,
+        clearScreen: false,
+        configFile: false,
+        logLevel: "error",
+        optimizeDeps: {
+          ...(options.fixture === "board"
+            ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
+            : {}),
+          include: ["diff"],
+        },
+        plugins: [
+          ...createStandaloneMockIsolationPlugins(),
+          await createMockGatewayPlugin(scenario, options.fixture),
+          createBoardFixturePlugin(),
+          ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
+        ],
+        publicDir: path.join(uiRoot, "public"),
+        resolve: {
+          alias: [
+            ...resolveExternalPackageAliasesForVite(),
+            ...resolveSourcePackageAliasesForVite(),
+            ...resolveTsconfigPathAliasesForVite(),
+          ],
+        },
+        root: uiRoot,
+        server: {
+          allowedHosts: options.allowedHosts,
+          host: options.host,
+          port: options.port,
+          strictPort: true,
+        },
+      },
+    ),
+  );
 
   await server.listen();
   console.log(

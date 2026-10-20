@@ -98,24 +98,28 @@ export function createStatusModelResolver(params: {
     const endpoint = evaluation.selectedRoute?.baseUrl
       ? formatModelEndpointUrl(evaluation.selectedRoute.baseUrl)
       : undefined;
-    // A selected route and its auth must describe the same decision. Provider-wide
-    // labels can prefer another stored credential over an explicitly configured key.
-    if (hasAuthOverride || (usesHostAuth && !evaluation.selectedRoute)) {
+    // Prepared auth remains authoritative without a route; provider-wide labels
+    // can prefer another stored credential over an explicitly configured key.
+    if (hasAuthOverride || (usesHostAuth && !evaluation.selectedCredential)) {
       return { authLabel, endpoint };
     }
     const mode =
       evaluation.selectedAuthMode === "api_key" ? "api-key" : evaluation.selectedAuthMode;
     const profileId = evaluation.selectedProfileId;
-    if (profileId) {
-      const label = isUserModelAuthProfileId(profileId)
+    const label = profileId
+      ? isUserModelAuthProfileId(profileId)
         ? "personal account"
-        : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId });
-      return { authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown", endpoint };
-    }
+        : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId })
+      : evaluation.runtimeAuth
+        ? runtimeId
+        : evaluation.evidence === "provider-config"
+          ? "models.json"
+          : evaluation.evidence === "environment"
+            ? "environment"
+            : undefined;
     return {
-      authLabel: evaluation.runtimeAuth
-        ? (mode ?? "native") + " (" + runtimeId + ")"
-        : (mode ?? "unknown"),
+      authLabel:
+        (mode ?? (evaluation.runtimeAuth ? "native" : "unknown")) + (label ? ` (${label})` : ""),
       endpoint,
     };
   };

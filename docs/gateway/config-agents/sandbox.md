@@ -26,7 +26,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           containerPrefix: "openclaw-sbx-",
           workdir: "/workspace",
           readOnlyRoot: true,
@@ -67,7 +67,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         },
         browser: {
           enabled: false,
-          image: "openclaw-sandbox-browser:bookworm-slim",
+          image: "openclaw-sandbox-browser:trixie-slim",
           network: "openclaw-sandbox-browser",
           cdpPort: 9222,
           cdpSourceRange: "172.21.0.1/32",
@@ -109,7 +109,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 }
 ```
 
-Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
+Defaults shown above (`off`/`docker`/`agent`/`none`/`trixie-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
 
 <Accordion title="Sandbox details">
 
@@ -143,7 +143,7 @@ Plugin-managed backends keep runtime-specific settings under their plugin entrie
 **SSH backend behavior:**
 
 - seeds the remote workspace once after create or recreate
-- then keeps the remote SSH workspace canonical
+- then uses the remote SSH workspace as the source of truth
 - routes `exec`, file tools, and media paths over SSH
 - does not sync remote changes back to the host automatically
 - does not support sandbox browser containers
@@ -191,8 +191,8 @@ Plugin-managed backends keep runtime-specific settings under their plugin entrie
 
 **OpenShell mode:**
 
-- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays canonical
-- `remote`: seed remote once when the sandbox is created, then keep the remote workspace canonical
+- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays the source of truth
+- `remote`: seed remote once when the sandbox is created, then use the remote workspace as the source of truth
 
 In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
 Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.

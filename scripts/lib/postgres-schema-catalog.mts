@@ -2,7 +2,7 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 
 export const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-export const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const identifier = (token: string) =>
   /^["`[]/.test(token) ? token.slice(1, -1).replaceAll(token[0]!.repeat(2), token[0]!) : token;
 const keyword = (token: string | undefined, word: string) => token?.toUpperCase() === word;
@@ -13,6 +13,18 @@ const mappedTypes: Record<string, string> = {
   TEXT: "text",
   BLOB: "bytea",
 };
+export const sqliteOnlyNulGuards = [
+  "node_worker_launches.launch_id",
+  "node_worker_launches.environment_id",
+  "node_worker_launches.session_id",
+  "node_worker_launches.run_id",
+  "node_worker_launches.result_json",
+  "node_worker_launches.error_text",
+  "node_worker_turns.turn_id",
+  "node_worker_turns.run_id",
+  "node_worker_turns.result_json",
+  "node_worker_turns.error_text",
+];
 
 function tokens(sql: string): string[] {
   const result: string[] = [];
@@ -62,6 +74,64 @@ function parts(input: string[]): string[][] {
 }
 
 type Expression = { sql: string; type: string };
+const navigationMembers = [
+  "version",
+  "modelBytes",
+  "modelWithoutCheckpointBytes",
+  "withoutCustomDataBytes",
+  "report",
+  "report.kind",
+  "navigation",
+  "reset",
+  "model",
+];
+function firstJsonMember(value: string, key: string): string {
+  return `(SELECT member.value FROM json_each(CASE WHEN json_typeof(${value}) = 'object' THEN ${value} ELSE '{}'::json END) WITH ORDINALITY AS member(key, value, position) WHERE member.key = ${literal(key)} ORDER BY member.position LIMIT 1)`;
+}
+function jsonMember(
+  table: string | undefined,
+  column: string,
+  path: string,
+  fn: string,
+): Expression {
+  const voice = table === "cache_entries" && column === '"value_json"';
+  const navigation = table === "transcript_events" && column === '"navigation_json"';
+  const member = /^'\$\.([A-Za-z]+(?:\.[A-Za-z]+)?)'$/.exec(path)?.[1];
+  const numeric = [
+    "version",
+    "modelBytes",
+    "modelWithoutCheckpointBytes",
+    "withoutCustomDataBytes",
+  ];
+  if (
+    !member ||
+    !(voice
+      ? ["agentId", "sessionKey", "origin", "status"].includes(member)
+      : navigation && navigationMembers.includes(member))
+  ) {
+    throw new Error(`Unsupported JSON predicate ${table}.${column} ${path}`);
+  }
+  // The CHECK's CTE selects first members; voice writers stringify unique keys.
+  const value = voice ? `(${column}::json -> ${literal(member)})` : quote(`j_${member}`);
+  const type = `json_typeof(${value})`;
+  const text = `(${value} #>> '{}')`;
+  const integer = `${type} = 'number' AND ${text} ~ '^-?[0-9]+$'`;
+  if (fn === "json_type") {
+    return {
+      sql: `CASE WHEN ${integer} THEN 'integer' WHEN ${type} = 'number' THEN 'real' ELSE ${type} END`,
+      type: "text",
+    };
+  }
+  if (navigation && numeric.includes(member)) {
+    // Only bounded integer comparisons consume these values. Larger integers cannot match.
+    return {
+      sql: `CASE WHEN ${integer} AND char_length(${text}) <= 20 THEN ${text}::numeric END`,
+      type: "bigint",
+    };
+  }
+  return { sql: `CASE WHEN ${type} = 'string' THEN ${text} END`, type: "text" };
+}
+
 function globRegex(pattern: string): string {
   let result = "\\A";
   for (let i = 0; i < pattern.length; i++) {
@@ -91,7 +161,7 @@ function globRegex(pattern: string): string {
   return `${result}\\Z`;
 }
 
-function expression(source: string, columns: Map<string, string>): Expression {
+function expression(source: string, columns: Map<string, string>, table?: string): Expression {
   const input = tokens(source);
   let pos = 0;
   const take = (word: string) => (keyword(input[pos], word) ? (pos++, true) : false);
@@ -111,12 +181,31 @@ function expression(source: string, columns: Map<string, string>): Expression {
     }
   };
   const boolean = (value: Expression) => {
+    if (value.type === "bigint" && ["0", "1"].includes(value.sql)) {
+      return value.sql === "0" ? "FALSE" : "TRUE";
+    }
     if (value.type !== "boolean") {
       throw new Error("SQLite numeric truthiness is unsupported");
     }
     return value.sql;
   };
   function atom(): Expression {
+    if (take("CASE")) {
+      requireToken("WHEN");
+      const condition = boolean(or());
+      requireToken("THEN");
+      const yes = or();
+      const no = take("ELSE") ? or() : { sql: "NULL", type: "null" };
+      requireToken("END");
+      const bool = yes.type === "boolean" || no.type === "boolean";
+      if (!bool) {
+        compatible(yes, no);
+      }
+      return {
+        sql: `CASE WHEN ${condition} THEN ${bool ? boolean(yes) : yes.sql} ELSE ${bool ? boolean(no) : no.sql} END`,
+        type: bool ? "boolean" : yes.type,
+      };
+    }
     if (take("(")) {
       const value = or();
       requireToken(")");
@@ -143,17 +232,103 @@ function expression(source: string, columns: Map<string, string>): Expression {
       return { sql: "NULL", type: "null" };
     }
     if (take("(")) {
-      if (!/^(length|json_valid)$/i.test(token)) {
+      if (
+        !/^(length|octet_length|json_valid|json_type|json_extract|ifnull|cast|instr|char|substr|coalesce|trim|typeof)$/i.test(
+          token,
+        )
+      ) {
         throw new Error(`Unsupported function ${token}`);
       }
       const value = or();
-      requireToken(")");
-      if (value.type !== "text" && !(keyword(token, "LENGTH") && value.type === "bytea")) {
-        throw new Error(`${token} requires text (or bytea for length)`);
+      if (keyword(token, "CAST")) {
+        requireToken("AS");
+        requireToken("BLOB");
+        requireToken(")");
+        if (value.type !== "text") {
+          throw new Error("CAST AS BLOB requires text");
+        }
+        return { sql: `convert_to(${value.sql}, 'UTF8')`, type: "bytea" };
       }
-      return keyword(token, "LENGTH")
-        ? { sql: `length(${value.sql})`, type: "bigint" }
-        : { sql: `(${value.sql} IS JSON)`, type: "boolean" };
+      const args = [value];
+      while (take(",")) {
+        args.push(or());
+      }
+      requireToken(")");
+      const [first, second, third] = args;
+      const name = token.toLowerCase();
+      const textArgs = args.every((arg) => arg.type === "text");
+      if (name === "char" && args.length === 1 && /^\d+$/.test(value.sql)) {
+        const point = Number(value.sql);
+        if (point === 0) {
+          return { sql: "", type: "nul" };
+        }
+        if (point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)) {
+          return { sql: literal(String.fromCodePoint(point)), type: "text" };
+        }
+      } else if ((name === "coalesce" || name === "ifnull") && args.length >= 2) {
+        if (args.some((arg) => arg.type === "boolean")) {
+          return { sql: `coalesce(${args.map(boolean).join(", ")})`, type: "boolean" };
+        }
+        args.forEach((arg) => compatible(value, arg));
+        return { sql: `coalesce(${args.map((arg) => arg.sql).join(", ")})`, type: value.type };
+      } else if (
+        name === "substr" &&
+        (args.length === 2 || args.length === 3) &&
+        first!.type === "text" &&
+        /^\d+$/.test(second!.sql) &&
+        Number(second!.sql) > 0 &&
+        (!third || /^\d+$/.test(third.sql))
+      ) {
+        return { sql: `substr(${args.map((arg) => arg.sql).join(", ")})`, type: "text" };
+      } else if (name === "trim" && args.length <= 2 && textArgs) {
+        return { sql: `btrim(${args.map((arg) => arg.sql).join(", ")})`, type: "text" };
+      } else if (name === "instr" && args.length === 2 && first!.type === "text") {
+        if (
+          second!.type === "nul" &&
+          sqliteOnlyNulGuards.some((guard) => guard === `${table}.${identifier(first!.sql)}`)
+        ) {
+          return { sql: first!.sql, type: "nul-position" };
+        }
+        if (second!.type === "text") {
+          return { sql: `strpos(${first!.sql}, ${second!.sql})`, type: "bigint" };
+        }
+      } else if (
+        ["json_type", "json_extract"].includes(name) &&
+        args.length === 2 &&
+        first!.type === "text" &&
+        second!.type === "text"
+      ) {
+        return jsonMember(table, first!.sql, second!.sql, name);
+      } else if (args.length === 1) {
+        if (name === "octet_length" && ["text", "bytea"].includes(value.type)) {
+          return { sql: `octet_length(${value.sql})`, type: "bigint" };
+        }
+        if (name === "length" && ["text", "bytea"].includes(value.type)) {
+          return {
+            sql: `${value.type === "text" ? "char_length" : "octet_length"}(${value.sql})`,
+            type: "bigint",
+          };
+        }
+        if (name === "json_valid" && value.type === "text") {
+          return { sql: `(${value.sql} IS JSON)`, type: "boolean" };
+        }
+        if (
+          name === "typeof" &&
+          ["text", "bytea", "bigint", "double precision"].includes(value.type)
+        ) {
+          const type = {
+            text: "text",
+            bytea: "blob",
+            bigint: "integer",
+            "double precision": "real",
+          }[value.type];
+          return {
+            sql: `CASE WHEN ${value.sql} IS NULL THEN 'null' ELSE ${literal(type!)} END`,
+            type: "text",
+          };
+        }
+      }
+      throw new Error(`Unsupported arguments for ${token}`);
     }
     const name = identifier(token);
     const type = columns.get(name);
@@ -164,10 +339,23 @@ function expression(source: string, columns: Map<string, string>): Expression {
   }
   function predicate(): Expression {
     const left = atom();
+    if (left.type === "nul-position") {
+      requireToken("=");
+      requireToken("0");
+      // PostgreSQL text is intrinsically NUL-free; retain SQLite's NULL result.
+      return { sql: `(${left.sql} IS NOT NULL OR NULL)`, type: "boolean" };
+    }
     if (take("IS")) {
       const negate = take("NOT");
-      requireToken("NULL");
-      return { sql: `${left.sql} IS ${negate ? "NOT " : ""}NULL`, type: "boolean" };
+      const right = atom();
+      compatible(left, right);
+      return {
+        sql:
+          right.type === "null"
+            ? `${left.sql} IS ${negate ? "NOT " : ""}NULL`
+            : `${left.sql} IS ${negate ? "" : "NOT "}DISTINCT FROM ${right.sql}`,
+        type: "boolean",
+      };
     }
     const negate = take("NOT");
     let sql: string;
@@ -187,6 +375,12 @@ function expression(source: string, columns: Map<string, string>): Expression {
       compatible(left, low);
       compatible(left, high);
       sql = `${left.sql} ${negate ? "NOT " : ""}BETWEEN ${low.sql} AND ${high.sql}`;
+    } else if (take("LIKE")) {
+      const pattern = input[pos++];
+      if (left.type !== "text" || !["'%/%'", "'%\\%'"].includes(pattern ?? "")) {
+        throw new Error("Only archive path-separator LIKE guards are supported");
+      }
+      sql = `strpos(${left.sql}, ${literal(pattern!.slice(2, -2))}) ${negate ? "=" : ">"} 0`;
     } else if (take("GLOB")) {
       const pattern = input[pos++];
       if (left.type !== "text" || !pattern?.startsWith("'")) {
@@ -235,7 +429,7 @@ function expression(source: string, columns: Map<string, string>): Expression {
   return result;
 }
 
-type Item = {
+export type Item = {
   kind: string;
   table: string;
   name: string;
@@ -244,8 +438,15 @@ type Item = {
   reason?: string;
   category?: string;
   design?: string;
+  pendingCapability?: "search";
 };
-type Column = { name: string; type: string; nullable: boolean; identity: boolean };
+type Column = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  identity: boolean;
+  default: string | null;
+};
 type ForeignKey = {
   columns: string[];
   target: string;
@@ -265,19 +466,33 @@ type Table = {
 };
 export type Catalog = { schema: string; tables: Table[]; objects: Item[]; notes: string[] };
 
-function indexExpressions(indexSource: string, cols: Map<string, string>): string {
+export function portTables(data: Catalog) {
+  return data.tables.map((table) => ({
+    ...table,
+    identities: table.columns
+      .filter((column) => column.identity)
+      .map((column) => ({
+        column: column.name,
+        autoIncrement: tokens(
+          data.objects.find((item) => item.kind === "table" && item.table === table.name)!.source,
+        ).some((token) => keyword(token, "AUTOINCREMENT")),
+      })),
+  }));
+}
+
+function indexExpressions(indexSource: string, cols: Map<string, string>, table: string): string {
   const ts = tokens(indexSource);
   const on = ts.findIndex((token) => keyword(token, "ON"));
   const keys = group(ts, ts.indexOf("(", on));
   const terms = parts(keys.body).map((term) => {
     const order = /^(ASC|DESC)$/i.test(term.at(-1)!) ? term.pop()!.toUpperCase() : "ASC";
-    return `(${expression(term.join(" "), cols).sql}) ${order} NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
+    return `(${expression(term.join(" "), cols, table).sql}) ${order} NULLS ${order === "DESC" ? "LAST" : "FIRST"}`;
   });
   const where = ts.slice(keys.end + 1);
   if (where.length && !keyword(where.shift(), "WHERE")) {
     throw new Error("Unsupported index suffix");
   }
-  const predicate = where.length ? expression(where.join(" "), cols) : undefined;
+  const predicate = where.length ? expression(where.join(" "), cols, table) : undefined;
   if (predicate && predicate.type !== "boolean") {
     throw new Error("Non-boolean index predicate");
   }
@@ -340,7 +555,7 @@ function translateObject(
     return ctx.record(kind, mapping.name, name, source, null, reason);
   }
   try {
-    const value = expression(source, kind === "default" ? new Map() : mapping.cols);
+    const value = expression(source, kind === "default" ? new Map() : mapping.cols, mapping.name);
     if (
       value.type !== expectedType &&
       !(expectedType !== "boolean" && value.type === "null") &&
@@ -362,6 +577,9 @@ function reportExcludedTable(ctx: Context, name: string, source: string, virtual
   if (virtual) {
     item.category = "FTS sync";
     item.design = "tsvector + GIN; preserve tokenizer/ranking semantics separately";
+  }
+  if (virtual || ctx.tableKinds.get(name) === "shadow") {
+    item.pendingCapability = "search";
   }
 }
 
@@ -385,11 +603,14 @@ function mapColumns(ctx: Context, mapping: TableMapping, columns: Row[], rowidCo
     const type = cols.get(colName)!;
     const identity = col === rowidColumn;
     const nullable = Number(col.notnull) === 0 && !identity;
+    let defaultSql: string | null = null;
     let definition = `${quote(colName)} ${type}${type === "text" ? ' COLLATE "C"' : ""}${identity ? " GENERATED BY DEFAULT AS IDENTITY" : ""}${!nullable ? " NOT NULL" : ""}`;
     if (col.dflt_value !== null) {
       const value = translateObject(ctx, mapping, "default", colName, String(col.dflt_value), type);
       if (value.sql && !identity) {
         definition += ` DEFAULT ${value.sql}`;
+        // PostgreSQL drops DEFAULT NULL from pg_attrdef; absence has the same default.
+        defaultSql = value.sql === "NULL" ? null : value.sql;
       }
       if (identity && value.sql) {
         value.sql = null;
@@ -400,7 +621,7 @@ function mapColumns(ctx: Context, mapping: TableMapping, columns: Row[], rowidCo
     ctx.record("column", name, colName, String(col.type), sql, omitted);
     if (!omitted) {
       fields.push(definition);
-      table.columns.push({ name: colName, type, nullable, identity });
+      table.columns.push({ name: colName, type, nullable, identity, default: defaultSql });
     }
     if (identity && !omitted) {
       ctx.result.notes.push(
@@ -439,6 +660,23 @@ function mapChecks(ctx: Context, mapping: TableMapping, sqlTokens: string[]): vo
     const { body: check, end } = group(sqlTokens, i + 1);
     i = end;
     const item = translateObject(ctx, mapping, "check", String(id++), check.join(" "), "boolean");
+    if (item.sql && name === "transcript_events" && check.includes("json_extract")) {
+      const functionName = "openclaw_transcript_navigation_check";
+      const members = navigationMembers.map((member) => {
+        const value = member.split(".").reduce(firstJsonMember, "document");
+        return `${value} AS ${quote(`j_${member}`)}`;
+      });
+      // STRICT skips absent metadata; a fixed builtin path also avoids parsing this
+      // CTE on every INSERT just to discover that SQL-function inlining is impossible.
+      ctx.record(
+        "function",
+        name,
+        functionName,
+        item.source,
+        `CREATE FUNCTION ${quote(functionName)}(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog AS $navigation$\nWITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),\nmembers AS (SELECT ${members.join(",\n")} FROM input)\nSELECT ${item.sql} FROM members;\n$navigation$;`,
+      );
+      item.sql = `${quote(functionName)}("navigation_json")`;
+    }
     if (item.sql) {
       fields.push(`CHECK (${item.sql})`);
     }
@@ -483,7 +721,7 @@ function mapIndexes(ctx: Context, mapping: TableMapping, indexes: Row[]): void {
       table.indexes++;
     } else {
       try {
-        sql = `CREATE ${Number(index.unique) ? "UNIQUE " : ""}INDEX ${quote(indexName)} ON ${qualified(ctx, name)} ${indexExpressions(source, cols)};`;
+        sql = `CREATE ${Number(index.unique) ? "UNIQUE " : ""}INDEX ${quote(indexName)} ON ${qualified(ctx, name)} ${indexExpressions(source, cols, name)};`;
         table.indexes++;
       } catch (error) {
         reason = `Index omitted: ${error instanceof Error ? error.message : String(error)}`;
@@ -674,5 +912,10 @@ export function catalog(db: DatabaseSync, schema: string): Catalog {
   }
   reportNonTableObjects(ctx);
   resolveForeignKeys(ctx);
+  for (const item of ctx.result.objects) {
+    if (["virtual", "shadow"].includes(ctx.tableKinds.get(item.table) ?? "")) {
+      item.pendingCapability = "search";
+    }
+  }
   return ctx.result;
 }

@@ -1,4 +1,3 @@
-// Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
 import {
@@ -66,11 +65,8 @@ import type {
   NodeEventHandleResult,
 } from "./server-node-events-types.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import {
-  loadSessionEntry,
-  resolveGatewayModelSupportsImages,
-  resolveSessionModelRef,
-} from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
+import { resolveGatewayModelSupportsImages, resolveSessionModelRef } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -352,7 +348,7 @@ function compactNodeEventText(raw: string, maxChars: number) {
   return truncateUtf16WithEllipsis(raw.replace(/\s+/g, " ").trim(), maxChars);
 }
 
-type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
+type LoadedSessionEntry = Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
 
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
@@ -504,7 +500,13 @@ async function handlePreparedNodeEvent(
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey } = source?.loaded ?? loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } =
+        source?.loaded ??
+        (await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: sessionKey,
+          excludeInternalEffects: true,
+        }));
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -596,7 +598,13 @@ async function handlePreparedNodeEvent(
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey } = source?.loaded ?? loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } =
+        source?.loaded ??
+        (await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg,
+          key: sessionKey,
+          excludeInternalEffects: true,
+        }));
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -821,9 +829,12 @@ async function handlePreparedNodeEvent(
         entry,
         agentId,
       } = source?.loaded ??
-      loadSessionEntry(target.sessionKey, {
+      (await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getRuntimeConfig(),
+        key: target.sessionKey,
         agentId: target.agentId,
-      });
+        excludeInternalEffects: true,
+      }));
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
@@ -849,6 +860,9 @@ async function handlePreparedNodeEvent(
         }
       }
 
+      if (!(await isNodeEventConnectionCurrent(opts))) {
+        return pairingChangedResult(evt.event);
+      }
       source?.assertCurrent();
       const queued = enqueueSystemEvent(
         summary,
@@ -954,14 +968,14 @@ async function handlePreparedNodeEvent(
         }
       }
 
-      enqueueNodeExecNotice({
-        cfg,
-        sessionKey,
-        agentId,
-        authorization: auth,
-        runId,
-        text,
-      });
+      const notify = () =>
+        enqueueNodeExecNotice({ cfg, sessionKey, agentId, authorization: auth, runId, text });
+      // A caller still waiting on this run gets its output inline; notify only if that fails.
+      if (typeof auth === "object" && auth.holdNotice) {
+        auth.holdNotice(notify);
+      } else {
+        notify();
+      }
       return undefined;
     }
     case "push.apns.register": {

@@ -702,15 +702,28 @@ suite.define(() => {
 
     await showSplitDashboard(page, sessionKey);
     const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
-    await expect.poll(() => workSummaries.count()).toBe(2);
-    const middleWorkSummary = workSummaries.first();
     const endWorkSummary = workSummaries.last();
+    await endWorkSummary.waitFor({ state: "visible" });
+    const endRowKey = await endWorkSummary.evaluate(
+      (button) => button.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+    );
+    expect(endRowKey).toBeTypeOf("string");
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
     traces.workEndExpand = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
     traces.workEndCollapse = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
 
+    const transcript = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await transcript.hover();
+    await page.mouse.wheel(0, -(await transcript.evaluate((element) => element.clientHeight)));
+    await waitForChatScrollIdle(page);
+    const middleWorkSummary = workSummaries.first();
+    expect(
+      await middleWorkSummary.evaluate(
+        (button) => button.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+      ),
+    ).not.toBe(endRowKey);
     await middleWorkSummary.evaluate((button) => {
       const row = button.closest<HTMLElement>(".chat-virtual-row");
       const thread = button.closest<HTMLElement>(".chat-thread");

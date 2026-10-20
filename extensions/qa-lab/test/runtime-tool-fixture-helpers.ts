@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { appendSqliteTrajectoryRuntimeEvents } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -253,6 +257,8 @@ export async function writeQaSessionTranscript(
     ...process.env,
     OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
   };
+  // The real transcript readers need the same authored config as the isolated writer.
+  setRuntimeConfigSnapshot(env.cfg);
   await upsertSessionEntry({
     agentId: "qa",
     env: sessionEnv,
@@ -335,6 +341,7 @@ export async function cleanupRuntimeToolFixtureTempRoots() {
     return;
   }
   await Promise.all(tempRoots.map((root) => closeQaRuntimeStores(root)));
+  clearRuntimeConfigSnapshot();
   await fs.rm(suiteRoot, { recursive: true, force: true });
   tempRoots.length = 0;
   suiteRoot = undefined;

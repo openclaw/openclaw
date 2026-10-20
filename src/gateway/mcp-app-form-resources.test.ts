@@ -1,10 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -19,14 +17,17 @@ import {
 import { compileStructuredInputForm } from "../agents/harness/structured-input.js";
 import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.js";
 import { buildMcpClientCapabilities } from "../agents/mcp-metadata.js";
+import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import {
   getMcpAppViewLease,
   type McpAppPrepareToolCall,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { QuestionManager } from "./question-manager.js";
+import * as sessionScopedRead from "./server-methods/session-scoped-read.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 const state = vi.hoisted(() => ({ root: "", current: true, uploads: true, apps: true }));
@@ -56,8 +57,38 @@ vi.mock("./question-session-access.js", () => ({
     return consume([undefined]);
   },
 }));
-vi.mock("./server-methods/sessions-files.js", () => ({
-  resolveLocalSessionWorkspaceRoot: () => state.root,
+vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
+  withSessionFileRoot: async (
+    params: { sessionKey: string; agentId?: string },
+    cfg: OpenClawConfig,
+    consume: (
+      loaded: {
+        root: string;
+        canonicalKey: string;
+        agentId: string;
+        storePath: string;
+        cfg: OpenClawConfig;
+        entry: { sessionId: string; updatedAt: number };
+      },
+      assertCurrent: () => void,
+      readEntry: () => { sessionId: string; updatedAt: number },
+    ) => Promise<unknown>,
+  ) => {
+    const entry = { sessionId: "session-1", updatedAt: 0 };
+    return consume(
+      {
+        root: state.root,
+        canonicalKey: params.sessionKey,
+        agentId: params.agentId ?? "main",
+        storePath: state.root,
+        cfg,
+        entry,
+      },
+      () => {},
+      () => entry,
+    );
+  },
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,
@@ -368,21 +399,21 @@ describe("registered MCP form resource route", () => {
     options.context.getGatewayMethodRegistry = () => registry;
     const client = new Client(
       { name: "form-host", version: "1" },
-      { capabilities: buildMcpClientCapabilities(true) },
+      { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
     );
     const server = new Server({ name: "origin", version: "1" }, { capabilities: { tools: {} } });
     const call = bindMcpClientElicitation(client);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     vi.spyOn(f.runtime, "callTool").mockImplementation(async () =>
-      CallToolResultSchema.parse(
+      toLegacyMcpCallToolResult(
         await call(f.controller.signal, () => client.callTool({ name: "pick" })),
       ),
     );
     try {
-      server.setRequestHandler(CallToolRequestSchema, async () => ({
+      server.setRequestHandler("tools/call", async (_request, ctx) => ({
         content: [],
-        structuredContent: await server.request(
+        structuredContent: await ctx.mcpReq.send(
           { method: "openai/elicitation/create", params: f.snapshot },
           z.object({ action: z.string(), content: z.record(z.string(), z.unknown()).optional() }),
         ),
@@ -443,6 +474,55 @@ describe("registered MCP form resource route", () => {
     ).toBe(false);
     expect((await f.invoke({ action: "preview", optionIndex: 1 }))[0]).toBe(false);
     expect(f.readResource).toHaveBeenCalledTimes(1);
+  });
+
+  it("limits concurrent form previews before session admission yields", async () => {
+    const f = await fixture();
+    const gate = createDeferred();
+    const entered = createDeferred();
+    f.readResource.mockImplementation(async (_server, uri) => {
+      if (f.readResource.mock.calls.length === 4) {
+        entered.resolve();
+      }
+      await gate.promise;
+      return { contents: [{ uri, text: "preview" }] };
+    });
+    const replies = Promise.all(
+      Array.from({ length: 5 }, () => f.invoke({ action: "preview", optionIndex: 0 })),
+    );
+    try {
+      await entered.promise;
+      expect(f.readResource).toHaveBeenCalledTimes(4);
+    } finally {
+      gate.resolve();
+      await replies;
+    }
+    const results = await replies;
+    expect(results.filter(([ok]) => ok)).toHaveLength(4);
+    expect(results.find(([ok]) => !ok)?.[2]).toMatchObject({
+      message: "MCP form resource request limit reached",
+    });
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(true);
+  });
+
+  it("releases form operation slots when session admission fails", async () => {
+    const f = await fixture();
+    const admission = vi
+      .spyOn(sessionScopedRead, "retainSessionScopedRead")
+      .mockRejectedValue(new Error("Session admission unavailable"));
+    try {
+      const replies = await Promise.all(
+        Array.from({ length: 4 }, () => f.invoke({ action: "preview", optionIndex: 0 })),
+      );
+      for (const reply of replies) {
+        expect(reply[0]).toBe(false);
+        expect(reply[2]).toMatchObject({ message: "Session admission unavailable" });
+      }
+      expect(f.readResource).not.toHaveBeenCalled();
+    } finally {
+      admission.mockRestore();
+    }
+    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(true);
   });
 
   it("rejects other requesters, sessions and forged pending records even when viewId was copied", async () => {

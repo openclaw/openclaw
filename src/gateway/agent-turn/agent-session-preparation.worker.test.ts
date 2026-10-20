@@ -3,6 +3,7 @@ import {
   isSessionEntryDataSql,
   observeSqliteReadSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   upsertSessionEntryCore,
@@ -10,6 +11,7 @@ import {
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
@@ -18,6 +20,7 @@ describe("agent session preparation worker boundary", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = {};
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       for (const kind of ["ordinary", "failed-present", "failed-missing", "archived"] as const) {
         const sessionKey = `agent:main:preparation-${kind}`;
@@ -82,8 +85,20 @@ describe("agent session preparation worker boundary", () => {
               preAttachmentSession: routing?.preAttachmentSession,
               respond,
             });
-            expect(prepared).toBeDefined();
-            expect(prepared?.sessionId === kind).toBe(kind !== "failed-missing");
+            if (!prepared) {
+              throw new Error("Session preparation did not return a candidate");
+            }
+            const patch = await buildAgentSessionPatch({
+              ...prepared,
+              freshEntry: prepared.entry,
+              initialEntry: prepared.entry,
+              sessionAgentId: prepared.canonicalSessionAgentId,
+              canonicalSessionKey: prepared.canonicalKey,
+              normalizedSpawned: {},
+              requestDeliveryHint: undefined,
+              hasRestoredCronContinuation: false,
+            });
+            expect(patch.patch.sessionId === kind).toBe(kind !== "failed-missing");
             expect(respond).not.toHaveBeenCalled();
           }
           expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);

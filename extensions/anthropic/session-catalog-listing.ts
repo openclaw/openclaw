@@ -63,7 +63,13 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
+  const scan = await listClaudeSessions(resolvedHome, resolvedScanOptions);
+  // Exact lookup reads only matching transcripts, independent of the ordinary discovery frontier.
+  const exact =
+    search && !scan.records.some((record) => record.threadId.toLocaleLowerCase() === search)
+      ? await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, sessionId: search })
+      : undefined;
+  const records = [...(exact?.records ?? []), ...scan.records].filter((record) => {
     if (!search) {
       return true;
     }
@@ -75,9 +81,20 @@ export async function listLocalClaudeSessionPage(
     .slice(offset, offset + params.limit)
     .map(({ filePath: _filePath, ...record }) => record);
   const nextOffset = offset + page.length;
+  const hasMore = nextOffset < records.length;
   return {
     sessions: page,
-    ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    ...(hasMore ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    // Host errors stop automatic pagination, so report the frontier after all discovered rows.
+    ...(!hasMore && scan.truncated
+      ? {
+          error: {
+            code: "DISCOVERY_TRUNCATED",
+            message:
+              "Claude session discovery reached its scan limit; some sessions are omitted. Search by exact session ID.",
+          },
+        }
+      : {}),
   };
 }
 
@@ -90,15 +107,16 @@ export async function readLocalClaudeTranscriptPage(
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
-  let filePath = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).find(
+  const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
     (record) => record.threadId === params.threadId,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
-      await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, forceRefresh: true })
-    ).find((record) => record.threadId === params.threadId)?.filePath;
+      await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
+    ).records.find((record) => record.threadId === params.threadId)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
@@ -210,6 +228,13 @@ export async function listClaudeSessionCatalog(params: {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const scanOptions = gatewayClaudeScanOptions(params.allowProcessHomeFallback);
+  const localHost: ClaudeSessionCatalogHost = {
+    hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+    label: "Local Claude",
+    kind: "gateway",
+    connected: true,
+    sessions: [],
+  };
   const localHosts: Promise<ClaudeSessionCatalogHost>[] =
     (params.allowProcessHomeFallback !== false || scanOptions.configDir !== undefined) &&
     (!requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID))
@@ -217,10 +242,7 @@ export async function listClaudeSessionCatalog(params: {
           (async () => {
             try {
               return {
-                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-                label: "Local Claude",
-                kind: "gateway",
-                connected: true,
+                ...localHost,
                 ...(await listLocalClaudeSessionPage(
                   {
                     limit: query.limitPerHost,
@@ -235,11 +257,7 @@ export async function listClaudeSessionCatalog(params: {
               };
             } catch {
               return {
-                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-                label: "Local Claude",
-                kind: "gateway",
-                connected: true,
-                sessions: [],
+                ...localHost,
                 error: {
                   code: "LOCAL_READ_FAILED",
                   message: "Local Claude sessions are unavailable",
@@ -317,6 +335,12 @@ export async function listClaudeSessionCatalog(params: {
         params.onHost?.(common);
         return common;
       }
+      const unavailable: ClaudeSessionCatalogHost = Object.assign({}, common, {
+        error: {
+          code: "NODE_INVOKE_FAILED",
+          message: "Paired node Claude sessions are unavailable",
+        },
+      });
       const eventualHost = Promise.resolve()
         .then(async () => {
           const raw = await params.runtime.nodes.invoke({
@@ -333,14 +357,7 @@ export async function listClaudeSessionCatalog(params: {
           });
           return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
         })
-        .catch((): ClaudeSessionCatalogHost =>
-          Object.assign({}, common, {
-            error: {
-              code: "NODE_INVOKE_FAILED",
-              message: "Paired node Claude sessions are unavailable",
-            },
-          }),
-        );
+        .catch(() => unavailable);
       // Retain publication through cold discovery without extending the fail-soft response.
       publishSessionCatalogHost(params, eventualHost);
       try {
@@ -348,12 +365,7 @@ export async function listClaudeSessionCatalog(params: {
           message: "paired node Claude session catalog timed out",
         });
       } catch {
-        return Object.assign({}, common, {
-          error: {
-            code: "NODE_INVOKE_FAILED",
-            message: "Paired node Claude sessions are unavailable",
-          },
-        });
+        return unavailable;
       }
     }),
   );

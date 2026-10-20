@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -11,33 +11,27 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_READY_COLUMN_DEFINITION } from "./openclaw-agent-db-additive-columns.js";
-import {
-  findOpenClawAgentDatabaseIdentity,
-  isOpenClawAgentDatabasePathCurrent,
-} from "./openclaw-agent-db-identity.js";
+import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import type { DB } from "./openclaw-agent-db.generated.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
-type ReceiptDatabase = { db: DatabaseSync; agentId: string };
+type ReceiptDatabase = { db: EngineConnection; agentId: string };
 const canonicalReceiptAdmission: SqliteDatabaseAdmissionKey<string | null> = {
   name: "agent.canonical-validation-receipt",
+  lifetime: "process",
   // Canonical writers preserve proof; only schema changes and offline repair revoke it.
   schemaDependent: true,
   read: (value) => (value === null || typeof value === "string" ? value : undefined),
 };
 
-function hasReceiptColumn(db: DatabaseSync): boolean {
+function hasReceiptColumn(db: EngineConnection): boolean {
   const { tableName, columnName } = CANONICAL_READY_COLUMN_DEFINITION;
   return tableHasColumn(db, tableName, columnName);
 }
 
 function physicalReceipt(database: ReceiptDatabase): string | undefined {
   const physical = findOpenClawAgentDatabaseIdentity(database);
-  if (
-    !physical ||
-    typeof physical.identity !== "string" ||
-    !isOpenClawAgentDatabasePathCurrent({ ...database, path: physical.filename })
-  ) {
+  if (!physical || typeof physical.identity !== "string") {
     return undefined;
   }
   // Advance the receipt revision when canonical validation rules change.
@@ -47,12 +41,24 @@ function physicalReceipt(database: ReceiptDatabase): string | undefined {
 /** Canonical proof follows this file generation; it never certifies physical integrity. */
 export function hasPersistedOpenClawAgentCanonicalValidation(database: ReceiptDatabase): boolean {
   const receipt = physicalReceipt(database);
-  if (!receipt || !hasReceiptColumn(database.db)) {
+  return (
+    receipt !== undefined &&
+    getSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission) === receipt
+  );
+}
+
+/** Schema admission and worker read-open load proof; runtime misses use canonical validation. */
+export function loadOpenClawAgentCanonicalValidationReceipt(database: ReceiptDatabase): boolean {
+  const receipt = physicalReceipt(database);
+  if (!receipt) {
     return false;
   }
-  assertCanonicalSessionValidationSchema(database.db);
   let persisted = getSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission);
   if (persisted === undefined) {
+    if (!hasReceiptColumn(database.db)) {
+      return false;
+    }
+    assertCanonicalSessionValidationSchema(database.db);
     persisted =
       executeSqliteQueryTakeFirstSync(
         database.db,

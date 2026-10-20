@@ -22,6 +22,7 @@ describe("embedded attempt context injection", () => {
         bootstrapMode: "limited",
         bootstrapContextRunKind: "default",
         bootstrapContextMode: "full",
+        deliversCompleteWorkspaceContext: false,
         hasCompletedBootstrapTurn,
         resolveBootstrapContextForRun,
       }),
@@ -34,6 +35,30 @@ describe("embedded attempt context injection", () => {
     expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["always", "none", "default", "full", true, false],
+    ["always", "full", "default", "full", true, true],
+    ["continuation-skip", "none", "cron", "full", true, false],
+    ["continuation-skip", "none", "heartbeat", "full", true, false],
+    ["continuation-skip", "none", "default", "lightweight", true, false],
+    ["continuation-skip", "limited", "default", "full", false, false],
+    ["never", "full", "default", "full", true, false],
+  ] as const)(
+    "completion eligibility: %s / %s / %s / %s / complete=%s -> %s",
+    async (mode, bootstrapMode, runKind, contextMode, complete, expected) => {
+      const result = await resolveAttemptBootstrapContext({
+        contextInjectionMode: mode,
+        bootstrapMode,
+        bootstrapContextRunKind: runKind,
+        bootstrapContextMode: contextMode,
+        deliversCompleteWorkspaceContext: complete,
+        hasCompletedBootstrapTurn: async () => false,
+        resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+      });
+      expect(result.shouldRecordCompletedBootstrapTurn).toBe(expected);
+    },
+  );
 
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
@@ -73,14 +98,7 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls.at(0)?.[0] as
-      | { messages?: AgentMessage[] }
-      | undefined;
-    const projectedMessages = assembleInput?.messages?.map((message) => ({
-      role: message.role,
-      content: (message as { content?: unknown }).content,
-    }));
-    expect(projectedMessages).toEqual([
+    expect(assemble.mock.calls[0]?.[0].messages).toMatchObject([
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);

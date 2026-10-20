@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { executeTsdownBuildPlan, type prepareTsdownBuildExecution } from "../tsdown-build.mts";
 import {
   listCacheFiles,
@@ -54,7 +54,7 @@ function declarationReferences(file: string, contents: string, parser: NativeTyp
 
 /** Publish a declaration subset only after its complete canonical build succeeds. */
 export async function publishStagedDeclarations(
-  plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+  plan: ReturnType<typeof prepareTsdownBuildExecution>,
   sources: { output: string; required: string[] }[],
   staging: string,
   dist: string,
@@ -63,7 +63,7 @@ export async function publishStagedDeclarations(
   sealInputs?: () => void,
   concurrency: 1 | 2 = 1,
 ) {
-  if (plan.invocations.length) {
+  if (plan?.invocations.length) {
     const code = await executeTsdownBuildPlan(plan, concurrency);
     if (code !== 0) {
       throw Object.assign(new Error(`Declaration build failed with exit ${code}`), {

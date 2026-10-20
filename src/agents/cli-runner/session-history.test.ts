@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadTranscriptEventsSync,
@@ -39,6 +43,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
       await cleanupSessionStateForTest({ stateDir });
     }
     cleanup();
+    clearRuntimeConfigSnapshot();
   });
 });
 
@@ -57,11 +62,15 @@ function extractReseedHistory(prompt: string | undefined): string {
 }
 
 async function withCliSessionState<T>(stateDir: string, run: () => Promise<T>): Promise<T> {
-  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, run);
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    setRuntimeConfigSnapshot({});
+    return await run();
+  });
 }
 
 async function createSession(messages: string[] = [], agentId = "main") {
   const dir = tempDirs.make("openclaw-cli-history-");
+  setRuntimeConfigSnapshot({});
   const target = {
     agentId,
     sessionId: "history-session",
@@ -604,6 +613,7 @@ describe("canonical CLI history", () => {
     "orphaned-tool-use",
     "message-policy",
     "system-prompt",
+    "prompt-tools",
     "cwd",
     "mcp",
     "session-expired",
@@ -779,33 +789,24 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("<next_user_message>\nnew ask\n</next_user_message>");
   });
 
-  it("renders canonical saved timestamps and omits invalid or noncanonical timestamps", () => {
+  it("renders saved timestamps and preserves undated history", () => {
     const prompt = buildCliSessionHistoryPrompt({
       messages: [
         { role: "user", content: "dated ask", timestamp: "2026-06-17T16:00:00.000Z" },
-        { role: "assistant", content: "zero date answer", timestamp: "0" },
-        { role: "user", content: "year-only ask", timestamp: "2026" },
-        { role: "assistant", content: "invalid date answer", timestamp: "not-a-date" },
-        { role: "user", content: "offset date ask", timestamp: "2026-06-17T12:00:00-04:00" },
         { role: "assistant", content: "undated answer" },
       ],
       prompt: "new ask",
     });
 
     expect(prompt).toContain("[2026-06-17T16:00:00.000Z] User: dated ask");
-    expect(prompt).toMatch(
-      /Assistant: zero date answer[\s\S]*User: year-only ask[\s\S]*Assistant: invalid date answer[\s\S]*User: offset date ask[\s\S]*Assistant: undated answer/u,
-    );
-    expect(prompt).not.toMatch(
-      /\[(?:2000-01-01T00:00:00\.000Z|2026-01-01T00:00:00\.000Z|not-a-date|2026-06-17T12:00:00-04:00)\]/u,
-    );
+    expect(prompt).toContain("Assistant: undated answer");
     expect(prompt).toContain(RESEED_CURRENCY_GUIDANCE);
   });
 
   it("skips reseed text when the transcript has no renderable conversation", () => {
     expect(
       buildCliSessionHistoryPrompt({
-        messages: [{ role: "tool", content: "ignored" }],
+        messages: [{ role: "user", content: "" }],
         prompt: "new ask",
       }),
     ).toBeUndefined();

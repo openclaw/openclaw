@@ -64,7 +64,6 @@ describe("pending cron receipt retention", () => {
     // next admitted run. Its pending job association must keep the receipt.
     for (let index = 0; index < 64; index += 1) {
       const prepared = prepareCronRunReceiptClaim({
-        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
@@ -74,7 +73,6 @@ describe("pending cron receipt retention", () => {
         claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
-          resolveAgentId: (current) => current.agentId!,
         }),
       );
       history.push(receipt.receiptId);
@@ -133,6 +131,7 @@ describe("pending cron receipt retention", () => {
             database: db,
             receiptSchema: prepareCronRunReceiptWriteSchema(db),
             handle: pending!,
+            pendingReceiptId: pending!.receiptId,
             status: "ok",
             finishedAtMs: now,
           }),

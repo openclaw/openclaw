@@ -1,201 +1,270 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import {
+  applyFault,
+  configuredFixture,
+  configureMerge,
+  expectExit,
+  observeMerged,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
-const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix, unknownProjection } =
-  createMergeOutcomeFixtureHarness();
+const {
+  fixture: createFixture,
+  reconciledMergeAfterCleanup,
+  outcomeRef,
+  describePosix,
+  unknownProjection,
+} = createMergeOutcomeFixtureHarness();
+
+const fixture = (changes: Parameters<typeof configureMerge>[1] = {}) =>
+  configuredFixture(createFixture, changes);
+const clean = { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
-  it("explicitly completes a reconciled merge after cleanup without another merge dispatch", () => {
-    const f = reconciledMergeAfterCleanup();
-    const landed = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
-    const previous = f.git(["rev-parse", outcomeRef]);
+  it("lands green CI with MAINTAIN authority", () => {
+    const f = fixture();
+    const state = f.state();
+    state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+    state.restPolicy = "not-found";
+    state.priorCi.membership = "member";
+    f.save(state);
 
-    const completed = f.complete(previous);
-    expect(completed.status, completed.output).toBe(0);
-    expect(f.record()).toMatchObject({ phase: "complete", landed, head: f.head });
+    expectExit(f.run());
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
     expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(1);
-    expect(f.state().comments[0]!.body).toContain("Merged via squash.");
-    expect(f.state().comments[0]!.body).toContain(`/commit/${landed}`);
-    f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
-
-    const stale = f.complete(previous);
-    expect(stale.status, stale.output).toBe(1);
-    expect(f.record().phase).toBe("complete");
-    const again = f.complete(f.git(["rev-parse", outcomeRef]));
-    expect(again.status, again.output).toBe(0);
-    expect(f.state().posts).toBe(1);
-    expect(f.state().mutations).toBe(1);
+    expect(f.state().calls.some((call) => call.some((arg) => arg.includes("/protection")))).toBe(
+      false,
+    );
+    expect(f.state().calls.some((call) => call.some((arg) => arg.startsWith("orgs/")))).toBe(false);
   });
 
-  it.each(["OPEN", "MERGED"])(
-    "reconciles retained %s with UNKNOWN projections without admission waiting",
-    (state) => {
-      const f = fixture();
-      f.save({ ...f.state(), mode: "unapplied" });
-      expect(f.run().status).toBe(1);
-      const before = f.git(["rev-parse", outcomeRef]);
-      const capture = f.captures();
-      f.recover();
-      const landed = state === "MERGED" ? f.advance("after\n", "stable\n") : null;
-      f.save({
-        ...f.state(),
-        observationReads: 0,
-        pr: {
-          ...f.state().pr,
-          ...unknownProjection,
-          state,
-          mergeCommit: landed ? { oid: landed } : null,
-        },
-      });
-      const run = f.run();
-      expect(run.status, run.output).toBe(state === "MERGED" ? 0 : 1);
+  it.each([
+    { phase: "initial", settles: true },
+    { phase: "initial", settles: false },
+    { phase: "stability", settles: true },
+    { phase: "stability", settles: false },
+  ])("starts $phase UNKNOWN budget (settles=$settles)", ({ phase, settles }) => {
+    const f = fixture();
+    const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+    configureMerge(f, {
+      mode: "unapplied",
+      observations: [
+        ...(phase === "stability" ? [{}] : []),
+        { main, pr: unknownProjection, advanceSeconds: 65 },
+        ...(settles
+          ? [
+              {
+                pr: clean,
+                advanceSeconds: 55,
+              },
+            ]
+          : []),
+      ],
+    });
+
+    const result = expectExit(f.run(), 1);
+    if (settles) {
+      expect(f.state().settlementSleeps).toEqual([2]);
+      expect(result.output).toContain("prior dispatch unresolved");
       expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
-      expect(f.state().settlementSleeps).toEqual([]);
-      expect(f.state().observationReads).toBe(2);
-      expect(f.captures()).toEqual(capture);
-      expect(existsSync(f.worktree)).toBe(true);
-      if (landed) {
-        expect(f.record()).toMatchObject({ phase: "merged", landed });
+      expect(f.record()).toMatchObject({ phase: "intent", head: f.head, accepted: false });
+    } else {
+      expect(f.state().settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(60);
+      expect(result.output).toContain(
+        phase === "initial"
+          ? "mergeability remained UNKNOWN"
+          : "mergeability recalculation remained UNKNOWN",
+      );
+      expect(f.state().mutations).toBe(0);
+      expect(f.captures()).toEqual([]);
+      expect(() => f.record()).toThrow();
+    }
+    expect(f.state().posts).toBe(0);
+  });
+
+  it.each([
+    { name: "timely known", known: true, readSeconds: 0, proofSeconds: 65, admitted: true },
+    { name: "late known", known: true, readSeconds: 65, proofSeconds: 0, admitted: false },
+    { name: "still UNKNOWN", known: false, readSeconds: 0, proofSeconds: 65, admitted: false },
+  ])(
+    "uses projection time for $name admission",
+    ({ known, readSeconds, proofSeconds, admitted }) => {
+      const f = fixture();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      configureMerge(f, {
+        mainProofDelaySeconds: proofSeconds,
+        observations: [
+          { pr: unknownProjection },
+          {
+            main,
+            pr: known ? clean : unknownProjection,
+            advanceSeconds: readSeconds,
+          },
+        ],
+      });
+
+      const result = f.run();
+      const state = f.state();
+
+      expect(state.mainProofDelayedAt, result.output).toBe(proofSeconds ? 2 : null);
+      expect(state.settlementSleeps[0]).toBe(2);
+      expect(state.settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(
+        known ? 2 : 60,
+      );
+      expect(result.status, result.output).toBe(admitted ? 0 : 1);
+      expect(state.mutations).toBe(admitted ? 1 : 0);
+      if (admitted) {
+        expect(state.graphqlMergePayloads[0]?.expectedHeadOid).toBe(f.head);
+        expect(f.record()).toMatchObject({ phase: "complete", head: f.head, main });
       } else {
-        expect(f.git(["rev-parse", outcomeRef])).toBe(before);
+        expect(result.output).toContain(
+          known ? "mergeability exceeded the 60s settle limit" : "mergeability remained UNKNOWN",
+        );
+        expect(f.captures()).toEqual([]);
+        expect(() => f.record()).toThrow();
       }
     },
   );
 
-  it.each([""])("refuses pre-journal merge output without erasing its evidence: %j", (output) => {
+  it("completes after cleanup without redispatch", () => {
+    const f = reconciledMergeAfterCleanup();
+    const landed = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
+    const previous = f.git(["rev-parse", outcomeRef]);
+
+    expectExit(f.complete(previous));
+    expect(f.record()).toMatchObject({ phase: "complete", landed, head: f.head });
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+    expect(f.state().comments[0]!.body).toContain("Merged via squash.");
+    expect(f.state().comments[0]!.body).toContain(`/commit/${landed}`);
+    f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
+
+    expectExit(f.complete(previous), 1);
+    expect(f.record().phase).toBe("complete");
+    expectExit(f.complete(f.git(["rev-parse", outcomeRef])));
+    expect(f.state()).toMatchObject({ posts: 1, mutations: 1 });
+  });
+
+  it.each(["OPEN", "MERGED"])("reconciles retained %s without UNKNOWN polling", (state) => {
+    const f = fixture({ mode: "unapplied" });
+    expectExit(f.run(), 1);
+    const before = f.git(["rev-parse", outcomeRef]);
+    const capture = f.captures();
+    f.recover();
+    const landed = state === "MERGED" ? f.advance("after\n", "stable\n") : null;
+    configureMerge(f, {
+      observationReads: 0,
+      pr: { ...unknownProjection, state, mergeCommit: landed ? { oid: landed } : null },
+    });
+    expectExit(f.run(), state === "MERGED" ? 0 : 1);
+    expect(f.state()).toMatchObject({
+      mutations: 1,
+      posts: 0,
+      settlementSleeps: [],
+      observationReads: 2,
+    });
+    expect(f.captures()).toEqual(capture);
+    expect(existsSync(f.worktree)).toBe(true);
+    if (landed) {
+      expect(f.record()).toMatchObject({ phase: "merged", landed });
+    } else {
+      expect(f.git(["rev-parse", outcomeRef])).toBe(before);
+    }
+  });
+
+  it.each([""])("preserves pre-journal output %j", (output) => {
     const f = fixture();
     const capture = join(f.worktree, ".local/merge-output.log");
     writeFileSync(capture, output);
-    f.save({ ...f.state(), mode: "unapplied" });
-    const run = f.run();
-    expect(run.status, run.output).toBe(1);
+    configureMerge(f, { mode: "unapplied" });
+    const run = expectExit(f.run(), 1);
     expect(f.state().mutations).toBe(0);
     expect(readFileSync(capture, "utf8")).toBe(output);
     expect(run.output).toContain("Legacy .local/merge-output.log: present");
     expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
-    expect(run.output).not.toContain("lock-recover, then rerun merge-run");
+    expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
     expect(() => f.record()).toThrow();
   });
 
-  it("does not repeat applied 502 + OPEN after main advance and exact lock recovery", () => {
-    const f = fixture();
-    f.save({ ...f.state(), mode: "applied-open" });
-    const first = f.run();
-    expect(first.status, first.output).toBe(1);
+  it("does not replay applied OPEN after lock release", () => {
+    const f = fixture({ mode: "applied-open" });
+    expectExit(f.run(), 1);
     expect(f.state().pr.state).toBe("OPEN");
     f.advance();
-    expect(f.recover()).toBe(true);
+    // The drained failure released the process lock; the outcome record still blocks a repeat.
+    expect(f.recover()).toBe(false);
     const second = f.run();
-    expect(f.state().mutations, "one mutation across exact lock recovery").toBe(1);
+    expect(f.state().mutations, "one mutation across lock release").toBe(1);
     expect(second.status, second.output).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(second.output).toContain("prior dispatch unresolved");
   });
 
   it.each(["success", "applied-merged", "advance-at-dispatch"])(
-    "confirms %s through fresh reads and preserves completion after later revert",
+    "confirms %s and retains completion after revert",
     (mode) => {
-      const f = fixture();
-      f.save({ ...f.state(), mode, stale: true });
-      const first = f.run();
-      expect(first.status, first.output).toBe(0);
+      const f = fixture({ mode, stale: true });
+      const first = expectExit(f.run());
       expect(f.state().posts).toBe(1);
       expect(f.record().phase).toBe("complete");
       expect(first.output).not.toContain("Warning: recorded squash");
       expect(f.ordinaryRead().state).toBe("OPEN");
       f.advance("before\n");
-      const second = f.run();
-      expect(second.status, second.output).toBe(0);
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(1);
+      const second = expectExit(f.run());
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
       expect(second.output).toContain("already complete");
       expect(second.output).not.toContain("Warning: recorded squash");
     },
   );
 
-  it.each(["intent", "dispatch", "receipt"])(
-    "retains uncertainty across crash/failure at %s",
-    (crash) => {
-      const f = fixture();
-      f.save({ ...f.state(), crash, mode: crash === "receipt" ? "success" : "applied-open" });
-      expect(f.run().status).not.toBe(0);
-      expect(f.record().phase).toBe("intent");
-      f.recover();
-      f.save({ ...f.state(), crash: "" });
-      const retry = f.run();
-      expect(retry.status, retry.output).toBe(crash === "receipt" ? 0 : 1);
-      expect(f.state().mutations).toBe(crash === "intent" ? 0 : 1);
-    },
-  );
+  it.each(["intent", "dispatch", "receipt"])("retains uncertainty after %s crash", (crash) => {
+    const f = fixture({ crash, mode: crash === "receipt" ? "success" : "applied-open" });
+    expect(f.run().status).not.toBe(0);
+    expect(f.record().phase).toBe("intent");
+    f.recover();
+    configureMerge(f, { crash: "" });
+    expectExit(f.run(), crash === "receipt" ? 0 : 1);
+    expect(f.state().mutations).toBe(crash === "intent" ? 0 : 1);
+  });
 
   it.each(["head", "base", "closed", "invalid", "unavailable", "partial", "revert"])(
-    "does not replay unresolved intent after %s",
+    "does not replay unresolved %s",
     (change) => {
-      const f = fixture();
-      f.save({ ...f.state(), mode: "unapplied" });
-      expect(f.run().status).toBe(1);
+      const f = fixture({ mode: "unapplied" });
+      expectExit(f.run(), 1);
       f.recover();
       const next = f.state();
-      if (change === "head") {
-        next.pr.headRefOid = f.base;
-      }
-      if (change === "base") {
-        next.pr.baseRefName = "release";
-      }
-      if (change === "closed") {
-        next.pr.state = "CLOSED";
-      }
-      if (change === "invalid") {
-        next.invalid = true;
-      }
-      if (change === "unavailable") {
-        next.unavailable = true;
-      }
-      if (change === "partial") {
-        f.advance("partial\n");
-      }
-      if (change === "revert") {
-        f.advance();
-        f.advance("before\n");
-      }
+      applyFault(change, {
+        head: () => Object.assign(next.pr, { headRefOid: f.base }),
+        base: () => Object.assign(next.pr, { baseRefName: "release" }),
+        closed: () => Object.assign(next.pr, { state: "CLOSED" }),
+        invalid: () => Object.assign(next, { invalid: true }),
+        unavailable: () => Object.assign(next, { unavailable: true }),
+        partial: () => f.advance("partial\n"),
+        revert: () => {
+          f.advance();
+          f.advance("before\n");
+        },
+      });
       f.save(next);
-      const retry = f.run();
-      expect(retry.status, retry.output).toBe(1);
+      expectExit(f.run(), 1);
       expect(f.state().mutations).toBe(1);
     },
   );
 
-  it.each([
-    { auto: false, method: "squash" },
-    { auto: true, method: "squash" },
-  ])("reconciles accepted pending UNKNOWN intent without polling for %j", ({ auto, method }) => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
+  it.each([false, true])("reconciles pending UNKNOWN (auto=%s)", (auto) => {
+    const f = fixture({
       mode: "pending",
-      pr: {
-        ...f.state().pr,
-        isMergeQueueEnabled: !auto,
-        mergeStateStatus: auto ? "BEHIND" : "BLOCKED",
-      },
+      pr: { isMergeQueueEnabled: !auto, mergeStateStatus: auto ? "BEHIND" : "BLOCKED" },
     });
-    const first = f.run(auto, f.repo, method);
-    expect(first.status, first.output).toBe(0);
+    const first = expectExit(f.run(auto));
     expect(first.output).toContain("AUTO/QUEUE PENDING");
     const before = f.git(["rev-parse", outcomeRef]);
     const capture = f.captures();
-    f.save({
-      ...f.state(),
-      observationReads: 0,
-      pr: { ...f.state().pr, ...unknownProjection },
-    });
-    const pending = f.run(auto, f.repo, method);
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(0);
+    configureMerge(f, { observationReads: 0, pr: { ...unknownProjection } });
+    const pending = f.run(auto);
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
     expect(f.git(["rev-parse", outcomeRef])).toBe(before);
     expect(f.captures()).toEqual(capture);
     expect(pending.status, pending.output).toBe(0);
@@ -203,50 +272,33 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.state().settlementSleeps).toEqual([]);
     expect(f.state().observationReads).toBe(2);
     const landed = f.advance("after\n", "stable\n");
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       pr: {
-        ...f.state().pr,
         state: "MERGED",
         mergeCommit: { oid: landed },
         autoMergeRequest: null,
         isInMergeQueue: false,
       },
     });
-    const done = f.run(auto, f.repo, method);
-    expect(done.status, done.output).toBe(0);
+    expectExit(f.run(auto));
     expect(f.state().mutations).toBe(1);
   });
 
-  it.each([false, true])(
-    "never cancels/rearms/falls back after ambiguous queue/auto=%s",
-    (auto) => {
-      const f = fixture();
-      f.save({
-        ...f.state(),
-        mode: "pending-error",
-        pr: {
-          ...f.state().pr,
-          isMergeQueueEnabled: !auto,
-          mergeStateStatus: auto ? "BEHIND" : "BLOCKED",
-        },
-      });
-      expect(f.run(auto).status).toBe(1);
-      f.recover();
-      f.save({
-        ...f.state(),
-        pr: { ...f.state().pr, autoMergeRequest: null, isInMergeQueue: false },
-      });
-      expect(f.run(auto).status).toBe(1);
-      expect(f.state().mutations).toBe(1);
-    },
-  );
+  it.each([false, true])("does not redispatch ambiguous auto=%s", (auto) => {
+    const f = fixture({
+      mode: "pending-error",
+      pr: { isMergeQueueEnabled: !auto, mergeStateStatus: auto ? "BEHIND" : "BLOCKED" },
+    });
+    expect(f.run(auto).status).toBe(1);
+    f.recover();
+    configureMerge(f, { pr: { autoMergeRequest: null, isInMergeQueue: false } });
+    expect(f.run(auto).status).toBe(1);
+    expect(f.state().mutations).toBe(1);
+  });
 
-  it("audits a confirmed admin landing using the prepared repository", () => {
-    const f = fixture();
-    f.save({ ...f.state(), admin: true, gates: "fail", comment: "rejected" });
-    const result = f.run();
-    expect(result.status, result.output).toBe(1);
+  it("audits admin landing in the prepared repository", () => {
+    const f = fixture({ admin: true, gates: "fail", comment: "rejected" });
+    const result = expectExit(f.run(), 1);
     expect(f.record().phase, result.output).toBe("commenting");
     expect(f.state().calls).toContainEqual([
       "direct",
@@ -263,24 +315,18 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.recover();
   });
 
-  it("retains confirmed admin merge before failed post-merge audit", () => {
-    const f = fixture();
-    f.save({ ...f.state(), admin: true, audit: true, gates: "fail" });
-    const first = f.run();
-    expect(first.status, first.output).toBe(1);
-    expect(f.record().route).toBe("admin");
-    expect(f.record().phase).toBe("merged");
+  it("retains admin merge after audit failure", () => {
+    const f = fixture({ admin: true, audit: true, gates: "fail" });
+    expectExit(f.run(), 1);
+    expect(f.record()).toMatchObject({ route: "admin", phase: "merged" });
     f.recover();
-    const retry = f.run();
-    expect(retry.status, retry.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(0);
+    expectExit(f.run());
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
   });
 
-  it("keeps required commits reachable through worktree deletion and aggressive GC", () => {
-    const f = fixture();
-    f.save({ ...f.state(), mode: "unapplied" });
-    expect(f.run().status).toBe(1);
+  it("retains commits after worktree deletion and GC", () => {
+    const f = fixture({ mode: "unapplied" });
+    expectExit(f.run(), 1);
     f.recover();
     f.git(["worktree", "remove", "--force", f.worktree]);
     f.git(["branch", "-D", "pr-123-prep", "pr-123", "topic"]);
@@ -288,7 +334,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     f.git(["reflog", "expire", "--expire=now", "--all"]);
     f.git(["gc", "--prune=now"]);
     f.git(["cat-file", "-e", f.head + "^{commit}"]);
-    expect(f.run().status).toBe(1);
+    expectExit(f.run(), 1);
     expect(f.state().mutations).toBe(1);
   });
 
@@ -307,9 +353,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "recovery-method",
     "recovery-repo",
   ])("fails closed on %s outcome evidence", (fault) => {
-    const f = fixture();
-    f.save({ ...f.state(), mode: "unapplied" });
-    expect(f.run().status).toBe(1);
+    const f = fixture({ mode: "unapplied" });
+    expectExit(f.run(), 1);
     f.recover();
     const previous = f.git(["rev-parse", outcomeRef]);
     if (fault.startsWith("recovery-")) {
@@ -339,10 +384,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       f.git(["symbolic-ref", outcomeRef, "refs/heads/topic"]);
     }
     if (fault === "mismatched") {
-      f.save({
-        ...f.state(),
-        repoAuthority: { ...f.state().repoAuthority, node_id: "other-repo" },
-      });
+      configureMerge(f, { repoAuthority: { ...f.state().repoAuthority, node_id: "other-repo" } });
     }
     if (fault === "missing-head") {
       rmSync(join(f.repo, ".git/objects", f.head.slice(0, 2), f.head.slice(2)));
@@ -358,16 +400,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
           : fault === "missing-landed"
             ? "1".repeat(40)
             : f.head;
-      f.save({
-        ...f.state(),
-        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
-      });
+      observeMerged(f, landed);
     }
     const before = f.git(["rev-parse", outcomeRef]);
-    const retry = f.run();
-    expect(retry.status, retry.output).toBe(1);
-    expect(f.state().mutations).toBe(1);
-    expect(f.state().posts).toBe(0);
+    const retry = expectExit(f.run(), 1);
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
     expect(f.git(["rev-parse", outcomeRef])).toBe(before);
     if (fault === "unreachable" || fault === "missing-landed") {
       const landed = fault === "unreachable" ? f.head : "1".repeat(40);
@@ -377,24 +414,21 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     }
   });
 
-  it("does not overwrite a successor installed at intent CAS", () => {
-    const f = fixture();
-    f.save({ ...f.state(), crash: "successor" });
-    const run = f.run();
-    expect(run.status, run.output).toBe(1);
+  it("preserves successor at intent CAS", () => {
+    const f = fixture({ crash: "successor" });
+    expectExit(f.run(), 1);
     expect(f.git(["cat-file", "blob", outcomeRef])).toBe("successor");
     expect(f.state().mutations).toBe(0);
   });
 
-  it("shares retained outcome across linked checkout contenders", () => {
+  it("shares outcomes across linked checkouts", () => {
     const f = fixture();
     const linked = join(f.root, "contender");
     f.git(["worktree", "add", "-q", "--detach", linked, f.base]);
-    f.save({ ...f.state(), mode: "unapplied" });
-    expect(f.run().status).toBe(1);
+    configureMerge(f, { mode: "unapplied" });
+    expectExit(f.run(), 1);
     f.recover();
-    const retry = f.run(false, linked);
-    expect(retry.status, retry.output).toBe(1);
+    expectExit(f.run(false, linked), 1);
     expect(f.state().mutations).toBe(1);
   });
 });
@@ -419,63 +453,50 @@ describePosix("repository identity across gh id representations", () => {
     return historical;
   };
 
-  it.each(historicalIds)(
-    "recovers the historical $name identity after CLI shape drift without rewriting its evidence",
-    ({ id, nextId }) => {
-      const f = fixture();
-      f.save({ ...f.state(), mode: "unapplied", repo: { ...f.state().repo, id } });
-      const first = f.run();
-      expect(first.status, first.output).toBe(1);
-      f.recover();
+  it.each(
+    historicalIds.flatMap((identity) =>
+      [false, true].map((completion) => ({
+        name: identity.name,
+        id: identity.id,
+        nextId: identity.nextId,
+        completion,
+      })),
+    ),
+  )(
+    "retains $name identity across drift (completion=$completion)",
+    ({ id, nextId, completion }) => {
+      const f = completion ? reconciledMergeAfterCleanup() : fixture();
+      if (!completion) {
+        configureMerge(f, { mode: "unapplied", repo: { ...f.state().repo, id } });
+        expectExit(f.run(), 1);
+        f.recover();
+      }
       const repo = { ...canonicalRepo, id };
       const previous = retainRepository(f, repo);
       const bytes = f.git(["show", `${previous}:outcome.json`]);
       const attempt = f.record().attempt;
-      const captures = f.captures();
-      f.save({ ...f.state(), repo: { ...f.state().repo, id: nextId } });
-
-      const observed = f.run();
-      expect(observed.status, observed.output).toBe(1);
-      expect(observed.output).toContain("prior dispatch unresolved");
-      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
-      expect(f.captures()).toEqual(captures);
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
-      f.recover();
-      f.save({ ...f.state(), mode: "success" });
-
-      const recovered = f.run(false, f.repo, "squash", previous);
-      expect(recovered.status, recovered.output).toBe(0);
-      expect(f.record()).toMatchObject({
-        phase: "complete",
-        recovery: { outcome: previous, attempt, actor: "fixture-operator" },
-      });
-      expect(f.record().repo).toEqual(repo);
-      expect(f.git(["show", `${previous}:outcome.json`])).toBe(bytes);
-      f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
-      expect(f.state().mutations).toBe(2);
-      expect(f.state().posts).toBe(1);
-      expect(existsSync(f.worktree)).toBe(false);
-    },
-  );
-
-  it.each(historicalIds)(
-    "completes the historical $name receipt after CLI shape drift without another dispatch",
-    ({ id, nextId }) => {
-      const f = reconciledMergeAfterCleanup();
-      const repo = { ...canonicalRepo, id };
-      const previous = retainRepository(f, repo);
-      const bytes = f.git(["show", `${previous}:outcome.json`]);
-      f.save({ ...f.state(), repo: { ...f.state().repo, id: nextId } });
-
-      const completed = f.complete(previous);
-      expect(completed.status, completed.output).toBe(0);
+      const captures = completion ? [] : f.captures();
+      configureMerge(f, { repo: { ...f.state().repo, id: nextId } });
+      if (completion) {
+        expectExit(f.complete(previous));
+      } else {
+        const observed = expectExit(f.run(), 1);
+        expect(observed.output).toContain("prior dispatch unresolved");
+        expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+        expect(f.captures()).toEqual(captures);
+        expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
+        f.recover();
+        configureMerge(f, { mode: "success" });
+        expectExit(f.run(false, f.repo, "squash", previous));
+        expect(f.record()).toMatchObject({
+          recovery: { outcome: previous, attempt, actor: "fixture-operator" },
+        });
+      }
       expect(f.record().phase).toBe("complete");
       expect(f.record().repo).toEqual(repo);
       expect(f.git(["show", `${previous}:outcome.json`])).toBe(bytes);
       f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(1);
+      expect(f.state()).toMatchObject({ mutations: completion ? 1 : 2, posts: 1 });
       expect(existsSync(f.worktree)).toBe(false);
     },
   );
@@ -494,60 +515,53 @@ describePosix("repository identity across gh id representations", () => {
     ].flatMap((fault) =>
       [false, true].map((completion) => ({ name: fault.name, repo: fault.repo, completion })),
     ),
-  )(
-    "refuses retained $name before side effects (completion=$completion)",
-    ({ repo, completion }) => {
-      const f = completion ? reconciledMergeAfterCleanup() : fixture();
-      if (!completion) {
-        f.save({ ...f.state(), mode: "unapplied" });
-        expect(f.run().status).toBe(1);
-        f.recover();
-      }
-      const previous = retainRepository(f, repo);
-      const bytes = f.git(["show", `${previous}:outcome.json`]);
-      const captures = completion ? [] : f.captures();
-      f.save({ ...f.state(), mode: "success" });
+  )("refuses $name (completion=$completion)", ({ repo, completion }) => {
+    const f = completion ? reconciledMergeAfterCleanup() : fixture();
+    if (!completion) {
+      configureMerge(f, { mode: "unapplied" });
+      expectExit(f.run(), 1);
+      f.recover();
+    }
+    const previous = retainRepository(f, repo);
+    const bytes = f.git(["show", `${previous}:outcome.json`]);
+    const captures = completion ? [] : f.captures();
+    configureMerge(f, { mode: "success" });
 
-      const result = completion ? f.complete(previous) : f.run(false, f.repo, "squash", previous);
-      expect(result.status, result.output).toBe(1);
-      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
-      expect(f.git(["show", `${previous}:outcome.json`])).toBe(bytes);
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
-      expect(existsSync(f.worktree)).toBe(!completion);
-      if (!completion) {
-        expect(f.captures()).toEqual(captures);
-        expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
-      }
-    },
-  );
+    const result = completion ? f.complete(previous) : f.run(false, f.repo, "squash", previous);
+    expect(result.status, result.output).toBe(1);
+    expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+    expect(f.git(["show", `${previous}:outcome.json`])).toBe(bytes);
+    expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
+    expect(existsSync(f.worktree)).toBe(!completion);
+    if (!completion) {
+      expect(f.captures()).toEqual(captures);
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    }
+  });
 
   it.each([
     { name: "fractional numeric id", authority: { id: 1.5 } },
     { name: "numeric node id", authority: { node_id: 1103012935 } },
     { name: "different name", authority: { full_name: "fixture/other" } },
     { name: "different host", authority: { html_url: "https://elsewhere.invalid/fixture/repo" } },
-  ])("rejects $name in repository authority before recording intent", ({ authority }) => {
+  ])("rejects $name before intent", ({ authority }) => {
     const f = fixture();
-    f.save({ ...f.state(), repoAuthority: { ...f.state().repoAuthority, ...authority } });
-    const result = f.run();
-    expect(result.status, result.output).toBe(1);
-    expect(f.state().mutations).toBe(0);
-    expect(f.state().posts).toBe(0);
+    configureMerge(f, { repoAuthority: { ...f.state().repoAuthority, ...authority } });
+    expectExit(f.run(), 1);
+    expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
     expect(() => f.record()).toThrow();
     expect(f.captures()).toEqual([]);
     expect(existsSync(f.worktree)).toBe(true);
   });
 
-  it.each([false, true])("requires repository authority for completion=%s", (completion) => {
+  it.each([false, true])("requires repo authority (completion=%s)", (completion) => {
     const f = completion ? reconciledMergeAfterCleanup() : fixture();
     const previous = completion ? f.git(["rev-parse", outcomeRef]) : undefined;
-    f.save({ ...f.state(), repoAuthorityUnavailable: true });
+    configureMerge(f, { repoAuthorityUnavailable: true });
     const result = previous ? f.complete(previous) : f.run();
     expect(result.status, result.output).toBe(1);
     expect(result.output).toContain("repository metadata unavailable");
-    expect(f.state().mutations).toBe(completion ? 1 : 0);
-    expect(f.state().posts).toBe(0);
+    expect(f.state()).toMatchObject({ mutations: completion ? 1 : 0, posts: 0 });
     if (previous) {
       expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
     } else {

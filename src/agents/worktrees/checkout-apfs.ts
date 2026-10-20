@@ -187,13 +187,15 @@ export async function copyApfsCloneIndex(
       if (
         !original ||
         !cloned ||
+        !original.exactIdentity ||
+        !cloned.exactIdentity ||
         !matchesSource(data, offset, original) ||
         cloned.type !== 1 ||
         cloned.ctimeSec >= snapshotSecond ||
         !original.cloneId ||
         original.cloneId !== cloned.cloneId ||
-        original.dev !== cloned.dev ||
-        original.ino === cloned.ino ||
+        original.exactIdentity.dev !== cloned.exactIdentity.dev ||
+        original.exactIdentity.ino === cloned.exactIdentity.ino ||
         original.size !== cloned.size ||
         original.mtimeSec !== cloned.mtimeSec ||
         original.mtimeNs !== cloned.mtimeNs ||

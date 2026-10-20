@@ -10,6 +10,7 @@ import {
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -34,7 +35,6 @@ import {
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  resolveSessionObserverDigestForLifecycle,
   snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
@@ -60,14 +60,7 @@ const MAX_DIGESTS_PER_RUN = 40;
 const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
-// The Control UI opens at most six live session subscriptions; matching that cap
-// prevents background observer calls from outgrowing the surface consuming them.
-const MAX_CONCURRENT_MODEL_SESSIONS = 6;
-
 export function createSessionObserver(deps: SessionObserverDeps): SessionObserverService {
-  const now = deps.now ?? Date.now;
-  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
   const resolveUtilityModelRef = deps.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const prepareModel = deps.prepareModel ?? defaultPrepareModel;
   const completeModel = deps.completeModel ?? defaultCompleteModel;
@@ -75,7 +68,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     resolveSessionStorePathCore(deps.getConfig().session?.store, { agentId });
   const readSession: NonNullable<SessionObserverDeps["readSession"]> =
     deps.readSession ??
-    ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId)));
+    ((sessionKey, agentId) =>
+      deps.getSessionRowProjection?.()?.sharingTarget({ key: sessionKey, agentId })?.entry);
   const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> = (params) =>
     params.reader
       ? params.reader.persist(params)
@@ -89,7 +83,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const pendingTerminalErrors = new Map<string, ReturnType<typeof setTimeout>>();
   const visibleConnections = new Set<string>();
   const clearPendingTerminalError = (runId: string) => {
-    clearTimeoutFn(pendingTerminalErrors.get(runId));
+    clearTimeout(pendingTerminalErrors.get(runId));
     pendingTerminalErrors.delete(runId);
   };
   const lifecycle = createSessionObserverLifecycle({
@@ -97,15 +91,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     readSession,
     refreshAfterReset: (sessionKey, agentId, consume) =>
       work.refreshAfterReset(sessionKey, agentId, consume),
-    now,
     isTerminal: (runId) => terminalRuns.has(runId),
     clearPendingTerminalError,
     releaseState: (state) => {
       preamblePublisher.clear(state);
-      if (state.timer) {
-        clearTimeoutFn(state.timer);
-      }
-      modelSlots.invalidateRequest(state);
+      clearTimeout(state.timer);
+      state.activeController?.abort();
     },
   });
   const { states, dormantRuns, revisionFloors, supersededRuns, disabledRuns } = lifecycle;
@@ -117,8 +108,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   });
   const work = createSessionObserverWork({
     deps,
-    readSession,
     companionReader,
+    states,
     handleEventSteps,
     canPublish: (state, session) =>
       audienceLifecycle.stateIsCurrent(state) && lifecycle.acceptPublication(state, session),
@@ -127,11 +118,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       preamblePublisher.dispose();
       audienceLifecycle.unsubscribe();
       for (const state of states.values()) {
-        clearTimeoutFn(state.timer);
-        modelSlots.invalidateRequest(state);
+        clearTimeout(state.timer);
+        state.activeController?.abort();
       }
     },
     finishClose: () => {
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       lifecycle.dispose();
       terminalRuns.clear();
       contextlessTerminalRuns.clear();
@@ -166,7 +158,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     (states.get(resolveSessionSubscriptionKey(sessionKey, agentId))?.runId ?? runId) === runId;
 
   const persistAcceptedDigest = createSessionObserverDigestPersister({
-    now,
     persistDigest,
     stillCurrent: runStillCurrent,
     onMissingEntry: (state) => {
@@ -182,9 +173,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }),
   });
   const preamblePublisher = createSessionObserverPreamblePublisher({
-    now,
-    setTimeoutFn,
-    clearTimeoutFn,
     isCurrent: (state) => audienceLifecycle.stateIsCurrent(state),
     preparePublication: work.preparePublication,
     publish: (state, digest) => {
@@ -195,9 +183,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const synthesizeTerminalDigest = createSessionObserverTerminalPublisher({
     dormantRuns,
-    readSession,
+    readSession:
+      deps.readSession ??
+      ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId))),
     persistDigest,
-    now,
     work,
     runStillCurrent,
     broadcast: (digest, agentId) =>
@@ -232,17 +221,16 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const demoteUtilityModel = (state: SessionObserverState): void => {
     if (state.timer) {
-      clearTimeoutFn(state.timer);
+      clearTimeout(state.timer);
       state.timer = undefined;
     }
-    modelSlots.invalidateRequest(state);
+    state.activeController?.abort();
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
     state.consecutiveFailures = 0;
   };
   const modelSlots = createSessionObserverModelSlots({
     states,
-    maxSessions: MAX_CONCURRENT_MODEL_SESSIONS,
     resolve: (agentId) => resolveUtilityModelRef({ cfg: deps.getConfig(), agentId }),
     demote: demoteUtilityModel,
   });
@@ -273,8 +261,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getConfig: deps.getConfig,
     prepareModel,
     completeModel,
-    setTimeoutFn,
-    clearTimeoutFn,
     isCurrent: modelStateIsCurrent,
   });
 
@@ -295,12 +281,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     ) {
       return;
     }
-    const delay = Math.max(0, MIN_DIGEST_INTERVAL_MS - (now() - state.lastRunAt));
+    const delay = Math.max(0, MIN_DIGEST_INTERVAL_MS - (Date.now() - state.lastRunAt));
     if (delay === 0) {
       runDigest(state, false);
       return;
     }
-    state.timer = setTimeoutFn(() => {
+    state.timer = setTimeout(() => {
       state.timer = undefined;
       runDigest(state, false);
     }, delay);
@@ -333,26 +319,30 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (!final && selectedNotes.length < MIN_NOTES_PER_DIGEST) {
       return;
     }
-    if (!final && now() - state.lastRunAt < MIN_DIGEST_INTERVAL_MS) {
+    if (!final && Date.now() - state.lastRunAt < MIN_DIGEST_INTERVAL_MS) {
       schedule(state);
       return;
     }
     if (state.timer) {
-      clearTimeoutFn(state.timer);
+      clearTimeout(state.timer);
       state.timer = undefined;
     }
+    if (!modelSlots.reserve(state)) {
+      state.finalPending ||= final;
+      return;
+    }
+    if (final) {
+      state.finalPending = false;
+    }
     state.inFlight = true;
-    state.lastRunAt = now();
+    state.lastRunAt = Date.now();
     const lastSelectedSequence = selectedNotes.at(-1)?.sequence ?? state.lastDigestNoteSequence;
     const retireSelectedNotes = () => {
       // Run rollover replaces state; inFlight keeps its note retirement monotonic.
       state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
     };
-    const requestGeneration = modelSlots.beginRequest(state);
     const digestIsStale = () =>
-      !modelStateIsCurrent(state) ||
-      !modelSlots.requestIsCurrent(state, requestGeneration) ||
-      (!final && state.terminalHealth !== undefined);
+      !modelStateIsCurrent(state) || (!final && state.terminalHealth !== undefined);
     const acceptDigestPublication = (session: ReturnType<typeof readSession>) => {
       if (digestIsStale()) {
         retireSelectedNotes();
@@ -389,7 +379,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
               ...(state.lifecycleRevision ? { lifecycleRevision: state.lifecycleRevision } : {}),
               runId: state.runId,
               revision: state.revision,
-              updatedAt: now(),
+              updatedAt: Date.now(),
               headline: modelDigest.headline,
               ...(modelDigest.assessment ? { assessment: modelDigest.assessment } : {}),
               health: final ? (state.terminalHealth ?? modelDigest.health) : modelDigest.health,
@@ -441,6 +431,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           }
         });
       } finally {
+        modelSlots.release(state);
         if (lifecycle.isTracked(state)) {
           state.inFlight = false;
           const runFinal = state.finalPending;
@@ -451,6 +442,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             lifecycle.dropState(state);
           } else {
             schedule(state);
+          }
+        }
+        // Pending notes already belong to bounded observer states. Settlement,
+        // not a polling timer or logical eviction, makes their capacity available.
+        for (const waiting of states.values()) {
+          if (waiting !== state) {
+            if (waiting.finalPending) {
+              runDigest(waiting, true);
+            } else {
+              schedule(waiting);
+            }
           }
         }
       }
@@ -471,7 +473,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       settledError || isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: event.data });
     if (lifecyclePhase === "error" && !terminal) {
       clearPendingTerminalError(event.runId);
-      const timer = setTimeoutFn(() => {
+      const timer = setTimeout(() => {
         if (reader) {
           work.background(() => work.handleEventAsync(event, true, reader));
         } else {
@@ -665,7 +667,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         ? undefined
         : modelSlots.claim(state.agentId, state);
     if (state.utilityModelRef !== utilityModelRef) {
-      modelSlots.invalidateRequest(state);
+      state.activeController?.abort();
       state.preparedPromise = undefined;
       state.utilityModelRef = utilityModelRef;
       state.consecutiveFailures = 0;
@@ -682,7 +684,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (terminal) {
       if (!state.terminalHealth) {
-        modelSlots.invalidateRequest(state);
+        state.activeController?.abort();
       }
       const flush = preamblePublisher.flush(state);
       if (flush) {
@@ -691,7 +693,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       preamblePublisher.clear(state);
       state.terminalHealth = terminalHealthFor(event);
       disabledRuns.delete(event.runId);
-      const endedAt = asFiniteNumber(event.data.endedAt) ?? now();
+      const endedAt = asFiniteNumber(event.data.endedAt) ?? Date.now();
       // previousDigest is set on every ACCEPTED digest of this run; digestCount now
       // counts attempts (budget), so it no longer implies any digest was published.
       const hasRunDigest = state.previousDigest?.runId === state.runId;

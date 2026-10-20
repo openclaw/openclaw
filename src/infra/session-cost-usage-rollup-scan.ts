@@ -59,13 +59,11 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
         for (const entry of batch) {
           let usageTotals: CostUsageTotals | undefined;
           if (entry.usage) {
-            usageTotals = emptyTotals();
-            const tokens = computeUsageTokenTotals(entry.usage);
-            usageTotals.input += tokens.input;
-            usageTotals.output += tokens.output;
-            usageTotals.cacheRead += tokens.cacheRead;
-            usageTotals.cacheWrite += tokens.cacheWrite;
-            usageTotals.totalTokens += tokens.totalTokens;
+            usageTotals = {
+              ...emptyTotals(),
+              ...computeUsageTokenTotals(entry.usage),
+              usageReport: entry.usage.usageReport,
+            };
             const cost = entry.costBreakdown;
             if (cost?.total !== undefined) {
               usageTotals.totalCost += cost.total;

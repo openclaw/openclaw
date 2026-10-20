@@ -1,4 +1,5 @@
 import type { WorkerProvider } from "../../plugins/types.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   isWorkerNodeCarrierBindingCurrent,
   type WorkerNodeCarrierBinding,
@@ -100,17 +101,27 @@ export function createDedicatedNodeLeaseAttestations(
       record: WorkerEnvironmentRecord,
       provider: WorkerProvider,
       lease: Parameters<WorkerProvider["inspect"]>[0],
+      signal?: AbortSignal,
     ) {
+      // Observations can stop at drain; provider mutations retain their settlement owner.
+      const inspectionSignal = signal
+        ? AbortSignal.any([signal, getGatewayRestartDrainSignal()])
+        : getGatewayRestartDrainSignal();
+      inspectionSignal.throwIfAborted();
       const inspection = await options
-        .callProvider(record.environmentId, () => provider.inspect(lease))
+        .callProvider(record.environmentId, () =>
+          provider.inspect({ ...lease, signal: inspectionSignal }),
+        )
         .then((result) => ({
           ...requireWorkerLeaseStatus(result),
           explicitlyDedicated: result.status === "active" && result.sharedHost === false,
         }))
         .catch(async (error: unknown) => {
+          inspectionSignal.throwIfAborted();
           await options.saveError(record, error);
           return undefined;
         });
+      inspectionSignal.throwIfAborted();
       if (inspection) {
         assertCurrent(record);
         // A successful observation withdraws access now, even if persistence later

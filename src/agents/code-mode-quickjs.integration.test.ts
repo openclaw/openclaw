@@ -52,6 +52,41 @@ function snapshotFixture() {
 }
 
 describe("QuickJS checkpoint admission through Code Mode", () => {
+  it("yields and resumes a direct executor call without an inline host", async () => {
+    const { ctx } = createCodeModeHarness({ codeMode: { executor: "quickjs" } });
+    const config = testing.resolveCodeModeHeadlessConfig(ctx);
+    const options = {
+      executor: "quickjs" as const,
+      runtimeConfig: ctx.config,
+      timeoutMs: config.timeoutMs,
+    };
+    const result = await testing.runCodeModeExecutor(
+      {
+        kind: "exec",
+        source: "const value = 42; await yield_control(); return value;",
+        config,
+        catalog: [],
+        namespaces: [],
+      },
+      options,
+    );
+    expect(result.status).toBe("waiting");
+    if (result.status !== "waiting") {
+      throw new Error(JSON.stringify(result));
+    }
+    expect(
+      await testing.runCodeModeExecutor(
+        {
+          kind: "resume",
+          continuation: result.continuation,
+          config,
+          settledRequests: result.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+          pendingRequests: [],
+        },
+        options,
+      ),
+    ).toMatchObject({ status: "completed", value: { json: "42" } });
+  });
   it.each(["exec", "wait", "headless"] as const)(
     "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
     async (mode) => {

@@ -102,6 +102,10 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 ```
 
+For missing containers, dotted numeric segments use the config schema to distinguish
+arrays from maps. Use `[0]` for an explicit array index or `["0"]` for a numeric map
+key. All writes validate the resulting config before saving.
+
 Prefer `agents.entries.<id>` paths for agent edits. The legacy `agents.list[0]`
 syntax and whole-list inputs still work with `set`, `patch`, and `unset`; writes
 persist the current keyed roster. Indexed edits use the current roster order.
@@ -193,6 +197,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 ### `config validate`
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
+
+Known retired core settings are reported before loading plugin migration diagnostics. Both `config get` and `config validate` include the `openclaw doctor --fix` repair hint. JSON errors keep their existing `error.message` and add the guidance in `repairHint`. Doctor still inspects all applicable core and plugin migrations when applying repairs.
 
 Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 
@@ -615,6 +621,9 @@ describes expected application; it is not a receipt from a running Gateway.
 See [Config hot reload](/gateway/configuration/hot-reload).
 
 Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
+
+Model references are normalized before a mutation is saved. Core agent model references do not require plugin discovery; provider catalog model IDs reuse compatible prepared plugin metadata or load their manifest normalization policies on demand.
+Unrelated edits leave provider catalogs unchanged. Catalog writes and changes to plugin discovery or activation policy normalize provider model IDs before saving.
 
 ## Write safety
 

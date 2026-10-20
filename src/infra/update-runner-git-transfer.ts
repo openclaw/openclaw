@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
@@ -304,12 +304,7 @@ export async function prepareGitCandidateTransfer(params: {
           throw new Error("Cannot locate the retained Git update pack");
         }
         const keepPath = location.stdout.trim();
-        const message = await fs.readFile(keepPath, "utf8").catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        });
+        const message = await fs.readFile(keepPath, "utf8").catch(ignoreMissingPath);
         // index-pack never overwrites an existing keep file. Do not remove one
         // created by another updater or operator, even for an identical pack.
         if (message === `${keepMessage}\n`) {

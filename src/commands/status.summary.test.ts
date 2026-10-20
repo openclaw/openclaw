@@ -1,7 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   clearActiveCredentialDegradedOwner,
   setActiveCredentialDegradedOwner,
@@ -28,8 +31,10 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
-  loadExactSessionEntryReadOnly:
-    vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
+  withSessionEntriesFromStoresInWorker:
+    vi.fn<
+      typeof import("../config/sessions/session-entry-read-runtime.js").withSessionEntriesFromStoresInWorker
+    >(),
 }));
 
 // mock-isolation: Keep plugin discovery outside this status aggregation fixture.
@@ -59,6 +64,7 @@ vi.mock("../status/summary.runtime.js", async (importOriginal) => {
         model: "gpt-5.5",
       })),
       resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
+      readSessionRuntimeMetadata: vi.fn(async (_cfg, candidates) => candidates.map(() => null)),
       resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
         typeof model === "string" && model.length > 0
           ? {
@@ -97,12 +103,17 @@ vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
   ),
 }));
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   loadConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   getRuntimeConfig: vi.fn(() => ({})),
+  captureRuntimeConfigAsyncReader: vi.fn(() =>
+    Object.assign(async () => ({}), { assertCurrent() {} }),
+  ),
   projectConfigOntoRuntimeSourceSnapshot: vi.fn((config) => config),
 }));
 
@@ -110,14 +121,12 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn(() => "/tmp/sessions.json"),
 }));
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryReadOnly: statusSummaryMocks.loadExactSessionEntryReadOnly,
-}));
-
+// mock-isolation: Status aggregation consumes fixture summaries and counts without starting session storage.
 vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
   const { createSessionStoreSummaryReaderStub } =
     await import("../config/sessions/session-store-summary.test-support.js");
   return {
+    withSessionEntriesFromStoresInWorker: statusSummaryMocks.withSessionEntriesFromStoresInWorker,
     withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
       const entries = statusSummaryMocks
         .listSessionEntriesCore(scope)
@@ -138,7 +147,14 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
       return {
         ...summarize(entries),
         byAgent: new Map(
-          options.agentIds.map((agentId) => [
+          [
+            ...new Set([
+              ...options.agentIds,
+              ...entries.flatMap(
+                ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId ?? [],
+              ),
+            ]),
+          ].map((agentId) => [
             agentId,
             summarize(
               entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`)),
@@ -210,6 +226,7 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
@@ -217,14 +234,26 @@ describe("getStatusSummary", () => {
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue([]);
     vi.mocked(peekSystemEvents).mockReset().mockReturnValue([]);
-    statusSummaryMocks.loadExactSessionEntryReadOnly.mockImplementation(({ sessionKey }) => {
-      const entry = statusSummaryMocks
-        .listSessionEntriesCore()
-        .find((candidate) => candidate.sessionKey === sessionKey)?.entry;
-      return entry
-        ? { sessionKey, entry: { sessionId: sessionKey, updatedAt: 0, ...entry } }
-        : undefined;
-    });
+    statusSummaryMocks.withSessionEntriesFromStoresInWorker.mockImplementation(
+      async (inputs, consume) =>
+        consume(
+          inputs.map((input) => ({
+            database: { agentId: input.agentId, path: input.storePath, env: {} },
+            assertCurrent: () => {},
+            result: {
+              kind: "session-exact-entries",
+              lifecycleTimestamps: {},
+              entries: statusSummaryMocks
+                .listSessionEntriesCore(input)
+                .filter(({ sessionKey }) => input.sessionKeys?.includes(sessionKey))
+                .map(({ sessionKey, entry }) => ({
+                  sessionKey,
+                  entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+                })),
+            },
+          })),
+        ),
+    );
     vi.mocked(statusSummaryRuntime.resolveAuthoredModelContextTokens).mockReturnValue(undefined);
     vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
       provider: "openai",
@@ -309,13 +338,64 @@ describe("getStatusSummary", () => {
     expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(empty);
   });
 
+  it("keeps global heartbeat routes separate across agent stores", async () => {
+    // Distinct physical stores keep each agent's literal global row separate.
+    vi.mocked(resolveSessionStorePathCore).mockImplementation(
+      (_store, options) => `/tmp/${options?.agentId}/sessions.json`,
+    );
+    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
+      defaultId: "research",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "research" }, { id: "ops" }],
+      ownership: "explicit",
+      selectionRequired: true,
+    });
+    statusSummaryMocks.listSessionEntriesCore.mockImplementation((scope) => [
+      {
+        sessionKey: "global",
+        entry:
+          scope?.agentId === "research"
+            ? {
+                delivery: normalizeSessionDeliveryState({
+                  context: { channel: "telegram", to: "123" },
+                }),
+              }
+            : {},
+      },
+    ]);
+
+    const summary = await getStatusSummary({
+      config: {
+        agents: {
+          ownership: "explicit",
+          entries: { research: {}, ops: {} },
+          defaults: { heartbeat: { target: "last", every: "30m" } },
+        },
+        session: { scope: "global" },
+      },
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+
+    expect(
+      summary.heartbeat.agents.map(({ agentId, waitingForRoute }) => ({
+        agentId,
+        waitingForRoute,
+      })),
+    ).toEqual([
+      { agentId: "research", waitingForRoute: false },
+      { agentId: "ops", waitingForRoute: true },
+    ]);
+  });
+
   it("does not read an unused route for a disabled heartbeat", async () => {
     const summary = await getStatusSummary({
       config: { agents: { defaults: { heartbeat: { target: "owner", every: "0m" } } } },
       includeChannelSummary: false,
     });
     expect(summary.heartbeat.agents[0]).toMatchObject({ enabled: false, waitingForRoute: false });
-    expect(statusSummaryMocks.loadExactSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(statusSummaryMocks.withSessionEntriesFromStoresInWorker).not.toHaveBeenCalled();
   });
 
   it("skips session model discovery and projection when sensitive output is disabled", async () => {
@@ -334,6 +414,60 @@ describe("getStatusSummary", () => {
       recent: [],
       byAgent: [{ agentId: "main", path: "[redacted]", count: 1, recent: [] }],
     });
+  });
+
+  it("redacts admitted database paths without mutating the owner's facts", async () => {
+    const privatePath = "/private/status-operator-read/agent.sqlite";
+    const store: DatabaseStoreDiagnostic = {
+      family: "agent",
+      path: privatePath,
+      configured: { default: "postgres", override: null, effective: "postgres", fixedLocal: false },
+      observed: "postgres",
+      mismatch: false,
+      schema: { versioning: "versioned", version: 5, expectedVersion: null, pending: null },
+      connectivity: "unknown",
+      namespace: "oc_agent_fixture",
+      storeId: "fixture-store",
+      database: null,
+      extensions: null,
+      admittedExtensions: null,
+      degraded: null,
+      custody: "unverifiable",
+      lease: "unverifiable",
+      backup: null,
+      legacyMigrations: { state: "unknown", pending: [] },
+      issues: [],
+      nextSteps: ["Run openclaw doctor on the Gateway host."],
+    };
+    const admitted = vi
+      .spyOn(
+        await import("../infra/database-engine/admitted-diagnostics.js"),
+        "describeAdmittedDatabaseStores",
+      )
+      .mockReturnValue([store]);
+    try {
+      const redacted = await getStatusSummary({
+        includeSensitive: false,
+        includeCliProjection: true,
+        includeChannelSummary: false,
+      });
+      expect(redacted.databaseStores?.[0]).toMatchObject({
+        family: "agent",
+        path: null,
+        observed: "postgres",
+        namespace: "oc_agent_fixture",
+      });
+      expect(JSON.stringify(redacted)).not.toContain(privatePath);
+      expect(store.path).toBe(privatePath);
+      const sensitive = await getStatusSummary({
+        includeSensitive: true,
+        includeCliProjection: true,
+        includeChannelSummary: false,
+      });
+      expect(sensitive.databaseStores?.[0]?.path).toBe(privatePath);
+    } finally {
+      admitted.mockRestore();
+    }
   });
 
   it("reports stale snapshot and cold credential owners without exposing ref identifiers", async () => {
@@ -635,5 +769,12 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.count).toBe(3);
     expect(summary.sessions.byAgent[0]?.count).toBe(1);
     expect(summary.sessions.byAgent[0]?.recent.map(({ key }) => key)).toEqual(["agent:main:main"]);
+    expect(statusSummaryRuntime.readSessionRuntimeMetadata).toHaveBeenCalledOnce();
+    expect(
+      vi
+        .mocked(statusSummaryRuntime.readSessionRuntimeMetadata)
+        .mock.calls[0]?.[1].map(({ sessionKey }) => sessionKey)
+        .toSorted(),
+    ).toEqual(["agent:main:main", "agent:ops:main", "agent:research:main"]);
   });
 });

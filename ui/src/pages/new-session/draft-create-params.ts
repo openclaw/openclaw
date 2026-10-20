@@ -23,6 +23,7 @@ export function buildSelectedSessionCreateParams(
       : (place.browser.remoteProject?.projectId ?? place.browser.projectId),
     projectGitUrl: place.hostedEnvironment ? undefined : place.browser.remoteProject?.cloneUrl,
     repository: place.remoteRepository,
+    deviceFolder: place.deviceFolder,
     worktree: place.worktree,
     worktreeSource: place.freshWorkspace ? "empty" : undefined,
     baseRef: place.baseRef,

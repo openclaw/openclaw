@@ -30,6 +30,12 @@ export type MemoryEmbeddingCacheCandidate = {
   source: MemorySource;
 };
 
+export type MemoryCachedEmbeddings = {
+  embeddings: number[][];
+  missing: number[];
+  missingCandidates: MemoryEmbeddingCacheCandidate[];
+};
+
 export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOps {
   protected abstract embedBatchWithRetry(
     inputs: Array<string | EmbeddingInput>,
@@ -44,11 +50,16 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
     const database = this.database;
     const assertCurrent = () => {
-      if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+      if (this.closed || !database.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
-    while (await database.pruneEmbeddingCache(max, assertCurrent)) {
+    const unreferencedFirst = {
+      identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
+    };
+    while (
+      await database.pruneEmbeddingCache({ maxEntries: max, unreferencedFirst }, assertCurrent)
+    ) {
       await yieldToEventLoop();
     }
   }
@@ -68,7 +79,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             },
           },
           () => {
-            if (!generation.database.db.isOpen) {
+            if (!generation.database.isOpen) {
               throw new Error("Memory database owner is closed");
             }
           },
@@ -95,11 +106,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
     maxTokens: number,
+    prepared?: MemoryCachedEmbeddings,
   ): Promise<number[][]> {
-    const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
-      candidates,
-      generation,
-    );
+    const { embeddings, missing, missingCandidates } =
+      prepared ?? (await this.collectCachedEmbeddings(candidates, generation));
 
     if (missing.length === 0) {
       return embeddings;
@@ -143,7 +153,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         if (
           this.closed ||
           generation.database.closed ||
-          !generation.database.db.isOpen ||
+          !generation.database.isOpen ||
           this.database !== generation.database
         ) {
           throw new Error("Memory database owner closed or changed before write admission");
@@ -254,6 +264,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
           maxEntries: this.cache.maxEntries,
+          unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,
       });

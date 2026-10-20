@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
+import { serializeModelRequestBody } from "@openclaw/ai/internal/model-request-body";
 import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
@@ -149,6 +149,7 @@ export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): 
     cacheKeyHash?: string;
     previousResponseIdPresent: boolean;
     modelHash?: string;
+    serviceTier?: string;
   };
 } {
   if (!encode) {
@@ -173,6 +174,10 @@ export function prepareProviderPrompt({ payload, encode }: ProviderPromptTask): 
       cacheKeyHash: cachePrefix?.parameters.fields?.prompt_cache_key?.slice(0, 16),
       previousResponseIdPresent: cachePrefix?.continuation ?? false,
       modelHash: cachePrefix?.parameters.fields?.model?.slice(0, 16),
+      serviceTier:
+        isRecord(payload) && typeof payload.service_tier === "string"
+          ? payload.service_tier
+          : undefined,
     },
   };
 }

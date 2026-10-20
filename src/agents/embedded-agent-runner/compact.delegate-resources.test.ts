@@ -4,10 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { getAiTransportHost, type AssistantMessage, type Model } from "@openclaw/ai";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
@@ -31,11 +30,14 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -49,7 +51,9 @@ import { loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import type { ExtensionContext } from "../sessions/extensions/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 const modes = [
@@ -67,24 +71,28 @@ const modes = [
 ] as const;
 type Mode = (typeof modes)[number];
 type Connection = { file: string; database: DatabaseSync; disposals: number };
-type Fixture = {
-  mode: Mode;
-  root: string;
+type Fixture = ReturnType<typeof createFixture> & {
   source?: Connection;
-  registrations: Connection[];
-  tools: Connection[];
-  entered: ReturnType<typeof createDeferredCore<void>>;
-  finish: ReturnType<typeof createDeferredCore<void>>;
-  pending: Promise<unknown>[];
-  eventBus: ReturnType<typeof createEventBus>;
   session?: AgentSession;
   context?: ExtensionContext;
-  disposals: number;
-  envRestored: boolean;
   admittedMetadata?: ReturnType<typeof resolvePluginMetadataSnapshot>;
-  releases: Array<() => Promise<void>>;
-  lateReads: number;
 };
+function createFixture(mode: Mode, root: string) {
+  return {
+    mode,
+    root,
+    registrations: new Array<Connection>(),
+    tools: new Array<Connection>(),
+    entered: createDeferredCore(),
+    finish: createDeferredCore(),
+    pending: new Array<Promise<unknown>>(),
+    eventBus: createEventBus(),
+    disposals: 0,
+    envRestored: false,
+    releases: new Array<() => Promise<void>>(),
+    lateReads: 0,
+  };
+}
 const active = vi.hoisted(() => ({ fixture: undefined as Fixture | undefined }));
 const providerId = "delegate-resource-provider";
 const summary = "The deployment checklist was reviewed. Compare the remaining rollout options.";
@@ -176,6 +184,11 @@ function remember(current: Fixture, pending: Promise<unknown>) {
   return pending;
 }
 
+function closeConnection(connection: Connection) {
+  connection.disposals++;
+  connection.database.close();
+}
+
 async function hold(current: Fixture, readTools = true) {
   current.entered.resolve();
   await current.finish.promise;
@@ -246,14 +259,7 @@ function assistant(model: Model, text: string): AssistantMessage {
     model: model.id,
     stopReason: "stop",
     timestamp: 1,
-    usage: {
-      input: 100,
-      output: 20,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 120,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: { ...createZeroUsageFixture(), input: 100, output: 20, totalTokens: 120 },
   };
 }
 
@@ -306,6 +312,7 @@ function openTool(current: Fixture, name: string): Connection {
 // this fixture tests runtime custody, not either wire protocol.
 vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>();
+  const runtimeModule = await import("../agent-bundle-mcp-runtime.js");
   return {
     ...actual,
     createBundleMcpToolRuntime: async (
@@ -314,9 +321,9 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
       const current = fixture();
       const connection = openTool(current, "mcp");
       if (current.mode.startsWith("mcp-")) {
-        return actual.createBundleMcpToolRuntime({
-          ...params,
-          createRuntime: (input) => ({
+        const createRuntime = vi
+          .spyOn(runtimeModule, "createSessionMcpRuntime")
+          .mockImplementationOnce((input) => ({
             sessionId: input.sessionId,
             workspaceDir: input.workspaceDir,
             configFingerprint: "delegate-mcp",
@@ -336,12 +343,15 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
             dispose: async () => {
               current.finish.resolve();
               if (connection.database.isOpen) {
-                connection.disposals++;
-                connection.database.close();
+                closeConnection(connection);
               }
             },
-          }),
-        });
+          }));
+        try {
+          return await actual.createBundleMcpToolRuntime(params);
+        } finally {
+          createRuntime.mockRestore();
+        }
       }
       const track = captureAsyncWorkTracker();
       if (current.mode === "preparation-failure") {
@@ -359,8 +369,7 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
               track(() => hold(current, false)),
             );
           }
-          connection.disposals++;
-          connection.database.close();
+          closeConnection(connection);
         },
       };
     },
@@ -383,8 +392,7 @@ vi.mock("../agent-bundle-lsp-runtime.js", async (importOriginal) => ({
       tools: [],
       sessions: [],
       dispose: async () => {
-        connection.disposals++;
-        connection.database.close();
+        closeConnection(connection);
       },
     };
   },
@@ -409,54 +417,92 @@ vi.mock("./skill-runtime.js", async (importOriginal) => {
 });
 
 describe("delegate compaction resource retirement", () => {
-  it.each(modes)(
+  let state: OpenClawTestState;
+  let runningCase: Promise<void> | undefined;
+  let cancelCase: (() => void) | undefined;
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ label: "delegate-resources", layout: "split" });
+  });
+
+  afterEach(async () => {
+    // Vitest timeouts do not join the test body. Release it before shared cleanup
+    // can reset registries or the next case can install its fixture.
+    cancelCase?.();
+    await runningCase?.catch(() => {});
+    vi.useRealTimers();
+    runningCase = undefined;
+    cancelCase = undefined;
+    await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+  });
+
+  afterAll(async () => {
+    await state.cleanup();
+  });
+
+  it.for(modes)(
     "keeps actual work owned through %s",
-    async (mode) => {
+    { timeout: 30_000 },
+    async (mode, { signal }) => {
       const lspCancelled = mode === "lsp-parent-abort";
       const mcpCancelled = mode === "mcp-caller-abort";
       const pendingPreparation = lspCancelled || mcpCancelled;
       const preparationFailed = mode === "preparation-failure" || lspCancelled || mcpCancelled;
-      await withOpenClawTestState(
-        { label: "delegate-resources", layout: "split" },
-        async (state) => {
-          const current: Fixture = {
-            mode,
-            root: state.root,
-            registrations: [],
-            tools: [],
-            entered: createDeferredCore(),
-            finish: createDeferredCore(),
-            pending: [],
-            eventBus: createEventBus(),
-            disposals: 0,
-            envRestored: false,
-            releases: [],
-            lateReads: 0,
-          };
-          active.fixture = current;
-          const pluginRoot = state.path("plugin");
-          const emptyBundled = state.path("empty-bundled");
-          fs.mkdirSync(pluginRoot);
-          fs.mkdirSync(emptyBundled);
-          const plugin = createColdPluginFixture({
-            rootDir: pluginRoot,
-            pluginId: providerId,
-            providerId,
-            manifest: { channels: [], channelConfigs: {}, providerAuthChoices: [] },
-          });
-          const key = `__delegate_resources_${path.basename(state.root)}`;
-          const bridge = {
-            connections: current.registrations,
-            hold: () => remember(current, hold(current)),
-          };
-          Object.defineProperty(globalThis, key, { configurable: true, value: bridge });
-          fs.writeFileSync(
-            plugin.runtimeSource,
-            `
+      runningCase = (async () => {
+        const root = state.path(mode);
+        fs.mkdirSync(root);
+        const current: Fixture = createFixture(mode, root);
+        active.fixture = current;
+        const controller = new AbortController();
+        const cancel = () => {
+          current.finish.resolve();
+          controller.abort(signal.reason);
+        };
+        cancelCase = cancel;
+        signal.addEventListener("abort", cancel, { once: true });
+        const pluginRoot = path.join(root, "plugin");
+        const emptyBundled = path.join(root, "empty-bundled");
+        fs.mkdirSync(emptyBundled);
+        const { plugin, model, config } = createCompactionResourceProvider({
+          pluginRoot,
+          providerId,
+          workspaceDir: state.workspaceDir,
+          contextWindow: 128_000,
+          modelEndpoint: true,
+          compaction: {
+            mode: "default",
+            keepRecentTokens: 1,
+            postIndexSync: "off",
+            timeoutSeconds: 180,
+          },
+        });
+        Object.assign(config, {
+          session: { store: state.path("transcripts", "openclaw-agent.sqlite") },
+        });
+        Object.assign(config.agents, { ownership: "explicit", entries: { main: {} } });
+        Object.assign(config.models.providers[providerId]!, { agentRuntime: { id: "openclaw" } });
+        Object.assign(config.plugins.entries[providerId]!, {
+          hooks: { allowConversationAccess: true },
+        });
+        const key = `__delegate_resources_${path.basename(state.root)}`;
+        const bridge = {
+          connections: current.registrations,
+          hold: () => {
+            vi.useFakeTimers({
+              toFake: ["setTimeout", "clearTimeout"],
+              shouldClearNativeTimers: true,
+            });
+            return remember(current, hold(current));
+          },
+        };
+        Object.defineProperty(globalThis, key, { configurable: true, value: bridge });
+        fs.writeFileSync(
+          plugin.runtimeSource,
+          `
 const { DatabaseSync } = require("node:sqlite");
 module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
   const bridge = globalThis[${JSON.stringify(key)}];
-  const file = ${JSON.stringify(state.root)} + "/registration-" + bridge.connections.length + ".sqlite";
+  const file = ${JSON.stringify(root)} + "/registration-" + bridge.connections.length + ".sqlite";
   const database = new DatabaseSync(file);
   database.exec("CREATE TABLE answer(value INTEGER); INSERT INTO answer VALUES (42)");
   const connection = { file, database, disposals: 0 };
@@ -476,360 +522,307 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
   }
 } };
 `,
-          );
-          const configuredModel = {
-            id: "model",
-            name: "Fixture model",
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 1_024,
-          } satisfies ModelDefinitionConfig;
-          const model = { ...configuredModel, provider: providerId };
-          const config: OpenClawConfig = {
-            session: { store: state.path("transcripts", "openclaw-agent.sqlite") },
-            agents: {
-              ownership: "explicit",
-              entries: { main: {} },
-              defaults: {
-                workspace: state.workspaceDir,
-                model: { primary: `${providerId}/model` },
-                compaction: {
-                  mode: "default",
-                  keepRecentTokens: 1,
-                  postIndexSync: "off",
-                  timeoutSeconds: 180,
-                },
-              },
+        );
+        const validation = validateConfigObjectRaw(config);
+        expect(
+          validation.ok,
+          validation.ok ? "" : validation.issues.map((issue) => issue.path).join(", "),
+        ).toBe(true);
+        const target = {
+          agentId: "main",
+          sessionId: `delegate-${mode}`,
+          sessionKey: `agent:main:delegate-${mode}`,
+          storePath: state.path("transcripts", "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+        const manager = SessionManager.open(target, state.workspaceDir);
+        await manager.appendModelChange(model.provider, model.id);
+        await manager.appendThinkingLevelChange("off");
+        for (const text of [
+          "Review the deployment checklist.",
+          "Compare the remaining options.",
+          "Keep the rollout notes.",
+        ]) {
+          manager.appendMessage({ role: "user", content: text, timestamp: 1 });
+          manager.appendMessage(assistant(model, `Recorded: ${text}`));
+        }
+        manager.appendMessage({
+          ...assistant(model, ""),
+          content: [
+            {
+              type: "toolCall",
+              id: "completed-tool",
+              name: "exec",
+              arguments: { command: "echo done" },
             },
-            models: {
-              providers: {
-                [providerId]: {
-                  api: "openai-completions",
-                  apiKey: "fixture-key",
-                  baseUrl: model.baseUrl,
-                  agentRuntime: { id: "openclaw" },
-                  models: [configuredModel],
-                },
-              },
-            },
-            plugins: {
-              allow: [providerId],
-              load: { paths: [pluginRoot] },
-              slots: { memory: "none" },
-              entries: {
-                [providerId]: { enabled: true, hooks: { allowConversationAccess: true } },
-              },
-            },
-          };
-          const validation = validateConfigObjectRaw(config);
-          expect(
-            validation.ok,
-            validation.ok ? "" : validation.issues.map((issue) => issue.path).join(", "),
-          ).toBe(true);
-          const target = {
-            agentId: "main",
-            sessionId: "delegate-session",
-            sessionKey: "agent:main:delegate-session",
-            storePath: state.path("transcripts", "openclaw-agent.sqlite"),
-          };
-          await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-          const manager = SessionManager.open(target, state.workspaceDir);
-          await manager.appendModelChange(model.provider, model.id);
-          await manager.appendThinkingLevelChange("off");
-          for (const text of [
-            "Review the deployment checklist.",
-            "Compare the remaining options.",
-            "Keep the rollout notes.",
-          ]) {
-            manager.appendMessage({ role: "user", content: text, timestamp: 1 });
-            manager.appendMessage(assistant(model, `Recorded: ${text}`));
-          }
-          const toolCall = {
-            ...assistant(model, ""),
-            content: [
-              {
-                type: "toolCall" as const,
-                id: "completed-tool",
-                name: "exec",
-                arguments: { command: "echo done" },
-              },
-            ],
-            stopReason: "toolUse" as const,
-          };
-          manager.appendMessage(toolCall);
-          manager.appendMessage({
-            role: "toolResult",
-            toolCallId: "completed-tool",
-            toolName: "exec",
-            content: [{ type: "text", text: "done" }],
-            isError: false,
-            timestamp: 2,
-          });
-          manager.appendMessage(assistant(model, "The action is complete."));
-          manager.flushPendingPersistence();
-          const originalMessages = manager.getBranch().filter((entry) => entry.type === "message");
-          // A distinct compaction workspace requires a new prepared owner instead of
-          // borrowing the already-published configured snapshot.
-          const compactionWorkspace = mode.startsWith("reload")
-            ? state.path("compaction-workspace")
-            : state.workspaceDir;
-          fs.mkdirSync(compactionWorkspace, { recursive: true });
-          const runtimeContext = {
-            workspaceDir: compactionWorkspace,
-            provider: providerId,
-            model: "model",
-            trigger: mode.startsWith("reload") ? "overflow" : "manual",
-            thinkLevel: "off" as const,
-            config,
-          };
-          const recordUsage = vi.fn();
-          const recordCompaction = vi.fn();
-          attachCompactionAccountingRecorder(runtimeContext, { recordUsage, recordCompaction });
-          const parent = new AsyncWorkScope();
-          const controller = new AbortController();
-          let operation: ReturnType<typeof delegateCompactionToRuntime> | undefined;
-          let drained: Promise<void> | undefined;
-          await withEnvAsync(
-            { OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundled, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-            async () => {
-              await resetPreparedModelRuntimeSnapshotsForTest();
-              clearPluginMetadataLifecycleCaches();
-              initializeGlobalHookRunner(createEmptyPluginRegistry());
-              let captured: ContextEngineFactoryResources | undefined;
-              let previousLease:
-                | Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>
-                | undefined;
-              let retirement: ReturnType<typeof retirePluginCache> | undefined;
-              let replacementMetadata: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
-              let replacementCache: ReturnType<typeof createPluginCache> | undefined;
-              try {
-                if (mode.startsWith("reload")) {
-                  const publication = { gatewayLifecycle: true, catalogMode: "static" as const };
-                  const previousCache = createPluginCache();
-                  const previousMetadata = withPluginCache(previousCache, () =>
-                    resolvePluginMetadataSnapshot({ config, workspaceDir: state.workspaceDir }),
+          ],
+          stopReason: "toolUse",
+        });
+        manager.appendMessage({
+          role: "toolResult",
+          toolCallId: "completed-tool",
+          toolName: "exec",
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          timestamp: 2,
+        });
+        manager.appendMessage(assistant(model, "The action is complete."));
+        manager.flushPendingPersistence();
+        const originalMessages = manager.getBranch().filter((entry) => entry.type === "message");
+        // A distinct compaction workspace requires a new prepared owner instead of
+        // borrowing the already-published configured snapshot.
+        const compactionWorkspace = mode.startsWith("reload")
+          ? path.join(root, "compaction-workspace")
+          : state.workspaceDir;
+        fs.mkdirSync(compactionWorkspace, { recursive: true });
+        const runtimeContext = {
+          workspaceDir: compactionWorkspace,
+          provider: providerId,
+          model: "model",
+          trigger: mode.startsWith("reload") ? "overflow" : "manual",
+          thinkLevel: "off" as const,
+          // Skill discovery has separate coverage; retain real environment custody
+          // without booting a discovery worker for every resource-lifetime case.
+          skillsSnapshot: { prompt: "", skills: [] },
+          config,
+        };
+        const recordUsage = vi.fn();
+        const recordCompaction = vi.fn();
+        attachCompactionAccountingRecorder(runtimeContext, { recordUsage, recordCompaction });
+        const parent = new AsyncWorkScope();
+        let operation: ReturnType<typeof delegateCompactionToRuntime> | undefined;
+        let drained: Promise<void> | undefined;
+        await withEnvAsync(
+          { OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundled, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+          async () => {
+            await resetPreparedModelRuntimeSnapshotsForTest();
+            clearPluginMetadataLifecycleCaches();
+            initializeGlobalHookRunner(createEmptyPluginRegistry());
+            let captured: ContextEngineFactoryResources | undefined;
+            let previousLease:
+              | Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>
+              | undefined;
+            let retirement: ReturnType<typeof retirePluginCache> | undefined;
+            let replacementMetadata: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
+            let replacementCache: ReturnType<typeof createPluginCache> | undefined;
+            try {
+              if (mode.startsWith("reload")) {
+                const publish = async (publishedConfig: OpenClawConfig) => {
+                  const context = { config: publishedConfig, workspaceDir: state.workspaceDir };
+                  const cache = createPluginCache();
+                  const metadata = withPluginCache(cache, () =>
+                    resolvePluginMetadataSnapshot(context),
                   );
-                  setGatewayPluginMetadataSnapshot(previousMetadata, {
-                    config,
-                    workspaceDir: state.workspaceDir,
+                  setGatewayPluginMetadataSnapshot(metadata, context);
+                  await refreshPreparedModelRuntimeSnapshots(publishedConfig, {
+                    gatewayLifecycle: true,
+                    catalogMode: "static",
                   });
-                  await refreshPreparedModelRuntimeSnapshots(config, publication);
-                  previousLease = await acquireAgentRunPreparedModelRuntime({
-                    config,
-                    agentId: "main",
-                    agentDir: state.agentDir(),
-                    workspaceDir: state.workspaceDir,
-                  });
-                  captured = withPluginRuntimeGenerationScope(
-                    previousLease.snapshot,
-                    () => new ContextEngineFactoryResources([]),
-                  );
-                  const replacementConfig = {
-                    ...config,
-                    messages: { responsePrefix: "replacement" },
-                  };
-                  replacementCache = createPluginCache();
-                  replacementMetadata = withPluginCache(replacementCache, () =>
-                    resolvePluginMetadataSnapshot({
-                      config: replacementConfig,
-                      workspaceDir: state.workspaceDir,
-                    }),
-                  );
-                  setGatewayPluginMetadataSnapshot(replacementMetadata, {
-                    config: replacementConfig,
-                    workspaceDir: state.workspaceDir,
-                  });
-                  await refreshPreparedModelRuntimeSnapshots(replacementConfig, publication);
-                  retirement = retirePluginCache(previousCache);
-                  expect(() => retainPluginCache(previousCache)).toThrow(
-                    "Plugin inventory has retired",
-                  );
-                  expect(previousLease.snapshot.metadataSnapshot).toBe(previousMetadata);
-                  expect(getPluginMetadataSnapshotCache(replacementMetadata)).not.toBe(
-                    previousCache,
-                  );
-                }
-                const compact = () =>
-                  mode === "reload-queued"
-                    ? compactEmbeddedAgentSession(
-                        {
-                          ...target,
-                          sessionTarget: target,
-                          sessionFile: target.sessionKey,
-                          ...runtimeContext,
-                          trigger: "manual",
-                          abortSignal: controller.signal,
-                          enqueue: async (task) => await task(),
-                        },
-                        {
-                          sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
-                        },
-                      )
-                    : delegateCompactionToRuntime({
-                        sessionId: target.sessionId,
-                        sessionKey: target.sessionKey,
-                        sessionTarget: target,
-                        runtimeContext,
-                        abortSignal: controller.signal,
-                      });
-                operation = parent.track(() => (captured ? captured.run(compact) : compact()));
-                const held = mode !== "raw" && mode !== "reload-queued";
-                if (held) {
-                  await Promise.race([
-                    current.entered.promise,
-                    operation.then(() => {
-                      if (mode !== "cleanup-tail") {
-                        throw new Error("Delegate returned before the fixture work started");
-                      }
-                      return current.entered.promise;
-                    }),
-                  ]);
-                  if (current.session) {
-                    await current.session.agent.waitForIdle();
-                  }
-                  if (
-                    mode === "reload-abort-before-commit" ||
-                    mode === "abort-after-commit" ||
-                    mode === "mcp-caller-abort"
-                  ) {
-                    controller.abort(new Error("fixture caller cancelled compaction"));
-                  }
-                  if (mode === "lsp-parent-abort") {
-                    parent.beginClose(new Error("fixture parent cancelled compaction"));
-                    expect(controller.signal.aborted).toBe(false);
-                  }
-                }
-                const result = pendingPreparation
-                  ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
-                  : await operation;
-                const cancelled =
-                  mode === "reload-abort-before-commit" || mode === "abort-after-commit";
-                expect(result.ok, result.reason).toBe(!cancelled && !preparationFailed);
-                if (mode.startsWith("reload")) {
-                  expect(current.admittedMetadata).toBe(replacementMetadata);
-                  expect(result.compacted).toBe(mode !== "reload-abort-before-commit");
-                  expect(
-                    SessionManager.open(target, state.workspaceDir)
-                      .getBranch()
-                      .filter((entry) => entry.type === "message"),
-                  ).toEqual(originalMessages);
-                }
-                expect(current.envRestored).toBe(true);
-                expect(current.disposals).toBe(preparationFailed ? 0 : 1);
-                if (lspCancelled || mcpCancelled) {
-                  expect(current.session).toBeUndefined();
-                  expect(current.tools).toHaveLength(1);
-                }
-                if (current.context) {
-                  expect(() => current.context?.isIdle()).toThrow();
-                }
-                const usageCount = recordUsage.mock.calls.length;
-                recordSessionModelUsage(
-                  current.session?.sessionManager,
-                  assistant(model, summary).usage,
+                  return { cache, metadata };
+                };
+                const { cache: previousCache, metadata: previousMetadata } = await publish(config);
+                previousLease = await acquireAgentRunPreparedModelRuntime({
+                  config,
+                  agentId: "main",
+                  agentDir: state.agentDir(),
+                  workspaceDir: state.workspaceDir,
+                });
+                captured = withPluginRuntimeGenerationScope(
+                  previousLease.snapshot,
+                  () => new ContextEngineFactoryResources([]),
                 );
-                expect(recordUsage.mock.calls.length).toBe(usageCount);
-                const committed = mode !== "reload-abort-before-commit" && !preparationFailed;
+                ({ cache: replacementCache, metadata: replacementMetadata } = await publish({
+                  ...config,
+                  messages: { responsePrefix: "replacement" },
+                }));
+                retirement = retirePluginCache(previousCache);
+                expect(() => retainPluginCache(previousCache)).toThrow(
+                  "Plugin inventory has retired",
+                );
+                expect(previousLease.snapshot.metadataSnapshot).toBe(previousMetadata);
+                expect(getPluginMetadataSnapshotCache(replacementMetadata)).not.toBe(previousCache);
+              }
+              const compact = () =>
+                mode === "reload-queued"
+                  ? compactEmbeddedAgentSession(
+                      {
+                        ...target,
+                        sessionTarget: target,
+                        sessionFile: target.sessionKey,
+                        ...runtimeContext,
+                        trigger: "manual",
+                        abortSignal: controller.signal,
+                        enqueue: async (task) => await task(),
+                      },
+                      {
+                        sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
+                      },
+                    )
+                  : delegateCompactionToRuntime({
+                      sessionId: target.sessionId,
+                      sessionKey: target.sessionKey,
+                      sessionTarget: target,
+                      runtimeContext,
+                      abortSignal: controller.signal,
+                    });
+              operation = parent.track(() => (captured ? captured.run(compact) : compact()));
+              const held = mode !== "raw" && mode !== "reload-queued";
+              if (held) {
+                await Promise.race([
+                  current.entered.promise,
+                  operation.then(() => {
+                    if (mode !== "cleanup-tail") {
+                      throw new Error("Delegate returned before the fixture work started");
+                    }
+                    return current.entered.promise;
+                  }),
+                ]);
+                if (mode === "before_compaction" || mode === "after_compaction") {
+                  await vi.advanceTimersByTimeAsync(25);
+                  vi.useRealTimers();
+                }
+                if (current.session) {
+                  await current.session.agent.waitForIdle();
+                }
+                if (
+                  mode === "reload-abort-before-commit" ||
+                  mode === "abort-after-commit" ||
+                  mode === "mcp-caller-abort"
+                ) {
+                  controller.abort(new Error("fixture caller cancelled compaction"));
+                }
+                if (mode === "lsp-parent-abort") {
+                  parent.beginClose(new Error("fixture parent cancelled compaction"));
+                  expect(controller.signal.aborted).toBe(false);
+                }
+              }
+              const result = pendingPreparation
+                ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
+                : await operation;
+              const cancelled =
+                mode === "reload-abort-before-commit" || mode === "abort-after-commit";
+              expect(result.ok, result.reason).toBe(!cancelled && !preparationFailed);
+              if (mode.startsWith("reload")) {
+                expect(current.admittedMetadata).toBe(replacementMetadata);
+                expect(result.compacted).toBe(mode !== "reload-abort-before-commit");
                 expect(
                   SessionManager.open(target, state.workspaceDir)
                     .getBranch()
-                    .filter((entry) => entry.type === "compaction").length,
-                ).toBe(committed ? 1 : 0);
-                expect(recordCompaction.mock.calls.length).toBe(
-                  committed && mode !== "reload-queued" ? 1 : 0,
-                );
-                const source = expectDefined(current.source, "selected managed source");
-                if (held && !pendingPreparation) {
-                  expect(source.database.isOpen).toBe(true);
-                  expect(current.tools.length).toBe(mode === "preparation-failure" ? 1 : 2);
-                  if (mode !== "cleanup-tail") {
-                    expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
-                  }
-                  let finished = false;
-                  drained = (captured?.work ?? parent).drain().then(() => {
-                    finished = true;
-                  });
-                  await new Promise<void>((resolve) => {
-                    setImmediate(resolve);
-                  });
-                  expect(finished).toBe(false);
-                  current.finish.resolve();
-                  await Promise.all(current.pending);
-                  await drained;
-                  expect(current.lateReads).toBeGreaterThan(0);
-                } else if (pendingPreparation) {
-                  await withTestTimeout(
-                    parent.drain(),
-                    5_000,
-                    "Tool preparation cleanup did not settle",
-                  );
-                } else {
-                  await parent.drain();
-                }
-                expect(source.disposals).toBe(mode === "raw" || mode.startsWith("reload") ? 0 : 1);
-                expect(source.database.isOpen).toBe(mode === "raw" || mode.startsWith("reload"));
-                for (const tool of current.tools) {
-                  expect(tool.disposals).toBe(1);
-                  expect(tool.database.isOpen).toBe(false);
-                }
-                expect(recordCompaction.mock.calls.length).toBe(
-                  committed && mode !== "reload-queued" ? 1 : 0,
-                );
-                if (mode !== "raw") {
-                  const reopened = new DatabaseSync(source.file);
-                  try {
-                    expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-                  } finally {
-                    reopened.close();
-                  }
-                }
-              } finally {
-                current.finish.resolve();
-                await Promise.allSettled([operation, ...current.pending]);
-                await (drained ?? parent.drain());
-                await captured?.work.drain();
-                await captured?.release();
-                await previousLease?.[Symbol.asyncDispose]();
-                await resetPreparedModelRuntimeSnapshotsForTest();
-                await retirement;
-                if (replacementCache) {
-                  await retirePluginCache(replacementCache);
-                }
-                if (mode.startsWith("reload")) {
-                  // RUN registries remain root-owned; these compaction leases and
-                  // their inventory references must nevertheless settle exactly once.
-                  for (const release of current.releases) {
-                    expect(release).toHaveBeenCalledOnce();
-                  }
-                  expect(
-                    getPluginCacheRetention(
-                      getPluginMetadataSnapshotCache(previousLease!.snapshot.metadataSnapshot),
-                    ),
-                  ).toBeUndefined();
-                  expect(getPluginCacheRetention(replacementCache!)).toBeUndefined();
-                }
-                current.eventBus.clear();
-                vi.restoreAllMocks();
-                for (const connection of [...current.registrations, ...current.tools]) {
-                  if (connection.database.isOpen) {
-                    connection.database.close();
-                  }
-                }
-                delete (globalThis as Record<string, unknown>)[key];
-                active.fixture = undefined;
-                cleanupPluginLoaderFixturesForTest();
-                resetPluginLoaderTestStateForTest();
-                clearPluginMetadataLifecycleCaches();
+                    .filter((entry) => entry.type === "message"),
+                ).toEqual(originalMessages);
               }
-            },
-          );
-        },
-      );
+              expect(current.envRestored).toBe(true);
+              expect(current.disposals).toBe(preparationFailed ? 0 : 1);
+              if (lspCancelled || mcpCancelled) {
+                expect(current.session).toBeUndefined();
+                expect(current.tools).toHaveLength(1);
+              }
+              if (current.context) {
+                expect(() => current.context?.isIdle()).toThrow();
+              }
+              const usageCount = recordUsage.mock.calls.length;
+              recordSessionModelUsage(
+                current.session?.sessionManager,
+                assistant(model, summary).usage,
+              );
+              expect(recordUsage.mock.calls.length).toBe(usageCount);
+              const committed = mode !== "reload-abort-before-commit" && !preparationFailed;
+              expect(
+                SessionManager.open(target, state.workspaceDir)
+                  .getBranch()
+                  .filter((entry) => entry.type === "compaction").length,
+              ).toBe(committed ? 1 : 0);
+              expect(recordCompaction.mock.calls.length).toBe(
+                committed && mode !== "reload-queued" ? 1 : 0,
+              );
+              const source = expectDefined(current.source, "selected managed source");
+              if (held && !pendingPreparation) {
+                expect(source.database.isOpen).toBe(true);
+                expect(current.tools.length).toBe(mode === "preparation-failure" ? 1 : 2);
+                if (mode !== "cleanup-tail") {
+                  expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
+                }
+                const owner = captured?.work ?? parent;
+                expect(owner.hasPendingWork).toBe(true);
+                let finished = false;
+                drained = owner.drain().then(() => {
+                  finished = true;
+                });
+                await Promise.resolve();
+                expect(finished).toBe(false);
+                current.finish.resolve();
+                await Promise.all(current.pending);
+                await drained;
+                expect(current.lateReads).toBeGreaterThan(0);
+              } else if (pendingPreparation) {
+                await withTestTimeout(
+                  parent.drain(),
+                  5_000,
+                  "Tool preparation cleanup did not settle",
+                );
+              } else {
+                await parent.drain();
+              }
+              expect(source.disposals).toBe(mode === "raw" || mode.startsWith("reload") ? 0 : 1);
+              expect(source.database.isOpen).toBe(mode === "raw" || mode.startsWith("reload"));
+              for (const tool of current.tools) {
+                expect(tool.disposals).toBe(1);
+                expect(tool.database.isOpen).toBe(false);
+              }
+              expect(recordCompaction.mock.calls.length).toBe(
+                committed && mode !== "reload-queued" ? 1 : 0,
+              );
+              if (mode !== "raw") {
+                const reopened = new DatabaseSync(source.file);
+                try {
+                  expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
+                } finally {
+                  reopened.close();
+                }
+              }
+            } finally {
+              current.finish.resolve();
+              await Promise.allSettled([operation, ...current.pending]);
+              await (drained ?? parent.drain());
+              await captured?.work.drain();
+              await captured?.release();
+              await previousLease?.[Symbol.asyncDispose]();
+              await resetPreparedModelRuntimeSnapshotsForTest();
+              await retirement;
+              if (replacementCache) {
+                await retirePluginCache(replacementCache);
+              }
+              if (mode.startsWith("reload")) {
+                // RUN registries remain root-owned; these compaction leases and
+                // their inventory references must nevertheless settle exactly once.
+                for (const release of current.releases) {
+                  expect(release).toHaveBeenCalledOnce();
+                }
+                expect(
+                  getPluginCacheRetention(
+                    getPluginMetadataSnapshotCache(previousLease!.snapshot.metadataSnapshot),
+                  ),
+                ).toBeUndefined();
+                expect(getPluginCacheRetention(replacementCache!)).toBeUndefined();
+              }
+              current.eventBus.clear();
+              vi.restoreAllMocks();
+              for (const connection of [...current.registrations, ...current.tools]) {
+                if (connection.database.isOpen) {
+                  connection.database.close();
+                }
+              }
+              delete (globalThis as Record<string, unknown>)[key];
+              signal.removeEventListener("abort", cancel);
+              active.fixture = undefined;
+              cleanupPluginLoaderFixturesForTest();
+              resetPluginLoaderTestStateForTest();
+              clearPluginMetadataLifecycleCaches();
+            }
+          },
+        );
+      })();
+      await runningCase;
     },
-    30_000,
   );
 });

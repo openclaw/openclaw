@@ -23,7 +23,7 @@ import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
@@ -45,9 +45,11 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { getPresenceVersion } from "../server/health-state.js";
 import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -228,18 +230,25 @@ export const systemHandlers: GatewayRequestHandlers = {
     },
   ),
   "system-presence": async (options) => {
-    const { respond, client, context } = options;
+    const { respond, client, context, params } = options;
     const projection = getSessionRowProjection(context);
     while (projection?.needsMembershipPreparation()) {
       await projection.prepareMembership();
       readGatewayRequestMutationAuthority(options).assertCurrent();
     }
+    const source = listSystemPresence();
     const presence = createPresenceRecipientProjection({
       cfg: context.getRuntimeConfig(),
-      presence: listSystemPresence(),
+      presence: source,
       projection,
     })(client);
-    respond(true, presence, undefined);
+    if (client && params.snapshot === true && acceptsPresenceDeltas(client)) {
+      // The RPC supplies a new client base; the next event must establish its own sent base.
+      client.presenceSnapshot = undefined;
+      respond(true, createPresenceReset(source, presence, getPresenceVersion()), undefined);
+    } else {
+      respond(true, presence, undefined);
+    }
   },
   "system.info": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
@@ -295,29 +304,16 @@ export const systemHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      // A targeted wake starts a model run. Require a live persisted session
+      // A targeted wake starts a model run. Require a live session
       // so malformed keys cannot create phantom work under agent defaults.
-      const binding = captureIncognitoSessionSource({
-        agentId: requestedAgentId,
-        sessionKey: requestedSessionKey,
-      });
       const authority = readGatewayRequestMutationAuthority(options);
-      const read =
-        binding && !("kind" in binding)
-          ? await binding.actor.sessions.read(
-              authority,
-              { sessionKey: requestedSessionKey },
-              binding.admissionSignal,
-            )
-          : undefined;
+      const memory = captureSessionActorStorageOwner(
+        { agentId: requestedAgentId, sessionKey: requestedSessionKey },
+        { assertCurrent: authority.assertCurrent, authorize: authority.assertCurrent },
+      );
       authority.assertCurrent();
-      binding?.admissionSignal?.throwIfAborted();
-      if (binding && "kind" in binding) {
-        binding.assertCurrent();
-      }
-      read?.snapshot.assertCurrent();
-      const targetSession = binding
-        ? read?.entry
+      const targetSession = memory
+        ? memory.owner?.readSession(requestedSessionKey, memory.authority)?.entry
         : (
             await loadGatewaySessionEntryReadOnlyInWorker({
               cfg,

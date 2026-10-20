@@ -54,11 +54,26 @@ Packaging builds the JavaScript runtime and Control UI, then stages the full
 standard package with production dependencies under
 `Contents/Resources/runtime/lib/node_modules/openclaw`. It retains the published
 package's `files` filter, including its CLI, Gateway, Control UI, npm, and
-optional `sqlite-vec`; on-demand plugins excluded from that package remain
-excluded. The root tarball uses the repository-pinned pnpm packer; Corepack-only
+optional `sqlite-vec`. Builds at an exact release tag retain the published plugin
+layout. Other commits also stage official external plugins built with that
+commit, including their target-architecture dependencies. If their estimated
+additional size exceeds 300 MiB, packaging stages only Codex for automatic setup.
+The installer prefers these staged copies and records their bundled paths, so
+development builds do not mix a newer SDK with older registry plugins. Plugin
+updates and Doctor retain the same-build copies until the app itself is updated.
+Release automation passes `RELEASE_TAG` and its verified `RELEASE_SHA` so shallow,
+tagless checkouts retain the release layout. Staging rejects tag/version/commit
+mismatches. With only `RELEASE_TAG`, it fetches that tag when needed; without an
+explicit release identity, local builds use tags pointing at the current commit.
+The root tarball uses the repository-pinned pnpm packer; Corepack-only
 setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or
 npm/corepack/npx shims ship in the app.
+
+For an executable-plus-sidecar packaging input, the separate
+[standalone builder](/install/standalone) emits `openclaw`, `runtime/`, and a
+manifest with compiler provenance and mode-specific signing entitlements.
+Desktop packaging owns seeding and replacement of that complete artifact.
 
 The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
 consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
@@ -263,6 +278,17 @@ after its first commit can hit this race and abort the process with
 
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
+Native exec-policy fixtures reuse the Linux job's runtime artifact from the same
+workflow run, verified against the selected checkout SHA. The macOS job installs
+only the root and native-asset dependency closures, keeping platform-specific
+dependencies local. The artifact omits UI, plugin, and sealed remote-worker outputs.
+It waits for the existing Linux build instead of rebuilding
+the runtime and plugins on a macOS runner. The prepared CLI remains the normal
+production launcher, including request validation, state ownership, and cleanup.
+The default suite keeps real CLI coverage in the native cwd, socket half-close,
+and skill-policy commit cases. The larger socket cancellation and Gateway trust
+matrices exercise the in-process execution boundary with prepared authorization;
+they do not launch a CLI for each setup, policy read, and repeated commit.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
 `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
 bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;
@@ -284,6 +310,14 @@ state; named-profile preferences use a fresh domain and are also discarded with
 the runner.
 If process cleanup cannot be verified or Keychain deletion fails, the launcher
 fails and retains its files for inspection.
+The release-only bundled recovery app-host lane keeps the disposable account’s
+canonical home so the real CLI can manage its unique named-profile service. Its
+state and preferences use that profile. The app host and Security commands share
+the account’s user Keychain domain, selecting the launcher-owned empty-password
+Keychain file; temporary files also remain launcher-owned. Cleanup removes
+the profile state only after the service and its observed process group retire.
+Unverified retirement retains both the profile state and temporary resources.
+
 CI environment markers only catch accidental invocation; they do not enforce
 isolation or make an operator desktop safe.
 
@@ -355,6 +389,10 @@ the rest of the run.
 If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
 check the `hdiutil` error on stderr. Routine image creation and attachment output stays
 quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
+A transient `Resource temporarily unavailable` attach failure is retried, up to three
+attempts in total. If attachment fails before mounting, cleanup detaches the snapshot image
+by device; if it stays attached, cleanup fails, retains the files, and prints the
+`hdiutil detach /dev/diskN` command to run.
 Snapshot images and build outputs stay in the checkout. Their read-only mount directories
 use macOS's per-user temporary location (`getconf DARWIN_USER_TEMP_DIR`), independently of
 `TMPDIR`, so an external checkout does not need to support nested mounts. If attachment
@@ -410,6 +448,11 @@ If the app crashes when you try to allow **Speech Recognition** or
    to force a clean slate from macOS.
 
 ### Gateway "Starting..." indefinitely
+
+During a cold start, the Gateway can briefly hold the state database for schema
+maintenance. The app waits for that custody to finish within its existing
+readiness timeout, then continues automatic setup. It does not replace the
+Gateway or create a new device identity while maintenance is active.
 
 Check whether a zombie process holds the port:
 

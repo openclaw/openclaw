@@ -375,7 +375,7 @@ async function runSetupHandoff(
   }
   const beforePersistentEffect = async () => {
     await requireSystemAgentPersistentApplyInference(
-      { binding: opts?.verifiedInference, runtime, deps: opts.deps },
+      { binding: opts?.verifiedInference, runtime },
       (failures) => {
         if (isSystemAgentInferenceUnavailableError(failures[0])) {
           throw failures[0];

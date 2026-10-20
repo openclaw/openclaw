@@ -28,8 +28,9 @@ import {
   loadSessionEntryReadOnly,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   getSessionEntryAsync,
@@ -42,7 +43,11 @@ import {
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
@@ -81,6 +86,11 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 }
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-store",
+    method: "runtime.agent.session.getSessionEntry",
+    replacement: "runtime.agent.session.getSessionEntryAsync",
+  });
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
@@ -113,64 +123,114 @@ async function runWithSessionWorkAdmission<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const params = { ...input };
-  const source = captureIncognitoSessionSource(params);
-  if (source && !("kind" in source)) {
-    return source.actor.sessions.withSharedState(() => runAdmittedWork());
+  const memory = captureMemoryExactSessionReader(params, () => params.signal?.throwIfAborted());
+  if (memory) {
+    return admit(memory.read(params.sessionKey, "list"), () =>
+      memory.read(params.sessionKey, "list"),
+    );
   }
   return runAdmittedWork();
 
   async function runAdmittedWork(): Promise<T> {
-    const initialEntry = await readSessionEntryReadOnlyInWorker({
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-      readConsistency: "latest",
-    });
-    const lifecycleAbortController = new AbortController();
-    const admission = await beginSessionWorkAdmission({
-      agentId: resolveSessionAgentIds({ config: getRuntimeConfig(), sessionKey: params.sessionKey })
-        .sessionAgentId,
-      scope: params.storePath,
-      identities: [params.sessionKey, initialEntry?.sessionId],
-      signal: params.signal,
-      onInterrupt: () =>
-        lifecycleAbortController.abort(
-          new Error("Agent work interrupted by a session lifecycle change."),
-        ),
-      assertAllowed: () => {
-        source?.admissionSignal?.throwIfAborted();
-        if (source && "kind" in source) {
-          source.assertCurrent();
+    return withSessionEntryReadOnlyInWorker(
+      {
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        readConsistency: "latest",
+      },
+      () => params.signal?.throwIfAborted(),
+      async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
         }
-        const currentEntry = source
-          ? "kind" in source
-            ? undefined
-            : source.actor.sessions.readSharing(params.sessionKey)?.entry
-          : getSessionEntry({
-              storePath: params.storePath,
-              sessionKey: params.sessionKey,
-              readConsistency: "latest",
-            });
-        const changed = initialEntry
-          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-          : Boolean(currentEntry);
-        if (changed) {
-          throw session.createSessionWorkStartChangedError(params.sessionKey);
-        }
-        const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
-        if (startError) {
-          throw new Error(startError);
+        const initialEntry = read.value;
+        const retained = owner.source?.databaseIdentity
+          ? retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${owner.source.databaseIdentity}`,
+              sessionKey: owner.scope?.sessionKey ?? params.sessionKey,
+              entry: initialEntry,
+              matches: (before, after) =>
+                before?.sessionId === after?.sessionId &&
+                before?.lifecycleRevision === after?.lifecycleRevision,
+            })
+          : undefined;
+        try {
+          return await admit(initialEntry, () => {
+            owner.assertCurrent();
+            const current = retained?.readCurrent();
+            if (retained && !current) {
+              throw session.createSessionWorkStartChangedError(params.sessionKey);
+            }
+            return current ? current.entry : initialEntry;
+          });
+        } finally {
+          retained?.release();
         }
       },
-    });
+    );
+  }
 
-    try {
-      const signal = params.signal
-        ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
-        : lifecycleAbortController.signal;
-      return await admission.run(async () => await run(signal));
-    } finally {
-      admission.release();
-    }
+  async function admit(
+    initialEntry: SessionEntry | undefined,
+    readCurrentEntry: () => SessionEntry | undefined,
+  ): Promise<T> {
+    const agentId = resolveSessionAgentIds({
+      config: getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+    }).sessionAgentId;
+    const target = captureSessionTarget({
+      storeScope: params.storePath,
+      sessionKey: params.sessionKey,
+      incarnation: initialEntry?.sessionId,
+      agentId,
+    });
+    return await withSessionTurn(
+      {
+        target,
+        sessionKey: params.sessionKey,
+        sessionId: initialEntry?.sessionId,
+        agentId,
+        abortSignal: params.signal,
+      },
+      async (operation, turnSignal) => {
+        const interruption = new AbortController();
+        const signal = AbortSignal.any([turnSignal, interruption.signal]);
+        const effect = await beginSessionEffect({
+          target,
+          operation,
+          agentId,
+          signal,
+          onInterrupt: (reason) =>
+            interruption.abort(
+              reason ?? new Error("Agent work interrupted by a session lifecycle change."),
+            ),
+          assertAllowed: () => {
+            const currentEntry = readCurrentEntry();
+            if (memory) {
+              const changed = initialEntry
+                ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+                : Boolean(currentEntry);
+              if (changed) {
+                throw session.createSessionWorkStartChangedError(params.sessionKey);
+              }
+            }
+            const startError = session.resolveSessionWorkStartError(
+              params.sessionKey,
+              currentEntry,
+            );
+            if (startError) {
+              throw new Error(startError);
+            }
+          },
+        });
+        try {
+          // Nested mutations exclude this callback's own retained effect from drain.
+          return await effect.run(async () => await run(signal));
+        } finally {
+          effect.release();
+        }
+      },
+    );
   }
 }
 

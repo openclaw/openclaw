@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n, t } from "../../i18n/index.ts";
-import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
+import { t } from "../../i18n/index.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  renderComposerInto,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerProps = ReturnType<typeof createComposerProps>;
 
 function renderComposer(overrides: Partial<ComposerProps> = {}): HTMLElement {
   const container = createComposerContainer();
   document.body.append(container);
-  render(renderChatComposer(createComposerProps(overrides)), container);
+  renderComposerInto(container, createComposerProps(overrides));
   return container;
 }
 
@@ -35,19 +38,14 @@ function primaryPointerDown(): MouseEvent {
   return new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
 }
 
-afterEach(async () => {
-  resetChatComposerState();
-  document.body.replaceChildren();
-  await i18n.setLocale("en");
-  vi.restoreAllMocks();
-});
+afterEach(() => resetComposerFixture());
 
 describe("chat composer pointer activation", () => {
   it("does not steal focus when a menu replaces the clicked content", () => {
     const container = renderComposer({ draft: "Keep this draft" });
     const input = textarea(container);
     const focus = vi.spyOn(input, "focus");
-    const menu = container.querySelector("wa-dropdown.agent-chat__capability-menu")!;
+    const menu = container.querySelector(".agent-chat__capability-menu .oc-menu")!;
     const label = document.createElement("span");
     menu.append(label);
     label.addEventListener("click", () => label.remove());

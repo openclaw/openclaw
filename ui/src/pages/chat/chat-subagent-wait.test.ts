@@ -1,12 +1,44 @@
-import { html, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
-import { renderSubagentActivity } from "./components/chat-subagent-activity.ts";
-import { renderChatWorkingIndicator } from "./components/chat-working-indicator.ts";
+import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx";
+import {
+  SubagentActivity,
+  type SubagentActivityProps,
+} from "./components/chat-subagent-activity.tsx";
+import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
+
+type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
 
 function resolveChatSubagentWait(input: Parameters<typeof projectSubagentStatus>[0]) {
   return projectSubagentStatus(input, false).wait;
+}
+
+function mountWorkingIndicator(
+  container: HTMLElement,
+  part: Parameters<typeof ChatWorkingIndicator>[0]["part"],
+  initial: ChatWorkingIndicatorOptions = {},
+) {
+  const [options, setOptions] = createSignal(initial);
+  const view = mountSolid(
+    () =>
+      createComponent(ChatWorkingIndicator, {
+        part,
+        get options() {
+          return options();
+        },
+      }),
+    { container },
+  );
+  onTestFinished(view.unmount);
+  flush();
+  return (next: ChatWorkingIndicatorOptions) => {
+    setOptions(next);
+    flush();
+  };
 }
 
 const parent: GatewaySessionRow = {
@@ -15,6 +47,7 @@ const parent: GatewaySessionRow = {
   hasActiveRun: false,
   hasActiveSubagentRun: true,
   startedAt: 1_000,
+  endedAt: 2_000,
 };
 const child: GatewaySessionRow = {
   key: "agent:main:subagent:child",
@@ -119,10 +152,29 @@ describe("chat waiting on subagents", () => {
     expect(project([{ ...active, status: "done", hasActiveRun: false }]).activity).toEqual([]);
     expect(project([active], true).activity).toEqual([]);
 
-    const container = document.createElement("div");
     const onOpenSubagent = vi.fn();
     const onOpenSession = vi.fn();
-    render(renderSubagentActivity(initial.activity, onOpenSubagent, onOpenSession), container);
+    let update!: (props: SubagentActivityProps) => void;
+    const view = mountSolid(() => {
+      const [props, setProps] = createSignal<SubagentActivityProps>({
+        rows: initial.activity,
+        onOpenSubagent,
+        onOpenSession,
+      });
+      update = (value) => setProps(value);
+      return createComponent(SubagentActivity, {
+        get rows() {
+          return props().rows;
+        },
+        get onOpenSubagent() {
+          return props().onOpenSubagent;
+        },
+        get onOpenSession() {
+          return props().onOpenSession;
+        },
+      });
+    });
+    const container = view.container;
     expect(container.textContent).toContain("Backend implementation");
     expect(container.textContent).toContain("Checking the API response");
     expect(container.textContent).toContain("UI regression tests");
@@ -132,10 +184,12 @@ describe("chat waiting on subagents", () => {
     container.querySelector("button")?.click();
     expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
     const acp = project([{ ...active, key: "agent:main:acp:coder" }]);
-    render(renderSubagentActivity(acp.activity, onOpenSubagent, onOpenSession), container);
+    update({ rows: acp.activity, onOpenSubagent, onOpenSession });
+    flush();
     container.querySelector("button")?.click();
     expect(onOpenSession).toHaveBeenCalledWith("agent:main:acp:coder");
-    render(renderSubagentActivity(updated.activity), container);
+    update({ rows: updated.activity });
+    flush();
     expect(container.textContent).toContain("Running the backend tests");
     expect(container.textContent).not.toContain("Checking the API response");
     expect(container.querySelector("button")).toBeNull();
@@ -274,7 +328,11 @@ describe("chat waiting on subagents", () => {
 
   it.each([
     { name: "the parent's run end", endedAt: 2_500, startedAt: 2_500 },
-    { name: "the yield when the row's run end is older", endedAt: 1_500, startedAt: 2_000 },
+    {
+      name: "the lifecycle boundary, never a later transcript timestamp",
+      endedAt: 1_500,
+      startedAt: 1_500,
+    },
   ])("counts the wait from $name", ({ endedAt, startedAt }) => {
     expect(
       resolveChatSubagentWait({
@@ -285,18 +343,97 @@ describe("chat waiting on subagents", () => {
     ).toBe(startedAt);
   });
 
+  it("keeps lifecycle wait timing after an announcement resumes and settles the parent", () => {
+    const dashboardChild = { ...child, key: "agent:main:dashboard:worker" };
+    const project = (
+      session: GatewaySessionRow,
+      history: unknown[],
+      descendants = [dashboardChild],
+    ) =>
+      projectSubagentStatus(
+        {
+          selectedSession: session,
+          messages: history,
+          subagentSessions: descendants,
+          subagentSessionsHydrated: true,
+        },
+        false,
+      );
+    expect(project({ ...parent, endedAt: 2_500 }, messages).wait?.startedAt).toBe(2_500);
+    const resumed = { ...parent, startedAt: 3_000, endedAt: undefined, hasActiveRun: true };
+    expect(project(resumed, messages).wait).toBeNull();
+    const settled = { ...resumed, hasActiveRun: false, endedAt: 4_000 };
+    const history = [
+      ...messages,
+      { role: "assistant", runId: "announcement", timestamp: 3_900, content: "Worker continues." },
+    ];
+    for (const loaded of [history, []]) {
+      const projection = project(settled, loaded);
+      expect(projection.wait).toEqual({
+        startedAt: 4_000,
+        runningCount: 0,
+        sessionCount: 1,
+      });
+      // A clock is known even when the transcript cannot place a pending handoff.
+      expect(projection.placedWait).toBeUndefined();
+    }
+    expect(project(settled, history, []).wait).toBeNull();
+  });
+
   it.each([
-    { name: "no delivered yield", history: [], startedAt: 1_000 },
-    { name: "unknown own run start", history: messages, startedAt: undefined },
-    { name: "yield predates latest own run", history: messages, startedAt: 3_000 },
-  ])("omits elapsed time with $name", ({ history, startedAt }) => {
-    expect(
-      resolveChatSubagentWait({
-        selectedSession: { ...parent, startedAt },
-        runActive: false,
-        messages: history,
-      }),
-    ).toEqual({ startedAt: null, runningCount: 0 });
+    { name: "a never-run parent", startedAt: undefined, endedAt: undefined },
+    { name: "an unsettled parent", startedAt: 1_000, endedAt: undefined },
+    { name: "an end from an older turn", startedAt: 3_000, endedAt: 2_000 },
+  ])("keeps child activity without inventing a wait for $name", ({ startedAt, endedAt }) => {
+    const projection = projectSubagentStatus(
+      {
+        selectedSession: { ...parent, startedAt, endedAt },
+        messages,
+        subagentSessions: [child],
+        subagentSessionsHydrated: true,
+      },
+      false,
+    );
+    expect(projection.wait).toBeNull();
+    expect(projection.running).toBe(1);
+    expect(projection.activity.map((entry) => entry.key)).toEqual([child.key]);
+  });
+
+  it.each([
+    { name: "no loaded handoff", history: [] },
+    { name: "only an earlier turn's handoff", history: messages },
+  ])("renders the recorded wait clock with $name", ({ history }) => {
+    const now = Date.UTC(2026, 9, 12, 20, 48);
+    const wait = resolveChatSubagentWait({
+      selectedSession: { ...parent, startedAt: now - 100_000, endedAt: now - 65_000 },
+      messages: history,
+    });
+    expect(wait?.startedAt).toBe(now - 65_000);
+    if (!wait) {
+      throw new Error("Expected a settled parent wait");
+    }
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const container = document.createElement("div");
+    document.body.append(container);
+    let view: ReturnType<typeof mountSolid> | undefined;
+    try {
+      view = mountSolid(
+        () =>
+          createComponent(UnplacedSubagentWait, {
+            sessionKey: parent.key,
+            wait,
+            options: { waitingSubagents: wait },
+          }),
+        { container },
+      );
+      flush();
+      const elapsed = container.querySelector("openclaw-elapsed-time");
+      expect(elapsed?.textContent?.trim()).toBe("1m 5s");
+    } finally {
+      view?.unmount();
+      container.remove();
+      clock.mockRestore();
+    }
   });
 
   it("counts unfinished children beside the session's own work once the roster has loaded", () => {
@@ -374,14 +511,11 @@ describe("chat waiting on subagents", () => {
 
   it("ends the working line with the running count", () => {
     const container = document.createElement("div");
-    const draw = (options: Parameters<typeof renderChatWorkingIndicator>[1]) =>
-      render(
-        renderChatWorkingIndicator(
-          { kind: "reading-indicator", key: "parent-working", startedAt: 1_000 },
-          options,
-        ),
-        container,
-      );
+    const draw = mountWorkingIndicator(container, {
+      kind: "reading-indicator",
+      key: "parent-working",
+      startedAt: 1_000,
+    });
     const suffix = () =>
       container.querySelector(".chat-working-indicator__subagents")?.textContent?.trim();
     draw({ runningSubagents: 3, outputTokens: 431 });
@@ -394,9 +528,9 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([false, true])(
-    "keeps a working fallback until child activity replaces it, leaving wait text to the composer (bubble mode: %s)",
-    (bubbleMode) => {
-      const container = document.createElement("div");
+    "keeps a working fallback until child activity replaces it (bubble mode: %s)",
+    async (bubbleMode) => {
+      const container = document.body.appendChild(document.createElement("div"));
       const onOpenSubagent = vi.fn();
       const projection = projectSubagentStatus(
         {
@@ -414,35 +548,33 @@ describe("chat waiting on subagents", () => {
         workingPhrases: ["Building"],
       };
       const part = { kind: "reading-indicator" as const, key: "parent-wait", startedAt: 1_500 };
-      render(renderChatWorkingIndicator(part, options), container);
+      const draw = mountWorkingIndicator(container, part, options);
       expect(container.textContent).toContain("Working…");
       expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
-      render(
-        renderChatWorkingIndicator(part, {
-          ...options,
-          subagentActivity: html`${renderSubagentActivity(projection.activity, onOpenSubagent)}`,
-        }),
-        container,
-      );
+      draw({
+        ...options,
+        subagentActivity: { rows: projection.activity, onOpenSubagent },
+      });
+      await vi.dynamicImportSettled();
+      flush();
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");
       expect(container.querySelector(".chat-working-indicator")).toBeNull();
       container.querySelector("button")?.click();
       expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
+      container.remove();
     },
   );
 
   it("makes the running count the way to the list when navigation is available", () => {
     const container = document.createElement("div");
     const onOpenSubagents = vi.fn();
-    const draw = (options: Parameters<typeof renderChatWorkingIndicator>[1]) =>
-      render(
-        renderChatWorkingIndicator(
-          { kind: "reading-indicator", key: "parent-count", startedAt: 1_000 },
-          { onOpenSubagents, ...options },
-        ),
-        container,
-      );
+    const update = mountWorkingIndicator(container, {
+      kind: "reading-indicator",
+      key: "parent-count",
+      startedAt: 1_000,
+    });
+    const draw = (options: ChatWorkingIndicatorOptions) => update({ onOpenSubagents, ...options });
     const control = () => container.querySelector<HTMLButtonElement>("button");
     draw({ runningSubagents: 3 });
     expect(control()?.textContent?.trim()).toBe("3 subagents running");

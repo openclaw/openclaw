@@ -76,14 +76,16 @@ suite.define(() => {
         await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(1);
         for (const [index, key] of sessionKeys.slice(1).entries()) {
           if (key === sessionKeys[2]) {
-            await gateway.deferNext("chat.startup");
+            await gateway.deferNext("chat.startup", { sessionKey: key });
           }
           await page.locator(`.sidebar-recent-session[data-session-key="${key}"] a`).click();
           await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
           await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(index + 2);
         }
         // Initial after-paint hydration belongs outside the reconnect measurement.
-        await gateway.resolveDeferred("chat.startup");
+        const startupScope = { match: { sessionKey: sessionKeys[2] } };
+        await gateway.waitForRequest("chat.startup", startupScope);
+        await gateway.resolveDeferred("chat.startup", undefined, startupScope);
         await expect
           .poll(async () => sessionHydrationMethods(await gateway.getRequests(), sessionKeys[2]))
           .toEqual(hydrationMethods);

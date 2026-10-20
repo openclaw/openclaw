@@ -28,6 +28,7 @@ import {
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import {
   OPENAI_CHATGPT_MODERN_MODEL_IDS,
+  OPENAI_DUAL_ROUTE_MODEL_IDS,
   OPENAI_GPT_53_CODEX_SPARK_MODEL_ID as OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
   OPENAI_GPT_54_LEGACY_MODEL_ID as OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID,
   OPENAI_GPT_54_MINI_MODEL_ID as OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
@@ -115,16 +116,6 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
 ] as const;
-const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
-  ...OPENAI_GPT_6_MODEL_IDS,
-  ...OPENAI_CODEX_GPT_56_MODEL_IDS,
-  OPENAI_CODEX_GPT_55_MODEL_ID,
-  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MODEL_ID,
-  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
-  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-] as const;
-
 function isOpenAIProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === PROVIDER_ID;
@@ -337,9 +328,9 @@ function withDefaultCodexContextMetadata(params: {
     return undefined;
   }
   const contextTokens =
-    typeof params.model.contextTokens === "number"
+    params.model.contextTokens !== undefined
       ? params.model.contextTokens
-      : typeof params.model.contextWindow === "number" && params.model.contextWindow > 0
+      : params.model.contextWindow !== undefined && params.model.contextWindow > 0
         ? Math.min(params.contextTokens, params.model.contextWindow)
         : params.contextTokens;
   const input = params.model.input?.includes("image")
@@ -554,7 +545,7 @@ export function buildOpenAICodexProviderHooks(): Required<
         [ctx.modelId, model.name].some(
           (candidate) =>
             typeof candidate === "string" &&
-            matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS),
+            matchesExactOrPrefix(candidate, OPENAI_DUAL_ROUTE_MODEL_IDS),
         )
       ) {
         model = { ...model, input: ["text", "image"] };

@@ -1,23 +1,24 @@
 import pLimit from "p-limit";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import type {
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "./control-ui-contract.js";
-import {
-  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
-  CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
-} from "./control-ui-contract.js";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "./control-ui-contract.js";
 import {
   createControlUiSessionPrPreparedRead,
   type PreparedSessionPrState,
   loadSessionPullRequests,
   pushedSnapshot,
+  retainControlUiSessionPrBranchSnapshot,
   UNAVAILABLE_SNAPSHOT,
-  type LoadSessionPullRequests,
 } from "./control-ui-session-pr-prepared-read.js";
 import type {
   ControlUiSessionPrRead,
@@ -33,7 +34,7 @@ const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
 type WatchedKeyState = PreparedSessionPrState & {
-  sourceIdentity?: string;
+  sessionKeysByConnId: Map<string, Set<string>>;
   refreshedAt?: number;
   cancelRefresh?: () => void;
   delivery?: Promise<void>;
@@ -46,50 +47,11 @@ type SubscriptionDeps = {
     session: Pick<ControlUiSessionPullRequestsParams, "sessionKey" | "agentId">,
   ) => Promise<ControlUiSessionPrRead | undefined>;
   isConnectionActive?: (connId: string) => boolean;
-  load?: LoadSessionPullRequests;
   scheduler: GatewayScheduler;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 };
 
-function parseSessionKeys(value: unknown): string[] | null {
-  if (!Array.isArray(value) || value.length > CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS) {
-    return null;
-  }
-  const keys = new Set<string>();
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      return null;
-    }
-    const key = entry.trim();
-    if (!key || key.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
-      return null;
-    }
-    keys.add(key);
-  }
-  return [...keys];
-}
-
-export function parseControlUiSessionPullRequestsSubscribeParams(
-  value: unknown,
-): { sessionKeys: string[]; refreshSessionKeys: string[] } | null {
-  if (!value || typeof value !== "object" || !("sessionKeys" in value)) {
-    return null;
-  }
-  const raw = value as { sessionKeys?: unknown; refreshSessionKeys?: unknown };
-  const sessionKeys = parseSessionKeys(raw.sessionKeys);
-  const refreshSessionKeys =
-    raw.refreshSessionKeys === undefined ? [] : parseSessionKeys(raw.refreshSessionKeys);
-  if (!sessionKeys || !refreshSessionKeys) {
-    return null;
-  }
-  const watched = new Set(sessionKeys);
-  for (const key of refreshSessionKeys) {
-    if (!watched.has(key)) {
-      return null;
-    }
-  }
-  return { sessionKeys, refreshSessionKeys };
-}
+export { parseControlUiSessionPullRequestsSubscribeParams } from "./control-ui-session-pr-subscription-params.js";
 
 /**
  * Owns the union of connection replace-sets. Only this union drives GitHub
@@ -117,52 +79,73 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
   >();
   const scheduler = deps.scheduler.scope();
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
-  const customLoad = deps.load;
-  const load = customLoad ?? loadSessionPullRequests;
+  // Loads revalidate watchers while holding a slot, so reads use their own bounded queue.
+  const limitReads = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   const withSource = <T>(
     target: ControlUiSessionPrTarget,
     operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
-  ) =>
-    customLoad
-      ? operation(() => {}, target.identity)
-      : withControlUiSessionPrSource(target.readSource, operation);
+  ) => withControlUiSessionPrSource(target.readSource, operation);
   let pollJob: GatewayScheduledJob | undefined;
   const scope = new AsyncWorkScope();
   let stopPromise: Promise<void> | undefined;
 
-  const retireKeyStateIfUnused = (sessionKey: string, state: WatchedKeyState | undefined) => {
+  const retireKeyStateIfUnused = (state: WatchedKeyState | undefined) => {
     if (!state || state.prepared || state.connIds.size > 0) {
       return;
     }
     state.cancelRefresh?.();
     state.cacheLifetime.abort(null);
-    if (keyStates.get(sessionKey) === state) {
-      keyStates.delete(sessionKey);
+    if (keyStates.get(state.target.identity) === state) {
+      keyStates.delete(state.target.identity);
     }
+  };
+
+  const addMembership = (state: WatchedKeyState, connId: string, sessionKey: string) => {
+    let keys = state.sessionKeysByConnId.get(connId);
+    if (!keys) {
+      keys = new Set();
+      state.sessionKeysByConnId.set(connId, keys);
+    }
+    keys.add(sessionKey);
+    state.connIds.add(connId);
+  };
+
+  const removeMembership = (
+    state: WatchedKeyState | undefined,
+    connId: string,
+    sessionKey: string,
+  ) => {
+    const keys = state?.sessionKeysByConnId.get(connId);
+    keys?.delete(sessionKey);
+    if (keys?.size === 0) {
+      state?.sessionKeysByConnId.delete(connId);
+      state?.connIds.delete(connId);
+    }
+    retireKeyStateIfUnused(state);
   };
 
   const removeMemberships = (
     connId: string,
-    previous: ReadonlyMap<string, unknown> | undefined,
-    retained?: ReadonlyMap<string, unknown>,
+    previous: ReadonlyMap<string, Watched> | undefined,
+    retained?: ReadonlyMap<string, Watched>,
   ) => {
     for (const key of previous?.keys() ?? []) {
-      if (!retained?.has(key)) {
-        const state = keyStates.get(key);
-        state?.connIds.delete(connId);
-        retireKeyStateIfUnused(key, state);
+      const oldTarget = previous?.get(key)?.target;
+      if (oldTarget && retained?.get(key)?.target.identity !== oldTarget.identity) {
+        const state = keyStates.get(oldTarget.identity);
+        removeMembership(state, connId, key);
       }
     }
   };
 
   const stateForTarget = (
-    sessionKey: string,
     target: ControlUiSessionPrTarget,
     sourceIdentity?: string,
+    retained?: WatchedKeyState,
   ) => {
     // Shared snapshots outlive individual viewers; authority stays only in each watched reader.
     const { assertCurrent: _assertCurrent, ...preparedTarget } = target;
-    const previous = keyStates.get(sessionKey);
+    const previous = keyStates.get(target.identity);
     if (
       previous?.target.identity === target.identity &&
       (sourceIdentity === undefined ||
@@ -171,18 +154,21 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     ) {
       previous.target = preparedTarget;
       previous.sourceIdentity ??= sourceIdentity;
+      retainControlUiSessionPrBranchSnapshot(previous, retained);
       return previous;
     }
     previous?.cancelRefresh?.();
     previous?.cacheLifetime.abort(null);
     const state: WatchedKeyState = {
       connIds: new Set(previous?.connIds),
+      sessionKeysByConnId: new Map(previous?.sessionKeysByConnId),
       target: preparedTarget,
       prepared: previous?.prepared,
       sourceIdentity,
       cacheLifetime: new AbortController(),
     };
-    keyStates.set(sessionKey, state);
+    retainControlUiSessionPrBranchSnapshot(state, retained);
+    keyStates.set(target.identity, state);
     return state;
   };
 
@@ -190,7 +176,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     scope,
     limit,
     withSource,
-    load,
+    load: loadSessionPullRequests,
     keyStates,
     stateForTarget,
     getSessionRowProjection: deps.getSessionRowProjection,
@@ -199,7 +185,9 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
   const currentWatcher = async (connId: string, sessionKey: string) => {
     const watched = subscriptions.get(connId)?.get(sessionKey);
     const target =
-      deps.isConnectionActive?.(connId) === false ? undefined : await watched?.readCurrent();
+      deps.isConnectionActive?.(connId) === false
+        ? undefined
+        : await limitReads(() => watched?.readCurrent());
     const subscription = subscriptions.get(connId);
     if (scope.isClosing || subscription?.get(sessionKey) !== watched) {
       return undefined;
@@ -210,9 +198,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     }
     if (!watched || !target) {
       subscription?.delete(sessionKey);
-      const state = keyStates.get(sessionKey);
-      state?.connIds.delete(connId);
-      retireKeyStateIfUnused(sessionKey, state);
+      const state = watched && keyStates.get(watched.target.identity);
+      removeMembership(state, connId, sessionKey);
       if (subscription?.size === 0) {
         // Pruning an old watch does not retire a newer replacement still preparing its keys.
         subscriptions.delete(connId);
@@ -223,32 +210,50 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       }
       return undefined;
     }
-    if (watched.target.identity !== target.identity) {
+    const changed = watched.target.identity !== target.identity;
+    const previous = keyStates.get(watched.target.identity);
+    const state = stateForTarget(target, undefined, previous);
+    if (changed) {
+      removeMembership(previous, connId, sessionKey);
       watched.deliveredHash = undefined;
     }
     watched.target = target;
-    stateForTarget(sessionKey, target).connIds.add(connId);
+    addMembership(state, connId, sessionKey);
+    if (changed) {
+      const replacement = scope
+        .track(() => loadSnapshot(target.identity))
+        .then(
+          () => {},
+          () => {},
+        );
+      replacements.add(replacement);
+      void replacement.finally(() => replacements.delete(replacement));
+    }
     return { watched, target };
   };
 
-  const currentKeyState = async (sessionKey: string) => {
-    for (const connId of keyStates.get(sessionKey)?.connIds ?? []) {
-      await currentWatcher(connId, sessionKey);
+  const currentKeyState = async (cacheKey: string) => {
+    const state = keyStates.get(cacheKey);
+    // Revalidate only this audience's requested spellings, not every key on each connection.
+    for (const [connId, keys] of state?.sessionKeysByConnId ?? []) {
+      for (const key of keys) {
+        await currentWatcher(connId, key);
+      }
     }
-    return keyStates.get(sessionKey);
+    return keyStates.get(cacheKey);
   };
 
   const loadSnapshot = async (
-    sessionKey: string,
+    cacheKey: string,
     refresh = false,
   ): Promise<ControlUiSessionPullRequestSnapshot> => {
-    const targetState = await currentKeyState(sessionKey);
+    const targetState = await currentKeyState(cacheKey);
     if (scope.isClosing || !targetState?.connIds.size) {
       return UNAVAILABLE_SNAPSHOT;
     }
     return withSource(targetState.target, async (assertSourceCurrent, sourceIdentity) => {
-      const state = stateForTarget(sessionKey, targetState.target, sourceIdentity);
-      const pending = inflight.get(sessionKey);
+      const state = stateForTarget(targetState.target, sourceIdentity);
+      const pending = inflight.get(cacheKey);
       if (pending) {
         if (pending.state === state && (!refresh || pending.refresh)) {
           return pending.promise;
@@ -257,8 +262,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         // poll results can never land after the refresh and revert its snapshot.
         await pending.promise;
         assertSourceCurrent();
-        return (await currentKeyState(sessionKey)) === state
-          ? loadSnapshot(sessionKey, refresh)
+        return (await currentKeyState(cacheKey)) === state
+          ? loadSnapshot(cacheKey, refresh)
           : UNAVAILABLE_SNAPSHOT;
       }
       const promise = scope
@@ -272,7 +277,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
             // Retain the source before this wait, without occupying a loader slot.
             await new Promise<void>((resolve) => {
               const refreshJob = scheduler.schedule({
-                id: `control-ui-session-pr-refresh:${sessionKey}`,
+                id: `control-ui-session-pr-refresh:${cacheKey}`,
                 delayMs: delay,
                 run: resolve,
               });
@@ -284,70 +289,70 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
             state.cancelRefresh = undefined;
           }
           return await limit(async () => {
-            if ((await currentKeyState(sessionKey)) !== state || state.connIds.size === 0) {
+            if ((await currentKeyState(cacheKey)) !== state || state.connIds.size === 0) {
               return UNAVAILABLE_SNAPSHOT;
             }
             if (refresh) {
               state.refreshedAt = scheduler.now();
             }
-            const snapshot = await load(
+            const assertReadCurrent = () => {
+              assertSourceCurrent();
+              if (scope.isClosing || keyStates.get(state.target.identity) !== state) {
+                throw new Error("Session pull-request watchers changed");
+              }
+              // Shared work survives a departing viewer while another prepared reader
+              // still authorizes this exact source. Delivery keeps its per-viewer guard.
+              for (const [connId, keys] of state.sessionKeysByConnId) {
+                if (deps.isConnectionActive?.(connId) === false) {
+                  continue;
+                }
+                for (const key of keys) {
+                  const watched = subscriptions.get(connId)?.get(key);
+                  if (!watched || watched.target.identity !== state.target.identity) {
+                    continue;
+                  }
+                  try {
+                    watched.target.assertCurrent?.();
+                    return;
+                  } catch {
+                    // A different watcher may still own a current grant.
+                  }
+                }
+              }
+              throw new Error("Session pull-request watchers changed");
+            };
+            const snapshot = await loadSessionPullRequests(
               { ...state.target.params, ...(refresh ? { refresh: true } : {}) },
               state.cacheLifetime.signal,
               {
                 target: state.target,
                 sourceIdentity,
-                assertCurrent: () => {
-                  assertSourceCurrent();
-                  if (scope.isClosing || keyStates.get(sessionKey) !== state) {
-                    throw new Error("Session pull-request watchers changed");
-                  }
-                  // Shared work survives a departing viewer while another prepared reader
-                  // still authorizes this exact source. Delivery keeps its per-viewer guard.
-                  for (const connId of state.connIds) {
-                    const watched = subscriptions.get(connId)?.get(sessionKey);
-                    if (
-                      !watched ||
-                      watched.target.identity !== state.target.identity ||
-                      deps.isConnectionActive?.(connId) === false
-                    ) {
-                      continue;
-                    }
-                    try {
-                      watched.target.assertCurrent?.();
-                      return;
-                    } catch {
-                      // A different watcher may still own a current grant.
-                    }
-                  }
-                  throw new Error("Session pull-request watchers changed");
+                branchSnapshot: state.branchSnapshot,
+                onBranchRead: (branch) => {
+                  assertReadCurrent();
+                  prepared.publishBranchSnapshot(state.target, pushedSnapshot(branch));
                 },
+                assertCurrent: assertReadCurrent,
               },
             )
               .then(pushedSnapshot)
               .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
-            if ((await currentKeyState(sessionKey)) === state) {
+            if ((await currentKeyState(cacheKey)) === state) {
               assertSourceCurrent();
               prepared.publishSnapshot(state, snapshot);
               // Shared equality does not acknowledge recipients that missed publication.
-              await push(
-                new Set(state.connIds),
-                sessionKey,
-                state,
-                snapshot,
-                assertSourceCurrent,
-                refresh,
-              );
+              await push(new Set(state.connIds), state, snapshot, assertSourceCurrent, refresh);
             }
             return snapshot;
           });
         })
         .catch(() => UNAVAILABLE_SNAPSHOT)
         .finally(() => {
-          if (inflight.get(sessionKey)?.promise === promise) {
-            inflight.delete(sessionKey);
+          if (inflight.get(cacheKey)?.promise === promise) {
+            inflight.delete(cacheKey);
           }
         });
-      inflight.set(sessionKey, {
+      inflight.set(cacheKey, {
         promise,
         refresh,
         state,
@@ -371,11 +376,11 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
 
   const push = (
     connIds: ReadonlySet<string>,
-    sessionKey: string,
     state: WatchedKeyState,
     snapshot: ControlUiSessionPullRequestSnapshot,
     assertSourceCurrent: () => void,
     refresh = false,
+    requestedKey?: string,
   ): Promise<void> => {
     if (connIds.size === 0) {
       return Promise.resolve();
@@ -384,47 +389,53 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     const isDelivered = (watched: Watched) =>
       !(refresh && watched.refreshPending) && watched.deliveredHash === hash;
     return enqueueDelivery(state, async () => {
-      const sessions = Object.create(null) as ControlUiSessionPullRequestsChanged["sessions"];
-      sessions[sessionKey] = snapshot;
       for (const connId of connIds) {
-        const watched = subscriptions.get(connId)?.get(sessionKey);
-        if (!watched || isDelivered(watched)) {
-          continue;
-        }
-        const current = await currentWatcher(connId, sessionKey);
-        if (
-          !current ||
-          scope.isClosing ||
-          current.watched !== watched ||
-          subscriptions.get(connId)?.get(sessionKey) !== watched ||
-          deps.isConnectionActive?.(connId) === false ||
-          keyStates.get(sessionKey) !== state ||
-          isDelivered(watched)
-        ) {
-          continue;
-        }
-        assertSourceCurrent();
-        try {
-          // The shared cache can carry another viewer's target after preparation yields.
-          current.target.assertCurrent?.();
-        } catch {
-          // Losing one recipient must not suppress the same snapshot for other viewers.
-          continue;
-        }
-        // A socket callback can replace the session or retire another viewer synchronously.
-        deps.broadcastToConnIds(
-          CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
-          { sessions },
-          new Set([connId]),
-          {
-            sessionKeys: [state.target.params.sessionKey],
-            agentId: state.target.params.agentId,
-          },
-        );
-        if (subscriptions.get(connId)?.get(sessionKey) === watched) {
-          watched.deliveredHash = hash;
-          if (refresh) {
-            delete watched.refreshPending;
+        const keys = requestedKey
+          ? [requestedKey]
+          : [...(state.sessionKeysByConnId.get(connId) ?? [])];
+        for (const sessionKey of keys) {
+          const watched = subscriptions.get(connId)?.get(sessionKey);
+          if (!watched || isDelivered(watched)) {
+            continue;
+          }
+          const current = await currentWatcher(connId, sessionKey);
+          if (
+            !current ||
+            scope.isClosing ||
+            current.watched !== watched ||
+            current.target.identity !== state.target.identity ||
+            subscriptions.get(connId)?.get(sessionKey) !== watched ||
+            deps.isConnectionActive?.(connId) === false ||
+            keyStates.get(state.target.identity) !== state ||
+            isDelivered(watched)
+          ) {
+            continue;
+          }
+          assertSourceCurrent();
+          try {
+            // The shared cache can carry another viewer's target after preparation yields.
+            current.target.assertCurrent?.();
+          } catch {
+            // Losing one recipient must not suppress the same snapshot for other viewers.
+            continue;
+          }
+          const sessions = Object.create(null) as ControlUiSessionPullRequestsChanged["sessions"];
+          sessions[sessionKey] = snapshot;
+          // A socket callback can replace the session or retire another viewer synchronously.
+          deps.broadcastToConnIds(
+            CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+            { sessions },
+            new Set([connId]),
+            {
+              sessionKeys: [state.target.params.sessionKey],
+              agentId: state.target.params.agentId,
+            },
+          );
+          if (subscriptions.get(connId)?.get(sessionKey) === watched) {
+            watched.deliveredHash = hash;
+            if (refresh) {
+              delete watched.refreshPending;
+            }
           }
         }
       }
@@ -453,19 +464,74 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       const loads = [];
       for (const [sessionKey, state] of keyStates) {
         if (state.connIds.size > 0) {
-          loads.push(loadSnapshot(sessionKey));
+          loads.push(
+            state.target.taskReceiptsOnly ? currentKeyState(sessionKey) : loadSnapshot(sessionKey),
+          );
         }
       }
       await Promise.all([Promise.allSettled(replacements), prepared.settle(), ...loads]);
+      // Revalidation can migrate an audience to a new cell during this pass.
+      await Promise.allSettled(replacements);
     });
   };
+
+  const stopLineage = sessionChanges.subscribeFacts((change) => {
+    if (
+      !sessionChangeScopeAffectsStoredRows(change) ||
+      ("facts" in change && change.facts?.kind === "unchanged")
+    ) {
+      return;
+    }
+    // Reconcile the indexed audience only; unchanged lineage performs no receipt/GitHub read.
+    for (const [key, state] of keyStates) {
+      // A removed root may be immediately replaced under the same key. The next
+      // entry notification (or normal poll) reconciles that watch after replacement.
+      const removedRoot =
+        "sessionKey" in change &&
+        change.sessionKey === state.target.params.sessionKey &&
+        change.facts?.kind === "removed";
+      if (!removedRoot && state.target.taskReceipts && state.connIds.size) {
+        void scope.track(() => currentKeyState(key)).catch(() => {});
+      }
+    }
+  });
+
+  const stopReceipts = githubPublicationReceipts.subscribeFacts((change) => {
+    if (change.kind !== "committed" && change.kind !== "unknown") {
+      return;
+    }
+    // Commit events refresh the existing watched union; no child poller is created.
+    for (const [key, state] of keyStates) {
+      if (!state.target.taskReceipts) {
+        continue;
+      }
+      state.snapshot = undefined;
+      if (state.prepared) {
+        sessionChanges.emit({ ...state.target.params, scope: "runtime" });
+      }
+      if (state.connIds.size) {
+        void scope
+          .track(async () => {
+            await inflight.get(key)?.promise;
+            await loadSnapshot(key);
+          })
+          .catch(() => {});
+      }
+    }
+  });
 
   const replace = (
     connId: string,
     sessionKeys: readonly string[],
     refreshSessionKeys: ReadonlySet<string> = new Set(),
     onAdmitted?: () => void,
+    passiveSessionKeys: ReadonlySet<string> = new Set(),
   ) => {
+    const activeKeys = new Set(sessionKeys);
+    const watchedKeys = [
+      ...activeKeys,
+      ...[...passiveSessionKeys].filter((key) => !activeKeys.has(key)),
+    ];
     let admitted = false;
     const admit = () => {
       if (!admitted) {
@@ -485,7 +551,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     }
     const generation = {};
     replacementGenerations.set(normalizedConnId, generation);
-    for (const key of sessionKeys) {
+    for (const key of watchedKeys) {
       const watched = subscriptions.get(normalizedConnId)?.get(key);
       if (watched && refreshSessionKeys.has(key)) {
         watched.refreshPending = true;
@@ -497,18 +563,34 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       try {
         const previousSubscription = subscriptions.get(normalizedConnId);
         const subscription = new Map<string, Watched>();
-        for (const key of sessionKeys) {
+        for (const key of watchedKeys) {
           const parsed = parseAgentSessionKey(key);
           const session =
             parsed?.rest === "global"
               ? { sessionKey: "global", agentId: parsed.agentId }
               : { sessionKey: key };
           const previous = previousSubscription?.get(key);
-          const readCurrent =
-            previous && (await previous.readCurrent())
-              ? previous.readCurrent
-              : await deps.prepareRead(normalizedConnId, session);
-          const target = await readCurrent?.();
+          const receiptOnly = !activeKeys.has(key);
+          const existingMode = previous?.target.taskReceiptsOnly === true;
+          let readCurrent = existingMode === receiptOnly ? previous?.readCurrent : undefined;
+          let target = await readCurrent?.();
+          if (!target) {
+            const preparedRead = await deps.prepareRead(normalizedConnId, session);
+            readCurrent =
+              preparedRead && receiptOnly
+                ? async () => {
+                    const current = await preparedRead();
+                    return (
+                      current && {
+                        ...current,
+                        taskReceiptsOnly: true,
+                        identity: JSON.stringify([current.identity, "receipts-only"]),
+                      }
+                    );
+                  }
+                : preparedRead;
+            target = await readCurrent?.();
+          }
           if (!readCurrent || !target) {
             continue;
           }
@@ -543,23 +625,30 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         }
         if (currentReplacement) {
           subscriptions.set(normalizedConnId, subscription);
-          removeMemberships(normalizedConnId, previousSubscription, subscription);
-          // Publish the whole replacement before cached hydration can send synchronously.
+          // Add before removing so an alias change retains its audience cell and cache lifetime.
           for (const [key, watched] of subscription) {
-            stateForTarget(key, watched.target).connIds.add(normalizedConnId);
+            const previous = previousSubscription?.get(key);
+            const retained = previous && keyStates.get(previous.target.identity);
+            addMembership(
+              stateForTarget(watched.target, undefined, retained),
+              normalizedConnId,
+              key,
+            );
           }
+          removeMemberships(normalizedConnId, previousSubscription, subscription);
           schedulePoll();
         }
         admit();
 
         await Promise.all(
           Array.from(subscription, async ([sessionKey, watched]) => {
-            const targetState = await currentKeyState(sessionKey);
+            const cacheKey = watched.target.identity;
+            const targetState = await currentKeyState(cacheKey);
             if (!targetState) {
               return;
             }
             return withSource(targetState.target, async (assertSourceCurrent, sourceIdentity) => {
-              const state = stateForTarget(sessionKey, targetState.target, sourceIdentity);
+              const state = stateForTarget(targetState.target, sourceIdentity);
               const isCurrent = () =>
                 subscriptions.get(normalizedConnId)?.get(sessionKey) === watched;
               const refresh = refreshSessionKeys.has(sessionKey);
@@ -569,25 +658,26 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
                 if (!watched.deliveredHash) {
                   await push(
                     new Set([normalizedConnId]),
-                    sessionKey,
                     state,
                     cached,
                     assertSourceCurrent,
+                    false,
+                    sessionKey,
                   );
                 }
                 return;
               }
-              const snapshot = await loadSnapshot(sessionKey, refresh);
+              const snapshot = await loadSnapshot(cacheKey, refresh);
               assertSourceCurrent();
               // A removed/re-added key has a new cell; retained keys still need their result.
               if (isCurrent() && (refresh ? watched.refreshPending : !watched.deliveredHash)) {
                 await push(
                   new Set([normalizedConnId]),
-                  sessionKey,
                   state,
                   snapshot,
                   assertSourceCurrent,
                   refresh,
+                  sessionKey,
                 );
               }
             }).catch(() => {});
@@ -629,6 +719,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     scope.beginClose();
     scheduler.beginClose();
     prepared.stop();
+    stopReceipts();
+    stopLineage();
     subscriptions.clear();
     replacementGenerations.clear();
     replacements.clear();

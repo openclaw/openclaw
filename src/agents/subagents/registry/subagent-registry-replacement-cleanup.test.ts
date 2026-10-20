@@ -1,8 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -19,6 +20,9 @@ import {
 } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 it.each(["completed", "failed"] as const)(
   "retains replacement transcript cleanup through restart until it has %s",

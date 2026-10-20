@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
@@ -15,8 +11,8 @@ import type { FeishuProbeResult } from "./types.js";
  * Successful bot info is effectively static, while failures are cached briefly
  * to avoid hammering the API during transient outages. */
 const probeCache = new Map<string, { result: FeishuProbeResult; expiresAt: number }>();
-const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const PROBE_ERROR_TTL_MS = 60 * 1000; // 1 minute
+const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000;
+const PROBE_ERROR_TTL_MS = 60 * 1000;
 const MAX_PROBE_CACHE_SIZE = 64;
 const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
 type ProbeFeishuOptions = {
@@ -54,12 +50,7 @@ function setCachedProbeResult(
   result: FeishuProbeResult,
   ttlMs: number,
 ): FeishuProbeResult {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
-  if (expiresAt === undefined) {
-    probeCache.delete(cacheKey);
-    return result;
-  }
-  probeCache.set(cacheKey, { result, expiresAt });
+  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
   pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
   return result;
 }
@@ -90,7 +81,7 @@ export async function probeFeishu(
     setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
   const cached = probeCache.get(cacheKey);
   if (cached) {
-    if (isFutureDateTimestampMs(cached.expiresAt)) {
+    if (cached.expiresAt > Date.now()) {
       return cached.result;
     }
     probeCache.delete(cacheKey);

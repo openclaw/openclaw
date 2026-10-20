@@ -23,8 +23,8 @@ vi.mock("./update-command-runtime-preflight.js", async (original) => ({
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: async () => [],
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (original) => ({
-  ...(await original<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (original) => ({
+  ...(await original<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: async () => {},
 }));
 vi.mock("./update-command-service.js", async () => {
@@ -41,17 +41,19 @@ const { finishAlreadyCurrentUpdate } = await import("./update-command-noop.js");
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 });
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { managedServiceRoot: undefined, foreground: false },
-  { managedServiceRoot: "/serving/install", foreground: false },
-  { managedServiceRoot: "/serving/install", foreground: true },
-])(
-  "refreshes already-current policy only for native admission (root=$managedServiceRoot, foreground=$foreground)",
-  async ({ managedServiceRoot, foreground }) => {
+  { platform: "linux", managedServiceRoot: undefined, foreground: false },
+  { platform: "linux", managedServiceRoot: "/serving/install", foreground: false },
+  { platform: "linux", managedServiceRoot: "/serving/install", foreground: true },
+  { platform: "darwin", managedServiceRoot: undefined, foreground: false },
+  { platform: "win32", managedServiceRoot: undefined, foreground: false },
+] as const)(
+  "refreshes already-current policy only for native Linux admission (platform=$platform, root=$managedServiceRoot, foreground=$foreground)",
+  async ({ platform, managedServiceRoot, foreground }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     const root = "/target/install";
     const serviceRoot = managedServiceRoot ?? root;
     const before: PreManagedServiceStop = {
@@ -102,8 +104,9 @@ it.each([
     });
 
     expect(refuseUpdate).not.toHaveBeenCalled();
-    expect(boundary.maintenance).toHaveBeenCalledTimes(foreground ? 0 : 1);
-    for (const [index, phase] of (foreground ? [] : ["refresh"]).entries()) {
+    const refresh = platform === "linux" && !foreground;
+    expect(boundary.maintenance).toHaveBeenCalledTimes(refresh ? 1 : 0);
+    for (const [index, phase] of (refresh ? ["refresh"] : []).entries()) {
       expect(boundary.maintenance).toHaveBeenNthCalledWith(
         index + 1,
         expect.objectContaining({

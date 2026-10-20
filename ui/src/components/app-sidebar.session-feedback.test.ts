@@ -3,24 +3,67 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogListResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
+import { patchSettings } from "../app/settings.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
+import { sessionMenu } from "../test-helpers/app-sidebar-cases/multi-select-support.ts";
+import {
   mountRoster,
+  owners,
   selectFilter,
+  sessionKeys,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import {
   catalogPage,
   createGateway,
+  createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
+import { registerSessionPluginAction } from "../test-helpers/control-ui-plugin-action.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { menuItemLabels, openSubmenu } from "../test-helpers/session-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
-import "./app-sidebar.ts";
+import {
+  SIDEBAR_SESSION_PAGE_SIZE,
+  storeSidebarSessionOwnerFilter,
+} from "./app-sidebar-session-types.ts";
+import "./app-sidebar.tsx";
 
 const hint = "No active sessions match this filter";
 const pagination = ".sidebar-session-pagination--roster button";
+type Roster = Awaited<ReturnType<typeof mountRoster>>;
+
+async function selectStatus(sidebar: Roster["sidebar"], status: string) {
+  await selectFilter(sidebar, `status:${status}`);
+  const input = sidebar.querySelector<HTMLInputElement>(
+    `#sidebar-sessions-status input[value="${status}"]`,
+  );
+  expect(input?.checked).toBe(true);
+  expect(sidebar.textContent).not.toContain(hint);
+}
+
+async function emptyCatalogFixture() {
+  const fixture = await mountRoster(undefined, []);
+  await selectFilter(fixture.sidebar, "owner:profile-ada");
+  await vi.waitFor(() => expect(fixture.sidebar.textContent).toContain(hint));
+  const enableCatalog = () =>
+    fixture.gatewayHarness.publish({
+      hello: {
+        ...fixture.gatewayHarness.gateway.snapshot.hello!,
+        features: { methods: ["sessions.catalog.list"] },
+      },
+    });
+  return { ...fixture, enableCatalog };
+}
 
 function matchingCatalog(): SessionsCatalogListResult {
   const page = catalogPage([{ threadId: "fixture-thread", name: "Catalog conversation" }]);
@@ -37,8 +80,8 @@ function matchingCatalog(): SessionsCatalogListResult {
 // Roster mode renders the owner filter from the roster's own list. Let that first
 // load settle so the Filter & sort owner picker is not replaced while in use.
 async function useSidebarMode(
-  sidebar: Awaited<ReturnType<typeof mountRoster>>["sidebar"],
-  context: Awaited<ReturnType<typeof mountRoster>>["context"],
+  sidebar: Roster["sidebar"],
+  context: Roster["context"],
   mode: "chip" | "roster",
 ) {
   sidebar.sidebarAgentsMode = mode;
@@ -55,6 +98,178 @@ async function useSidebarMode(
 }
 
 describe("sidebar session feedback", () => {
+  it.each([false, true])(
+    "uses only the roster membership read in roster mode (involvingMe=%s)",
+    async (involvingMe) => {
+      const viewer = "profile-ada";
+      const groups = ["Planning", "Research"];
+      const sectionOrder = ["category:Research", "category:Planning"];
+      const rows: GatewaySessionRow[] = (
+        [
+          ["mine", "My project", viewer],
+          ["involved", "Shared project", "profile-sam"],
+          ["other", "Other project", "profile-sam"],
+        ] as const
+      ).map(([id, label, ownerId], index) => ({
+        key: `agent:main:${id}`,
+        agentId: "main",
+        sessionId: id,
+        kind: "direct",
+        label,
+        updatedAt: 3 - index,
+        lastAssistantMessage: { text: `${label} update`, timestamp: index + 1 },
+        owner: { actor: { type: "human", id: ownerId } },
+      }));
+      let failRoster = false;
+      const request = createGatewayRequestMock(async (method, raw) => {
+        const params = raw as Record<string, unknown> | undefined;
+        if (method === "sessions.list") {
+          if (failRoster && params?.source === "agent-roster") {
+            throw new Error("Fixture roster unavailable");
+          }
+          const selected = params?.spawnedBy
+            ? []
+            : rows.filter(
+                (row) =>
+                  (!params?.ownerId || row.owner?.actor.id === params.ownerId) &&
+                  (!params?.involvingMe || row.key !== "agent:main:other"),
+              );
+          return {
+            ...sessionsResult(selected, 1),
+            owners,
+            hasMore: false,
+            nextOffset: null,
+          };
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.groups.list") {
+          return { groups: groups.map((name, position) => ({ name, position })), sectionOrder };
+        }
+        if (method === "sessions.describe") {
+          return { session: rows.find((row) => row.key === params?.key) ?? null };
+        }
+        return {};
+      });
+      const gateway = createGatewayHarness(createTestGatewayClient(request));
+      gateway.publish({
+        selfUser: { id: viewer, name: "Ada" },
+        hello: {
+          ...gateway.gateway.snapshot.hello!,
+          features: {
+            methods: [
+              ...gateway.gateway.snapshot.hello!.features!.methods!,
+              "sessions.groups.list",
+            ],
+          },
+        },
+      });
+      patchSettings({
+        gatewayUrl: gateway.gateway.connection.gatewayUrl,
+        sidebarAgentsMode: "roster",
+      });
+      storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, viewer, {
+        ownerId: involvingMe ? null : viewer,
+        involvingMe,
+      });
+      const sessions = createTestSessionCapability(gateway.gateway);
+      const { sidebar, context, provider } = await mountSidebar(
+        gateway.gateway,
+        sessions,
+        "panel",
+        {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "main", name: "Harbor" }],
+        },
+      );
+      const plugin = registerSessionPluginAction(context, {
+        id: "review",
+        label: "Review session",
+        placement: "session",
+        resolve: ({ session }) => ({ label: `Review ${session?.label}` }),
+        run: async () => {},
+      });
+      const filteredSidebarReads = () =>
+        request.mock.calls.flatMap(([method, raw]) => {
+          const params = raw as Record<string, unknown> | undefined;
+          return method === "sessions.list" &&
+            params?.source === "sidebar" &&
+            (params.ownerId || params.involvingMe)
+            ? [params]
+            : [];
+        });
+      const expectedKeys = involvingMe
+        ? ["agent:main:mine", "agent:main:involved"]
+        : ["agent:main:mine"];
+      const expectRoster = () => {
+        expect(sidebar.querySelector(".sidebar-agent-roster__preview")?.textContent).toBe(
+          involvingMe ? "Shared project update" : "Other project update",
+        );
+        expect(sessionKeys(sidebar)).toEqual([]);
+      };
+      try {
+        sidebar.connected = true;
+        sidebar.setSessionSortMode("updated");
+        await settleLitElement(sidebar);
+        await vi.waitFor(expectRoster);
+        expect.soft(filteredSidebarReads()).toEqual([]);
+        await vi.waitFor(() => expect(sessions.state.groups).toEqual(groups));
+        expect.soft(sidebar.knownSessionGroups()).toEqual(groups);
+        expect.soft(sidebar.knownSectionOrder()).toEqual(sectionOrder);
+
+        const menuSession = sidebar.findSidebarMenuSessionByKey("agent:main:mine");
+        expect(menuSession).toBeDefined();
+        sidebar.sidebarMenus.openSessionMenu(menuSession!, 0, 0);
+        await settleLitElement(sidebar);
+        const menu = await sessionMenu(sidebar);
+        expect.soft(menuItemLabels(menu)).toContain("Review My project");
+        const groupMenu = await openSubmenu(menu, "Move to group");
+        expect.soft(menuItemLabels(groupMenu)).toEqual(expect.arrayContaining(groups));
+        sidebar.sidebarMenus.closeSessionMenu();
+
+        sidebar.sidebarAgentsMode = "chip";
+        await settleLitElement(sidebar);
+        await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(expectedKeys));
+        expect(filteredSidebarReads().length).toBeGreaterThan(0);
+        request.mockClear();
+
+        sidebar.sidebarAgentsMode = "roster";
+        await settleLitElement(sidebar);
+        await vi.waitFor(expectRoster);
+        expect(sidebar.sidebarSessionOwnerFilter()).toEqual({
+          ownerId: involvingMe ? null : viewer,
+          involvingMe,
+        });
+        expect.soft(filteredSidebarReads()).toEqual([]);
+
+        failRoster = true;
+        await rosterActivityStore(context).refresh();
+        await settleLitElement(sidebar);
+        expect(sidebar.querySelector(".sidebar-agent-roster__link")).not.toBeNull();
+        failRoster = false;
+        await rosterActivityStore(context).refresh();
+        await settleLitElement(sidebar);
+        expect(sidebar.querySelector(".sidebar-agent-roster__link")).toBeNull();
+        expectRoster();
+
+        sidebar.setSessionOwnerFilter(null);
+        sidebar.sidebarAgentsMode = "chip";
+        await settleLitElement(sidebar);
+        await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(rows.map((row) => row.key)));
+        expect(sidebar.knownSessionGroups()).toEqual(groups);
+        expect(sidebar.knownSectionOrder()).toEqual(sectionOrder);
+      } finally {
+        plugin.lifetime.abort();
+        provider.remove();
+        context.connectionBootstrap.reset();
+        sessions.dispose();
+      }
+    },
+  );
+
   it("shows pending append, blocks repeated activation, and recovers after failure and retry", async () => {
     const keys = Array.from(
       { length: SIDEBAR_SESSION_PAGE_SIZE + 1 },
@@ -75,7 +290,7 @@ describe("sidebar session feedback", () => {
     const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     expect(button().disabled).toBe(false);
     button().click();
-    button().click(); // The owner is already pending before Lit applies disabled.
+    button().click(); // The owner is already pending before the renderer applies disabled.
     await settleLitElement(sidebar);
     expect(button().disabled).toBe(true);
     expect(button().getAttribute("aria-busy")).toBe("true");
@@ -110,20 +325,13 @@ describe("sidebar session feedback", () => {
   });
 
   it("waits for catalog hydration, refresh, and hidden pages before explaining an empty list", async () => {
-    const { sidebar, gatewayHarness, request } = await mountRoster(undefined, []);
-    await selectFilter(sidebar, "owner:profile-ada");
-    await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+    const { sidebar, request, enableCatalog } = await emptyCatalogFixture();
     let pending = createDeferred<SessionsCatalogListResult>();
     const original = request.getMockImplementation()!;
     request.mockImplementation((method, ...args) =>
       method === "sessions.catalog.list" ? pending.promise : original(method, ...args),
     );
-    gatewayHarness.publish({
-      hello: {
-        ...gatewayHarness.gateway.snapshot.hello!,
-        features: { methods: ["sessions.catalog.list"] },
-      },
-    });
+    enableCatalog();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.catalog.list", expect.anything()),
     );
@@ -153,42 +361,29 @@ describe("sidebar session feedback", () => {
         ),
       }),
     );
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await settleLitElement(sidebar);
     expect(sidebar.textContent).not.toContain(hint);
   });
 
   it("waits for a pending catalog host to publish its matching result", async () => {
-    const { sidebar, gatewayHarness, request } = await mountRoster(undefined, []);
-    await selectFilter(sidebar, "owner:profile-ada");
-    await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
-    const catalog: SessionsCatalogListResult["catalogs"][number] = {
-      id: "fixture",
-      label: "Fixture catalog",
-      capabilities: { continueSession: true, archive: false },
-      hosts: [
-        {
-          hostId: "node:fixture",
-          label: "Fixture host",
-          kind: "node",
-          connected: true,
-          pending: true,
-          sessions: [],
-        },
-      ],
-    };
+    const { sidebar, gatewayHarness, request, enableCatalog } = await emptyCatalogFixture();
+    const catalog = catalogPage([]).catalogs[0]!;
+    catalog.capabilities.archive = false;
+    Object.assign(catalog, { id: "fixture", label: "Fixture catalog" });
+    Object.assign(catalog.hosts[0]!, {
+      hostId: "node:fixture",
+      label: "Fixture host",
+      kind: "node",
+      pending: true,
+    });
     const original = request.getMockImplementation()!;
     request.mockImplementation((method, ...args) =>
       method === "sessions.catalog.list"
         ? Promise.resolve({ catalogs: [catalog] })
         : original(method, ...args),
     );
-    gatewayHarness.publish({
-      hello: {
-        ...gatewayHarness.gateway.snapshot.hello!,
-        features: { methods: ["sessions.catalog.list"] },
-      },
-    });
+    enableCatalog();
     await sidebar.sessionData.refreshSessionCatalogs();
     await settleLitElement(sidebar);
     const params = request.mock.calls.findLast(
@@ -225,20 +420,19 @@ describe("sidebar session feedback", () => {
     { mode: "roster", filter: "owner:profile-ada", failure: false },
     { mode: "roster", filter: "owner:profile-ada", failure: true },
   ] as const)(
-    "explains only settled empty $mode filters ($filter, failure=$failure)",
+    "limits settled empty-session feedback to session mode ($mode, $filter, failure=$failure)",
     async ({ mode, filter, failure }) => {
       const { sidebar, context, result, sessions } = await mountRoster(undefined, []);
       await useSidebarMode(sidebar, context, mode);
       if (!failure) {
         for (const status of ["active", "archived", "all"]) {
-          await selectFilter(sidebar, "status:" + status);
-          expect(sidebar).toHaveProperty("sessionsStatusFilter", status);
-          expect(sidebar.textContent).not.toContain(hint);
+          await selectStatus(sidebar, status);
         }
         await selectFilter(sidebar, "status:active");
       }
       await selectFilter(sidebar, filter);
-      await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+      await settleLitElement(sidebar);
+      expect(sidebar.textContent?.includes(hint)).toBe(mode === "chip");
       if (failure) {
         const pending = createDeferred<never>();
         sessions.list.mockImplementation(async () => await pending.promise);
@@ -254,12 +448,11 @@ describe("sidebar session feedback", () => {
           expect(sidebar.querySelectorAll("[data-session-section]")).toHaveLength(0);
         }
         for (const status of ["archived", "all"] as const) {
-          await selectFilter(sidebar, "status:" + status);
-          expect(sidebar).toHaveProperty("sessionsStatusFilter", status);
-          expect(sidebar.textContent).not.toContain(hint);
+          await selectStatus(sidebar, status);
         }
         await selectFilter(sidebar, "status:active");
-        await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+        await settleLitElement(sidebar);
+        expect(sidebar.textContent?.includes(hint)).toBe(mode === "chip");
         if (mode === "roster") {
           result.hasMore = true;
           await rosterActivityStore(context).refresh();
@@ -268,7 +461,7 @@ describe("sidebar session feedback", () => {
             ...sidebar.sessionData.sessionsResult!,
             hasMore: true,
           };
-          sidebar.requestUpdate();
+          sidebar.invalidate();
         }
         await settleLitElement(sidebar);
         expect(sidebar.textContent).not.toContain(hint);

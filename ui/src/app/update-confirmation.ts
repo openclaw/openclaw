@@ -52,13 +52,10 @@ export function createUpdateProgressWatcher(
           update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
-    const stopOverlays = context.overlays.subscribe(emit);
-    const stopGateway = context.gateway.subscribe(emit);
+    // Deliver ordered progress receipts, including subscribe-time state, to the dialog.
+    const stops = [context.overlays, context.gateway].map((source) => source.subscribe(emit));
     emit();
-    return () => {
-      stopOverlays();
-      stopGateway();
-    };
+    return () => stops.forEach((stop) => stop());
   };
 }
 
@@ -72,7 +69,7 @@ export type ConfirmAndStartUpdateParams = {
     updateAvailable: UpdateAvailable | null;
     updateSchedule: UpdateScheduleState | null;
   } | null>;
-  /** Reads current application-owned authority immediately before native dispatch. */
+  /** Required for native dispatch; reads current application-owned authority at the action. */
   canStartNativeUpdate?: () => boolean;
   /** Reconfirm a fresh Gateway target if the native bridge disappears. */
   prepareGatewayFallback?: ConfirmAndStartUpdateParams["prepareRetry"];
@@ -84,6 +81,8 @@ export type ConfirmAndStartUpdateParams = {
    * the Gateway route so a declined handoff cannot end in silence.
    */
   viaNativeApp: boolean;
+  /** Owner-held target captured before loading or showing confirmation. */
+  isCurrentTarget: () => boolean;
   startGatewayUpdate: () => void;
   /**
    * Streams the update lifecycle so the dialog can stay open and report it.
@@ -94,6 +93,6 @@ export type ConfirmAndStartUpdateParams = {
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {
-  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.ts");
+  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.tsx");
   await confirmAndStartUpdateRuntime(params);
 }

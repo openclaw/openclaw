@@ -45,13 +45,17 @@ export type RuntimeContextCustomMessage = {
   timestamp: number;
 };
 
-/** Appends turn additions to both full and resumed projections without changing their provenance. */
+/** Adds turn context without separating an inline prompt header from its user text. */
 export function appendCurrentInboundContext(
   context: CurrentInboundPromptContext | undefined,
   fragments: RuntimeContextFragment[],
   legacyText = fragments.map((fragment) => fragment.text).join("\n\n"),
 ): CurrentInboundPromptContext {
-  const append = (text?: string) => [text, legacyText].filter(Boolean).join("\n\n");
+  // A space joiner binds the existing context's trailing header to the user body.
+  // Later additions must precede that context in both full and resumed prompts.
+  const inline = context?.promptJoiner === " ";
+  const append = (text?: string) =>
+    (inline ? [legacyText, text] : [text, legacyText]).filter(Boolean).join("\n\n");
   return {
     ...context,
     text: append(context?.text),

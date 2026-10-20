@@ -4,7 +4,7 @@ import type {
   MentionInboxItem,
   MentionsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
@@ -12,6 +12,7 @@ import {
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -26,15 +27,19 @@ type MentionsSnapshot = {
 export type MentionsCapability = ReturnType<typeof createMentionsCapability>;
 
 type MentionConnection = {
+  retired: boolean;
   client: GatewayBrowserClient;
   hello: GatewayHelloOk;
   connectionRevision: number;
   profileId: string;
   gatewayInstanceId: string;
-  loaded: boolean;
+  revision: number;
+  requestedRevision: number;
   dismissing: Set<string>;
   refreshRequested: boolean;
   refreshPromise: Promise<void> | null;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  retryAttempt: number;
 };
 
 /** Owns one profile's temporary Inbox even when no Inbox presenter is mounted. */
@@ -50,16 +55,15 @@ export function createMentionsCapability(
   };
   let connection: MentionConnection | null = null;
   let disposed = false;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   const publish = (patch: Partial<MentionsSnapshot>) => {
     snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener();
-    }
+    listeners.publish();
   };
   const isCurrent = (owner: MentionConnection) =>
     !disposed &&
     connection === owner &&
+    !owner.retired &&
     canCallGatewayMethod(gateway.snapshot, "mentions.list", "operator.read") &&
     gateway.snapshot.client === owner.client &&
     gateway.snapshot.hello === owner.hello &&
@@ -76,10 +80,17 @@ export function createMentionsCapability(
     }
     try {
       const result = await owner.client.request<MentionsListResult>(method, params);
-      if (!isCurrent(owner) || result.gatewayInstanceId !== owner.gatewayInstanceId) {
+      if (
+        !isCurrent(owner) ||
+        result.gatewayInstanceId !== owner.gatewayInstanceId ||
+        result.revision < owner.revision
+      ) {
         return;
       }
-      owner.loaded = true;
+      owner.revision = result.revision;
+      // The Gateway can emit its changed revision while preparing this same snapshot.
+      owner.refreshRequested &&= owner.requestedRevision > result.revision;
+      owner.retryAttempt = 0;
       publish({ phase: "ready", items: result.items, error: null });
     } catch (error) {
       if (!isCurrent(owner)) {
@@ -90,8 +101,20 @@ export function createMentionsCapability(
         (error.gatewayCode === "FORBIDDEN" ||
           resolveGatewayErrorDetailCode(error) ===
             ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE);
-      if (accessLost) {
+      if (error instanceof GatewayRequestError && error.gatewayCode === "UNAVAILABLE") {
+        owner.refreshRequested = true;
+        if (owner.retryTimer === undefined) {
+          owner.retryTimer = setTimeout(
+            () => {
+              owner.retryTimer = undefined;
+              void refreshAutomatically(owner);
+            },
+            resolveGatewayReadRetryDelayMs(error, owner.retryAttempt++),
+          );
+        }
+      } else if (accessLost) {
         // Retire in-flight reads too; an earlier success cannot restore a revoked Inbox.
+        clearTimeout(owner.retryTimer);
         connection = null;
       }
       publish({
@@ -103,16 +126,16 @@ export function createMentionsCapability(
   };
 
   const refreshOwner = (owner: MentionConnection): Promise<void> => {
-    if (!isCurrent(owner)) {
+    if (!isCurrent(owner) || owner.retryTimer !== undefined) {
       return Promise.resolve();
     }
-    owner.refreshRequested = true;
     if (owner.refreshPromise) {
       return owner.refreshPromise;
     }
+    owner.refreshRequested = true;
     owner.refreshPromise = Promise.resolve().then(async () => {
       try {
-        while (isCurrent(owner) && owner.refreshRequested) {
+        while (isCurrent(owner) && owner.retryTimer === undefined && owner.refreshRequested) {
           owner.refreshRequested = false;
           publish({ phase: "loading", error: null });
           await requestSnapshot(owner, "mentions.list", {});
@@ -133,7 +156,7 @@ export function createMentionsCapability(
       if (owner.refreshPromise) {
         return owner.refreshPromise;
       }
-      if (owner.loaded && !owner.refreshRequested) {
+      if (owner.revision >= 0 && !owner.refreshRequested) {
         return Promise.resolve();
       }
       return refreshOwner(owner);
@@ -146,6 +169,30 @@ export function createMentionsCapability(
     const profileId = next.selfUser?.identity?.id;
     const gatewayInstanceId = next.hello?.server?.bootId;
     if (connection && isCurrent(connection)) {
+      return;
+    }
+    clearTimeout(connection?.retryTimer);
+    if (connection) {
+      // Keep its display identity, but never revive pre-disconnect requests.
+      connection.retired = true;
+    }
+    const sameIdentity =
+      connection?.client === next.client &&
+      connection?.connectionRevision === gateway.connectionRevision &&
+      (!profileId || connection.profileId === profileId) &&
+      (!gatewayInstanceId || connection.gatewayInstanceId === gatewayInstanceId);
+    if (!disposed && next.phase !== "connected" && sameIdentity) {
+      publish({ phase: "unavailable", dismissing: [], error: null });
+      return;
+    }
+    if (
+      !disposed &&
+      sameIdentity &&
+      next.selfUser === undefined &&
+      canCallGatewayMethod(next, "mentions.list", "operator.read")
+    ) {
+      // A fresh hello precedes users.self; unresolved identity is not access loss.
+      publish({ phase: "loading", dismissing: [], error: null });
       return;
     }
     if (
@@ -162,18 +209,26 @@ export function createMentionsCapability(
       return;
     }
     const owner: MentionConnection = {
+      retired: false,
       client: next.client,
       hello: next.hello,
       connectionRevision: gateway.connectionRevision,
       profileId,
       gatewayInstanceId,
-      loaded: false,
+      revision: -1,
+      requestedRevision: -1,
       dismissing: new Set(),
       refreshRequested: false,
       refreshPromise: null,
+      retryAttempt: 0,
     };
     connection = owner;
-    publish({ phase: "loading", items: [], dismissing: [], error: null });
+    publish({
+      phase: "loading",
+      ...(!sameIdentity ? { items: [] } : {}),
+      dismissing: [],
+      error: null,
+    });
     if (!isCurrent(owner)) {
       return;
     }
@@ -192,13 +247,16 @@ export function createMentionsCapability(
       payload?.gatewayInstanceId !== owner.gatewayInstanceId ||
       typeof payload.revision !== "number" ||
       !Number.isSafeInteger(payload.revision) ||
-      payload.revision < 0
+      payload.revision < 0 ||
+      payload.revision <= Math.max(owner.revision, owner.requestedRevision)
     ) {
       return;
     }
+    owner.requestedRevision = payload.revision;
     owner.refreshRequested = true;
     void refreshAutomatically(owner);
   });
+  // Retire prior identity requests before hydrating the next connection's Inbox.
   const stopGateway = gateway.subscribe(synchronize);
   synchronize();
 
@@ -243,9 +301,10 @@ export function createMentionsCapability(
         }
       }
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       disposed = true;
+      clearTimeout(connection?.retryTimer);
       connection = null;
       stopGateway();
       stopEvents();

@@ -1,15 +1,17 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   defaultControlUiFeatureMethods,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  installPreferenceServer,
+  captureFrame,
+  expectFocused,
+  seedStorage,
+} from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal rail pins" });
 const unloaded = [
@@ -34,14 +36,11 @@ suite.define(() => {
             { key: "agent:main:design", kind: "direct", label: "Design ideas" },
           ],
         });
-        await page.addInitScript(
-          ({ key }) =>
-            localStorage.setItem(
-              key,
-              JSON.stringify({ railShortcuts: ["session:agent:main:design"] }),
-            ),
-          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
-        );
+        await seedStorage(page, {
+          [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+            railShortcuts: ["session:agent:main:design"],
+          }),
+        });
         await page.goto(suite.server.baseUrl + "chat");
         const pin = page
           .locator(".sidebar-rail")
@@ -129,20 +128,35 @@ suite.define(() => {
           },
         },
       });
-      await page.addInitScript(
-        ({ key, entries: savedEntries }) =>
-          localStorage.setItem(
-            key,
-            JSON.stringify({ railShortcuts: savedEntries, themeMode: "dark" }),
-          ),
-        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
-      );
+      await seedStorage(page, {
+        [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+          railShortcuts: entries,
+          themeMode: "dark",
+        }),
+      });
       await page.goto(suite.server.baseUrl + "chat");
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
       const pins = rail.locator(".sidebar-rail__pin");
       const pinOrder = () =>
         pins.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry")));
+      let committedEntries = entries;
+      const changePins = async (action: () => Promise<void>, nextEntries: string[]) => {
+        const after = await gateway.deferNext("users.prefs.set");
+        await action();
+        const request = await gateway.waitForRequest("users.prefs.set", { after });
+        expect(request.params).toEqual({
+          entries: { "ui.railShortcuts": nextEntries },
+          expectedEntries: { "ui.railShortcuts": committedEntries },
+        });
+        // Post-commit profile reads must retain the accepted pin order.
+        await gateway.setMethodResponse("users.prefs.get", {
+          status: "ok",
+          entries: { "ui.railShortcuts": nextEntries, "ui.themeMode": "dark" },
+        });
+        await gateway.resolveDeferred("users.prefs.set");
+        committedEntries = nextEntries;
+      };
       await expect.poll(pinOrder).toEqual(entries);
       for (const row of unloaded) {
         const link = rail.getByRole("link", { name: row.label, exact: true });
@@ -157,23 +171,14 @@ suite.define(() => {
       expect(await pins.locator(".sidebar-reorder-trigger").count()).toBe(0);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const dir = createControlUiE2eArtifactDir("rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [rail, pins.first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(dir, "after-desktop.png"), frame.png);
+        await captureFrame(dir, "after-desktop.png", page.locator(".shell"), [rail, pins.first()]);
         await page.setViewportSize({ width: 390, height: 844 });
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
           .click();
         await page.locator(".shell--nav-drawer-open").waitFor();
-        const mobile = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [rail], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(dir, "after-mobile.png"), mobile.png);
+        await captureFrame(dir, "after-mobile.png", page.locator(".shell"), [rail]);
         await page.setViewportSize({ width: 1280, height: 800 });
       }
       const source = rail.getByRole("link", { name: "Research plan", exact: true });
@@ -183,8 +188,11 @@ suite.define(() => {
         throw new Error("Missing target pin bounds");
       }
       // Playwright drives native mouse drag/drop, beginning on the anchor itself.
-      await source.dragTo(target, { targetPosition: { x: box.width / 2, y: 2 } });
       const reordered = [entries[2]!, entries[0]!, entries[1]!, ...entries.slice(3)];
+      await changePins(
+        () => source.dragTo(target, { targetPosition: { x: box.width / 2, y: 2 } }),
+        reordered,
+      );
       await expect.poll(pinOrder).toEqual(reordered);
 
       const menu = page.locator(".sidebar-rail-pin-menu");
@@ -192,15 +200,9 @@ suite.define(() => {
         await source.focus();
         await page.keyboard.press(key);
         await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
-        await expect
-          .poll(() =>
-            menu
-              .getByRole("menuitem", { name: "Move down", exact: true })
-              .evaluate((el) => el.matches(":focus-within")),
-          )
-          .toBe(true);
+        await expectFocused(menu.getByRole("menuitem", { name: "Move down", exact: true }), true);
         await page.keyboard.press("Escape");
-        await expect.poll(() => source.evaluate((el) => el === document.activeElement)).toBe(true);
+        await expectFocused(source);
       }
       await rail
         .getByRole("link", { name: "Release notes", exact: true })
@@ -212,15 +214,23 @@ suite.define(() => {
       await expect.poll(() => menu.getAttribute("aria-label")).toContain("Research plan");
       expect(await previousMenu!.evaluate((element) => element.isConnected)).toBe(false);
       await previousMenu!.evaluate((element) =>
-        element.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true })),
+        element.dispatchEvent(
+          new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
+        ),
       );
       await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
       await page.keyboard.press("Escape");
       await source.click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Move down", exact: true }).click();
+      await changePins(
+        () => menu.getByRole("menuitem", { name: "Move down", exact: true }).click(),
+        [entries[0]!, entries[2]!, entries[1]!, entries[3]!],
+      );
       await expect.poll(pinOrder).toEqual([entries[0], entries[2], entries[1], entries[3]]);
       await source.click({ button: "right" });
-      await menu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+      await changePins(
+        () => menu.getByRole("menuitem", { name: "Unpin", exact: true }).click(),
+        entries.filter((entry) => entry !== entries[2]),
+      );
       await expect.poll(pinOrder).toEqual(entries.filter((entry) => entry !== entries[2]));
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
     });
@@ -249,34 +259,11 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("connect");
         const installProfilePreferences = () =>
-          page.evaluate(() => {
-            const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-            const storageKey = "openclaw-test:clean-rail:profile-prefs";
-            const saved = sessionStorage.getItem(storageKey);
-            const values: Record<string, unknown> = saved
-              ? JSON.parse(saved)
-              : { "ui.themeMode": "dark" };
-            mock.setRequestHandler("users.prefs.get", ({ respond }) =>
-              respond({ status: "ok", entries: values }),
-            );
-            mock.setRequestHandler("users.prefs.set", ({ params, respond }) => {
-              const request = params as {
-                entries: Record<string, unknown>;
-                expectedEntries?: Record<string, unknown>;
-              };
-              if (
-                Object.entries(request.expectedEntries ?? {}).some(
-                  ([key, value]) => JSON.stringify(values[key] ?? null) !== JSON.stringify(value),
-                )
-              ) {
-                respond({ status: "conflict" });
-                return;
-              }
-              Object.assign(values, request.entries);
-              sessionStorage.setItem(storageKey, JSON.stringify(values));
-              respond({ status: "ok" });
-            });
-          });
+          installPreferenceServer(
+            page,
+            { "ui.themeMode": "dark" },
+            "openclaw-test:clean-rail:profile-prefs",
+          );
         await installProfilePreferences();
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -295,13 +282,7 @@ suite.define(() => {
           if (!dir) {
             return;
           }
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [rail, source],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(dir, name), frame.png);
+          await captureFrame(dir, name, page.locator(".shell"), [rail, source]);
         };
         await capture("rail-empty.png");
         const sourceBox = await source.boundingBox();

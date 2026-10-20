@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "./config/config.js";
+import { createConfigIO } from "./config/config.js";
 import { probeDockerGatewayHealth } from "./docker-healthcheck.js";
 import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
 
-vi.mock("./config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./config/config.js")>()),
-  getRuntimeConfig: vi.fn(),
-}));
+vi.mock("./config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config/config.js")>();
+  return {
+    ...actual,
+    createConfigIO: vi.fn((...args: Parameters<typeof actual.createConfigIO>) => ({
+      ...actual.createConfigIO(...args),
+      loadConfigAsync: async () => ({ gateway: { port: 19002 } }),
+    })),
+  };
+});
 
 vi.mock("./infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./infra/gateway-lock.js")>()),
@@ -20,7 +26,6 @@ describe("Docker healthcheck", () => {
     vi.stubGlobal("fetch", fetch);
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
     vi.mocked(readActiveGatewayLockPort).mockResolvedValue(undefined);
-    vi.mocked(getRuntimeConfig).mockReturnValue({ gateway: { port: 19002 } });
     fetch.mockResolvedValue(new Response());
   });
 
@@ -36,7 +41,7 @@ describe("Docker healthcheck", () => {
 
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19000/healthz");
-    expect(getRuntimeConfig).not.toHaveBeenCalled();
+    expect(createConfigIO).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -47,10 +52,9 @@ describe("Docker healthcheck", () => {
 
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
-    expect(getRuntimeConfig).toHaveBeenCalledWith({
-      pin: false,
-      skipPluginValidation: true,
-      skipShellEnvFallback: true,
+    expect(createConfigIO).toHaveBeenCalledWith({
+      pluginValidation: "skip",
+      shellEnvFallback: "defer",
     });
   });
 

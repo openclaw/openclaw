@@ -46,8 +46,13 @@ jobs:
       ) }}
     # Admission runs before job concurrency, so an empty metadata edit cannot
     # cancel a useful dispatch. Other changes retain the receiver's policy.
+    # Each event kind owns its lane, as in the receiver's reference dispatcher:
+    # pull_request_target and review runs leave check runs on the PR head, and
+    # GitHub keeps counting a cancelled one there (UNSTABLE), so a comment or
+    # review must never cancel a PR event. Review activity runs are independent
+    # observations and never share a group; comments serialize per comment.
     concurrency:
-      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}-{2}', github.repository, github.event_name, (github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') && github.run_id || github.event.comment.id || github.event.issue.number || github.event.pull_request.number || github.run_id) }}
       cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
@@ -90,7 +95,7 @@ jobs:
       - name: Create ClawSweeper dispatch token
         id: token
         if: ${{ env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
@@ -105,6 +110,10 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
+          if [[ "$COMMENT_BODY" == *"<!-- clawsweeper-maintainer-opt-in:"* ]]; then
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|autoclose|auto([[:space:]]+|-)?merge)\b' <<< "$COMMENT_BODY"; then
             echo "is_command=true" >> "$GITHUB_OUTPUT"
           else
@@ -119,7 +128,7 @@ jobs:
             steps.comment_filter.outputs.is_command == 'true' &&
             env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
           }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
@@ -132,15 +141,13 @@ jobs:
         id: pr_ack_token
         if: >-
           ${{
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' &&
             github.event_name == 'pull_request_target' &&
-            (
-              github.event.action == 'ready_for_review' ||
-              (github.event.action == 'opened' && github.event.pull_request.draft == false)
-            ) &&
-            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+            (github.event.action == 'ready_for_review' ||
+              (github.event.action == 'opened' && github.event.pull_request.draft == false))
           }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
@@ -296,7 +303,7 @@ jobs:
 
       - name: Setup supported Node runtime
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false

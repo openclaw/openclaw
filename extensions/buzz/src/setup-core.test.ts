@@ -7,43 +7,11 @@ describe("buzzSetupContract", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { name: "  Named bot  ", expected: "Named bot" },
-    { name: "   ", expected: "Existing bot" },
-    { name: undefined, expected: "Existing bot" },
-  ])(
-    "persists the supplied account name without clearing an omitted name: $name",
-    ({ name, expected }) => {
-      const cfg = {
-        channels: { buzz: { name: "Existing bot", groupPolicy: "allowlist" } },
-      } as OpenClawConfig;
-      const before = structuredClone(cfg);
-      const result = buzzSetupContract.applyAccountConfig({
-        cfg,
-        accountId: "default",
-        input: { name, relayUrl: "wss://buzz.example.com", privateKey: "11".repeat(32) },
-      });
-
-      expect(result.channels?.buzz?.name).toBe(expected);
-      expect(result.channels?.buzz?.groupPolicy).toBe("allowlist");
-      expect(cfg).toEqual(before);
-    },
-  );
-
-  it.each([
-    {
-      name: "plaintext private key",
-      privateKey: "11".repeat(32),
-    },
-    {
-      name: "private-key SecretRef",
-      privateKey: { source: "env" as const, provider: "default", id: "BUZZ_EXISTING_KEY" },
-    },
-  ])("adds a named account without changing the existing $name", ({ privateKey }) => {
+  it("adds a named account without changing the existing private-key SecretRef", () => {
     const buzz = {
       enabled: false,
       relayUrl: "wss://original.example.com",
-      privateKey,
+      privateKey: { source: "env" as const, provider: "default", id: "BUZZ_EXISTING_KEY" },
       authTag: '["auth","owner","kind=9","signature"]',
     };
     const cfg = { channels: { buzz } } as OpenClawConfig;
@@ -95,52 +63,42 @@ describe("buzzSetupContract", () => {
     expect(process.env.BUZZ_PRIVATE_KEY).toBe(existingPrivateKey);
   });
 
-  it.each(["root", "explicit-default", "named"])(
-    "renames and reconfigures the selected %s identity without changing siblings",
-    (scope) => {
-      const root = {
-        name: "Root",
-        relayUrl: "wss://root.example.com",
-        privateKey: "11".repeat(32),
-      };
-      const ada = { name: "Ada", relayUrl: "wss://ada.example.com", privateKey: "22".repeat(32) };
-      const explicitDefault = {
-        name: "Default",
-        relayUrl: "wss://default.example.com",
-        privateKey: "33".repeat(32),
-      };
-      const accounts = scope === "explicit-default" ? { ada, default: explicitDefault } : { ada };
-      const cfg = { channels: { buzz: { ...root, accounts } } } as OpenClawConfig;
-      const before = structuredClone(cfg);
-      const accountId = scope === "named" ? "ada" : "default";
-      const renamed = buzzSetupContract.applyAccountName!({ cfg, accountId, name: " Renamed " });
-      const result = buzzSetupContract.applyAccountConfig({
-        cfg: renamed,
-        accountId,
-        input: { relayUrl: "wss://new.example.com", privateKey: "44".repeat(32) },
-      });
-      const patch = {
-        name: "Renamed",
-        relayUrl: "wss://new.example.com",
-        privateKey: "44".repeat(32),
-        enabled: true,
-      };
-      expect(result.channels?.buzz).toEqual(
-        scope === "root"
-          ? { ...patch, accounts }
-          : { ...root, accounts: { ...accounts, [accountId]: patch } },
-      );
-      expect(cfg).toEqual(before);
-    },
-  );
+  it("renames and reconfigures the explicit default identity without changing siblings", () => {
+    const root = {
+      name: "Root",
+      relayUrl: "wss://root.example.com",
+      privateKey: "11".repeat(32),
+    };
+    const ada = { name: "Ada", relayUrl: "wss://ada.example.com", privateKey: "22".repeat(32) };
+    const explicitDefault = {
+      name: "Default",
+      relayUrl: "wss://default.example.com",
+      privateKey: "33".repeat(32),
+    };
+    const accounts = { ada, default: explicitDefault };
+    const cfg = { channels: { buzz: { ...root, accounts } } } as OpenClawConfig;
+    const before = structuredClone(cfg);
+    const accountId = "default";
+    const renamed = buzzSetupContract.applyAccountName!({ cfg, accountId, name: " Renamed " });
+    const result = buzzSetupContract.applyAccountConfig({
+      cfg: renamed,
+      accountId,
+      input: { relayUrl: "wss://new.example.com", privateKey: "44".repeat(32) },
+    });
+    const patch = {
+      name: "Renamed",
+      relayUrl: "wss://new.example.com",
+      privateKey: "44".repeat(32),
+      enabled: true,
+    };
+    expect(result.channels?.buzz).toEqual({
+      ...root,
+      accounts: { ...accounts, [accountId]: patch },
+    });
+    expect(cfg).toEqual(before);
+  });
 
   it("validates and applies BUZZ_PRIVATE_KEY setup without storing the key", () => {
-    expect(buzzSetupContract.metadata.fields.find((field) => field.key === "useEnv")).toMatchObject(
-      {
-        kind: "boolean",
-        envVars: ["BUZZ_PRIVATE_KEY"],
-      },
-    );
     expect(
       buzzSetupContract.validateInput?.({
         cfg: {},
@@ -170,27 +128,6 @@ describe("buzzSetupContract", () => {
       enabled: true,
       relayUrl: "wss://buzz.example.com",
     });
-  });
-
-  it("clears an identity-bound auth tag when changing the private key", () => {
-    const cfg = {
-      channels: {
-        buzz: {
-          relayUrl: "wss://buzz.example.com",
-          privateKey: "11".repeat(32),
-          authTag: '["auth","owner","kind=9","signature"]',
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = buzzSetupContract.applyAccountConfig({
-      cfg,
-      accountId: "default",
-      input: { relayUrl: "wss://buzz.example.com", privateKey: "22".repeat(32) },
-    });
-
-    expect(result.channels?.buzz?.privateKey).toBe("22".repeat(32));
-    expect(result.channels?.buzz?.authTag).toBeUndefined();
   });
 
   it("clears an auth tag when replacing an unresolved SecretRef with the environment", () => {

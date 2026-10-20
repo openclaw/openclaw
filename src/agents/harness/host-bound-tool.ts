@@ -1,5 +1,9 @@
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
-import { bindAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import {
+  bindAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { rewrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import {
@@ -16,7 +20,7 @@ import { isWorkspaceTool } from "./host-capability-workspace.js";
 export function bindHostToolSurface(
   tools: AnyAgentTool[],
   params: {
-    assertActive: () => void;
+    assertActive: SessionSourceAssertion;
     observeResult: (result: unknown) => void;
     hookContext: Parameters<typeof rewrapToolWithBeforeToolCallHook>[1];
     callerIdentity: Parameters<typeof wrapToolWithGatewayCallerIdentity>[1] | undefined;
@@ -44,7 +48,7 @@ export function bindHostToolSurface(
 
 export function gateBoundTool(
   tool: AnyAgentTool,
-  assertActive: () => void,
+  assertActive: SessionSourceAssertion,
   observeResult: (result: unknown) => void,
   workspaceReadiness?: AgentWorkspaceReadiness,
 ): AnyAgentTool {
@@ -53,19 +57,23 @@ export function gateBoundTool(
   if (!execute && !sourcePreparer) {
     return tool;
   }
+  const assertCurrent = () =>
+    runWithAgentToolSourceExecutionScope(assertActive, async () => {
+      assertActive();
+      workspaceReadiness?.assertCurrent();
+    });
   const acceptResult = <T>(result: T): T => {
-    assertActive();
+    // Completed results keep their run binding; transcript changes fence the next effect.
+    (assertActive.assertScopeCurrent ?? assertActive)();
     workspaceReadiness?.assertCurrent();
     observeResult(result);
     return result;
   };
   const awaitWorkspace = async () => {
-    assertActive();
+    await assertCurrent();
     if (workspaceReadiness) {
-      workspaceReadiness.assertCurrent();
       await workspaceReadiness.waitUntilReady();
-      assertActive();
-      workspaceReadiness.assertCurrent();
+      await assertCurrent();
     }
   };
   const gated: AnyAgentTool = {
@@ -77,7 +85,7 @@ export function gateBoundTool(
               if (workspaceReadiness) {
                 await awaitWorkspace();
               } else {
-                assertActive();
+                await assertCurrent();
               }
             } catch (error) {
               // This gate precedes dispatch; a revoked owner must not look like
@@ -97,12 +105,11 @@ export function gateBoundTool(
       if (workspaceReadiness) {
         await awaitWorkspace();
       } else {
-        assertActive();
+        await assertCurrent();
       }
       const prepared = await sourcePreparer(preparationParams);
       try {
-        assertActive();
-        workspaceReadiness?.assertCurrent();
+        await assertCurrent();
       } catch (error) {
         prepared.dispose();
         throw error;
@@ -119,7 +126,7 @@ export function gateBoundTool(
           if (workspaceReadiness) {
             await awaitWorkspace();
           } else {
-            assertActive();
+            await assertCurrent();
           }
           return acceptResult(await prepared.execute(onImplementationStart));
         },

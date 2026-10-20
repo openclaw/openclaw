@@ -3,13 +3,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
 import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
 import { resolveSandboxContext } from "./context.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { resolvePreparedSandboxRuntimeStatus } from "./runtime-status.js";
 
 const docker = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -39,6 +40,7 @@ it("rejects hosted custody released during ordinary browser inspection before cr
       databasePath: resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: path.join(root, "openclaw.json"),
         role: "gateway",
@@ -87,7 +89,7 @@ it("rejects hosted custody released during ordinary browser inspection before cr
       config,
       sessionKey,
       workspaceDir: path.join(root, "workspace"),
-      preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
         cfg: config,
         sessionKey,
         preparedSessionEntry: null,

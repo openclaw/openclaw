@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -12,6 +13,7 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
@@ -40,8 +42,12 @@ import type {
   LatestTranscriptAssistantText,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
 import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
@@ -49,6 +55,7 @@ import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
+import { projectAssistantTranscriptMirrorIdentity } from "./transcript-assistant-delivery-read.js";
 import {
   projectAssistantTranscriptText,
   recordAssistantManagedMediaUrls,
@@ -60,6 +67,7 @@ import {
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
+  type SubagentCompletionDirectDeliveryMirror,
 } from "./transcript-mirror.js";
 import type {
   ReadRecentSessionConversationTextOptions,
@@ -67,7 +75,6 @@ import type {
 } from "./transcript-recent-text.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptAppendTarget = {
   agentId?: string;
@@ -92,6 +99,7 @@ export type SessionTranscriptAppendResult =
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
 type InternalSessionTranscriptDeliveryMirror =
   | SessionTranscriptDeliveryMirror
+  | SubagentCompletionDirectDeliveryMirror
   | {
       kind: "message-tool-source-reply";
       final: boolean;
@@ -101,7 +109,8 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice;
+  | SkillWorkshopChangeNotice
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -199,7 +208,7 @@ export async function readRecentUserAssistantTextForSession(
           agentId,
           sessionKey: scopedSessionKey,
           sessionId: read.value.sessionId,
-          storePath: owner.incognito?.actor.path ?? owner.scope?.storePath ?? storePath,
+          storePath: owner.source?.path ?? owner.scope?.storePath ?? storePath,
           env: owner.scope?.env,
         },
         owner.assertCurrent,
@@ -323,17 +332,30 @@ export async function appendExactAssistantMessageToSessionTranscript(
     message: SessionTranscriptAssistantMessage;
   },
 ): Promise<SessionTranscriptAppendResult> {
-  const incognito = captureIncognitoSessionOperation(params);
-  return incognito
-    ? incognito.actor.sessions.withSharedState(() =>
-        appendExactAssistantMessageWithSource(params, incognito),
-      )
-    : appendExactAssistantMessageWithSource(params);
+  const assertCurrent = () => params.assertCurrent?.();
+  const authority = { assertCurrent, authorize: assertCurrent };
+  if (captureSessionActorStorageOwner(params, authority)) {
+    return (
+      (await withSessionActorStorage(
+        params,
+        {
+          authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          create: Boolean(params.command),
+        },
+        () => appendExactAssistantMessageWithSource(params),
+      )) ?? {
+        ok: false,
+        ...(params.expectedSessionId ? { code: "session-rebound" as const } : {}),
+        reason: `unknown sessionKey: ${params.sessionKey}`,
+      }
+    );
+  }
+  return appendExactAssistantMessageWithSource(params);
 }
 
 async function appendExactAssistantMessageWithSource(
   params: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0],
-  incognito?: ReturnType<typeof captureIncognitoSessionOperation>,
 ): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -350,54 +372,46 @@ async function appendExactAssistantMessageWithSource(
     !transcriptAgentId && params.config ? resolveDefaultAgentId(params.config) : undefined;
   const storeAgentId =
     transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey, configuredDefaultAgentId);
+  const memory = getSessionActorStorageBinding(params);
   const storePath =
-    incognito?.actor.path ??
+    memory?.path ??
     params.storePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: storeAgentId });
-  const actorKey = incognito
-    ? resolveSqliteSessionKey(sessionKey, incognito.actor.agentId)
-    : undefined;
-  const resolved =
-    incognito && actorKey
-      ? {
-          existing: (
-            await incognito.actor.sessions.read(
-              incognito.authority,
-              { sessionKey: actorKey },
-              incognito.admissionSignal,
-            )
-          ).entry,
-          normalizedKey: actorKey,
-        }
-      : await withSessionEntryReadOnlyInWorker(
+  const resolved = memory
+    ? {
+        existing: memory.actor.storage.readCurrent(
           {
-            ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
-            sessionKey,
-            storePath,
+            type: "session.entry.read",
+            input: { sessionKey: resolveSqliteSessionKey(sessionKey, memory.agentId) },
           },
-          () => params.assertCurrent?.(),
-          async (read, owner) => {
-            if (!read.ok) {
-              throw read.error;
-            }
-            return {
-              existing: read.value,
-              normalizedKey: resolveSqliteSessionKey(
-                sessionKey,
-                owner.scope?.agentId ?? storeAgentId,
-              ),
-            };
-          },
-        );
-  incognito?.authority.assertCurrent();
-  params.assertCurrent?.();
+          memory.authority,
+        ),
+        normalizedKey: resolveSqliteSessionKey(sessionKey, memory.agentId),
+      }
+    : await withSessionEntryReadOnlyInWorker(
+        { ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}), sessionKey, storePath },
+        () => params.assertCurrent?.(),
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return {
+            existing: read.value,
+            normalizedKey: resolveSqliteSessionKey(
+              sessionKey,
+              owner.scope?.agentId ?? storeAgentId,
+            ),
+          };
+        },
+      );
+  const { normalizedKey } = resolved;
   let entry = resolved.existing;
   if (
     (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) ||
     (params.expectedLifecycleRevision !== undefined &&
       entry?.lifecycleRevision !== (params.expectedLifecycleRevision ?? undefined)) ||
     (params.expectedWriterRunId !== undefined &&
-      (entry as SessionEntry | undefined)?.activeWriterRunId !== params.expectedWriterRunId)
+      entry?.activeWriterRunId !== params.expectedWriterRunId)
   ) {
     return {
       ok: false,
@@ -436,7 +450,7 @@ async function appendExactAssistantMessageWithSource(
           message,
           beforeMessageWrite: params.beforeMessageWrite,
           agentId: transcriptAgentId,
-          sessionKey: resolved.normalizedKey,
+          sessionKey: normalizedKey,
         })
       : message;
   if (!preparedUnkeyedMessage) {
@@ -449,7 +463,7 @@ async function appendExactAssistantMessageWithSource(
   const target: SessionTranscriptAppendTarget = {
     ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
     sessionId: entry.sessionId,
-    sessionKey: resolved.normalizedKey,
+    sessionKey: normalizedKey,
     storePath,
   };
   if (isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey) {
@@ -506,7 +520,7 @@ async function appendExactAssistantMessageWithSource(
                     beforeMessageWrite: params.beforeMessageWrite,
                     explicitIdempotencyKey,
                     agentId: transcriptAgentId,
-                    sessionKey: resolved.normalizedKey,
+                    sessionKey: normalizedKey,
                   }),
               },
             }
@@ -567,7 +581,7 @@ async function appendExactAssistantMessageWithSource(
     try {
       const now = Date.now();
       await updateSessionEntry(
-        { agentId: transcriptAgentId, sessionKey: resolved.normalizedKey, storePath },
+        { agentId: transcriptAgentId, sessionKey: normalizedKey, storePath },
         (current) =>
           current.sessionId !== entry.sessionId
             ? null
@@ -620,31 +634,12 @@ async function readLatestVisibleTranscriptMessage(scope: {
   }
 }
 
-function extractAssistantMessageText(message: AgentMessage): string | null {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) {
-    return null;
-  }
-
-  const parts = message.content
-    .filter(
-      (
-        part,
-      ): part is {
-        type: "text";
-        text: string;
-      } => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
-    )
-    .map((part) => part.text.trim());
-
-  return parts.length > 0 ? parts.join("\n").trim() : null;
-}
-
 async function findLatestEquivalentAssistantMessageId(
   target: SessionTranscriptTurnWriteContext,
   message: SessionTranscriptAssistantMessage,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(sanitizeTranscriptMessage(message));
-  if (!expectedText) {
+  const expected = projectAssistantTranscriptMirrorIdentity(sanitizeTranscriptMessage(message));
+  if (!expected) {
     return undefined;
   }
 
@@ -655,14 +650,12 @@ async function findLatestEquivalentAssistantMessageId(
       sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
-    const latestMessage = latest?.message as { role?: unknown } | undefined;
-    if (latestMessage?.role !== "assistant") {
-      return undefined;
-    }
-    const candidateText = latest
-      ? extractAssistantMessageText(sanitizeTranscriptMessage(latest.message as AgentMessage))
+    const candidate = latest
+      ? projectAssistantTranscriptMirrorIdentity(
+          sanitizeTranscriptMessage(latest.message as AgentMessage),
+        )
       : undefined;
-    return candidateText === expectedText ? latest?.id : undefined;
+    return isDeepStrictEqual(candidate, expected) ? latest?.id : undefined;
   }
 
   return undefined;

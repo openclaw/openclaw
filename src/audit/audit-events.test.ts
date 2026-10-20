@@ -9,8 +9,16 @@ import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
+import {
+  assertAuditOverflowRetention,
+  assertAuditRetentionCountDrift,
+  assertAuditRunAtomicity,
+  assertAuditRunReplay,
+  assertAuditRunWarmWrite,
+} from "./audit-event-retention.test-support.js";
 import {
   listAuditEvents,
   pruneExpiredAuditEventsInDatabase,
@@ -20,7 +28,6 @@ import type { AuditEventInput, ToolActionAuditEventInput } from "./audit-event-t
 import type { AuditEventWriter } from "./audit-event-writer.js";
 
 const tempDirs: string[] = [];
-const AUDIT_EVENT_MAX_ROWS_CONTRACT = 100_000;
 const AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
 const AUDIT_EVENT_RETENTION_MS_CONTRACT = 30 * 24 * 60 * 60_000;
 let auditTestRunSequence = 0;
@@ -86,6 +93,10 @@ function captureAuditWriter(inputs: AuditEventInput[]): AuditEventWriter {
     ready: Promise.resolve(),
     record: (input) => {
       inputs.push(input);
+      return true;
+    },
+    recordRun: (start, finish) => {
+      inputs.push(start, finish);
       return true;
     },
     recordExecutionIdentity: () => true,
@@ -225,72 +236,93 @@ describe("audit event persistence", () => {
     });
   });
 
-  it("deduplicates replayed source events", async () => {
+  it.each(["source", "event"])("deduplicates replayed %s identities", async (identity) => {
     const database = createDatabaseOptions();
     const input = auditInput();
-    expect(
-      recordAuditEventInDatabase(input, {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeDefined();
-    expect(
-      recordAuditEventInDatabase(input, {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeUndefined();
-    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
-  });
-
-  it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
-    const database = createDatabaseOptions();
-    const { db } = openOpenClawStateDatabase(database);
-    const occurredAt = Date.now();
-    db.prepare(
-      `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
-            numbers(n) AS (
-              SELECT 1 + a.d + 10*b.d + 100*c.d + 1000*d.d + 10000*e.d + 100000*f.d
-              FROM digits a, digits b, digits c, digits d, digits e, digits f
-            )
-       INSERT INTO audit_events (
-         event_id, source_id, source_sequence, occurred_at, kind, action, status,
-         actor_type, actor_id, agent_id, run_id
-       )
-       SELECT 'event-' || n, 'source-' || n, n, ? + n, 'agent_run',
-              'agent.run.started', 'started', 'agent', 'main', 'main', 'run-' || n
-       FROM numbers
-       WHERE n <= ?`,
-    ).run(occurredAt, AUDIT_EVENT_MAX_ROWS_CONTRACT + 1);
-
+    const first = recordAuditEventInDatabase(
+      input,
+      { ...database, database: openOpenClawStateDatabase(database) },
+      "replayed-event",
+    );
+    expect(first?.sequence).toBe(1);
     expect(
       recordAuditEventInDatabase(
-        auditInput({
-          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
-          occurredAt: occurredAt + AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
-        }),
+        { ...input, ...(identity === "event" ? { sourceId: "another-source" } : {}) },
         { ...database, database: openOpenClawStateDatabase(database) },
+        identity === "event" ? "replayed-event" : "another-event",
       ),
-    ).toBeDefined();
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
-      count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
-    });
+    ).toBeUndefined();
+    const next = recordAuditEventInDatabase(
+      auditInput({ sourceId: "after-replay", sourceSequence: 2 }),
+      { ...database, database: openOpenClawStateDatabase(database) },
+    );
+    expect(next?.sequence).toBe(3);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([next, first]);
   });
 
-  it("rolls back an insert whose sequence cannot be represented safely", () => {
+  it("writes a warm run pair with one insert and no extra SQL", () => {
+    assertAuditRunWarmWrite(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("completes whole and partial run-pair replays without duplicating event IDs", () => {
+    assertAuditRunReplay(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("keeps run pairs atomic and rehydrates the sequence after rollback", () => {
+    assertAuditRunAtomicity(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("repairs retention count drift once without repeated pruning reads", () => {
+    assertAuditRetentionCountDrift(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("prunes overflow in one statement and keeps the retained sequence window", () => {
+    assertAuditOverflowRetention(openOpenClawStateDatabase(createDatabaseOptions()));
+  });
+
+  it("rehydrates the sequence after an enclosing transaction rolls back", async () => {
+    const database = createDatabaseOptions();
+    const options = { ...database, database: openOpenClawStateDatabase(database) };
+    const record = (sourceSequence: number) =>
+      recordAuditEventInDatabase(auditInput({ sourceSequence }), options);
+    const first = record(1);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        expect(record(2)?.sequence).toBe(2);
+        throw new Error("rollback enclosing transaction");
+      }, options),
+    ).toThrow("rollback enclosing transaction");
+
+    const committed = record(3);
+    expect(committed?.sequence).toBe(2);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([committed, first]);
+  });
+
+  it.each([false, true])("rolls back an unsafe sequence (warmed: %s)", (warmed) => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
-      BigInt(Number.MAX_SAFE_INTEGER),
+      BigInt(Number.MAX_SAFE_INTEGER) - (warmed ? 1n : 0n),
     );
+    if (warmed) {
+      expect(
+        recordAuditEventInDatabase(auditInput({ sourceSequence: 1 }), {
+          ...database,
+          database: openOpenClawStateDatabase(database),
+        })?.sequence,
+      ).toBe(Number.MAX_SAFE_INTEGER);
+    }
 
     expect(() =>
-      recordAuditEventInDatabase(auditInput(), {
+      recordAuditEventInDatabase(auditInput({ sourceSequence: 2 }), {
         ...database,
         database: openOpenClawStateDatabase(database),
       }),
     ).toThrow("audit event sequence is outside the supported integer range");
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: warmed ? 1 : 0,
+    });
   });
 
   it("returns an expired append only while bounded pruning still retains it", () => {
@@ -374,19 +406,21 @@ describe("audit event persistence", () => {
     }
   });
 
-  it("forgets expiry changes when the pruning transaction rolls back", () => {
-    const database = createDatabaseOptions();
-    const owner = openOpenClawStateDatabase(database);
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const record = (sourceSequence: number) =>
-      recordAuditEventInDatabase(auditInput({ sourceSequence }), {
-        ...database,
-        database: owner,
-      });
-    try {
-      record(1);
-      owner.db.exec(`
+  it.each(["warm insert", "pruning"] as const)(
+    "forgets cached facts when %s fails to commit",
+    (mode) => {
+      const database = createDatabaseOptions();
+      const owner = openOpenClawStateDatabase(database);
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const record = (sourceSequence: number) =>
+        recordAuditEventInDatabase(auditInput({ sourceSequence }), {
+          ...database,
+          database: owner,
+        });
+      try {
+        const first = record(1);
+        owner.db.exec(`
         CREATE TABLE audit_expiry_parent (id INTEGER PRIMARY KEY);
         CREATE TABLE audit_expiry_child (
           parent_id INTEGER NOT NULL,
@@ -399,18 +433,24 @@ describe("audit event persistence", () => {
           INSERT INTO audit_expiry_child (parent_id) VALUES (1);
         END;
       `);
-      clock.mockReturnValue(now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1);
-      expect(() => record(2)).toThrow(/FOREIGN KEY/u);
-      owner.db.exec("DROP TRIGGER reject_audit_expiry");
-      const committed = record(3);
-      expect(committed).toBeDefined();
-      expect(owner.db.prepare("SELECT event_id FROM audit_events").all()).toEqual([
-        { event_id: committed?.eventId },
-      ]);
-    } finally {
-      clock.mockRestore();
-    }
-  });
+        clock.mockReturnValue(
+          mode === "pruning" ? now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1 : now + 1,
+        );
+        expect(() => record(2)).toThrow(/FOREIGN KEY/u);
+        owner.db.exec("DROP TRIGGER reject_audit_expiry");
+        const committed = record(3);
+        expect(committed).toBeDefined();
+        expect(
+          owner.db.prepare("SELECT event_id FROM audit_events ORDER BY sequence").all(),
+        ).toEqual([
+          ...(mode === "warm insert" ? [{ event_id: first?.eventId }] : []),
+          { event_id: committed?.eventId },
+        ]);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("excludes and physically prunes records outside the fixed retention window", async () => {
     const database = createDatabaseOptions();
@@ -428,26 +468,27 @@ describe("audit event persistence", () => {
     }
     const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
 
+    const prune = () =>
+      pruneExpiredAuditEventsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: expiredAt,
+      });
+    const rollback = new Error("fixture outer rollback");
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        expect(prune()).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+        throw rollback;
+      }, database),
+    ).toThrow(rollback);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT + 1,
+    });
+
     expect((await listAuditEvents({ database, limit: 10, now: expiredAt })).events).toEqual([]);
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+    expect(prune()).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(1);
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(0);
+    expect(prune()).toBe(1);
+    expect(prune()).toBe(0);
   });
 });
 
@@ -533,13 +574,14 @@ describe("agent activity audit projection", () => {
     );
     await recorder.stop();
 
-    expect(inputs.at(-1)).toMatchObject({
+    const toolInput = inputs.find((input) => input.kind === "tool_action");
+    expect(toolInput).toMatchObject({
       actorType: "system",
       actorId: "unknown",
       agentId: "unknown",
     });
-    expect(inputs.at(-1)).not.toHaveProperty("sessionKey");
-    expect(inputs.at(-1)).not.toHaveProperty("sessionId");
+    expect(toolInput).not.toHaveProperty("sessionKey");
+    expect(toolInput).not.toHaveProperty("sessionId");
   });
 
   it("omits prompt, arguments, results, and raw errors from run and tool records", () => {

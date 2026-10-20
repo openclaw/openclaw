@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -39,15 +40,22 @@ export function prepareInstantThreadHandoff(options: {
   return () => {
     const draft = retainDraft();
     return draft
-      ? new InstantThreadHandoff(context, key, agentId, draft, options.message, options.composer)
+      ? new InstantThreadHandoff(
+          context,
+          key,
+          agentId,
+          draft,
+          options.message,
+          options.composer,
+          params.displayName,
+        )
       : undefined;
   };
 }
 
 /**
- * A transient route owns the original draft element, not a copy of its controllers.
- * Its attachment custody, selection flags and frozen startup intent survive rollback.
- * No draft bytes are persisted here, including incognito drafts.
+ * Retain the original draft element, attachments, selections and startup intent for rollback.
+ * Never persist draft bytes, including incognito drafts.
  */
 export class InstantThreadHandoff {
   private readonly creation;
@@ -74,6 +82,7 @@ export class InstantThreadHandoff {
     private readonly draft: RetainedNewSessionDraft,
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
     composer?: CreationComposer,
+    displayName?: string,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -103,16 +112,23 @@ export class InstantThreadHandoff {
     const target = { pathname: options.pathname, search: "", hash: "" };
     // The route renders the provisional key, but saved/global selection stays
     // on the last admitted session until StartedSessionNavigation adopts it.
-    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    // A cached preview can notify the shell synchronously on reconnect. Publish
+    // its admission owner first so that navigation cannot select an unadmitted key.
     this.clearPendingCreate = context.chatSubmissions.beginCreate({
       creation: this.creation,
       message,
       composer,
+      displayName,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),
     });
-    this.transition.signal.addEventListener("abort", () => this.dispose(), { once: true });
+    this.transition = beginInstantThreadNavigation(context, "chat", target);
+    listen(this.transition.signal, "abort", () => this.dispose(), {
+      once: true,
+      signal: this.lifetime.signal,
+    });
+    // Connection receipts retire preview authority and start the retained draft's rollback.
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (

@@ -1,10 +1,10 @@
 // Keep provider/model dependencies controlled while exercising the real config reloader.
 // oxfmt-ignore
-import { cleanupPreparedModelRuntimeHarness, getPreparedModelRuntimeMocks, resetPreparedModelRuntimeHarness } from "../agents/prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { usePreparedModelRuntimeHarness } from "../agents/prepared-model-runtime.test-harness.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
-import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-snapshots.js";
+import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-persisted-rows.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import * as authProfileStoreUpdate from "../agents/auth-profiles/store-update.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -12,17 +12,10 @@ import {
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
-import {
-  readConfigFileSnapshot,
-  registerConfigWriteListener,
-  transformConfigFileWithRetry,
-} from "../config/config.js";
+import { completionModelDefinition } from "../agents/simple-completion.test-support.js";
+import { readConfigFileSnapshot, transformConfigFileWithRetry } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import {
-  createRuntimeConfigWriteApplication,
-  getRuntimeConfigWriteApplication,
-} from "../config/runtime-write-application.js";
-import * as configFileSource from "../config/source-file.js";
+import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { activateSavedSetupCredential } from "../system-agent/setup-inference-credential-access.js";
@@ -31,27 +24,21 @@ import {
   commitSetupInferenceActivation,
   type SetupInferenceConfigTarget,
 } from "../system-agent/setup-inference-transition.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
-import { createWatcherMock } from "./config-reload.watcher.test-support.js";
+import { ownedConfigReloadOptions } from "./config-reload.test-support.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 
-let state: OpenClawTestState;
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "activation-reloader" });
-  await resetPreparedModelRuntimeHarness(state);
-  bindPluginMetadataSnapshotCache(getPreparedModelRuntimeMocks().pluginMetadataSnapshot);
-  getPreparedModelRuntimeMocks().configuredAgentIds = ["default"];
-  getPreparedModelRuntimeMocks().configuredWorkspaces.set("default", state.workspaceDir);
-});
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+const harness = usePreparedModelRuntimeHarness({ label: "activation-reloader" });
+beforeEach(() => {
+  const { state, mocks } = harness;
+  bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot);
+  mocks.configuredAgentIds = ["default"];
+  mocks.configuredWorkspaces.set("default", state.workspaceDir);
 });
 
 it("the real reloader restores the working connection after failed credential activation", async () => {
+  const { state } = harness;
+  const agentDir = state.agentDir("default");
   const previous: OpenClawConfig = {
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
@@ -61,16 +48,9 @@ it("the real reloader restores the working connection after failed credential ac
           baseUrl: "https://fixture.invalid/v1",
           api: "openai-responses",
           apiKey: "fixture-key",
-          models: ["working", "verified"].map((id) => ({
-            id: "fixture-" + id,
-            name: id,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128000,
-            maxTokens: 4096,
-            compat: { supportsTools: true },
-          })),
+          models: ["working", "verified"].map((name) =>
+            completionModelDefinition({ id: `fixture-${name}`, name }),
+          ),
         },
       },
     },
@@ -79,18 +59,16 @@ it("the real reloader restores the working connection after failed credential ac
       defaults: { workspace: state.workspaceDir, model: "openai/fixture-working" },
     },
   };
-  const candidate = {
-    ...previous,
-    agents: {
-      ...previous.agents,
-      defaults: { ...previous.agents?.defaults, model: "openai/fixture-verified" },
-    },
-  };
+  const candidate = structuredClone(previous);
+  candidate.agents!.defaults!.model = "openai/fixture-verified";
   const profileId = "openai:pending-activation";
-  const pendingCredential: AuthProfileCredential = {
+  const promotedCredential: AuthProfileCredential = {
     type: "api_key",
     provider: "openai",
     key: "fixture-replacement-key",
+  };
+  const pendingCredential: AuthProfileCredential = {
+    ...promotedCredential,
     setup: {
       replacement: true,
       modelRef: "openai/fixture-verified",
@@ -104,19 +82,12 @@ it("the real reloader restores the working connection after failed credential ac
   await state.writeConfig(previous);
   await refreshPreparedModelRuntimeSnapshots(previous);
   const initial = await readConfigFileSnapshot();
-  const configFileAdapter = vi
-    .spyOn(configFileSource, "createConfigFileAdapter")
-    .mockImplementation((options) => {
-      const watcher = createWatcherMock();
-      const adapter = watcher.attach(options);
-      return {
-        ...adapter,
-        start() {
-          adapter.start();
-          watcher.emit("ready");
-        },
-      };
-    });
+  const watcher = installWatcherMock();
+  const startWatcher = watcher.adapter.start;
+  watcher.adapter.start = vi.fn(async () => {
+    await startWatcher();
+    watcher.emit("ready");
+  });
   const applyRuntime: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"] = async (
     plan,
     config,
@@ -130,36 +101,16 @@ it("the real reloader restores the working connection after failed credential ac
   };
   let promotionObserved = false;
   const reloader = startGatewayConfigReloader({
-    scheduler: createTestGatewayScheduler("fake-timers"),
-    initialConfig: initial.config,
-    initialCompareConfig: initial.sourceConfig,
-    initialSnapshotRawHash: initial.hash ?? null,
-    initialAuthoredConfig: initial.parsed,
-    initialSnapshotValid: initial.valid,
-    initialSnapshotIssues: initial.issues,
-    testDebounceMs: 0,
+    ...(await ownedConfigReloadOptions(initial, state.configPath)),
     readSnapshot: () => readConfigFileSnapshot(),
-    watchPath: state.configPath,
-    readPluginInstallRecords: async () => ({}),
-    initialPluginInstallRecords: {},
-    subscribeToWrites: (listener) =>
-      registerConfigWriteListener(listener, {
-        ownsRuntimeActivationFor: state.configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-        }),
-      }),
     prepareConfigCandidate: async ({ runtimeConfig, sourceConfig }) => {
       if (
         resolveAgentModelPrimaryValue(sourceConfig.agents?.defaults?.model) ===
         "openai/fixture-verified"
       ) {
-        expect(
-          loadAuthProfileStoreWithoutExternalProfiles(state.agentDir("default")).profiles[
-            profileId
-          ],
-        ).toEqual({ type: "api_key", provider: "openai", key: "fixture-replacement-key" });
+        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual(
+          promotedCredential,
+        );
         promotionObserved = true;
         throw new Error("fixture candidate runtime preparation failed");
       }
@@ -175,11 +126,12 @@ it("the real reloader restores the working connection after failed credential ac
   const captureEntered = createDeferred();
   const releaseCapture = createDeferred();
   const completion = createDeferred<() => Promise<boolean>>();
-  const applied = createDeferred<ReturnType<typeof createRuntimeConfigWriteApplication>>();
-  let recoveryApplication: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
+  type Application = NonNullable<ReturnType<typeof getRuntimeConfigWriteApplication>>;
+  const applied = createDeferred<Application>();
+  let recoveryApplication: Application | undefined;
   // Recovery can read auth before the failed config write returns to its rollback caller.
   const prepareRows = runtimeAuthProfileRowsCache.prepare.bind(runtimeAuthProfileRowsCache);
-  const rowRead = vi.spyOn(runtimeAuthProfileRowsCache, "prepare").mockImplementation((...args) => {
+  vi.spyOn(runtimeAuthProfileRowsCache, "prepare").mockImplementation((...args) => {
     const reader = prepareRows(...args);
     if (!recoveryApplication?.claimed) {
       return reader;
@@ -195,15 +147,15 @@ it("the real reloader restores the working connection after failed credential ac
     };
   });
   const updateAuth = authProfileStoreUpdate.runAuthProfileStoreUpdate;
-  const rollback = vi
-    .spyOn(authProfileStoreUpdate, "runAuthProfileStoreUpdate")
-    .mockImplementation(async (...args) => {
+  vi.spyOn(authProfileStoreUpdate, "runAuthProfileStoreUpdate").mockImplementation(
+    async (...args) => {
       const result = await updateAuth(...args);
       if (recoveryApplication?.claimed) {
         releaseCapture.resolve();
       }
       return result;
-    });
+    },
+  );
   try {
     await reloader.ready;
     const configTarget: SetupInferenceConfigTarget = {
@@ -239,7 +191,7 @@ it("the real reloader restores the working connection after failed credential ac
       assertCurrent: () => {},
       activate: () =>
         activateSavedSetupCredential({
-          agentDir: state.agentDir("default"),
+          agentDir,
           profileId,
           credential: pendingCredential,
         }),
@@ -256,22 +208,14 @@ it("the real reloader restores the working connection after failed credential ac
     for (const section of ["agents", "models", "gateway", "plugins"] as const) {
       expect(restored[section]).toEqual(previous[section]);
     }
-    const store = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir("default"));
+    const store = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
     expect(store.profiles[profileId]).toEqual(pendingCredential);
     await expect(
-      resolveApiKeyForProfile({
-        cfg: restored,
-        store,
-        profileId,
-        agentDir: state.agentDir("default"),
-      }),
+      resolveApiKeyForProfile({ cfg: restored, store, profileId, agentDir }),
     ).resolves.toBeNull();
     const normal = await prepareModelRuntimeSnapshot({
-      agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
+      ...harness.agentInput("default", restored),
       workspaceDir: state.workspaceDir,
-      config: restored,
     });
     expect(resolveAgentModelPrimaryValue(normal.config.agents?.defaults?.model)).toBe(
       "openai/fixture-working",
@@ -281,9 +225,7 @@ it("the real reloader restores the working connection after failed credential ac
     try {
       await reloader.stop();
     } finally {
-      rowRead.mockRestore();
-      rollback.mockRestore();
-      configFileAdapter.mockRestore();
+      vi.restoreAllMocks();
     }
   }
 });

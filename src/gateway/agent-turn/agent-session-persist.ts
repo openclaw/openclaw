@@ -47,7 +47,8 @@ import { createClosedSessionTranscriptSource } from "../session-end-transcript-r
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
-} from "../session-reset-service.js";
+} from "../session-lifecycle-plugin-hooks.js";
+import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import {
   cronContinuationHasReusableRuntime,
   resolveAgentSessionWorkStartError,
@@ -81,6 +82,7 @@ export type AgentSessionPersistResult = {
 };
 
 export async function persistAgentSessionPhase(params: {
+  freshChild?: boolean;
   assertAdmissionCurrent?: () => void;
   onSessionCommitted?: (entry: SessionEntry) => void;
   request: AgentRunRequest;
@@ -110,7 +112,6 @@ export async function persistAgentSessionPhase(params: {
   requestedBestEffortDeliver?: boolean;
   expectedSession: Parameters<typeof assertExpectedExistingSession>[0]["constraint"];
   maintenanceConfig: SessionEntryPatchOptions["maintenanceConfig"];
-  abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   assertGatewayWorkAdmissionAllowed: () => void;
   respondToGatewayAdmissionOutcome: () => boolean;
   setCronContinuationClaim: (claim: CronContinuationClaim) => void;
@@ -128,11 +129,6 @@ export async function persistAgentSessionPhase(params: {
   let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
   let createdNewEntry = false;
-  const abortForLifecycleRotation = () =>
-    params.abortForLifecycleRotation({
-      sessionKey: params.canonicalSessionKey,
-      agentId: params.agentId,
-    });
   const isDeliveryDenied = (entry: SessionEntry | undefined) =>
     params.request.deliver === true &&
     resolveSendPolicy({
@@ -150,10 +146,18 @@ export async function persistAgentSessionPhase(params: {
     );
     return undefined;
   };
-  if (params.storePath && !params.suppressVisibleSessionEffects) {
-    if (abortForLifecycleRotation()) {
+  if (params.freshChild) {
+    // Creation committed the final metadata. The acquired work lease supplies the
+    // current entry and still rejects reset/replacement before launch.
+    params.assertGatewayWorkAdmissionAllowed();
+    if (params.respondToGatewayAdmissionOutcome()) {
       return undefined;
     }
+    if (sessionEntry) {
+      params.onSessionCommitted?.(sessionEntry);
+    }
+    skipAgentInitialSessionTouch = true;
+  } else if (params.storePath && !params.suppressVisibleSessionEffects) {
     let deniedSessionEntry: SessionEntry | undefined;
     let persisted: SessionEntry | undefined;
     let mutationError: ReturnType<typeof errorShape> | undefined;
@@ -358,18 +362,25 @@ export async function persistAgentSessionPhase(params: {
                   runId: params.runId,
                   sessionId: params.request.expectedExistingSessionId ?? merged.sessionId,
                 })
-              : transitionMainSessionRecovery(merged as InternalSessionEntry, {
-                  kind: "claim_foreground",
-                  cycleId: randomUUID(),
-                  lifecycleGeneration: params.lifecycleGeneration,
-                  sessionId: merged.sessionId,
-                  sessionKey: params.canonicalSessionKey,
-                  claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
-                  runId: params.runId,
-                });
+              : readSessionSendDeliveryAdmission({
+                    runId: params.runId,
+                    agentId: params.sessionAgentId,
+                    sessionKey: params.canonicalSessionKey,
+                    sessionId: merged.sessionId,
+                  })
+                ? undefined // The selected command claims ownership; future queued inputs must not fence it.
+                : transitionMainSessionRecovery(merged as InternalSessionEntry, {
+                    kind: "claim_foreground",
+                    cycleId: randomUUID(),
+                    lifecycleGeneration: params.lifecycleGeneration,
+                    sessionId: merged.sessionId,
+                    sessionKey: params.canonicalSessionKey,
+                    claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
+                    runId: params.runId,
+                  });
             if (
               params.isRestartRecoveryResumeRun &&
-              recoveryTransition.kind !== "recovery_validated"
+              recoveryTransition?.kind !== "recovery_validated"
             ) {
               rejectMutation(
                 ErrorCodes.UNAVAILABLE,
@@ -377,7 +388,7 @@ export async function persistAgentSessionPhase(params: {
                   "recovery was skipped.",
               );
             }
-            if (recoveryTransition.kind === "foreground_claimed") {
+            if (recoveryTransition?.kind === "foreground_claimed") {
               mainRestartRecoveryOwnerLease = {
                 ...recoveryTransition.claim,
                 storePath: params.storePath,
@@ -414,9 +425,6 @@ export async function persistAgentSessionPhase(params: {
         params.respond(false, undefined, creationAuthorizationError);
         return undefined;
       }
-      if (abortForLifecycleRotation()) {
-        return undefined;
-      }
       if (err instanceof ExpectedExistingSessionChangedError) {
         mutationError = errorShape(ErrorCodes.UNAVAILABLE, err.message);
       }
@@ -425,9 +433,6 @@ export async function persistAgentSessionPhase(params: {
         return undefined;
       }
       throw err;
-    }
-    if (abortForLifecycleRotation()) {
-      return undefined;
     }
     if (deniedSessionEntry) {
       sessionEntry = deniedSessionEntry;
@@ -457,7 +462,7 @@ export async function persistAgentSessionPhase(params: {
       params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
       return undefined;
     }
-    if (params.respondToGatewayAdmissionOutcome() || abortForLifecycleRotation()) {
+    if (params.respondToGatewayAdmissionOutcome()) {
       return undefined;
     }
     skipAgentInitialSessionTouch = params.touchInteraction;
@@ -510,7 +515,6 @@ export async function persistAgentSessionPhase(params: {
       });
     }
     emitGatewaySessionStartPluginHook({
-      cfg: params.cfg,
       sessionKey: params.canonicalSessionKey,
       sessionId: resolvedSessionId,
       resumedFrom: previousSessionId,
@@ -535,10 +539,10 @@ export async function persistAgentSessionPhase(params: {
     admittedSessionId: params.state.admittedSessionId,
     skipAgentInitialSessionTouch,
     isNewSession,
-    spawnedBy: patchBuild.spawnedBy,
-    groupId: patchBuild.groupId,
-    groupChannel: patchBuild.groupChannel,
-    groupSpace: patchBuild.groupSpace,
+    spawnedBy: params.freshChild ? sessionEntry?.spawnedBy : patchBuild.spawnedBy,
+    groupId: params.freshChild ? sessionEntry?.groupId : patchBuild.groupId,
+    groupChannel: params.freshChild ? sessionEntry?.groupChannel : patchBuild.groupChannel,
+    groupSpace: params.freshChild ? sessionEntry?.space : patchBuild.groupSpace,
     pendingChatRun: isMainSession
       ? {
           sessionKey: params.canonicalSessionKey,

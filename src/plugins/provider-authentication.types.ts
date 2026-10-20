@@ -1,6 +1,6 @@
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderConfig, SecretInput } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -25,6 +25,21 @@ export type ProviderAuthProfile = {
   secretStorage?: ProviderAuthSecretStorage;
 };
 
+type HeaderPatch<T> = Omit<T, "headers"> & {
+  headers?: Record<string, SecretInput | undefined>;
+};
+
+type ProviderAuthConfigPatch = Omit<Partial<OpenClawConfig>, "models"> & {
+  models?: Omit<NonNullable<OpenClawConfig["models"]>, "providers"> & {
+    providers?: Record<
+      string,
+      Omit<HeaderPatch<ModelProviderConfig>, "request"> & {
+        request?: HeaderPatch<NonNullable<ModelProviderConfig["request"]>>;
+      }
+    >;
+  };
+};
+
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
   profiles: ProviderAuthProfile[];
@@ -34,9 +49,12 @@ export type ProviderAuthResult = {
    * Use this for provider-owned onboarding defaults such as
    * `models.providers.<id>` entries, default aliases, or agent model helpers.
    * The caller still persists auth-profile bindings separately.
+   * Undefined header entries delete superseded credentials during the merge.
    */
-  configPatch?: Partial<OpenClawConfig>;
+  configPatch?: ProviderAuthConfigPatch;
   defaultModel?: string;
+  /** Setup routes the selected agent's model through this runtime, without changing global defaults. */
+  agentRuntimeId?: string;
   notes?: string[];
   /**
    * Opt in to replace `agents.defaults.models` wholesale with the patch map.

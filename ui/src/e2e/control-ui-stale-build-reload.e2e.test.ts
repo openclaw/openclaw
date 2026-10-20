@@ -14,6 +14,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
@@ -25,9 +26,8 @@ it("reloads a stale document onto the current build when an unvisited lazy route
   const fixture = tempDirs.make("openclaw-stale-build-reload-");
   const rootA = path.join(fixture, "build-a");
   const rootB = path.join(fixture, "build-b");
-  // Real production chunks and routing exercise Vite's preload errors as well as
-  // browser import rejection; a synthetic import cannot prove this recovery path.
-  await buildProductionControlUiE2e(rootA, buildA);
+  // An older chunk layout retires a real lazy import; build identity alone preserves asset hashes.
+  await buildProductionControlUiE2e(rootA, buildA, { includeBootGroups: false });
   await buildProductionControlUiE2e(rootB, buildB);
   const activityAssetA = (await readdir(path.join(rootA, "assets"))).find((file) =>
     /^activity-page-.*\.js$/u.test(file),
@@ -68,11 +68,7 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       : await chromium.launch({
           executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
         });
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(`${error.name}: ${error.message}`));
@@ -83,13 +79,15 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       }
     });
     const gateway = await installMockGateway(page, { serverBuildId: buildA });
+    const expectBuild = (id: string) =>
+      expect
+        .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
+        .toMatchObject({ client: { buildId: id } });
     try {
       const baseUrl = `http://127.0.0.1:${server.claim.port}/`;
       expect((await page.goto(`${baseUrl}new`))?.status()).toBe(200);
       await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
-      await expect
-        .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
-        .toMatchObject({ client: { buildId: buildA } });
+      await expectBuild(buildA);
       expect(requests.some(({ url }) => url.includes(activityAssetA))).toBe(false);
       expect(await page.locator("openclaw-activity-page").count()).toBe(0);
       expect(documents).toHaveLength(1);
@@ -114,9 +112,7 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       });
       await page.locator("openclaw-activity-page").waitFor({ state: "visible" });
       await page.getByRole("region", { name: "Active sessions", exact: true }).waitFor();
-      await expect
-        .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
-        .toMatchObject({ client: { buildId: buildB } });
+      await expectBuild(buildB);
       expect(requests.slice(requestStart)).toContainEqual({
         method: "GET",
         url: `/assets/${activityAssetA}`,

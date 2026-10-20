@@ -74,7 +74,7 @@ afterEach(async () => {
 
 describe("prepared subagent publication ownership", () => {
   it.each(["run", "session"] as const)(
-    "copies only the selected %s from 5,000 retained records",
+    "reuses the selected %s projection from 5,000 retained records",
     async (kind) => {
       const records = new Map(
         Array.from({ length: 5_000 }, (_, i) => {
@@ -97,11 +97,15 @@ describe("prepared subagent publication ownership", () => {
       const read = () =>
         withSubagentRunReadSnapshot(
           subagentRuns,
-          (snapshot) => ({ snapshot, runIds: ["run-0"], sessionKeys: [] }),
+          (snapshot) => ({
+            snapshot,
+            runIds: kind === "run" ? ["run-0"] : [],
+            sessionKeys: kind === "session" ? ["agent:main:parent-0"] : [],
+          }),
           ({ snapshot }, selected) => ({ snapshot, ids: [...selected.keys()] }),
           readScope,
         );
-      await read();
+      const warmed = await read();
       const projected = vi.spyOn(delivery, "projectSubagentRunForSessionList");
       const scan = vi.spyOn(subagentRuns, Symbol.iterator).mockImplementation(() => {
         throw new Error("A keyed read must not scan the live registry");
@@ -110,17 +114,15 @@ describe("prepared subagent publication ownership", () => {
       scan.mockRestore();
       expect(result.ids).toEqual(["run-0"]);
       expect([...result.snapshot.keys()]).toEqual(["run-0"]);
-      expect(new Set(projected.mock.calls.map(([entry]) => entry.runId))).toEqual(
-        new Set(["run-0"]),
-      );
-      // Each preparation/capture frame owns at most one copy of its matching record.
-      expect(projected.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(result.snapshot.get("run-0")).toBe(warmed.snapshot.get("run-0"));
+      expect(projected).not.toHaveBeenCalled();
       const current = subagentRuns.get("run-0")!;
       subagentRuns.set(current.runId, {
         ...current,
         execution: { ...current.execution, status: "terminal" },
       });
       expect(result.snapshot.get("run-0")?.execution.status).toBe("running");
+      expect((await read()).snapshot.get("run-0")?.execution.status).toBe("terminal");
     },
   );
 

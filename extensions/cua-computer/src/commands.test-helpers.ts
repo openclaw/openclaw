@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
-import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
+import { createCuaDriver, type CuaDriverSession, type CuaToolResult } from "./driver-client.js";
+import { createCuaMcpDriver } from "./mcp-driver-client.js";
+
+vi.mock("./driver-client.js", { spy: true });
+vi.mock("./mcp-driver-client.js", { spy: true });
 
 const geometry = {
   platform: "linux",
@@ -135,13 +139,34 @@ export function driver(
   };
 }
 
+export function createTestProvider(
+  session: CuaDriverSession,
+  platform: NodeJS.Platform = "linux",
+  env: NodeJS.ProcessEnv = macOsEndpoint(),
+) {
+  const createDriver = vi.mocked(platform === "darwin" ? createCuaMcpDriver : createCuaDriver);
+  createDriver.mockReturnValueOnce(session);
+  onTestFinished(() => createDriver.mockRestore());
+  const endpoint = process.env[CUA_DRIVER_ENDPOINT_ENV];
+  const hostPlatform = process.platform;
+  const platformSpy = vi
+    .spyOn(process, "platform", "get")
+    .mockReturnValue(hostPlatform)
+    .mockReturnValueOnce(platform);
+  vi.stubEnv(CUA_DRIVER_ENDPOINT_ENV, env[CUA_DRIVER_ENDPOINT_ENV]);
+  try {
+    return createCuaComputerProvider();
+  } finally {
+    platformSpy.mockRestore();
+    vi.stubEnv(CUA_DRIVER_ENDPOINT_ENV, endpoint);
+  }
+}
+
 export async function execution(session: CuaDriverSession, platform: NodeJS.Platform = "linux") {
-  return await createCuaComputerProvider({
-    platform,
-    env: macOsEndpoint(),
-    driver: session,
-    imageProcessor: {
-      encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
-    },
-  }).openExecution({ executionId: randomUUID() });
+  const provider = createTestProvider(session, platform);
+  try {
+    return await provider.openExecution({ executionId: randomUUID() });
+  } finally {
+    vi.mocked(platform === "darwin" ? createCuaMcpDriver : createCuaDriver).mockRestore();
+  }
 }

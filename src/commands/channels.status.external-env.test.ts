@@ -16,8 +16,7 @@ import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
-  readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
-  requireValidConfig: vi.fn(),
+  requireValidConfigFileSnapshot: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
 }));
 
@@ -25,12 +24,10 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => mocks.callGateway(opts),
 }));
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
-}));
-
-vi.mock("./config-validation.js", () => ({
-  requireValidConfig: (runtime: unknown) => mocks.requireValidConfig(runtime),
+vi.mock("./config-validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-validation.js")>()),
+  requireValidConfigFileSnapshot: (runtime: unknown) =>
+    mocks.requireValidConfigFileSnapshot(runtime),
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({
@@ -99,8 +96,7 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
   beforeEach(() => {
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
-    mocks.readConfigFileSnapshot.mockClear();
-    mocks.requireValidConfig.mockReset();
+    mocks.requireValidConfigFileSnapshot.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockReset();
   });
 
@@ -116,7 +112,7 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
         allow: ["external-env-channel-plugin"],
       },
     } as OpenClawConfig;
-    mocks.requireValidConfig.mockResolvedValue(config);
+    mocks.requireValidConfigFileSnapshot.mockResolvedValue({ path: "/tmp/openclaw.json", config });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: config,
       effectiveConfig: config,

@@ -95,7 +95,7 @@ export function createProgressCardHandlers(
       }
       // Lazy handler preparation can outlive the session authorized by the router.
       sessionMutationAuthorization?.assertCurrent();
-      const read = retainSessionScopedRead(options, session.sessionKey, session.agentId);
+      const read = await retainSessionScopedRead(options, session.sessionKey, session.agentId);
       try {
         const card = await store.get(session.sessionKey, session.agentId);
         sessionMutationAuthorization?.assertCurrent();

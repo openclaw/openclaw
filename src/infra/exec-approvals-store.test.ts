@@ -21,6 +21,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
@@ -33,6 +34,7 @@ import {
   execApprovalsPublication,
   type ExecApprovalsPublicationValue,
 } from "./exec-approvals-publication.js";
+import * as execApprovalsSocket from "./exec-approvals-socket.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -220,21 +222,63 @@ describe("exec approvals SQLite store", () => {
     }
   });
 
-  it("mints one socket token and reuses it on later initialization", async () => {
-    const first = (await ensureExecApprovalsSnapshot()).file;
-    const transactions = vi.fn();
-    workerProbe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "transaction") {
-        transactions();
-      }
-      admit(request, grant);
-    });
-    const second = (await ensureExecApprovalsSnapshot()).file;
-    expect(transactions).not.toHaveBeenCalled();
+  it("keeps socket credentials local across initialization and policy CAS", async () => {
+    const initialized = await ensureExecApprovalsSnapshot();
+    const first = initialized.file;
+    const policyRow = row();
+    const repeated = await ensureExecApprovalsSnapshot();
+    const second = repeated.file;
+    expect(row()).toEqual(policyRow);
+    expect(repeated.hash).toBe(initialized.hash);
     expect(first.socket?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(first.socket?.token).toBe(second.socket?.token);
     expect(first.socket?.path).toBe(second.socket?.path);
-    expect(row()).toMatchObject({ has_socket_token: 1, socket_path: first.socket?.path });
+    expect(row()).toMatchObject({ has_socket_token: 0, socket_path: null });
+    expect(row()?.raw_json).not.toContain(first.socket?.token);
+    expect(readExecApprovalsSnapshot().file.socket?.token).toBeUndefined();
+    const rotated = await updateExecApprovals({
+      baseHash: initialized.hash,
+      update: {
+        kind: "replace",
+        preserveSocket: true,
+        file: { ...first, socket: { ...first.socket, token: "synthetic-rotated-socket-token" } },
+      },
+    });
+    expect(rotated?.file.socket?.token).toBe("synthetic-rotated-socket-token");
+    expect(rotated?.hash).toBe(initialized.hash);
+    expect(row()).toEqual(policyRow);
+    await expect(
+      updateExecApprovals({
+        baseHash: "stale-policy-hash",
+        update: { kind: "replace", preserveSocket: true, file: first },
+      }),
+    ).resolves.toBeNull();
+    expect((await ensureExecApprovalsSnapshot()).file.socket?.token).toBe(
+      "synthetic-rotated-socket-token",
+    );
+  });
+
+  it("reports a saved policy when local socket attachment fails after commit", async () => {
+    const before = await ensureExecApprovalsSnapshot();
+    const security = before.file.defaults?.security === "deny" ? "allowlist" : "deny";
+    vi.spyOn(execApprovalsSocket, "attachExecApprovalsSocket").mockRejectedValueOnce(
+      new Error("client credentials are busy"),
+    );
+    await expect(
+      updateExecApprovals({
+        baseHash: before.hash,
+        update: {
+          kind: "replace",
+          preserveSocket: true,
+          file: { ...before.file, defaults: { security } },
+        },
+      }),
+    ).rejects.toThrow(
+      "Exec approval policy was saved, but local socket credentials could not be updated",
+    );
+    const after = readExecApprovalsSnapshot();
+    expect(after.file.defaults?.security).toBe(security);
+    expect(after.hash).not.toBe(before.hash);
   });
 
   it("throws typed snapshot failures while enforcement reads fail closed", () => {
@@ -556,6 +600,77 @@ describe("exec approvals SQLite store", () => {
     }
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
+
+  it.each(["usage", "one-shot", "allow-always"] as const)(
+    "fences concurrent %s writes only when they can change policy",
+    async (kind) => {
+      const entry = { id: "echo", pattern: "/usr/bin/echo" };
+      saveExecApprovals({ version: 1, agents: { main: { allowlist: [entry] } } });
+      const input: ExecAuthorizationCommitInput = {
+        agentId: "main",
+        matches: [entry],
+        command: "echo before",
+        authorization: {
+          source: "current-policy",
+          security: "allowlist",
+          ask: "on-miss",
+          allowlistSatisfied: true,
+        },
+      };
+      const assertCurrent = await commitExecAuthorizationLocked(input);
+      const failures: unknown[] = [];
+      const stages: string[] = [];
+      workerProbe.admission(workerAdmission, (request, grant, admit) => {
+        admit(request, grant);
+        stages.push(request.stage);
+        try {
+          assertCurrent();
+        } catch (error) {
+          failures.push(error);
+        }
+      });
+      const requests = [commitExecAuthorizationLocked({ ...input, command: "echo after" })];
+      if (kind !== "usage") {
+        requests.push(
+          commitExecAuthorizationLocked({
+            ...input,
+            authorization: {
+              ...input.authorization,
+              source: "explicit-approval",
+              policySnapshot: createExecApprovalPolicySnapshot({
+                file: loadExecApprovals(),
+                agentId: "main",
+              }),
+            },
+            allowAlwaysDecision:
+              kind === "one-shot"
+                ? { kind: "one-shot", reasons: ["prompt-only"] }
+                : { kind: "exact-command", commandText: "echo approved" },
+            command: "echo after",
+          }),
+        );
+      }
+      const next = await Promise.all(requests);
+      expect(stages).toEqual(["transaction", "commit"]);
+      expect(failures).toEqual(
+        kind === "allow-always"
+          ? [
+              expect.objectContaining({
+                message: "Exec approval policy is unavailable or changing before execution",
+              }),
+              expect.objectContaining({
+                message: "Exec approval policy is unavailable or changing before execution",
+              }),
+            ]
+          : [],
+      );
+      expect(assertCurrent).not.toThrow();
+      for (const guard of next) {
+        expect(guard).not.toThrow();
+      }
+      expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo after");
+    },
+  );
 
   it("does not batch authorizations across an intervening policy denial", async () => {
     const entry = { id: "echo", pattern: "/usr/bin/echo" };

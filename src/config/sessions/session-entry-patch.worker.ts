@@ -1,8 +1,18 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
+import type {
+  SqliteWorkerBackend,
+  SqliteWorkerOperations,
+} from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { captureTrajectoryRuntimeRetentionMetadataMutation } from "../../trajectory/runtime-retention.sqlite.js";
@@ -12,6 +22,7 @@ import {
   writeSessionEntryPatchInDatabase,
 } from "./session-accessor.sqlite-entry-mutation.js";
 import {
+  normalizeLifecycleTarget,
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -36,8 +47,40 @@ import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pe
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 
+export type SessionWorkerDatabaseBinding = {
+  database: EngineConnection;
+  databasePath: string;
+  admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
+};
+
+/** Private write domains borrow one canonical connection and its admission lifecycle. */
+export function bindSessionWorkerBackend<Operations extends SqliteWorkerOperations>(
+  input: { agentId: string },
+  bound: SessionWorkerDatabaseBinding,
+  domain: string,
+  createExecute: (
+    context: AgentWorkerOperationContext,
+    database: OpenClawAgentDatabase,
+  ) => SqliteWorkerBackend<Operations>["execute"],
+  owner = domain,
+): SqliteWorkerBackend<Operations> {
+  const options = {
+    agentId: input.agentId,
+    path: bound.databasePath,
+    env: getSqliteWorkerStateContext().environment,
+  };
+  const database = getOpenClawAgentDatabaseIfOpen(options);
+  if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
+    throw new Error(`${owner} lost its canonical database owner`);
+  }
+  const context = createSessionWorkerOperationContext(database, options, bound, domain);
+  return bindSqliteWorkerDatabase<Operations>(database.db, {
+    execute: createExecute(context, database),
+  });
+}
+
 /** Connection-bound domains share the executor's transaction and publication grants. */
-export function createSessionWorkerOperationContext(
+function createSessionWorkerOperationContext(
   database: OpenClawAgentDatabase,
   options: AgentWorkerOperationContext["options"],
   bound: {
@@ -57,7 +100,7 @@ export function createSessionWorkerOperationContext(
         dispatch({ ...request, facts: { ...request.facts, publication } });
       });
     },
-    writeTransaction(operationLabel, owner, write) {
+    writeTransaction(operationLabel, owner, write, diagnosticContext) {
       return runOpenClawAgentWriteTransaction(
         (current) => {
           if (current.db !== native) {
@@ -67,7 +110,7 @@ export function createSessionWorkerOperationContext(
           return write(current);
         },
         options,
-        { operationLabel },
+        { operationLabel, diagnosticContext },
       );
     },
   };
@@ -79,6 +122,20 @@ export function readSessionEntryPatchSnapshot(
   selection: SessionEntryPatchSelection,
   includeWindowFacts?: true,
 ) {
+  let sessionKey: string | undefined;
+  if (selection.kind === "entry") {
+    sessionKey = selection.exact ? selection.sessionKey : selection.sessionKey.trim();
+  } else {
+    const target = normalizeLifecycleTarget(selection.target);
+    if (target.storeKeys.length === 1) {
+      sessionKey = target.canonicalKey;
+    }
+  }
+  const actor =
+    sessionKey === undefined ? undefined : prepareSessionActorEntryPatch(database, sessionKey);
+  if (actor) {
+    return [actor.snapshot()];
+  }
   return selection.kind === "target"
     ? readLifecycleTargetSnapshot(database, selection.target, { includeWindowFacts })
     : readSessionEntrySelectionSnapshot(
@@ -107,11 +164,10 @@ export function commitSessionEntryPatch(
       | ReturnType<typeof readSessionPendingInputAuthorityFactsInTransaction>
       | undefined;
     let result: SessionEntryPatchCommitted;
-    const predicate = readSessionEntryPatchPredicate(
-      database,
-      input.sessionKey,
-      input.shouldCommitIf,
-    );
+    const actorPatch = prepareSessionActorEntryPatch(database, input.sessionKey);
+    const predicate = actorPatch
+      ? actorPatch.readPredicate(input.shouldCommitIf)
+      : readSessionEntryPatchPredicate(database, input.sessionKey, input.shouldCommitIf);
     if (!predicate.matches) {
       // A false predicate precedes CAS and the throwing guard, including for a null patch.
       result = { kind: "session-entry-patch", entry: null, applied: false };
@@ -139,8 +195,8 @@ export function commitSessionEntryPatch(
           });
         },
       };
-      const publishActor = prepareSessionActorEntryPatch(database, input.sessionKey);
       let mutation;
+      let lifecycleEffects: SessionEntryPatchCommitted["lifecycleEffects"];
       if ("operation" in input) {
         if (input.validateCanonicalKeys) {
           assertCanonicalSqliteSessionKeysCurrent(database);
@@ -185,6 +241,9 @@ export function commitSessionEntryPatch(
           existing,
           writeBase,
           operation: input.operation,
+          onLifecycleProjection: (effects) => {
+            lifecycleEffects = effects;
+          },
         });
         mutation = writeSessionEntryPatchInDatabase(database, {
           sessionKey: input.sessionKey,
@@ -217,12 +276,13 @@ export function commitSessionEntryPatch(
         publishRetention?.();
       }
       if (publication && mutation.postimages) {
-        publishActor?.(mutation.postimages, publication);
+        actorPatch?.publish(mutation.postimages, publication);
       }
       result = {
         kind: "session-entry-patch",
-        entry: mutation.entry,
+        ...(input.returnEntry === false ? {} : { entry: mutation.entry }),
         applied: mutation.applied,
+        lifecycleEffects,
         publication,
         transcriptPredicate:
           mutation.entry.sessionId === predicate.transcriptPredicate?.sessionId
@@ -256,7 +316,10 @@ export function transferSessionEntryWorkerCandidate<Receipt extends object>(
   const transcriptPublication = readStagedSessionTranscriptAuthority(database);
   const candidate = transcriptPublication ? { ...result, transcriptPublication } : result;
   if (result.publication) {
-    if (result.publication.source && result.publication.fullEntries?.size) {
+    if (
+      result.publication.source &&
+      (result.publication.fullEntries?.size || result.publication.actorPostimages?.size)
+    ) {
       sealSessionEntryPublicationSource(result.publication.source);
     }
     boundSessionEntryReplacementPublication(result.publication, candidate);

@@ -1,8 +1,9 @@
 import "../../../styles/chat/session-rail.css";
-import "./chat-comment-controller.ts";
-import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import "../../../styles/chat/working-indicator.css";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
@@ -10,16 +11,21 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
+import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -34,7 +40,6 @@ function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null 
   }
   return t("chat.rail.checksPending", { count: String(checks.running) });
 }
-const SESSION_RAIL_STARTER_KEYS = ["changed", "stopped", "remaining"] as const;
 const COMPANION_HINT_KEYS = {
   busy: "chat.rail.askBusy",
   "history-unavailable": "chat.rail.askHistoryUnavailable",
@@ -55,8 +60,11 @@ type ChatSessionRailProps = {
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  modelControls?: ChatModelControlsProps;
+  client: GatewayBrowserClient | null;
   connected: boolean;
   sendShortcut: ChatSendShortcut;
+  inputDeviceId?: string;
   onSubmit?: (question: string | ChatSessionCompanionTurn) => void;
   onDraftChange?: (draft: string) => void;
   onAttachmentsChange?: ChatAttachmentControlsProps["onAttachmentsChange"];
@@ -67,25 +75,30 @@ type ChatSessionRailProps = {
 };
 export type ChatSessionRailElement = SolidBridgeElement<ChatSessionRailProps>;
 
-function ChatSessionRailContent(props: ChatSessionRailProps) {
-  let region!: HTMLElement;
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
+
+function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRailElement) {
+  let textarea: HTMLTextAreaElement | undefined;
   let thread!: HTMLDivElement;
+  const focusComposer = () => {
+    if (textarea && !textarea.disabled) {
+      textarea.focus({ preventScroll: true });
+    }
+  };
   const blocks = markdownBlocksRef(() => props.presented);
-  const [configRevision, setConfigRevision] = createSignal(0);
-  createEffect(
-    () => props.uploadConfig,
-    (config) => config?.subscribe(() => setConfigRevision((value) => value + 1)),
-  );
+  const uploadConfig = createMemo(() => {
+    const config = props.uploadConfig;
+    return config && projectOwner(config, (owner) => owner);
+  });
   // The synchronous companion owner mutates settled turns in place. Snapshot its published fields.
   const turns = createMemo(() => props.companion.turns.map((turn) => ({ ...turn, source: turn })));
   const pending = () => props.companion.turns.some((turn) => turn.status === "pending");
   const attachmentProps = createMemo<ChatAttachmentControlsProps>(() => {
-    configRevision();
     const companion = props.companion;
     const reads = companion.attachmentReads;
     const readSignal = reads?.readSignal;
     return {
-      uploadConfig: props.uploadConfig,
+      uploadConfig: uploadConfig()?.read(),
       attachments: companion.attachments,
       getAttachments: () => props.companion.attachments ?? [],
       attachmentReads: reads,
@@ -116,30 +129,49 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
       props.onSubmit?.(question);
     }
   };
-  // The pane consumes its focus intent only when it publishes a new request.
-  const focusRequest = createMemo(() => props.focusRequest);
-  createEffect(focusRequest, (request) => {
-    const requested = request?.();
-    if (untrack(() => props.presented) && requested) {
-      region
-        .querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")
-        ?.focus({ preventScroll: true });
-    }
-  });
-  const scrollKey = createMemo(() =>
-    JSON.stringify(props.companion.turns.map((turn) => [turn.question, turn.status])),
-  );
-  createEffect(scrollKey, () => {
-    thread.scrollTop = thread.scrollHeight;
+  onSettled(() => {
+    let focusRequest: ChatSessionRailProps["focusRequest"];
+    let scrollKey: string | undefined;
+    const syncInputs = () => {
+      const request = host.focusRequest;
+      if (request !== focusRequest) {
+        focusRequest = request;
+        cancelLayout(host);
+        if (request) {
+          // The mobile panel must commit before consuming the pane's focus intent.
+          scheduleLayout(host, () => () => {
+            if (host.presented && request()) {
+              focusComposer();
+            }
+          });
+        }
+      }
+      const nextScrollKey = JSON.stringify(
+        host.companion.turns.map((turn) => [turn.question, turn.status]),
+      );
+      if (nextScrollKey !== scrollKey) {
+        scrollKey = nextScrollKey;
+        scheduleLayout(thread, () => {
+          const bottom = thread.scrollHeight;
+          return () => {
+            thread.scrollTop = bottom;
+          };
+        });
+      }
+    };
+    inputHandlers.set(host, syncInputs);
+    syncInputs();
+    return () => {
+      inputHandlers.delete(host);
+      cancelLayout(host);
+      cancelLayout(thread);
+    };
   });
   const showPullRequests = () =>
     props.digest &&
     (!props.running || (props.activeRunId && props.digest.runId === props.activeRunId));
   return (
     <section
-      ref={(element) => {
-        region = element;
-      }}
       class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded"
       role="region"
       aria-label={t("chat.rail.title")}
@@ -191,14 +223,18 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
         )}
         <For each={turns()} keyed={false}>
           {(turn) => {
-            const answered = createMemo(() => {
+            const answered = () => {
               const value = turn();
               return value.status === "answered" ? value : undefined;
-            });
-            const failed = createMemo(() => {
+            };
+            const failed = () => {
               const value = turn();
               return value.status === "failed" ? value : undefined;
-            });
+            };
+            const working = () => {
+              const value = turn();
+              return value.status === "pending" ? value : undefined;
+            };
             return (
               <article
                 class={[
@@ -223,24 +259,39 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
                   when={answered()}
                   fallback={
                     <>
-                      <div class="chat-session-rail__hint">
-                        {t(failed() ? COMPANION_HINT_KEYS[failed()!.hint] : "chat.rail.askPending")}
-                      </div>
+                      <Show when={working()}>
+                        {(waiting) => (
+                          // Same working indicator the main transcript shows while a run has no output yet.
+                          <div class="chat-group assistant chat-session-rail__message">
+                            <ChatWorkingIndicator
+                              part={{
+                                kind: "reading-indicator",
+                                key: `side-chat:${waiting().startedAt}`,
+                                startedAt: waiting().startedAt,
+                              }}
+                              options={{}}
+                            />
+                          </div>
+                        )}
+                      </Show>
                       <Show when={failed()}>
-                        {(failure) =>
-                          failure().retryable &&
-                          props.connected &&
-                          props.onSubmit && (
-                            <button
-                              class="btn btn--secondary chat-session-rail__retry"
-                              type="button"
-                              disabled={pending()}
-                              onClick={() => props.onSubmit?.(failure().source)}
-                            >
-                              {t("chat.rail.askRetry")}
-                            </button>
-                          )
-                        }
+                        {(failure) => (
+                          <>
+                            <div class="chat-session-rail__hint">
+                              {t(COMPANION_HINT_KEYS[failure().hint])}
+                            </div>
+                            {failure().retryable && props.connected && props.onSubmit && (
+                              <button
+                                class="btn btn--secondary chat-session-rail__retry"
+                                type="button"
+                                disabled={pending()}
+                                onClick={() => props.onSubmit?.(failure().source)}
+                              >
+                                {t("chat.rail.askRetry")}
+                              </button>
+                            )}
+                          </>
+                        )}
                       </Show>
                     </>
                   }
@@ -277,35 +328,25 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
           }}
         </For>
       </div>
-      {!props.companion.turns.some((turn) => turn.status !== "failed") && (
-        <div class="chat-session-rail__starters">
-          <For each={SESSION_RAIL_STARTER_KEYS}>
-            {(key) => (
-              <button
-                class="chip chat-session-rail__starter"
-                type="button"
-                disabled={!props.connected}
-                onClick={() => props.onSubmit?.(t(`chat.rail.starters.${key}`))}
-              >
-                <Icon name="spark" />
-                <span>{t(`chat.rail.starters.${key}`)}</span>
-              </button>
-            )}
-          </For>
-        </div>
-      )}
-      <openclaw-chat-comment-controller
-        prop:paneId={`side-chat:${props.sessionKey}`}
-        prop:props={attachmentProps()}
-        prop:disabled={attachmentProps().disabled}
-        prop:sessionKey={props.sessionKey}
-        prop:presented={props.presented}
+      <ChatCommentController
+        onFocusComposer={focusComposer}
+        paneId={`side-chat:${props.sessionKey}`}
+        props={attachmentProps()}
+        disabled={Boolean(attachmentProps().disabled)}
+        sessionKey={props.sessionKey}
+        presented={props.presented}
       />
       <SessionRailComposer
+        textareaRef={(element) => (textarea = element)}
+        sessionKey={props.sessionKey}
         companion={props.companion}
+        modelControls={props.modelControls}
+        client={props.client}
         connected={props.connected}
+        presented={props.presented}
         pending={pending()}
         sendShortcut={props.sendShortcut}
+        inputDeviceId={props.inputDeviceId}
         attachmentProps={attachmentProps()}
         submit={submit}
         onDraftChange={props.onDraftChange}
@@ -315,6 +356,11 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
 }
 
 defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
+  propertyChanged: (host, key) => {
+    if (key === "companion" || key === "focusRequest") {
+      inputHandlers.get(host)?.();
+    }
+  },
   properties: {
     sessionKey: { default: "", attribute: false },
     digest: { default: null, attribute: false },
@@ -322,8 +368,11 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     activeRunId: { default: null, attribute: false },
     pullRequests: { default: [], attribute: false },
     companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+    modelControls: { default: undefined, attribute: false },
+    client: { default: null, attribute: false },
     connected: { default: false, attribute: false },
     sendShortcut: { default: "enter", attribute: false },
+    inputDeviceId: { default: undefined, attribute: false },
     onSubmit: { default: undefined, attribute: false },
     onDraftChange: { default: undefined, attribute: false },
     onAttachmentsChange: { default: undefined, attribute: false },
@@ -333,17 +382,3 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     focusRequest: { default: undefined, attribute: false },
   },
 });
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-comment-controller": HTMLAttributes<HTMLElement> & {
-        "prop:paneId": string;
-        "prop:props": ChatAttachmentControlsProps;
-        "prop:disabled"?: boolean;
-        "prop:sessionKey": string;
-        "prop:presented": boolean;
-      };
-    }
-  }
-}

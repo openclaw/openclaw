@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.10.2",
+  "version": "2026.10.5",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -81,6 +81,11 @@
       "import": "./dist/internal/google-model-family.mjs",
       "default": "./dist/internal/google-model-family.mjs"
     },
+    "./internal/model-request-body": {
+      "types": "./dist/internal/model-request-body.d.mts",
+      "import": "./dist/internal/model-request-body.mjs",
+      "default": "./dist/internal/model-request-body.mjs"
+    },
     "./internal/openai": {
       "types": "./dist/internal/openai.d.mts",
       "import": "./dist/internal/openai.mjs",
@@ -118,14 +123,37 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.131.0",
-    "@google/genai": "2.27.0",
-    "@mistralai/mistralai": "2.7.0",
-    "openai": "7.27.0",
+    "@anthropic-ai/sdk": "0.133.0",
+    "@google/genai": "2.28.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
+    "openai": "7.32.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.34"
+    "typebox": "1.3.36",
+    "zod": "4.6.6",
+    "zod-to-json-schema": "3.25.2"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "optional": true
+    },
+    "@opentelemetry/resources": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-trace-base": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@mistralai/mistralai": "2.7.0",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },

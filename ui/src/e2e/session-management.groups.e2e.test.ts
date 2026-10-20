@@ -283,6 +283,9 @@ suite.define(() => {
         .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
+      await page.getByRole("menu", { name: "Advanced", exact: true }).waitFor({ state: "hidden" });
+      await page.keyboard.press("Escape");
+      await page.locator("openclaw-session-menu [role=menu]").first().waitFor({ state: "hidden" });
       await sidebarResearch.hover();
       await sidebarResearch.click({ button: "right" });
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
@@ -383,7 +386,7 @@ suite.define(() => {
         table.locator("tbody .session-data-row .session-label-chip").allTextContents();
       await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
 
-      for (const name of ["Key", "Kind", "Updated", "Tokens"]) {
+      for (const name of ["Session", "Updated"]) {
         await table.getByRole("columnheader", { name }).getByRole("button", { name }).waitFor();
       }
 
@@ -393,8 +396,8 @@ suite.define(() => {
       await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
       expect(await updatedHeader.getAttribute("aria-sort")).toBe("ascending");
 
-      const keyHeader = table.getByRole("columnheader", { name: "Key" });
-      await keyHeader.getByRole("button", { name: "Key" }).press("Enter");
+      const keyHeader = table.getByRole("columnheader", { name: "Session" });
+      await keyHeader.getByRole("button", { name: "Session" }).press("Enter");
       await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
       expect(await keyHeader.getAttribute("aria-sort")).toBe("descending");
       expect(await updatedHeader.getAttribute("aria-sort")).toBeNull();
@@ -439,7 +442,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.getByRole("button", { name: "Filters" }).click();
-      await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+      await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("category");
       await page.getByRole("button", { name: "New group" }).click();
       const field = page.locator("openclaw-modal-dialog input");
@@ -672,18 +675,22 @@ suite.define(() => {
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
-      await submitInputDialog(page, "Projects");
+      const dialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      const field = dialog.getByRole("textbox");
+      await field.fill("Projects");
+      await field.press("Enter");
       await gateway.waitForRequest("sessions.groups.rename");
       await gateway.rejectDeferred("sessions.groups.rename", {
         code: "INVALID_REQUEST",
         message: "rejected group rename",
       });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await expect
+        .poll(() => dialog.getByRole("alert").textContent())
+        .toContain("rejected group rename");
+      expect(await field.inputValue()).toBe("Projects");
+      expect(await field.isEnabled()).toBe(true);
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
 
       expect(
         await page.evaluate((key) => localStorage.getItem(key), collapsedSessionSectionsStorageKey),

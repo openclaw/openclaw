@@ -13,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: () => loadConfigMock(),
+    captureRuntimeConfigAsyncReader: () => async () => loadConfigMock(),
   };
 });
 
@@ -188,7 +188,6 @@ describe("Discord ACP bind here end-to-end flow", () => {
     });
 
     expect(preflight?.boundSessionKey).toBe(binding.targetSessionKey);
-    expect(preflight?.boundAgentId).toBe("codex");
     expect(preflight?.route.sessionKey).toBe(binding.targetSessionKey);
     expect(preflight?.route.agentId).toBe("codex");
     expect(preflight?.threadBinding).toEqual(binding);

@@ -71,14 +71,6 @@ suite.define(() => {
           await menu.getByRole("menuitem", { name: "Copy path" }).waitFor();
           if (scenario.systemReads) {
             await gateway.waitForRequest("system.info");
-            await expect
-              .poll(() =>
-                pane.evaluate(
-                  (element) =>
-                    (element as HTMLElement & { headerPlatform?: string | null }).headerPlatform,
-                ),
-              )
-              .toBe("darwin");
           }
           if (scenario.revealLabel) {
             await menu.getByRole("menuitem", { name: scenario.revealLabel }).waitFor();

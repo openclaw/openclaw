@@ -26,6 +26,7 @@ export async function resolveDiscordNativeInteractionChannelContext(
     channelName: channelContext.channelName,
     channelSlug: channelContext.channelSlug,
     rawChannelId: channelContext.channelId,
+    memberRoleIds: interaction.rawData.member?.roles ?? [],
     threadParentId: hasGuild ? channelContext.threadParentId : undefined,
     threadParentName: hasGuild ? channelContext.threadParentName : undefined,
     threadParentSlug: hasGuild ? channelContext.threadParentSlug : "",

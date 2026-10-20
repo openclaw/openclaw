@@ -14,6 +14,7 @@ import {
 import type { WorkerInferenceTerminalOutcome } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import * as configRuntime from "../config/runtime-snapshot.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
@@ -51,7 +52,7 @@ import * as stateDb from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
-import { createWorkerConnection, type WorkerConnection } from "./worker-connection.js";
+import { createWorkerConnection } from "./worker-connection.js";
 import {
   seedFaultAttachedEnvironment,
   WorkerFaultPlacementLifecycle,
@@ -65,7 +66,7 @@ export const SESSION_ID = "fault-session";
 export const SESSION_KEY = "agent:main:fault-session";
 export const ENVIRONMENT_ID = "fault-environment";
 export const RUN_ID = "fault-run";
-const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
+const BUNDLE_HASH = "a".repeat(64);
 const CREDENTIAL = ["worker", "fault", "fixture"].join("-");
 const MODEL_REF = { provider: "fake", model: "fault-model" } as const;
 const SSH_ENDPOINT: WorkerSshEndpoint = {
@@ -75,18 +76,13 @@ const SSH_ENDPOINT: WorkerSshEndpoint = {
   hostKey: [["ssh", "ed25519"].join("-"), "AAAA"].join(" "),
   keyRef: { source: "file", provider: "worker-fixtures", id: "/development-key" },
 };
-const HANDSHAKE = {
-  bundleHash: BUNDLE_HASH,
-  openclawVersion: "fault-test",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 const BUNDLE_ARTIFACT = {
   install: "bundle" as const,
   bundleHash: BUNDLE_HASH,
-  openclawVersion: HANDSHAKE.openclawVersion,
+  openclawVersion: "fault-test",
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
   tarballBytes: 1,
-  tarballSha256: Array.from({ length: 64 }, () => "b").join(""),
+  tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };
 const PROVIDER: WorkerProvider = {
@@ -96,6 +92,11 @@ const PROVIDER: WorkerProvider = {
   inspect: async () => ({ status: "active" }),
   destroy: async () => {},
 };
+const workerHandshake = (artifact: WorkerInstallationArtifact) => ({
+  bundleHash: artifact.bundleHash,
+  openclawVersion: artifact.openclawVersion,
+  protocolFeatures: [...artifact.protocolFeatures],
+});
 
 type Deferred<T> = ReturnType<typeof createDeferred<T>>;
 
@@ -106,8 +107,7 @@ export function doneMessage(text: string): WorkerDoneMessage {
     role: "assistant",
     content: [{ type: "text", text }],
     api: "openai-responses",
-    provider: MODEL_REF.provider,
-    model: MODEL_REF.model,
+    ...MODEL_REF,
     usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason: "stop",
     timestamp: 1,
@@ -123,17 +123,18 @@ type FaultRule =
   | { kind: "drop-response"; method: string; restart: boolean }
   | { kind: "partition-after-inference-event"; seq: number };
 
-type TranscriptGate = {
-  phase: "before-apply" | "after-apply";
+type Gate = {
   entered: Deferred<void>;
   release: Deferred<void>;
 };
-
-type LiveEventGate = {
+function enterGate({ entered, release }: Gate): Promise<void> {
+  entered.resolve();
+  return release.promise;
+}
+type TranscriptGate = Gate & { phase: "before-apply" | "after-apply" };
+type LiveEventGate = Gate & {
   stage: "before-service" | "after-service";
   target: "preview" | "finishing";
-  entered: Deferred<void>;
-  release: Deferred<void>;
   claimed: boolean;
 };
 
@@ -154,12 +155,7 @@ type ProviderPlan =
     }
   | { kind: "pending"; release: Deferred<WorkerInferenceTerminalOutcome>; started: Deferred<void> };
 
-export type WorkerClients = {
-  connection: WorkerConnection;
-  transcript: WorkerTranscriptCommitClient;
-  live: WorkerLiveEventClient;
-  inference: WorkerInferenceProxyClient;
-};
+export type WorkerClients = Awaited<ReturnType<ComposedGatewayHarness["createClients"]>>;
 
 type WorkerClientOptions = {
   admissionProof?: string;
@@ -196,7 +192,7 @@ export class ComposedGatewayHarness {
   serviceValue!: workerEnv.WorkerEnvironmentService;
   private liveEventsValue!: liveEvents.WorkerLiveEventReceiver;
   private readonly placementLifecycle: WorkerFaultPlacementLifecycle;
-  private placementGateValue: WorkerSessionPlacementGate | undefined;
+  private placementGateValue: WorkerSessionPlacementGate;
   private useReplacementExecutor = false;
   private connectionsPaused = false;
   private unsubscribeLive: (() => void) | undefined;
@@ -209,19 +205,15 @@ export class ComposedGatewayHarness {
     root: string,
     artifact: WorkerInstallationArtifact = BUNDLE_ARTIFACT,
   ): Promise<ComposedGatewayHarness> {
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: SESSION_KEY, storePath },
-      { sessionId: SESSION_ID, updatedAt: 1 },
-    );
+    const target = {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: SESSION_ID, updatedAt: 1 });
     const sessionTarget = captureSessionTranscriptTargetBinding(
-      await resolveSessionTranscriptRuntimeTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        storePath,
-      }),
+      await resolveSessionTranscriptRuntimeTarget(target),
     );
     const database = stateDb.openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
@@ -232,11 +224,7 @@ export class ComposedGatewayHarness {
       sessionId: SESSION_ID,
       credential: CREDENTIAL,
       sshEndpoint: SSH_ENDPOINT,
-      handshake: {
-        bundleHash: artifact.bundleHash,
-        openclawVersion: artifact.openclawVersion,
-        protocolFeatures: [...artifact.protocolFeatures],
-      },
+      handshake: workerHandshake(artifact),
       rpcSetVersion: WORKER_RPC_SET_VERSION,
     });
     return new ComposedGatewayHarness(root, sessionTarget, database, store, artifact);
@@ -261,9 +249,7 @@ export class ComposedGatewayHarness {
         profiles: { development: { provider: "fake", settings: { region: "test" } } },
       },
     };
-    this.placementStore = placements.createWorkerSessionPlacementStore({
-      database: this.database,
-    });
+    this.placementStore = placements.createWorkerSessionPlacementStore({ database });
     this.liveEventsValue = liveEvents.createWorkerLiveEventReceiver();
     this.placementLifecycle = new WorkerFaultPlacementLifecycle({
       agentId: "main",
@@ -290,19 +276,12 @@ export class ComposedGatewayHarness {
     });
   }
 
-  private get handshake() {
-    return {
-      bundleHash: this.artifact.bundleHash,
-      openclawVersion: this.artifact.openclawVersion,
-      protocolFeatures: [...this.artifact.protocolFeatures],
-    };
-  }
-
   get epoch(): number {
     return expectDefined(this.store.get(ENVIRONMENT_ID), "fault environment missing").ownerEpoch;
   }
 
   async start(): Promise<void> {
+    configRuntime.setRuntimeConfigSnapshot(this.cfg);
     // ws forwards bind errors first; wait there so failed binds reject setup.
     const listening = once(this.webSocketServer, "listening");
     this.httpServer.listen(this.socketPath);
@@ -311,6 +290,16 @@ export class ComposedGatewayHarness {
 
   addFault(rule: FaultRule): void {
     this.faults.push(rule);
+  }
+
+  planPending() {
+    const plan = {
+      kind: "pending" as const,
+      release: createDeferred<WorkerInferenceTerminalOutcome>(),
+      started: createDeferred(),
+    };
+    this.providerPlan = plan;
+    return plan;
   }
 
   addLiveEventGate(stage: LiveEventGate["stage"], target: LiveEventGate["target"]): LiveEventGate {
@@ -329,7 +318,7 @@ export class ComposedGatewayHarness {
     await this.placementLifecycle.settleRun(runId);
     for (const [claimId, source] of this.turnSources) {
       if (source.operationalRunInstance.runId === runId) {
-        source.dispose();
+        await source.dispose();
         this.turnSources.delete(claimId);
       }
     }
@@ -362,7 +351,7 @@ export class ComposedGatewayHarness {
         sessionId: SESSION_ID,
         ownerEpoch: epoch,
         rpcSetVersion: WORKER_RPC_SET_VERSION,
-        handshake: this.handshake,
+        handshake: workerHandshake(this.artifact),
       },
       assignment: {
         agentId: "worker-agent",
@@ -390,11 +379,11 @@ export class ComposedGatewayHarness {
     return descriptor;
   }
 
-  async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {
+  async createClients(params: WorkerClientOptions = {}) {
     const descriptor = await this.createDescriptor(params);
-    const epoch = descriptor.admission.ownerEpoch;
+    const { admission, assignment, connectionEndpoint } = descriptor;
     const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: this.socketPath },
+      endpoint: connectionEndpoint,
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
@@ -403,13 +392,13 @@ export class ComposedGatewayHarness {
     return {
       connection,
       transcript: new WorkerTranscriptCommitClient(connection, {
-        runEpoch: epoch,
-        baseLeafId: params.baseLeafId ?? null,
-        initialSeq: params.initialSeq ?? 1,
+        runEpoch: admission.ownerEpoch,
+        baseLeafId: assignment.transcript.baseLeafId,
+        initialSeq: assignment.transcript.nextSeq,
       }),
       live: new WorkerLiveEventClient(connection, {
-        runEpoch: epoch,
-        initialAckedSeq: params.initialAckedSeq ?? 0,
+        runEpoch: admission.ownerEpoch,
+        initialAckedSeq: assignment.liveEvents.ackedSeq,
       }),
       inference: new WorkerInferenceProxyClient(connection),
     };
@@ -479,7 +468,7 @@ export class ComposedGatewayHarness {
         },
       },
     });
-    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID, staleClaim.owner.ownerEpoch);
+    this.liveEventsValue.clearEnvironment(ENVIRONMENT_ID);
     await this.placementLifecycle.prepareRun(runId, credential);
     return next.ownerEpoch;
   }
@@ -520,24 +509,23 @@ export class ComposedGatewayHarness {
     }
     this.liveEventsValue.clear();
     for (const source of this.turnSources.values()) {
-      source.dispose();
+      await source.dispose();
     }
     this.turnSources.clear();
     this.unsubscribeLive?.();
     this.unsubscribeLive = undefined;
     await this.chat.dispose();
-    await new Promise<void>((resolve) => {
-      this.webSocketServer.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      this.httpServer.close(() => resolve());
-    });
+    for (const server of [this.webSocketServer, this.httpServer]) {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
     // Session writes can retain maintenance workers after their request settles.
     // Join this fixture's database owners before removing their files.
     await cleanupSessionStateForTest({
       stateDir: path.join(this.root, "state"),
       rootPath: this.root,
-    });
+    }).finally(configRuntime.clearRuntimeConfigSnapshot);
     await fs.rm(this.root, { recursive: true, force: true });
   }
 
@@ -578,10 +566,9 @@ export class ComposedGatewayHarness {
   };
 
   private createService(): workerEnv.WorkerEnvironmentService {
-    const ledger = createWorkerTranscriptCommitStore({ database: this.database });
     const committer = createWorkerTranscriptCommitter({
       getConfig: () => this.cfg,
-      store: ledger,
+      store: createWorkerTranscriptCommitStore({ database: this.database }),
     });
     return workerEnv.createWorkerEnvironmentService({
       scheduler: createTestGatewayScheduler(),
@@ -589,24 +576,22 @@ export class ComposedGatewayHarness {
       getConfig: () => this.cfg,
       resolveProvider: (providerId) => (providerId === PROVIDER.id ? PROVIDER : undefined),
       prepareInstallation: async () => this.artifact,
-      bootstrapWorker: async () => this.handshake,
+      bootstrapWorker: async () => workerHandshake(this.artifact),
       resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
       applyTranscriptCommit: async (params) => {
         const gate = this.transcriptGate;
         if (gate?.phase === "before-apply") {
-          gate.entered.resolve();
-          await gate.release.promise;
+          await enterGate(gate);
         }
         const result = await committer.commit(params);
         if (gate?.phase === "after-apply") {
-          gate.entered.resolve();
-          await gate.release.promise;
+          await enterGate(gate);
         }
         return result;
       },
       liveEvents: this.liveEventsValue,
       inferenceStore: createWorkerInferenceStore({ path: this.database.path }),
-      ...(this.placementGateValue ? { placementStore: this.placementGateValue } : {}),
+      placementStore: this.placementGateValue,
     });
   }
 
@@ -653,15 +638,13 @@ export class ComposedGatewayHarness {
           );
           if (gate) {
             gate.claimed = true;
-            if (gate.stage === "before-service") {
-              gate.entered.resolve();
-              await gate.release.promise;
-            }
+          }
+          if (gate?.stage === "before-service") {
+            await enterGate(gate);
           }
           const result = await service.pushLiveEvent(identity, request);
           if (gate?.stage === "after-service") {
-            gate.entered.resolve();
-            await gate.release.promise;
+            await enterGate(gate);
           }
           return result;
         },

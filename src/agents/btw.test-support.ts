@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createOpenClawTestState,
@@ -8,7 +9,6 @@ import {
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import {
   streamSimpleMock,
-  readFileMock,
   parseSessionEntriesMock,
   migrateSessionEntriesMock,
   buildSessionContextMock,
@@ -115,7 +115,9 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}) {
   };
 }
 
-function createAssistantDoneEvent(content: unknown[]) {
+function createAssistantDoneEvent(
+  content: AssistantMessage["content"],
+): Extract<AssistantMessageEvent, { type: "done" }> {
   return {
     type: "done",
     reason: "stop",
@@ -159,7 +161,9 @@ function mockCliOutput(output: { text: string; rawText?: string }) {
 }
 
 function registerCodexSideQuestionHarness(
-  overrides: Partial<Pick<AgentHarness, "authBootstrap" | "supports">> = {},
+  overrides: Partial<
+    Pick<AgentHarness, "authBootstrap" | "supports" | "resolveSessionRuntimeOwnershipAsync">
+  > = {},
 ) {
   const runHarnessSideQuestion = vi.fn().mockResolvedValue({ text: "Codex side answer." });
   registerAgentHarness({
@@ -397,7 +401,6 @@ export function setupBtwTestHooks() {
 
   beforeEach(() => {
     streamSimpleMock.mockReset();
-    readFileMock.mockReset();
     parseSessionEntriesMock.mockReset();
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
@@ -459,7 +462,6 @@ export function setupBtwTestHooks() {
     };
     preparedRuntimeSnapshotState.useSnapshotPluginRegistry = false;
 
-    readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
     mockTranscriptEntries([
       createTranscriptEntry({

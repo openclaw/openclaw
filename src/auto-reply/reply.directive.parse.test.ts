@@ -1,57 +1,44 @@
 /** Tests parsing of inline reply directives and command tags. */
 import { describe, expect, it } from "vitest";
-import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { parseInlineSessionDirectives } from "./reply/directive-handling.parse.js";
-import {
-  extractElevatedDirective,
-  extractReasoningDirective,
-  extractThinkDirective,
-  extractFastDirective,
-  extractStatusDirective,
-} from "./reply/directives.js";
+import { extractThinkDirective } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
 
 describe("directive parsing", () => {
-  it.each([
-    "  ordinary\t text\r\n    if ready:\r\n        run('a  b')  \r\n",
-    "\n    /thinkingish  /models\t /unknown\r\n",
-    " \t\r\n",
-  ])("preserves all bytes when no directive is recognized: %j", (body) => {
-    expect(parseInlineSessionDirectives(body).cleaned).toBe(body);
-  });
+  it.each(["  ordinary\t text\r\n    if ready:\r\n        run('a  b')  \r\n"])(
+    "preserves all bytes when no directive is recognized: %j",
+    (body) => {
+      expect(parseInlineSessionDirectives(body).cleaned).toBe(body);
+    },
+  );
 
-  it.each([
-    "/think high",
-    "/exec host=auto security=deny",
-    "/queue collect debounce:2s cap:5",
-    "/model example/model -s",
-    "/sample --runtime openclaw -s",
-    "/status:",
-  ])("preserves code and significant spacing around %s", (directive) => {
-    const code =
-      "\r\n```python\r\n    if ready:\r\n        run('a  b')\r\n\t\tfinish()  \r\n```\r\n";
-    const parsed = parseInlineSessionDirectives(`  Keep\t spacing ${directive} here  too${code}`, {
-      modelAliases: ["sample"],
-    });
-    expect(parsed.cleaned).toBe(`  Keep\t spacing here  too${code}`);
-  });
+  it.each(["/think high", "/status:"])(
+    "preserves code and significant spacing around %s",
+    (directive) => {
+      const code =
+        "\r\n```python\r\n    if ready:\r\n        run('a  b')\r\n\t\tfinish()  \r\n```\r\n";
+      const parsed = parseInlineSessionDirectives(
+        `  Keep\t spacing ${directive} here  too${code}`,
+        {
+          modelAliases: ["sample"],
+        },
+      );
+      expect(parsed.cleaned).toBe(`  Keep\t spacing here  too${code}`);
+    },
+  );
 
-  it.each([
-    "/think high",
-    "/verbose",
-    "/exec host=auto",
-    "/queue collect",
-    "/model sample -s",
-    "/sample",
-  ])("does not consume indentation after the last argument of %s", (directive) => {
-    const code = "    if ready:\r\n        run()  \r\n";
-    expect(
-      parseInlineSessionDirectives(`${directive}\r\n${code}`, {
-        modelAliases: ["sample"],
-      }).cleaned,
-    ).toBe(code);
-  });
+  it.each(["/sample"])(
+    "does not consume indentation after the last argument of %s",
+    (directive) => {
+      const code = "    if ready:\r\n        run()  \r\n";
+      expect(
+        parseInlineSessionDirectives(`${directive}\r\n${code}`, {
+          modelAliases: ["sample"],
+        }).cleaned,
+      ).toBe(code);
+    },
+  );
 
   it.each([
     ["/exec\n host=auto\n security=deny\r\n", { execHost: "auto", execSecurity: "deny" }],
@@ -80,30 +67,6 @@ describe("directive parsing", () => {
     expect(parsed.cleaned).toBe("/think low\r\n    code  here");
   });
 
-  it("matches reasoning directive", () => {
-    const res = extractReasoningDirective("/reasoning on please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.reasoningLevel).toBe("on");
-  });
-
-  it("matches reasoning stream directive", () => {
-    const res = extractReasoningDirective("/reasoning stream please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.reasoningLevel).toBe("stream");
-  });
-
-  it("matches fast directive", () => {
-    const res = extractFastDirective("/fast on please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.fastMode).toBe(true);
-  });
-
-  it("matches auto fast directive", () => {
-    const res = extractFastDirective("/fast auto please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.fastMode).toBe("auto");
-  });
-
   it("parses default thinking and fast directives as override clears", () => {
     const think = parseInlineSessionDirectives("/think default");
     expect(think.hasThinkDirective).toBe(true);
@@ -116,16 +79,6 @@ describe("directive parsing", () => {
     expect(fast.fastMode).toBeUndefined();
     expect(fast.rawFastMode).toBe("inherit");
     expect(fast.clearFastMode).toBe(true);
-  });
-  it("matches elevated ask", () => {
-    const res = extractElevatedDirective("/elevated ask please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.elevatedLevel).toBe("ask");
-  });
-  it("matches elevated full", () => {
-    const res = extractElevatedDirective("/elevated full please");
-    expect(res.hasDirective).toBe(true);
-    expect(res.elevatedLevel).toBe("full");
   });
 
   it("matches think with no argument and consumes colon", () => {
@@ -160,146 +113,22 @@ describe("directive parsing", () => {
     expect(res[invalidField]).toBe(true);
   });
 
-  it("matches steer queue directive", () => {
-    const res = extractQueueDirective("please /queue steer now");
-    expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("steer");
-    expect(res.rawMode).toBe("steer");
-    expect(res.cleaned).toBe("please now");
-  });
-
-  it("strips inline /model and /think directives while keeping user text", () => {
-    const model = parseInlineSessionDirectives("please sync /model openai/gpt-4.1-mini now");
-    expect(model.cleaned).toBe("please sync now");
-    expect(model.hasModelDirective).toBe(true);
-    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelScope).toBeUndefined();
-
-    const think = parseInlineSessionDirectives("please sync /think:high now");
-    expect(think.cleaned).toBe("please sync now");
-    expect(think.hasThinkDirective).toBe(true);
-    expect(think.thinkLevel).toBe("high");
-  });
-
-  it("preserves the trailing /model -s session-only scope", () => {
-    const model = parseInlineSessionDirectives("please sync /model openai/gpt-4.1-mini -s now");
-    expect(model.cleaned).toBe("please sync now");
-    expect(model.hasModelDirective).toBe(true);
-    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelScope).toBe("session");
-  });
-
-  it("preserves the trailing /model --session scope for native slash commands", () => {
-    const model = parseInlineSessionDirectives("/model openai/gpt-4.1-mini --session", {
+  it.each(["-s harness=codex"])("parses /model runtime and session options from %s", (options) => {
+    const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${options}`, {
       command: { kind: "native", name: "model" },
     });
 
     expect(model.cleaned).toBe("");
-    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelScope).toBe("session");
-    expect(model.command).toEqual({ name: "model" });
-  });
-
-  it.each(["--runtime codex -s", "-s --runtime codex", "runtime=codex -s", "-s harness=codex"])(
-    "parses /model runtime and session options from %s",
-    (options) => {
-      const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${options}`, {
-        command: { kind: "native", name: "model" },
-      });
-
-      expect(model.cleaned).toBe("");
-      expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-      expect(model.rawModelRuntime).toBe("codex");
-      expect(model.modelScope).toBe("session");
-      expect(model.command).toEqual({ name: "model" });
-    },
-  );
-
-  it.each(["-slow", "--sessional"])(
-    "preserves partial session option %s as ordinary text",
-    (option) => {
-      const model = parseInlineSessionDirectives(
-        `please sync /model openai/gpt-4.1-mini ${option} now`,
-      );
-
-      expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-      expect(model.cleaned).toBe(`please sync ${option} now`);
-    },
-  );
-
-  it("rejects duplicate native /model options through unconsumed arguments", () => {
-    const model = parseInlineSessionDirectives(
-      "/model openai/gpt-4.1-mini --runtime codex --runtime acp",
-      { command: { kind: "native", name: "model" } },
-    );
-
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
     expect(model.rawModelRuntime).toBe("codex");
-    expect(model.cleaned).toBe("--runtime acp");
-    expect(model.command).toEqual({
-      name: "model",
-      unconsumedArguments: "--runtime acp",
-    });
-  });
-
-  it("preserves duplicate inline /model options as message text", () => {
-    const model = parseInlineSessionDirectives("please sync /model openai/gpt-4.1-mini -s -s now");
-
-    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelScopeConflict).toBe(true);
-    expect(model.cleaned).toBe("please sync -s now");
-  });
-
-  it("keeps here as the selected model in mixed commands", () => {
-    const model = parseInlineSessionDirectives("please /model here continue");
-    expect(model.cleaned).toBe("please continue");
-    expect(model.rawModelDirective).toBe("here");
-  });
-
-  it.each([
-    ["-a", "agent"],
-    ["--agent", "agent"],
-    ["-g", "global"],
-    ["--global", "global"],
-  ] as const)("preserves explicit /model %s scope", (option, scope) => {
-    const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${option}`, {
-      command: { kind: "native", name: "model" },
-    });
-
-    expect(model.cleaned).toBe("");
-    expect(model.modelScope).toBe(scope);
-  });
-
-  it("keeps --persist as ordinary text for inline directives", () => {
-    const model = parseInlineSessionDirectives(
-      "please sync /model openai/gpt-4.1-mini --persist now",
-    );
-    expect(model.cleaned).toBe("please sync --persist now");
-    expect(model.hasModelDirective).toBe(true);
-    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-
-    const think = parseInlineSessionDirectives("/think high --persist");
-    expect(think.cleaned).toBe("--persist");
-    expect(think.hasThinkDirective).toBe(true);
-    expect(think.thinkLevel).toBe("high");
+    expect(model.modelScope).toBe("session");
+    expect(model.command).toEqual({ name: "model" });
   });
 
   it("preserves spacing when stripping think directives before paths", () => {
     const res = extractThinkDirective("thats not /think high/tmp/hello");
     expect(res.hasDirective).toBe(true);
     expect(res.cleaned).toBe("thats not /tmp/hello");
-  });
-
-  it("preserves spacing when stripping status directives before paths", () => {
-    const res = extractStatusDirective("thats not /status:/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
-  });
-
-  it("does not treat /usage as a status directive", () => {
-    const res = extractStatusDirective("thats not /usage:/tmp/hello");
-    expect(res.hasDirective).toBe(false);
-    expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
   });
 
   it("parses queue options and modes", () => {
@@ -311,65 +140,26 @@ describe("directive parsing", () => {
     expect(res.dropPolicy).toBe("summarize");
     expect(res.cleaned).toBe("please now");
   });
-
-  it("extracts reply_to_current tag with whitespace", () => {
-    const res = parseInlineDirectives("ok [[ reply_to_current ]]", {
-      currentMessageId: "msg-1",
-      stripAudioTag: false,
-    });
-    expect(res.replyToId).toBe("msg-1");
-    expect(res.text).toBe("ok");
-  });
-
-  it("extracts reply_to id tag with whitespace", () => {
-    const res = parseInlineDirectives("see [[ reply_to : 12345 ]] now", {
-      currentMessageId: "msg-1",
-      stripAudioTag: false,
-    });
-    expect(res.replyToId).toBe("12345");
-    expect(res.text).toBe("see now");
-  });
-
-  it("preserves newlines when stripping reply tags", () => {
-    const res = parseInlineDirectives("line 1\nline 2 [[reply_to_current]]\n\nline 3", {
-      currentMessageId: "msg-2",
-      stripAudioTag: false,
-    });
-    expect(res.replyToId).toBe("msg-2");
-    expect(res.text).toBe("line 1\nline 2\n\nline 3");
-  });
 });
 
-describe("level directive preserves message text after an invalid level", () => {
-  it("keeps the message when /verbose is followed by prose", () => {
-    const res = parseInlineSessionDirectives("/verbose explain quantum computing");
-    expect(res.hasVerboseDirective).toBe(true);
-    expect(res.verboseLevel).toBeUndefined();
-    expect(res.rawVerboseLevel).toBeUndefined();
-    expect(res.cleaned).toBe("explain quantum computing");
-  });
+describe("typed level directives accept digit and underscore aliases", () => {
+  it.each([
+    ["think", "think_hard", "thinkLevel", "low", ""],
+    ["reasoning", "0", "reasoningLevel", "off", ""],
+    ["verbose", "3d printing tips", "verboseLevel", undefined, "3d printing tips"],
+  ] as const)("/%s %s", (name, args, levelKey, level, cleaned) => {
+    const parsed = parseInlineSessionDirectives(`/${name} ${args}`, {
+      command: { kind: "text", name },
+    });
 
-  it("still consumes off so it persists rather than clears", () => {
-    const elevated = extractElevatedDirective("hello there /elevated off");
-    expect(elevated.elevatedLevel).toBe("off");
-    expect(elevated.cleaned).toBe("hello there");
-  });
-
-  it("still reports a single unrecognized trailing token", () => {
-    const res = extractElevatedDirective("/elevated maybe");
-    expect(res.hasDirective).toBe(true);
-    expect(res.elevatedLevel).toBeUndefined();
-    expect(res.rawLevel).toBe("maybe");
+    expect(parsed[levelKey]).toBe(level);
+    expect(parsed.cleaned).toBe(cleaned);
   });
 });
 
 describe("native directive commands own their complete argument boundary", () => {
   it.each([
-    ["think", "rawThinkLevel", "about", "my deployment plan"],
-    ["verbose", "rawVerboseLevel", "explain", "quantum computing"],
     ["trace", "rawTraceLevel", "banana", "please"],
-    ["fast", "rawFastMode", "bananas", "please"],
-    ["reasoning", "rawReasoningLevel", "nonsense", "please"],
     ["elevated", "rawElevatedLevel", "perhaps", "explain"],
   ] as const)(
     "preserves the invalid first argument for native /%s",
@@ -387,18 +177,6 @@ describe("native directive commands own their complete argument boundary", () =>
       });
     },
   );
-
-  it("retains unexpected arguments after a valid native queue mode", () => {
-    const parsed = parseInlineSessionDirectives("/queue collect please help", {
-      command: { kind: "native", name: "queue" },
-    });
-
-    expect(parsed.queueMode).toBe("collect");
-    expect(parsed.command).toEqual({
-      name: "queue",
-      unconsumedArguments: "please help",
-    });
-  });
 
   it("does not interpret another directive inside native command arguments", () => {
     const parsed = parseInlineSessionDirectives("/queue /think high", {

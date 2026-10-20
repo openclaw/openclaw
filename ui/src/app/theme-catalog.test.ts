@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   ThemesGetResult,
@@ -17,8 +17,11 @@ import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
-import { renderAgentIdentityAvatar } from "../components/identity-avatar-view.ts";
+import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -123,8 +126,10 @@ it("resolves built-in branding before the palette and catalog load", () => {
 it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
   const theme = createApplicationTheme(loadSettings(), gateway);
-  const container = document.createElement("div");
-  const renderMark = vi.fn(() => render(renderAgentIdentityAvatar({ id: "openclaw" }), container));
+  const { container, unmount } = mountSolid(() =>
+    createComponent(AgentIdentityAvatar, { agent: { id: "openclaw" } }),
+  );
+  const renderMark = vi.fn();
   const unsubscribe = theme.subscribe(renderMark);
   gateway.start();
   current().request.mockResolvedValue(
@@ -133,15 +138,18 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
   current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
   try {
     await vi.dynamicImportSettled();
+    flush();
     expect(container.querySelector(".identity-avatar--neutral")).not.toBeNull();
     renderMark.mockClear();
     patchSettings({ theme: "knot" });
+    flush();
     expect(theme.settings.theme).toBe("knot");
     expect(renderMark).toHaveBeenCalledTimes(1);
     expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
     const palette = document.getElementById("openclaw-theme-palette-knot")!;
     expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
     palette.dispatchEvent(new Event("load"));
+    flush();
     expect(renderMark).toHaveBeenCalledTimes(2);
     expect(document.documentElement.dataset.themeId).toBe("knot");
     expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
@@ -150,7 +158,7 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
     unsubscribe();
     theme.dispose();
     gateway.stop();
-    render(nothing, container);
+    unmount();
     document.getElementById("openclaw-theme-palette-knot")?.remove();
   }
 });
@@ -162,6 +170,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   favicon.type = "image/svg+xml";
   favicon.setAttribute("href", "/favicon.svg");
   document.head.append(favicon);
+  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -176,7 +185,9 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   });
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "profile-alias" } }] },
+    snapshot: {
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "profile-alias" } }],
+    },
   });
   try {
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe(descriptor.id));
@@ -287,6 +298,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   } finally {
     applicationTheme.dispose();
     gateway.stop();
+    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     favicon.remove();
   }
 });
@@ -371,7 +383,9 @@ it("does not report a previous palette failure after a local theme switch", asyn
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     auth: { role: "operator", scopes: ["operator.read"] },
-    snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "read-only" } }] },
+    snapshot: {
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "read-only" } }],
+    },
   });
   try {
     await vi.waitFor(() =>
@@ -516,7 +530,7 @@ it.each([
     const hello = () => ({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
-      snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
+      snapshot: { presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "first" } }] },
     });
     current().opts.onHello?.(hello());
     try {

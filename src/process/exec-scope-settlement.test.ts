@@ -3,11 +3,15 @@ import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import { withMockedPlatform, withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { CommandProcessCleanupError, hasCommandProcessCleanupError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
-import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
+import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
+  spawnCommand,
+  withCommandProcessScope,
+} from "./exec-spawn.js";
 import { runExec } from "./exec.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
@@ -27,12 +31,28 @@ vi.mock("../shared/pid-alive.js", () => ({
   getProcessInstanceStartTime: () => 1,
 }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
+// mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
+vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
 vi.mock("./exec-termination.js", () => ({
   createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
 }));
 
 const scopes: Promise<unknown>[] = [];
 const fixtures: Array<() => void> = [];
+const uncertainCleanup = { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" };
+const emptyResult = {
+  stdout: Buffer.alloc(0),
+  stderr: Buffer.alloc(0),
+  exitCode: 0,
+  failed: false,
+  timedOut: false,
+  isCanceled: false,
+  isMaxBuffer: false,
+  isTerminated: false,
+  isForcefullyTerminated: false,
+};
+const spawnFixture = () => spawnCommand(["fixture"], { reject: false });
+
 function ownScope<T>(
   run: (stop: () => void) => Promise<T>,
   custody?: CommandProcessCustody,
@@ -47,17 +67,7 @@ function commandFixture() {
   const child = new BrokerChild(1, ["fixture"], async () => {});
   const ready = createDeferredCore();
   const closed = createDeferredCore();
-  const result = createDeferredCore<{
-    stdout: Buffer;
-    stderr: Buffer;
-    exitCode: number;
-    failed: boolean;
-    timedOut: boolean;
-    isCanceled: boolean;
-    isMaxBuffer: boolean;
-    isTerminated: boolean;
-    isForcefullyTerminated: boolean;
-  }>();
+  const result = createDeferredCore<typeof emptyResult>();
   const cleanup = createDeferredCore<"forced" | "uncertain">();
   vi.spyOn(child, "ready").mockReturnValue(ready.promise);
   vi.spyOn(child, "waitForClose").mockReturnValue(closed.promise);
@@ -80,17 +90,7 @@ function commandFixture() {
     finish(close = true) {
       child.exitCode = 0;
       child.emit("exit", 0, null);
-      result.resolve({
-        stdout: Buffer.alloc(0),
-        stderr: Buffer.alloc(0),
-        exitCode: 0,
-        failed: false,
-        timedOut: false,
-        isCanceled: false,
-        isMaxBuffer: false,
-        isTerminated: false,
-        isForcefullyTerminated: false,
-      });
+      result.resolve({ ...emptyResult });
       if (close) {
         closed.resolve();
       }
@@ -139,10 +139,9 @@ describe("command scope physical settlement", () => {
       });
       let finished = false;
       const failure = new Error("transport failed");
-      const scope = ownScope(
-        () => ownScope(async () => void (await spawnCommand(["fixture"], { reject: false }))),
-        { reserve },
-      ).finally(() => {
+      const scope = ownScope(() => ownScope(async () => void (await spawnFixture())), {
+        reserve,
+      }).finally(() => {
         finished = true;
       });
       const outcome = scope.catch((error: unknown) => error);
@@ -175,12 +174,9 @@ describe("command scope physical settlement", () => {
     async (notStarted) => {
       const fixture = commandFixture();
       const reservation = { spawned: vi.fn(), settled: vi.fn() };
-      const scope = ownScope(
-        async () => void (await spawnCommand(["fixture"], { reject: false })),
-        {
-          reserve: () => reservation,
-        },
-      );
+      const scope = ownScope(async () => void (await spawnFixture()), {
+        reserve: () => reservation,
+      });
       const outcome = scope.catch((error: unknown) => error);
       if (notStarted) {
         fixture.child.markNotStarted();
@@ -228,10 +224,10 @@ describe("command scope physical settlement", () => {
       fixture.finish();
       fixture.cleanup.resolve("forced");
       if (live) {
-        await vi.advanceTimersByTimeAsync(301);
+        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
         vi.useRealTimers();
       }
-      expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      expect(await outcome).toMatchObject(uncertainCleanup);
       expect(beforeInput).not.toHaveBeenCalled();
       expect(reservation.settled).toHaveBeenCalledTimes(live ? 0 : 1);
     },
@@ -265,7 +261,7 @@ describe("command scope physical settlement", () => {
       expect(scopeFinished).toBe(false);
       fixture.cleanup.resolve(cleanup);
       if (cleanup === "uncertain") {
-        expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+        expect(await outcome).toMatchObject(uncertainCleanup);
       } else {
         await scope;
       }
@@ -281,9 +277,7 @@ describe("command scope physical settlement", () => {
       let scopeFinished = false;
       const scope = ownScope(async () => {
         const pending =
-          api === "exec"
-            ? runExec("fixture", [], { logOutput: false })
-            : spawnCommand(["fixture"], { reject: false });
+          api === "exec" ? runExec("fixture", [], { logOutput: false }) : spawnFixture();
         void pending.catch(() => {});
         throw failure;
       }).finally(() => {
@@ -301,19 +295,54 @@ describe("command scope physical settlement", () => {
 
 it.skipIf(process.platform === "win32")(
   "preserves uncertainty when a closed raw command still owns a live group",
+  () =>
+    withMockedPlatform("linux", async () => {
+      const listeners = process.listeners("SIGCHLD");
+      vi.useFakeTimers();
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      const fixture = commandFixture();
+      const scope = ownScope(async () => {
+        await spawnFixture();
+      });
+      const outcome = scope.catch((error: unknown) => error);
+      fixture.open();
+      fixture.finish();
+      try {
+        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS + 1);
+        expect(await outcome).toMatchObject(uncertainCleanup);
+        expect(process.listeners("SIGCHLD")).toEqual(listeners);
+      } finally {
+        vi.useRealTimers();
+      }
+    }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "confirms a closed raw command group that outlives the cooperative grace",
   async () => {
     vi.useFakeTimers();
-    vi.spyOn(process, "kill").mockReturnValue(true);
-    const fixture = commandFixture();
-    const scope = ownScope(async () => {
-      await spawnCommand(["fixture"], { reject: false });
+    const disappearsAt = Date.now() + 1_000;
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("synthetic group probe"), {
+        code: Date.now() < disappearsAt ? "EPERM" : "ESRCH",
+      });
     });
-    const outcome = scope.catch((error: unknown) => error);
+    const fixture = commandFixture();
+    const reservation = { spawned: vi.fn(), settled: vi.fn() };
+    const scope = ownScope(
+      async () => {
+        await spawnFixture();
+      },
+      { reserve: () => reservation },
+    );
     fixture.open();
     fixture.finish();
     try {
-      await vi.advanceTimersByTimeAsync(301);
-      expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(reservation.settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(scope).resolves.toBeUndefined();
+      expect(reservation.settled).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
@@ -324,14 +353,14 @@ it("keeps Windows transport failure uncertain without a native exit", async () =
   await withMockedWindowsPlatform(async () => {
     const fixture = commandFixture();
     const scope = ownScope(async () => {
-      const pending = spawnCommand(["fixture"], { reject: false });
+      const pending = spawnFixture();
       fixture.open();
       await setImmediate();
       fixture.fail(new Error("transport failed after readiness"));
       await pending.catch(() => {});
     });
     const outcome = scope.catch((error: unknown) => error);
-    expect(await outcome).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+    expect(await outcome).toMatchObject(uncertainCleanup);
   });
 });
 

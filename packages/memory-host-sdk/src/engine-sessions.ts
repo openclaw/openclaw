@@ -3,6 +3,7 @@
 export { extractKeywords } from "./host/query-expansion.js";
 export {
   buildSessionEntry,
+  buildSessionEntries,
   listSessionTranscriptCorpusEntriesForAgent,
   matchesSessionEntryPrefixHash,
   parseCanonicalSessionSyncTargetFromPath,

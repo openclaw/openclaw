@@ -6,9 +6,15 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { resolveSecretSentinel } from "../secrets/sentinel.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
+import {
+  assertPrepared,
+  completionConfig,
+  completionModel,
+} from "./simple-completion.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntimeLease: vi.fn(),
@@ -74,18 +80,7 @@ import {
 
 function createOllamaModelResolver(): SimpleCompletionModelResolver {
   return vi.fn(async (provider, modelId, _agentDir, _cfg, options) => ({
-    model: {
-      provider,
-      id: modelId,
-      name: modelId,
-      api: "ollama",
-      baseUrl: "http://127.0.0.1:11434",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8192,
-      maxTokens: 1024,
-    } satisfies Model,
+    model: completionModel({ provider, id: modelId }),
     authStorage: options?.authStorage ?? AuthStorage.inMemory({}),
     modelRegistry: options?.modelRegistry ?? ModelRegistry.inMemory(AuthStorage.inMemory({})),
   }));
@@ -97,7 +92,11 @@ beforeEach(() => {
   mocks.publishedGeneration = "A";
   mocks.acquireRuntimeLease.mockReset();
   mocks.disposeRuntime.mockReset();
-  mocks.getApiKeyForModel.mockReset();
+  mocks.getApiKeyForModel.mockReset().mockResolvedValue({
+    apiKey: "ollama-local",
+    source: "local marker",
+    mode: "api-key",
+  });
   mocks.prepareProviderRuntimeAuth.mockReset();
   mocks.resolvePluginMetadataSnapshot
     .mockReset()
@@ -105,22 +104,14 @@ beforeEach(() => {
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   preparedModelRuntime = {
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      createStores: () => ({ authStorage, modelRegistry }),
+    }),
     testGeneration: "A",
-    catalogOwner: undefined,
-    observationConfig: {},
-    isCurrent: () => true,
-    agentDir: "/tmp/openclaw-agent",
     workspaceDir: "/tmp/runtime-workspace",
-    config: {},
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    allowGatewaySubagentBinding: false,
-    modelCatalog: { entries: [], routeVariants: [] },
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    activeProjectKeys: [],
-    createStores: () => ({ authStorage, modelRegistry }),
   };
   mocks.acquireRuntimeLease.mockResolvedValue({
     snapshot: preparedModelRuntime,
@@ -131,43 +122,38 @@ beforeEach(() => {
 it("keeps route rematerialization and runtime auth on the supplied generation", async () => {
   const observedModelGenerations: string[] = [];
   const observedRuntimeAuthGenerations: string[] = [];
-  const modelResolver: SimpleCompletionModelResolver = vi.fn(
-    async (provider, modelId, _agentDir, cfg, options) => {
-      if (!options?.authStorage || !options.modelRegistry) {
-        throw new Error("prepared stores were not bound");
-      }
-      const generation = mocks.readGeneration();
-      observedModelGenerations.push(generation);
-      mocks.publishedGeneration = "B";
-      await Promise.resolve();
-      const configured = cfg?.models?.providers?.openai;
-      return {
-        model: {
-          provider,
-          id: modelId,
-          name: modelId,
-          api: configured?.api ?? "openai-chatgpt-responses",
-          baseUrl: configured?.baseUrl ?? "https://chatgpt.com/backend-api/codex",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 4096,
-          params: { generation },
-        } satisfies Model,
-        authStorage: options.authStorage,
-        modelRegistry: options.modelRegistry,
-      };
-    },
-  );
+  const modelResolver: SimpleCompletionModelResolver = async (
+    provider,
+    modelId,
+    _agentDir,
+    cfg,
+    options,
+  ) => {
+    if (!options?.authStorage || !options.modelRegistry) {
+      throw new Error("prepared stores were not bound");
+    }
+    const generation = mocks.readGeneration();
+    observedModelGenerations.push(generation);
+    mocks.publishedGeneration = "B";
+    await Promise.resolve();
+    const configured = cfg?.models?.providers?.openai;
+    return {
+      model: completionModel({
+        provider,
+        id: modelId,
+        api: configured?.api ?? "openai-chatgpt-responses",
+        baseUrl: configured?.baseUrl ?? "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        params: { generation },
+      }),
+      authStorage: options.authStorage,
+      modelRegistry: options.modelRegistry,
+    };
+  };
   mocks.getApiKeyForModel.mockImplementation(async () => {
     await Promise.resolve();
     mocks.publishedGeneration = "B";
-    return {
-      apiKey: "sk-platform",
-      source: "models.providers.openai",
-      mode: "api-key",
-    };
+    return { apiKey: "sk-platform", source: "models.providers.openai", mode: "api-key" };
   });
   mocks.prepareProviderRuntimeAuth.mockImplementation(async () => {
     observedRuntimeAuthGenerations.push(mocks.readGeneration());
@@ -176,11 +162,7 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
 
   const result = await prepareSimpleCompletionModel({
     preparedModelRuntime,
-    cfg: {
-      models: {
-        providers: { openai: { baseUrl: "", models: [], apiKey: "fixture-api-key" } },
-      },
-    },
+    cfg: completionConfig("openai", { baseUrl: "", models: [], apiKey: "fixture-api-key" }),
     agentId: "main",
     provider: "openai",
     modelId: "gpt-5.5",
@@ -188,12 +170,8 @@ it("keeps route rematerialization and runtime auth on the supplied generation", 
     modelResolver,
   });
 
-  expect(result).not.toHaveProperty("error");
-  if ("error" in result) {
-    throw new Error(result.error);
-  }
-  const prepared = result;
-  expect(prepared.model.params).toMatchObject({ generation: "A" });
+  assertPrepared(result);
+  expect(result.model.params).toMatchObject({ generation: "A" });
   expect(observedModelGenerations).toEqual(["A", "A"]);
   expect(observedRuntimeAuthGenerations).toEqual(["A"]);
 });
@@ -215,11 +193,6 @@ it.each([false, true])(
       if (cleanupFails) {
         throw cleanupError;
       }
-    });
-    mocks.getApiKeyForModel.mockResolvedValue({
-      apiKey: "local-fixture",
-      source: "local marker",
-      mode: "api-key",
     });
     const resolve = createOllamaModelResolver();
     const preparing = parent.run(() =>
@@ -250,12 +223,10 @@ it.each([false, true])(
       releaseCleanup.resolve();
       await draining;
       expect(dispose).toHaveBeenCalledOnce();
-      const cleanup = dispose.mock.results[0]!.value;
-      if (cleanupFails) {
-        await expect(cleanup).rejects.toBe(cleanupError);
-      } else {
-        await expect(cleanup).resolves.toBeUndefined();
-      }
+      const cleanup = expect(dispose.mock.results[0]!.value);
+      await (cleanupFails ? cleanup.rejects : cleanup.resolves).toBe(
+        cleanupFails ? cleanupError : undefined,
+      );
     } finally {
       release.resolve();
       releaseCleanup.resolve();
@@ -278,16 +249,6 @@ it.each(["/", "entry"])(
       ],
     });
     mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
-    mocks.getApiKeyForModel.mockResolvedValue({
-      apiKey: "ollama-local",
-      source: "local marker",
-      mode: "api-key",
-    });
-    const release = vi.fn(async () => {});
-    mocks.acquireRuntimeLease.mockResolvedValue({
-      snapshot: preparedModelRuntime,
-      [Symbol.asyncDispose]: release,
-    });
     const resolveModel = createOllamaModelResolver();
     const modelResolver: SimpleCompletionModelResolver = async (...args) => {
       const resolved = await resolveModel(...args);
@@ -302,8 +263,10 @@ it.each(["/", "entry"])(
       modelResolver,
     });
 
-    try {
-      expect(result).toMatchObject({
+    assertPrepared(result);
+    {
+      await using prepared = result;
+      expect(prepared).toMatchObject({
         selection: { provider: "openai", modelId: "middle" },
         model: { provider: "openai", id: "middle", contextWindow: 8192 },
       });
@@ -316,12 +279,8 @@ it.each(["/", "entry"])(
           pluginMetadataSnapshot: metadataSnapshot,
         }),
       );
-    } finally {
-      if (!("error" in result)) {
-        await result[Symbol.asyncDispose]();
-      }
     }
-    expect(release).toHaveBeenCalledOnce();
+    expect(mocks.disposeRuntime).toHaveBeenCalledOnce();
   },
 );
 
@@ -366,19 +325,15 @@ it.each(["current", "credential lookup", "provider auth exchange"] as const)(
     });
     if (revokedDuring === "current") {
       expect(await preparing).not.toHaveProperty("error");
-      expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledOnce();
-      expect(setRuntimeApiKey).toHaveBeenCalledOnce();
       const [provider, credential] = setRuntimeApiKey.mock.calls[0] as [string, string];
       expect(provider).toBe("ollama");
       expect(resolveSecretSentinel(credential)).toBe("worker-runtime-token");
     } else {
       await expect(preparing).rejects.toBe(revoked);
-      if (revokedDuring === "credential lookup") {
-        expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
-      } else {
-        expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledOnce();
-      }
-      expect(setRuntimeApiKey).not.toHaveBeenCalled();
     }
+    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledTimes(
+      revokedDuring === "credential lookup" ? 0 : 1,
+    );
+    expect(setRuntimeApiKey).toHaveBeenCalledTimes(revokedDuring === "current" ? 1 : 0);
   },
 );

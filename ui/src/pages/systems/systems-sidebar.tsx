@@ -1,17 +1,13 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
+import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import type {
-  SystemsController,
-  SystemsSortMode,
-  SystemsStatusFilter,
-} from "./systems-controller.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
+import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
 import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
@@ -26,32 +22,6 @@ const statusOptions = [
   { value: "online", labelKey: "systems.online" },
   { value: "offline", labelKey: "systems.offline" },
 ] as const satisfies ReadonlyArray<{ value: SystemsStatusFilter; labelKey: string }>;
-
-function MenuOption(props: { value: string; label: string; checked: boolean }) {
-  let item!: HTMLElement;
-  createEffect(
-    () => props.checked,
-    (checked) => {
-      syncDropdownItemRadio(item, checked);
-    },
-  );
-  return (
-    <wa-dropdown-item
-      class="sidebar-session-sort-menu__item"
-      value={props.value}
-      role="menuitemradio"
-      aria-checked={props.checked ? "true" : "false"}
-      ref={(element) => {
-        item = element;
-      }}
-    >
-      <span class="session-menu__text">{t(props.label)}</span>
-      <span slot="details" class="session-menu__check" aria-hidden="true">
-        {props.checked ? <Icon name="check" /> : null}
-      </span>
-    </wa-dropdown-item>
-  );
-}
 
 export function systemName(row: SystemsInventoryRow): string {
   const named =
@@ -105,36 +75,31 @@ export function systemPlatform(row: SystemsInventoryRow): string | undefined {
   return platform ? prettifyPlatform(platform, row.node?.deviceFamily) : undefined;
 }
 
-type SystemsSidebarProps = { controller?: SystemsController };
+type SystemsSidebarProps = { controller?: Systems };
 type SystemsSidebarElement = SolidBridgeElement<SystemsSidebarProps>;
 function SystemsSidebarContent(props: SystemsSidebarProps) {
   const projection = createMemo(() =>
-    props.controller
-      ? projectSource(props.controller, {
-          read: (value) => value,
-          subscribe: (value, notify) => value.subscribe(notify),
-          equality: "revision",
-        })
-      : null,
+    props.controller ? projectOwner(props.controller, (value) => value) : null,
   );
   const controller = () => projection()?.read();
   return (
-    <Show when={controller()?.current}>
+    <Show when={controller()?.current()}>
       <SystemsInventory controller={controller()!} />
     </Show>
   );
 }
-function SystemsInventory(props: { controller: SystemsController }) {
+function SystemsInventory(props: { controller: Systems }) {
+  const menuId = createUniqueId();
   const controller = () => props.controller;
-  const query = () => controller().query.trim().toLocaleLowerCase();
+  const query = createMemo(() => controller().state.query.trim().toLocaleLowerCase());
   const rows = createMemo(() => {
-    const sortMode = controller().sortMode;
+    const sortMode = controller().state.sortMode;
     return controller()
-      .rows.filter((row) => {
+      .state.rows.filter((row) => {
         const matchesStatus =
-          controller().statusFilter === "all" ||
+          controller().state.statusFilter === "all" ||
           row.environment.status ===
-            (controller().statusFilter === "online" ? "available" : "unavailable");
+            (controller().state.statusFilter === "online" ? "available" : "unavailable");
         return (
           matchesStatus &&
           [
@@ -163,6 +128,23 @@ function SystemsInventory(props: { controller: SystemsController }) {
         );
       });
   });
+  const filterItem = (
+    prefix: "sort" | "status",
+    option: { value: string; labelKey: string },
+    checked: boolean,
+  ): MenuItem => ({
+    id: `${prefix}:${option.value}`,
+    label: t(option.labelKey),
+    type: "radio",
+    checked,
+    class: "sidebar-session-sort-menu__item",
+    content: <span class="session-menu__text">{t(option.labelKey)}</span>,
+    details: (
+      <span class="session-menu__check" aria-hidden="true">
+        {checked ? <Icon name="check" /> : null}
+      </span>
+    ),
+  });
   const renderRow = (row: SystemsInventoryRow) => {
     const online = row.environment.status === "available";
     const platform = systemPlatform(row);
@@ -172,7 +154,7 @@ function SystemsInventory(props: { controller: SystemsController }) {
         class="systems-machine"
         type="button"
         data-status={row.environment.status}
-        aria-pressed={row.environment.id === controller().selectedId ? "true" : "false"}
+        aria-pressed={row.environment.id === controller().state.selectedId ? "true" : "false"}
         aria-description={platform ? `${status()} · ${platform}` : status()}
         onClick={() => controller().select(row.environment.id)}
       >
@@ -204,19 +186,46 @@ function SystemsInventory(props: { controller: SystemsController }) {
           type="search"
           aria-label={t("systems.search")}
           placeholder={t("systems.search")}
-          value={controller().query}
-          onInput={(event: InputEvent) => {
-            if (event.currentTarget instanceof HTMLInputElement) {
-              controller().updatePresentation({ query: event.currentTarget.value });
-            }
-          }}
+          value={controller().state.query}
+          onInput={(event) => controller().updatePresentation({ query: event.currentTarget.value })}
         />
-        <wa-dropdown
-          class="systems-filter-menu sidebar-session-sort-menu"
+        <Menu
+          id={menuId}
+          class="systems-filter-menu"
+          panelClass="sidebar-session-sort-menu"
           placement="bottom-end"
-          aria-label={t("systems.filterSort")}
-          onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-            const value = event.detail.item.value;
+          label={t("systems.filterSort")}
+          triggerClass={[
+            "systems-filter__sort sidebar-session-sort",
+            { "sidebar-session-sort--filtered": controller().state.statusFilter !== "all" },
+          ]}
+          triggerAttributes={{ title: t("systems.filterSort") }}
+          trigger={<Icon name="listFilter" />}
+          items={[
+            {
+              kind: "content",
+              id: "sort-heading",
+              content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
+            },
+            ...sortOptions.map((option) =>
+              filterItem("sort", option, controller().state.sortMode === option.value),
+            ),
+            {
+              kind: "content",
+              id: "status-heading",
+              content: (
+                <>
+                  <div class="session-menu__separator" role="separator" />
+                  <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
+                </>
+              ),
+            },
+            ...statusOptions.map((option) =>
+              filterItem("status", option, controller().state.statusFilter === option.value),
+            ),
+          ]}
+          onSelect={(item) => {
+            const value = item.id;
             const sort = sortOptions.find((option) => value === `sort:${option.value}`);
             const status = statusOptions.find((option) => value === `status:${option.value}`);
             if (sort) {
@@ -225,54 +234,20 @@ function SystemsInventory(props: { controller: SystemsController }) {
               controller().updatePresentation({ statusFilter: status.value });
             }
           }}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            class={[
-              "systems-filter__sort sidebar-session-sort",
-              { "sidebar-session-sort--filtered": controller().statusFilter !== "all" },
-            ]}
-            aria-label={t("systems.filterSort")}
-            title={t("systems.filterSort")}
-          >
-            <Icon name="listFilter" />
-          </button>
-          <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>
-          <For each={sortOptions}>
-            {(option) => (
-              <MenuOption
-                value={`sort:${option.value}`}
-                label={option.labelKey}
-                checked={controller().sortMode === option.value}
-              />
-            )}
-          </For>
-          <div class="session-menu__separator" role="separator" />
-          <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
-          <For each={statusOptions}>
-            {(option) => (
-              <MenuOption
-                value={`status:${option.value}`}
-                label={option.labelKey}
-                checked={controller().statusFilter === option.value}
-              />
-            )}
-          </For>
-        </wa-dropdown>
+        />
         <button
           type="button"
           class="systems-filter__refresh"
           aria-label={t("systems.refresh")}
           title={t("systems.refresh")}
-          disabled={controller().loading || !controller().connected}
+          disabled={controller().loading() || !controller().connected()}
           onClick={() => void controller().refresh("manual")}
         >
           <Icon name="refresh" />
         </button>
       </div>
-      <div class="systems-sidebar__list" aria-busy={controller().loading ? "true" : "false"}>
-        {controller().loading && !controller().inventory ? (
+      <div class="systems-sidebar__list" aria-busy={controller().loading() ? "true" : "false"}>
+        {controller().loading() && !controller().state.inventory ? (
           <p class="systems-sidebar__empty" role="status">
             {t("systems.loading")}
           </p>
@@ -280,7 +255,7 @@ function SystemsInventory(props: { controller: SystemsController }) {
         <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
         <For each={["node", "worker"] as const}>
           {(kind) => {
-            const group = () => rows().filter((row) => systemKind(row) === kind);
+            const group = createMemo(() => rows().filter((row) => systemKind(row) === kind));
             return (
               <Show when={group().length}>
                 <section class="systems-group">
@@ -294,10 +269,10 @@ function SystemsInventory(props: { controller: SystemsController }) {
             );
           }}
         </For>
-        {!controller().loading && rows().length === 0 ? (
+        {!controller().loading() && rows().length === 0 ? (
           <p class="systems-sidebar__empty">
             {t(
-              query() || controller().statusFilter !== "all"
+              query() || controller().state.statusFilter !== "all"
                 ? "systems.noMatches"
                 : "systems.empty",
             )}

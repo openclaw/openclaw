@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { Type } from "typebox";
 // System prompt report tests cover prompt accounting, bootstrap injection
 // matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+import type { AnyAgentTool } from "./tools/common.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
@@ -30,6 +36,111 @@ describe("buildSystemPromptReport", () => {
       ...overrides,
     });
 
+  it("separates catalog availability from consumed schemas using owner provenance", () => {
+    const makeTool = (name: string): AnyAgentTool => ({
+      name,
+      label: name,
+      description: name,
+      parameters: Type.Object({ value: Type.String() }),
+      execute: async () => ({ content: [], details: {} }),
+    });
+    const visible = makeTool("visible");
+    const deferred = makeTool("deferred");
+    const remote = makeTool("remote");
+    setPluginToolMeta(visible, {
+      pluginId: "bundle-mcp",
+      optional: true,
+      mcp: {
+        serverName: "Docs Server",
+        safeServerName: "docs",
+        toolName: "visible",
+        operation: "tool",
+      },
+    });
+    const remoteSchema = publishRuntimeToolInputSchema(remote.parameters).schema;
+    const catalogEntries: ToolSearchCatalogEntry[] = [
+      {
+        id: "visible",
+        source: "mcp",
+        sourceName: "docs",
+        name: visible.name,
+        description: "",
+        parameters: visible.parameters,
+        tool: visible,
+        directVisible: true,
+        mcp: {
+          serverName: "Docs Server",
+          safeServerName: "docs",
+          toolName: "visible",
+          operation: "tool",
+        },
+      },
+      {
+        id: "deferred",
+        source: "openclaw",
+        sourceName: "core",
+        name: deferred.name,
+        description: "",
+        parameters: deferred.parameters,
+        tool: deferred,
+      },
+      {
+        id: "remote",
+        source: "mcp",
+        sourceName: "docs",
+        name: remote.name,
+        description: "",
+        parameters: remoteSchema,
+        tool: remote,
+      },
+      {
+        id: "client",
+        source: "client",
+        name: "client",
+        description: "",
+        parameters: new Proxy(
+          {},
+          {
+            ownKeys: () => {
+              throw new Error("must not inspect unpublished client schema");
+            },
+          },
+        ),
+        tool: remote,
+      },
+    ];
+    const report = makeReport({ tools: [visible], catalogEntries });
+    expect(report.tools.entries).toMatchObject([
+      { source: "mcp", sourceName: "docs", serverName: "Docs Server" },
+    ]);
+    expect(report.tools.schemaChars).toBe(JSON.stringify(visible.parameters).length);
+    expect(report.tools.deferred).toEqual({
+      schemaChars: JSON.stringify(deferred.parameters).length + JSON.stringify(remoteSchema).length,
+      entries: [
+        {
+          name: "deferred",
+          source: "openclaw",
+          sourceName: "core",
+          schemaChars: JSON.stringify(deferred.parameters).length,
+        },
+        {
+          name: "remote",
+          source: "mcp",
+          sourceName: "docs",
+          schemaChars: JSON.stringify(remoteSchema).length,
+        },
+        { name: "client", source: "client", sourceName: undefined, schemaChars: null },
+      ],
+    });
+    expect(makeReport({ tools: [visible] }).tools.entries[0]).toMatchObject({
+      source: "mcp",
+      serverName: "Docs Server",
+    });
+    expect(makeReport({ tools: [visible], catalogEntries: [] }).tools.deferred?.entries).toEqual(
+      [],
+    );
+  });
+
   it("ignores malformed injected file paths and still matches valid entries", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = makeReport({
@@ -46,7 +157,7 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("accounts for project context with LF markers and UTF-16 content", () => {
-    const systemPrompt = "lead\n# Project Context\n汉🦞\n## Silent Replies\ntail";
+    const systemPrompt = `lead\n# Project Context\n汉🦞${SYSTEM_PROMPT_CACHE_BOUNDARY}\n## Skills\nRun-scoped catalog\n## Silent Replies\ntail`;
     const report = makeReport({ systemPrompt });
     expect(report.systemPrompt).toMatchObject({
       chars: systemPrompt.length,

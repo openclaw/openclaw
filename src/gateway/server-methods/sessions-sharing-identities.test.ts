@@ -22,13 +22,8 @@ describe("sharing identity display", () => {
       profiles: [
         {
           id: "profile-1",
-          displayName: "  ",
-          emails: ["new-name@example.test"],
-          githubIdentity: null,
-          mergedInto: null,
-          createdAt: 1,
+          label: "new-name@example.test",
           updatedAt: 2,
-          avatarMime: null,
           hasAvatar: false,
         },
       ],

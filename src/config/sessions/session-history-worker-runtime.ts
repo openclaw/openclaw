@@ -9,6 +9,7 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
@@ -27,6 +28,7 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import { readSessionTranscriptAccountingFromReplica } from "./session-transcript-accounting-replica.js";
 import type {
   SessionColdMetadataWorkerInput,
   SessionColdMetadataWorkerResult,
@@ -71,13 +73,18 @@ function receivePage(
       if (page.kind === "rpc" && page.page.encodedResponse) {
         // Wire bytes are immutable; each reader still owns its mutable page metadata.
         const { messages, ...response } = page.page.encodedResponse;
+        const { encodedMessagesDeflate, ...metadata } = page.page;
         const copy = structuredClone({
           ...page,
-          page: { ...page.page, encodedResponse: response },
+          page: { ...metadata, encodedResponse: response },
         });
         return {
           ...copy,
-          page: { ...copy.page, encodedResponse: { ...copy.page.encodedResponse, messages } },
+          page: {
+            ...copy.page,
+            encodedMessagesDeflate,
+            encodedResponse: { ...copy.page.encodedResponse, messages },
+          },
         };
       }
       return structuredClone(page);
@@ -165,9 +172,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
-        ...(cliBinding
-          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
-          : {}),
+        ...(cliBinding ? { cliSessionBindings: { "claude-cli": cliBinding } } : {}),
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {
@@ -283,6 +288,19 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
+    if (capturedRequest.kind === "active-accounting" && !admission && normalizedSessionKey) {
+      const accounting = readSessionTranscriptAccountingFromReplica(
+        {
+          path: currentSource.path,
+          sessionKey: normalizedSessionKey,
+          sessionId: resolved.sessionId,
+        },
+        capturedRequest.params.options,
+      );
+      if (accounting) {
+        return accounting;
+      }
+    }
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
       // Only display-history projections resolve subagent lineage across stores.
@@ -348,6 +366,7 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
+        capturedRequest.kind === "recent-usage" ||
         capturedRequest.kind === "history-event-page" ||
         capturedRequest.kind === "active-accounting" ||
         capturedRequest.kind === "bounded-tail" ||
@@ -364,7 +383,16 @@ export async function readSessionHistoryPageInWorker(
                 ? capturedRequest.params.options.readOnly
                 : false;
       let retriedProjection = false;
-      const readPage = () => readQueuedHistory(input, key, owner, signal);
+      const readPage = () =>
+        capturedRequest.kind === "active-accounting"
+          ? runOpenClawAgentWriteAdmission(
+              databaseOptions,
+              () => readQueuedHistory(input, key, owner, signal),
+              true,
+              undefined,
+              signal,
+            )
+          : readQueuedHistory(input, key, owner, signal);
       try {
         if (exactArchiveRead) {
           const page = await readPage();

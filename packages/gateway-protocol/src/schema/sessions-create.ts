@@ -5,13 +5,14 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
   SessionToolOverridesSchema,
 } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
+export { SESSION_CREATE_RETRY_WINDOW_MS } from "../session-limits.js";
 export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
 
 /** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
@@ -100,6 +101,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   /** Remote-owned source; create, dispatch, then send the initial turn. */
   repository: Type.Optional(SessionRepositorySourceSchema),
+  deviceFolder: Type.Optional(SessionDeviceFolderSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeSource: Type.Optional(
     Type.Literal("empty", {

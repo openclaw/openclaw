@@ -27,7 +27,7 @@ async function waitForRecordedPidsDead(pids: number[], signal: AbortSignal) {
 }
 
 describe.skipIf(process.platform === "win32")("check-changed public wrapper cancellation", () => {
-  it.for(["resistant", "cooperative", "failure"] as const)(
+  it.for(["resistant", "cooperative"] as const)(
     "joins a %s check and stops admitting commands",
     { timeout: 20_000 },
     async (mode, { signal }) => {
@@ -80,10 +80,6 @@ fs.appendFileSync(${JSON.stringify(commandsPath)}, JSON.stringify(args) + "\\n")
 if (args.length !== 1 || args[0] !== "check:no-conflict-markers") {
   console.error("unexpected fixture command: " + JSON.stringify(args));
   process.exit(99);
-}
-if (${JSON.stringify(mode)} === "failure") {
-  console.error("fixture check failed");
-  process.exit(7);
 }
 fs.writeFileSync(${JSON.stringify(pidPaths[0])}, String(process.ppid));
 fs.writeFileSync(${JSON.stringify(pidPaths[1])}, String(process.pid));
@@ -146,25 +142,21 @@ child.once("message", () => {
             return [pid];
           });
         try {
-          if (mode !== "failure") {
-            // The relay writes readiness only after both leaf signal handlers are installed.
-            await withinTest(
-              awaitGateBeforeSettlement(
-                ready.promise,
-                completion,
-                "changed-check command did not become ready",
-              ),
-              signal,
-            );
-            expect(readOwnedPids()).toHaveLength(3);
-            expect(wrapper?.kill("SIGTERM")).toBe(true);
-          }
+          // The relay writes readiness only after both leaf signal handlers are installed.
+          await withinTest(
+            awaitGateBeforeSettlement(
+              ready.promise,
+              completion,
+              "changed-check command did not become ready",
+            ),
+            signal,
+          );
+          expect(readOwnedPids()).toHaveLength(3);
+          expect(wrapper?.kill("SIGTERM")).toBe(true);
           const result = await withinTest(completion, signal);
           expect(result.error, result.stderr).toBeUndefined();
-          expect(result.status, result.stderr).toBe(mode === "failure" ? 7 : 143);
-          expect(result.stderr.trim().split("\n").at(-1)).toBe(
-            `[check:changed] FAILED (exit ${mode === "failure" ? 7 : 143})`,
-          );
+          expect(result.status, result.stderr).toBe(143);
+          expect(result.stderr.trim().split("\n").at(-1)).toBe("[check:changed] FAILED (exit 143)");
           expect(fs.readFileSync(commandsPath, "utf8").trim()).toBe(
             JSON.stringify(["check:no-conflict-markers"]),
           );

@@ -101,26 +101,29 @@ describe("POSIX process group inspection", () => {
     expect(procFs.readFileSync).toHaveBeenCalledWith("/proc/123/status", "utf8");
   });
 
-  it.each(["empty"])(
-    "confirms a group reaped during an %s Linux snapshot is stopped",
-    (snapshot) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      let reaped = false;
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        if (reaped) {
-          throw Object.assign(new Error("group reaped"), { code: "ESRCH" });
-        }
-        return true;
-      });
+  it.each([
+    { snapshot: "empty", inspection: inspectLinuxProcessGroupStats(123, [], () => true) },
+    { snapshot: "unreadable", inspection: null },
+  ])("re-probes the kernel after an inconclusive $snapshot snapshot", ({ inspection }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    let present = true;
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      if (!present) {
+        throw Object.assign(new Error("group reaped"), { code: "ESRCH" });
+      }
+      return true;
+    });
 
-      expect(
-        isQaPosixProcessGroupAlive(123, () => {
-          reaped = true;
-          return snapshot === "empty" ? inspectLinuxProcessGroupStats(123, [], () => true) : null;
-        }),
-      ).toBe(false);
-    },
-  );
+    // The last zombie is reaped between the existence probe and the /proc scan.
+    expect(
+      isQaPosixProcessGroupAlive(123, () => {
+        present = false;
+        return inspection;
+      }),
+    ).toBe(false);
+    present = true;
+    expect(isQaPosixProcessGroupAlive(123, () => inspection)).toBe(true);
+  });
 
   it.each(["ESRCH", "EPERM"])("preserves the group signal contract on %s", (code) => {
     const failure = Object.assign(new Error("group signal failed"), { code });

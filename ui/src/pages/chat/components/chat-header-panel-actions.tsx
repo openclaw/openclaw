@@ -1,11 +1,14 @@
-import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
-import { createMemo, For, Show } from "solid-js";
-import { icons } from "../../../components/icons.ts";
+import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { KeyboardShortcut } from "../../../components/solid/kbd.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -20,13 +23,17 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
+import { useChatQuickActionEntries, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
+
+export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 
 export type ChatPaneLayoutMenuProps = {
   paneId: string;
   narrow: boolean;
+  mobile?: boolean;
   actionsDisabled?: boolean;
-  panelMenuActions?: (HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo })[];
+  panelMenuActions?: HeaderPanelAction[];
   layoutMenuActions?: HeaderMenuQuickAction[];
   sidebarLayout?: SidebarLayout;
   panelDefinitions?: SidebarPanelDefinition[];
@@ -38,10 +45,6 @@ export type ChatPaneLayoutMenuProps = {
   onSplitRight?: (paneId: string) => void;
   onClosePane?: (paneId: string) => void;
 };
-type LayoutAction = HeaderMenuQuickAction & {
-  className?: string;
-  shortcut?: KeyboardShortcutCombo;
-};
 
 function layoutModel(props: ChatPaneLayoutMenuProps) {
   const layout = props.sidebarLayout;
@@ -51,16 +54,13 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
   const mainDefinition = definitions.find((definition) => definition.slot === mainSlot);
   const sideDefinition = definitions.find((definition) => definition.slot === side?.slot);
   const split = layout?.open === true && !layout.expanded;
-  const actions: (HeaderMenuQuickAction & {
-    className?: string;
-    shortcut?: KeyboardShortcutCombo;
-  })[] = [];
+  const actions: ChatQuickAction[] = [];
   if (layout && props.onLayoutChange && (split || layout.expanded)) {
     actions.push({
       id: "focus",
       className: "chat-panel-focus",
       label: t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand"),
-      icon: layout.expanded ? icons.minimize : icons.maximize,
+      icon: layout.expanded ? "minimize" : "maximize",
       active: layout.expanded === true,
       onActivate: () =>
         props.onLayoutChange?.(
@@ -74,7 +74,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "swap",
       className: "chat-panel-swap",
       label: t("chat.sidePanel.swap", { main: mainDefinition.label, side: sideDefinition.label }),
-      icon: icons.arrowLeftRight,
+      icon: "arrowLeftRight",
       onActivate: () => props.onLayoutChange?.(promoteSidebarPanel(layout, side.id)),
     });
   }
@@ -89,13 +89,8 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions.push({
       id: "expand-side-panel",
       className: "side-panel__expand",
-      label: t(
-        layout.expanded && layout.expandedSide
-          ? "chat.sidePanel.restore"
-          : "chat.sidePanel.expandPanel",
-        { panel: sideDefinition.label },
-      ),
-      icon: layout.expanded && layout.expandedSide ? icons.minimize : icons.maximize,
+      label: t("chat.sidePanel.expandPanel", { panel: sideDefinition.label }),
+      icon: "maximize",
       onActivate: () =>
         props.onLayoutChange?.(toggleSidebarPanelExpanded(layout, side.id), {
           dashboardPresentation: "personal",
@@ -106,7 +101,7 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions.push({
       id: "close-side-panel",
       label: t("chat.sidebarColumns.close", { panel: sideDefinition.label }),
-      icon: icons.x,
+      icon: "x",
       onActivate: () => props.onCloseSidePanel?.(side.slot),
     });
   }
@@ -115,17 +110,17 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "side-panel",
       className: "chat-side-panel-toggle",
       label: t(split ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
-      icon: split ? icons.panelRightClose : icons.panelRightOpen,
+      icon: split ? "panelRightClose" : "panelRightOpen",
       active: split,
       onActivate: props.onToggleSidePanel,
     });
   }
   actions.push(...(props.layoutMenuActions ?? []));
   for (const [id, label, icon, callback] of [
-    ["open-split-view", "chat.splitView.open", icons.columns2, props.onOpenSplitView],
-    ["split-down", "chat.splitView.splitDown", icons.panelBottomOpen, props.onSplitDown],
-    ["split-right", "chat.splitView.splitRight", icons.panelRightOpen, props.onSplitRight],
-    ["close-pane", "chat.splitView.closePane", icons.x, props.onClosePane],
+    ["open-split-view", "chat.splitView.open", "columns2", props.onOpenSplitView],
+    ["split-down", "chat.splitView.splitDown", "panelBottomOpen", props.onSplitDown],
+    ["split-right", "chat.splitView.splitRight", "panelRightOpen", props.onSplitRight],
+    ["close-pane", "chat.splitView.closePane", "x", props.onClosePane],
   ] as const) {
     if (callback && (!props.narrow || (id !== "split-down" && id !== "split-right"))) {
       actions.push({
@@ -141,9 +136,9 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
   }
   if (layout && props.onLayoutChange && !props.narrow && split) {
     for (const [dock, label, icon] of [
-      ["left", "dockLeft", icons.panelLeftOpen],
-      ["right", "dockRight", icons.panelRightOpen],
-      ["bottom", "dockBottom", icons.panelBottomOpen],
+      ["left", "dockLeft", "panelLeftOpen"],
+      ["right", "dockRight", "panelRightOpen"],
+      ["bottom", "dockBottom", "panelBottomOpen"],
     ] as const) {
       actions.push({
         id: `dock-${dock}`,
@@ -155,132 +150,111 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       });
     }
   }
-  const panelActions = props.panelMenuActions ?? [];
+  const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
     panelActions,
     allActions,
-    mainHeaderAction: mainDefinition?.headerAction,
-    sideHeaderAction: sideDefinition?.headerAction,
+    mainHeaderActionView: mainDefinition?.headerActionView,
+    sideHeaderActionView: sideDefinition?.headerActionView,
+    mainHeaderLink: mainDefinition?.headerLink,
+    sideHeaderLink: sideDefinition?.headerLink,
   };
 }
-function LayoutActionItem(props: { action: LayoutAction }) {
-  const command = () => {
-    const action = props.action;
-    return action.kind === "status" ? null : action;
-  };
-  return (
-    <Show
-      when={command()}
-      fallback={
-        <div class="session-menu__status" data-menu-status={props.action.id} role="note">
-          <span class="session-menu__check" aria-hidden="true">
-            <LitContent value={props.action.icon} />
-          </span>
-          <ActionLabel action={props.action} />
-        </div>
-      }
-    >
-      {(action) => (
-        <wa-dropdown-item
-          class={["session-menu__item", action().className]}
-          value={action().id}
-          aria-label={action().label}
-          type={action().active === undefined ? undefined : "checkbox"}
-          prop:checked={action().active ?? false}
-          disabled={action().disabled}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">
-            <LitContent value={action().icon} />
-          </span>
-          <ActionLabel action={action()} />
-          <Show when={action().shortcut}>
-            {(shortcut) => (
-              <KeyboardShortcut
-                combo={shortcut()}
-                slot="details"
-                class="side-panel-type-option__shortcut"
-              />
-            )}
-          </Show>
-        </wa-dropdown-item>
-      )}
-    </Show>
-  );
-}
-function ActionLabel(props: { action: LayoutAction }) {
-  return (
-    <span class="session-menu__text">
-      {props.action.label}
-      <Show when={props.action.description}>
-        <span class="session-menu__description">{props.action.description}</span>
-      </Show>
-    </span>
-  );
-}
+let nextLayoutId = 0;
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
+  const id = `chat-pane-layout-${++nextLayoutId}`;
+  const controls = createMenuControls();
+  let menu: MenuHandle | undefined;
   const model = createMemo(() => layoutModel(props));
-  let menu!: WaDropdown;
-  let pendingAction: (() => void) | undefined;
+  const headerActions = createMemo(
+    () => (
+      <>
+        <Show when={model().mainHeaderActionView}>
+          {(view) => <ClearCompanion {...view()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().mainHeaderLink}>
+          {(link) => <ExternalPanelLink {...link()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().sideHeaderActionView}>
+          {(view) => <ClearCompanion {...view()} actionRef={controls.ref()} />}
+        </Show>
+        <Show when={model().sideHeaderLink}>
+          {(link) => <ExternalPanelLink {...link()} actionRef={controls.ref()} />}
+        </Show>
+      </>
+    ),
+    { lazy: true },
+  );
+  const primary = useChatQuickActionEntries(
+    () => (props.mobile ? model().panelActions : model().actions),
+    true,
+  );
+  const secondary = useChatQuickActionEntries(
+    () => (props.mobile ? model().actions : model().panelActions),
+    true,
+  );
+  const items = createMemo(
+    (): MenuEntry[] => {
+      return [
+        ...primary(),
+        ...(primary().length && secondary().length
+          ? [
+              {
+                kind: "content" as const,
+                id: "panel-actions",
+                content: <div class="session-menu__separator" role="separator" />,
+              },
+            ]
+          : []),
+        ...secondary(),
+        {
+          kind: "content",
+          id: "header-actions",
+          content: headerActions(),
+        },
+      ];
+    },
+    { lazy: true },
+  );
   return (
-    <Show when={model().allActions.length > 0 || model().mainHeaderAction}>
-      <wa-dropdown
-        ref={(element) => {
-          menu = element;
-        }}
-        class="chat-pane__layout-menu chat-panel-layout-menu"
+    <Show
+      when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
+    >
+      <Menu
+        controls={controls}
+        lazy
+        id={id}
+        class={[
+          "chat-pane__layout-menu chat-panel-layout-menu",
+          { "chat-panel-layout-menu--mobile": props.mobile },
+        ]}
         placement="bottom-end"
-        onWa-select={(event) => {
-          const action = model().allActions.find(
-            (candidate) => candidate.id === event.detail.item.value,
-          );
+        label={t(props.mobile ? "chat.sessionHeader.panels" : "chat.sessionHeader.layout")}
+        triggerClass="btn btn--ghost chat-pane__layout-trigger"
+        trigger={
+          <>
+            <span aria-hidden="true">
+              <Icon name={props.mobile ? "panelRightOpen" : "columns2"} />
+            </span>
+            <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
+          </>
+        }
+        items={items()}
+        ref={(handle) => {
+          menu = handle;
+        }}
+        onSelect={(item, event) => {
+          const action = model().allActions.find((candidate) => candidate.id === item.id);
           if (action && action.kind !== "status" && !action.disabled) {
             event.preventDefault();
-            pendingAction = action.onActivate;
-            // Settle opening first; Web Awesome otherwise skips the hide transition.
-            const selectedMenu = menu;
-            void selectedMenu.updateComplete.then(() => {
-              selectedMenu.open = false;
-              selectedMenu
-                .querySelector<HTMLElement>('[slot="trigger"]')
-                ?.focus({ preventScroll: true });
-            });
+            menu?.close();
+            action.onActivate();
           }
         }}
-        onWa-after-hide={(event) => {
-          if (event.target !== event.currentTarget) {
-            return;
-          }
-          const action = pendingAction;
-          pendingAction = undefined;
-          action?.();
-        }}
-      >
-        <button
-          slot="trigger"
-          class="btn btn--ghost chat-pane__layout-trigger"
-          type="button"
-          aria-label={t("chat.sessionHeader.layout")}
-        >
-          <span aria-hidden="true">
-            <Icon name="columns2" />
-          </span>
-          {t("chat.sessionHeader.layout")}
-        </button>
-        <For each={model().actions} keyed={(action) => action.id}>
-          {(action) => <LayoutActionItem action={action()} />}
-        </For>
-        <Show when={model().panelActions.length > 0}>
-          <div class="session-menu__separator" role="separator" />
-          <For each={model().panelActions} keyed={(action) => action.id}>
-            {(action) => <LayoutActionItem action={action()} />}
-          </For>
-        </Show>
-        <LitContent value={model().mainHeaderAction} />
-        <LitContent value={model().sideHeaderAction} />
-      </wa-dropdown>
+      />
     </Show>
   );
 }

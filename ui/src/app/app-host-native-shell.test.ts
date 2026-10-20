@@ -1,32 +1,32 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import "../components/macos-titlebar-controls.runtime.ts";
-import "../components/sidebar-update-card.ts";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import "../components/modal-dialog.ts";
+import "../components/sidebar-update-card.tsx";
+import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import "./app-host.ts";
-import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
-import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
-import type { ApplicationContext } from "./context.ts";
 import {
-  handleNavDrawerKeydown,
-  navigationSurfaceIsHidden,
-  renderFloatingUpdateCard,
-} from "./navigation-surface.ts";
+  createConnectedShellOwner as createShellOwner,
+  createShellOwner as createDisconnectedShellOwner,
+} from "./app-host-solid.test-support.ts";
+import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
+import { bootstrapApplication } from "./bootstrap.ts";
+import type { ApplicationContext } from "./context.ts";
+import { COMMAND_PALETTE_ELEMENT, ensureCustomElementDefined } from "./lazy-custom-element.ts";
+import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 type ShellNavigationState = {
+  elements: ShellOwnedElements;
   runtime: { context: ApplicationContext };
-  handleNativeToggleSidebar: () => void;
-  handleNativeOpenSearch: () => void;
-  handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
-  handleNativeNavigate: (event: Event) => void;
   onboarding: boolean;
-  updated: (changedProperties: Map<string, unknown>) => void;
+  afterCommit: () => void;
 };
 
 type ShellSettingsEscapeState = ShellKeyboardState & {
+  element: HTMLElement;
+  elements: ShellOwnedElements;
   lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string; hash: string };
   navDrawerOpen: boolean;
   routeState: { routeId: "appearance" };
@@ -38,16 +38,6 @@ type TestWebKitWindow = Window & {
       openclawNav: { postMessage: (message: unknown) => void };
     };
   };
-};
-
-type MacosTitlebarControlsState = HTMLElement & {
-  navCollapsed: boolean;
-  historyOnly: boolean;
-  newSessionDisabledReason?: string;
-  onToggleSidebar?: () => void;
-  onOpenPalette?: () => void;
-  onOpenNewSession?: () => void;
-  updateComplete: Promise<boolean>;
 };
 
 function nativeSessionContext(
@@ -76,19 +66,46 @@ afterEach(() => {
 });
 
 describe("OpenClaw native shell", () => {
+  it("focuses the navigation drawer without a tooltip claiming Escape", async () => {
+    vi.stubGlobal("matchMedia", () => Object.assign(new EventTarget(), { matches: true }));
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
+    const shell = createShellOwner();
+    shell.runtime = runtime;
+    const drawer = document.createElement("nav");
+    drawer.className = "shell-nav";
+    shell.navDrawerElement = drawer;
+    const { tooltip, trigger } = createTooltip("Workspace options");
+    Object.defineProperty(trigger, "checkVisibility", { value: () => true });
+    drawer.append(tooltip);
+    shell.element.append(drawer);
+    document.body.append(shell.element);
+    try {
+      await settleTooltip(tooltip);
+      shell.toggleNavigationSurface();
+      shell.afterCommit();
+      await shell.updateComplete;
+      await settleTooltip(tooltip);
+      expect(document.activeElement).toBe(trigger);
+      expect(tooltip.hasAttribute("open")).toBe(false);
+    } finally {
+      shell.element.remove();
+    }
+  });
+
   it.each(["MacIntel", "Win32"])(
     "uses only the platform sidebar modifier on %s without consuming text navigation",
     (platform) => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const snapshot = { navCollapsed: false };
       const update = vi.fn((next: { navCollapsed: boolean }) => Object.assign(snapshot, next));
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+      const shell = createShellOwner() as unknown as ShellKeyboardState;
       shell.runtime = {
         context: { navigation: { snapshot, update } } as unknown as ApplicationContext,
       };
       const drawer = Object.assign(document.createElement("div"), { closeNavDrawer: vi.fn() });
-      const editor = document.createElement("textarea");
-      editor.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+      const editor = document.body.appendChild(document.createElement("textarea"));
+      onTestFinished(() => editor.remove());
       try {
         for (const modifiers of [
           { metaKey: true },
@@ -102,7 +119,7 @@ describe("OpenClaw native shell", () => {
             platform === "MacIntel"
               ? Object.keys(modifiers).length === 1 && "metaKey" in modifiers
               : Object.keys(modifiers).length === 1 && "ctrlKey" in modifiers;
-          const init = { key: "b", code: "KeyB", cancelable: true, ...modifiers };
+          const init = { key: "b", code: "KeyB", bubbles: true, cancelable: true, ...modifiers };
           const event = new KeyboardEvent("keydown", init);
           editor.dispatchEvent(event);
           expect(event.defaultPrevented).toBe(expected);
@@ -119,37 +136,20 @@ describe("OpenClaw native shell", () => {
   );
 
   it("reports readiness only while the native command listener owner is connected", () => {
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-      connectedCallback(): void;
-      disconnectedCallback(): void;
-      nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
-    };
+    const shell = createDisconnectedShellOwner();
     const nativeWindow = window as Window & { __OPENCLAW_NATIVE_COMMANDS_READY__?: boolean };
     const states: boolean[] = [];
     const recordState = () =>
       states.push(nativeWindow["__OPENCLAW_NATIVE_COMMANDS_READY__"] === true);
     window.addEventListener("openclaw:native-commands-state", recordState);
     try {
-      shell.connectedCallback();
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-history-state", {
-          detail: { canGoBack: true, canGoForward: false },
-        }),
-      );
-      expect(shell.nativeHistoryState.canGoBack).toBe(true);
+      shell.connect();
       expect(states).toEqual([true]);
 
-      shell.disconnectedCallback();
-      shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-history-state", {
-          detail: { canGoBack: true, canGoForward: false },
-        }),
-      );
-      expect(shell.nativeHistoryState.canGoBack).toBe(false);
+      shell.disconnect();
       expect(states).toEqual([true, false]);
     } finally {
-      shell.disconnectedCallback();
+      shell.disconnect();
       window.removeEventListener("openclaw:native-commands-state", recordState);
       Reflect.deleteProperty(nativeWindow, "__OPENCLAW_NATIVE_COMMANDS_READY__");
     }
@@ -157,7 +157,7 @@ describe("OpenClaw native shell", () => {
 
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
     shell.runtime = {
       context: {
         navigate,
@@ -171,46 +171,59 @@ describe("OpenClaw native shell", () => {
       cancelable: true,
     });
 
-    shell.handleDocumentKeydown(event);
+    document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
-  it("restores the complete prior workspace URL when Escape leaves Settings", () => {
-    const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsEscapeState;
-    shell.runtime = {
-      context: {
-        navigate,
-        overlays: { snapshot: { devicePairSetupOpen: false } },
-      } as unknown as ApplicationContext,
-    };
-    shell.lastWorkspaceLocation = {
-      routeId: "usage",
-      pathname: "/usage",
-      search: "?agent=main",
-      hash: "#queue",
-    };
-    shell.navDrawerOpen = false;
-    shell.routeState = { routeId: "appearance" };
+  it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
+    "restores the complete prior workspace URL when Escape leaves Settings after %s detaches",
+    (surface) => {
+      const navigate = vi.fn();
+      const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
+      shell.runtime = {
+        context: {
+          navigate,
+          overlays: { snapshot: { devicePairSetupOpen: false } },
+        } as unknown as ApplicationContext,
+      };
+      shell.lastWorkspaceLocation = {
+        routeId: "usage",
+        pathname: "/usage",
+        search: "?agent=main",
+        hash: "#queue",
+      };
+      shell.navDrawerOpen = false;
+      shell.routeState = { routeId: "appearance" };
 
-    shell.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+      if (surface !== "none") {
+        const overlay = Object.assign(document.createElement("div"), {
+          isOpen: true,
+          dialogOpen: true,
+        });
+        Object.assign(shell.elements, { [surface]: overlay });
+        shell.element.append(overlay);
+        document.body.append(shell.element);
+        onTestFinished(() => shell.element.remove());
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+        expect(navigate).not.toHaveBeenCalled();
+        overlay.remove();
+      }
 
-    expect(navigate).toHaveBeenCalledWith("usage", {
-      pathname: "/usage",
-      search: "?agent=main",
-      hash: "#queue",
-    });
-  });
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+
+      expect(navigate).toHaveBeenCalledWith("usage", {
+        pathname: "/usage",
+        search: "?agent=main",
+        hash: "#queue",
+      });
+    },
+  );
 
   it("keeps the raw config editor unchanged when Escape is pressed", () => {
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsEscapeState;
+    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
     shell.runtime = {
       context: {
         navigate,
@@ -227,10 +240,13 @@ describe("OpenClaw native shell", () => {
     rawEditor.focus();
     const onInput = vi.fn();
     rawEditor.addEventListener("input", onInput);
-    rawEditor.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
 
     try {
-      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
       rawEditor.dispatchEvent(event);
 
       expect(rawEditor.value).toBe('{ "gateway": { "port": 18789 } }');
@@ -244,9 +260,7 @@ describe("OpenClaw native shell", () => {
   it("lets a shadow-root confirmation own Escape without leaving Settings", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsEscapeState;
+    const shell = createShellOwner() as unknown as ShellSettingsEscapeState;
     shell.runtime = {
       context: {
         navigate,
@@ -257,15 +271,21 @@ describe("OpenClaw native shell", () => {
     shell.navDrawerOpen = false;
     shell.routeState = { routeId: "appearance" };
     const container = document.body.appendChild(document.createElement("div"));
-    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
+    const shadow = container.attachShadow({ mode: "open" });
+    const modal = shadow.appendChild(document.createElement("openclaw-modal-dialog"));
     const cancel = modal.appendChild(document.createElement("button"));
 
     try {
-      const { dialog } = await getRenderedModalDialog(container);
+      const { dialog } = await getRenderedModalDialog(shadow);
       expect(dialog.open).toBe(true);
+      expect(dialog.getRootNode()).toBe(shadow);
       expect(document.querySelector("dialog[open]")).toBeNull();
-      cancel.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
-      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
 
       cancel.dispatchEvent(event);
 
@@ -282,37 +302,45 @@ describe("OpenClaw native shell", () => {
     const update = vi.fn((next: { navCollapsed: boolean }) => {
       snapshot.navCollapsed = next.navCollapsed;
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
     shell.runtime = {
       context: {
         navigation: { snapshot, update },
       } as unknown as ApplicationContext,
     };
 
-    shell.handleNativeToggleSidebar();
+    window.dispatchEvent(new Event("openclaw:native-toggle-sidebar"));
     expect(update).toHaveBeenLastCalledWith({ navCollapsed: true });
 
-    shell.handleNativeToggleSidebar();
+    window.dispatchEvent(new Event("openclaw:native-toggle-sidebar"));
     expect(update).toHaveBeenLastCalledWith({ navCollapsed: false });
   });
 
   it.each(["operator.write", "operator.sessions.write"])(
     "opens search and starts a session from native titlebar events with %s",
-    (scope) => {
+    async (scope) => {
       const navigate = vi.fn();
       const openPalette = vi.fn();
       const togglePalette = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
-      Object.defineProperty(shell, "commandPalette", {
-        configurable: true,
-        value: { openPalette, togglePalette },
-      });
+      const shell = createShellOwner() as unknown as ShellNavigationState;
+      shell.elements.commandPalette = Object.assign(
+        document.createElement("openclaw-command-palette"),
+        {
+          custodianAvailable: false,
+          desktopAvailable: false,
+          isOpen: false,
+          openPalette,
+          togglePalette,
+        },
+      );
+      document.body.append(shell.elements.commandPalette);
+      onTestFinished(() => shell.elements.commandPalette?.remove());
       shell.runtime = {
         context: nativeSessionContext(navigate, "agent/a", { scopes: [scope] }),
       };
-      shell.handleNativeOpenSearch();
+      window.dispatchEvent(new Event("openclaw:native-open-search"));
       const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
-      shell.handleNativeToggleSearch(toggleEvent);
+      window.dispatchEvent(toggleEvent);
       shell.handleNativeNewSession();
 
       expect(openPalette).toHaveBeenCalledOnce();
@@ -320,64 +348,89 @@ describe("OpenClaw native shell", () => {
       // preventDefault is the handled signal for the native legacy fallback.
       expect(toggleEvent.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      onTestFinished(() => platform.mockRestore());
+      shell.elements.commandPalette.remove();
+      const shortcut = new KeyboardEvent("keydown", {
+        key: "k",
+        metaKey: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(shortcut);
+      // Join the cold import before the shared runner retires this module graph.
+      await ensureCustomElementDefined(
+        COMMAND_PALETTE_ELEMENT.tagName,
+        COMMAND_PALETTE_ELEMENT.loadModule,
+      );
+      expect(shortcut.defaultPrevented).toBe(true);
+      expect(togglePalette).toHaveBeenCalledOnce();
     },
   );
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
-    "opens a draft from the composer on %s without taking New Window or modified Enter",
-    (platform) => {
-      const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-      const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
-      shell.runtime = {
-        context: nativeSessionContext(navigate, "research", {
-          scopes: ["operator.sessions.write"],
-        }),
-      };
-      const textarea = document.createElement("textarea");
-      textarea.value = "Keep this foreground draft";
-      textarea.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
-      const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
-      try {
-        // Receiver semantics only; synthetic DOM events cannot prove browser delivery.
-        const event = new KeyboardEvent("keydown", {
-          key: "O",
-          code: "KeyO",
-          shiftKey: true,
-          cancelable: true,
+  it.each(
+    ["MacIntel", "Win32", "Linux x86_64"].flatMap((platform) =>
+      [false, true].map((native) => ({ platform, native })),
+    ),
+  )("opens a draft from the composer on $platform (native=$native)", ({ platform, native }) => {
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
+    const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    const navigate = vi.fn();
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: nativeSessionContext(navigate, "research", {
+        scopes: ["operator.sessions.write"],
+      }),
+    };
+    const textarea = document.body.appendChild(document.createElement("textarea"));
+    onTestFinished(() => textarea.remove());
+    textarea.value = "Keep this foreground draft";
+    const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+    try {
+      // Receiver semantics only; synthetic DOM events cannot prove OS delivery.
+      const chord = native
+        ? { key: "n", code: "KeyN", shiftKey: false }
+        : { key: "O", code: "KeyO", shiftKey: true };
+      const event = new KeyboardEvent("keydown", {
+        ...chord,
+        bubbles: true,
+        cancelable: true,
+        ...modifier,
+      });
+      textarea.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
+        search: "?agent=research",
+      });
+      expect(textarea.value).toBe("Keep this foreground draft");
+      for (const init of [
+        native ? { key: "O", code: "KeyO", shiftKey: true } : { key: "n", code: "KeyN" },
+        { key: "Enter", code: "Enter" },
+        { ...chord, repeat: true },
+        { ...chord, isComposing: true },
+        { ...chord, keyCode: 229 },
+      ]) {
+        const ignored = new KeyboardEvent("keydown", {
           ...modifier,
+          ...init,
+          bubbles: true,
+          cancelable: true,
         });
-        textarea.dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(true);
-        expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", {
-          search: "?agent=research",
-        });
-        expect(textarea.value).toBe("Keep this foreground draft");
-        for (const init of [
-          { key: "n", code: "KeyN" },
-          { key: "Enter", code: "Enter" },
-          { key: "O", code: "KeyO", shiftKey: true, repeat: true },
-          { key: "O", code: "KeyO", shiftKey: true, isComposing: true },
-          { key: "O", code: "KeyO", shiftKey: true, keyCode: 229 },
-        ]) {
-          const ignored = new KeyboardEvent("keydown", { ...modifier, ...init, cancelable: true });
-          textarea.dispatchEvent(ignored);
-          expect(ignored.defaultPrevented).toBe(false);
-        }
-        expect(navigate).toHaveBeenCalledOnce();
-      } finally {
-        platformSpy.mockRestore();
+        textarea.dispatchEvent(ignored);
+        expect(ignored.defaultPrevented).toBe(false);
       }
-    },
-  );
+      expect(navigate).toHaveBeenCalledOnce();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 
   it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
     "leaves the New Session shortcut unhandled during %s",
     (guard) => {
       const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
-        ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellKeyboardState & ShellNavigationState;
       const context = nativeSessionContext(navigate, "main", {
         ...(guard === "read-only" ? { scopes: ["operator.read"] } : {}),
         ...(guard === "unavailable" ? { methods: [] } : {}),
@@ -399,7 +452,7 @@ describe("OpenClaw native shell", () => {
           shiftKey: true,
           cancelable: true,
         });
-        shell.handleDocumentKeydown(key);
+        document.dispatchEvent(key);
         expect(key.defaultPrevented).toBe(false);
         expect(navigate).not.toHaveBeenCalled();
       } finally {
@@ -412,13 +465,14 @@ describe("OpenClaw native shell", () => {
   it("leaves a rendered modal navigation drawer in control of the New Session chord", () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
     shell.runtime = { context: nativeSessionContext(navigate, "main") };
     const drawer = document.body.appendChild(document.createElement("nav"));
     drawer.className = "shell-nav";
     drawer.setAttribute("aria-modal", "true");
+    Object.assign(shell, { navDrawerElement: drawer });
     try {
-      shell.handleDocumentKeydown(
+      document.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "O",
           code: "KeyO",
@@ -433,72 +487,9 @@ describe("OpenClaw native shell", () => {
     }
   });
 
-  it("keeps the new-thread control in the native titlebar only while collapsed", async () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({ matches: true })),
-    );
-    const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-      runtime: { context: ApplicationContext };
-      viewCallbacks: ShellViewCallbacks;
-      navDrawerTrigger: HTMLElement | null;
-      navDrawerOpen: boolean;
-    };
-    shell.runtime = { context: {} as ApplicationContext };
-    const drawerTrigger = shell.appendChild(document.createElement("button"));
-    drawerTrigger.className = "topbar-nav-toggle";
-    Object.defineProperty(drawerTrigger, "checkVisibility", { value: () => true });
-    const onOpenPalette = vi.fn();
-    const onOpenNewSession = vi.fn();
-    const controls = document.createElement(
-      "openclaw-macos-titlebar-controls",
-    ) as unknown as MacosTitlebarControlsState;
-    controls.navCollapsed = false;
-    controls.historyOnly = false;
-    controls.onToggleSidebar = shell.viewCallbacks.toggleSidebar;
-    controls.onOpenPalette = onOpenPalette;
-    controls.onOpenNewSession = onOpenNewSession;
-    document.body.append(controls);
-    await controls.updateComplete;
-
-    controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__sidebar-toggle")?.click();
-    expect(shell.navDrawerOpen).toBe(true);
-    expect(shell.navDrawerTrigger).toBe(drawerTrigger);
-    controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__search")?.click();
-    expect(controls.querySelector(".macos-titlebar-controls__new-session")).toBeNull();
-
-    controls.navCollapsed = true;
-    await controls.updateComplete;
-    controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__new-session")?.click();
-
-    expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(onOpenNewSession).toHaveBeenCalledOnce();
-    controls.remove();
-  });
-
-  it("disables the native titlebar new-session control with its access reason", async () => {
-    const onOpenNewSession = vi.fn();
-    const controls = document.createElement(
-      "openclaw-macos-titlebar-controls",
-    ) as unknown as MacosTitlebarControlsState;
-    controls.navCollapsed = true;
-    controls.newSessionDisabledReason = "Operator write access is required.";
-    controls.onOpenNewSession = onOpenNewSession;
-    document.body.append(controls);
-    await controls.updateComplete;
-
-    const button = controls.querySelector<HTMLButtonElement>(
-      ".macos-titlebar-controls__new-session",
-    );
-    expect(button?.disabled).toBe(true);
-    button?.click();
-    expect(onOpenNewSession).not.toHaveBeenCalled();
-    controls.remove();
-  });
-
   it("retains a native new-session request until a context exists", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
 
     shell.handleNativeNewSession();
 
@@ -517,7 +508,7 @@ describe("OpenClaw native shell", () => {
       { methods: ["sessions.create"], scopes: ["operator.sessions.read"] },
     ]) {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: nativeSessionContext(navigate, "main", options),
       };
@@ -547,7 +538,7 @@ describe("OpenClaw native shell", () => {
     "preserves native destination $basePath$path and acknowledges it",
     ({ path, routeId, search, basePath }) => {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: { navigate, basePath } as unknown as ApplicationContext,
       };
@@ -556,7 +547,7 @@ describe("OpenClaw native shell", () => {
         detail: { path, search },
       });
 
-      shell.handleNativeNavigate(event);
+      window.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledExactlyOnceWith(routeId, {
@@ -570,7 +561,7 @@ describe("OpenClaw native shell", () => {
     "ignores malformed native search %s and keeps the plain route",
     (search) => {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: {
           navigate,
@@ -582,7 +573,7 @@ describe("OpenClaw native shell", () => {
         detail: { path: "/custodian", search },
       });
 
-      shell.handleNativeNavigate(event);
+      window.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { pathname: "/custodian" });
@@ -593,7 +584,7 @@ describe("OpenClaw native shell", () => {
     "leaves invalid native Dashboard path %s unhandled",
     (path) => {
       const navigate = vi.fn();
-      const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+      const shell = createShellOwner() as unknown as ShellNavigationState;
       shell.runtime = {
         context: {
           navigate,
@@ -604,7 +595,7 @@ describe("OpenClaw native shell", () => {
         detail: { path },
       });
 
-      shell.handleNativeNavigate(event);
+      window.dispatchEvent(event);
 
       expect(event.defaultPrevented).toBe(false);
       expect(navigate).not.toHaveBeenCalled();
@@ -613,7 +604,7 @@ describe("OpenClaw native shell", () => {
 
   it("does not start a native session during onboarding", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    const shell = createShellOwner() as unknown as ShellNavigationState;
     shell.runtime = {
       context: {
         navigate,
@@ -632,18 +623,16 @@ describe("OpenClaw native shell", () => {
     (window as TestWebKitWindow).webkit = {
       messageHandlers: { openclawNav: { postMessage } },
     };
-    const snapshot = { navCollapsed: false, navWidth: 280 };
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
-    shell.runtime = {
-      context: {
-        navigation: { snapshot },
-      } as unknown as ApplicationContext,
-    };
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
+    runtime.context.navigation.update({ navCollapsed: false, navWidth: 280 });
+    const shell = createShellOwner();
+    shell.runtime = runtime;
 
-    shell.updated(new Map());
-    shell.updated(new Map());
-    snapshot.navCollapsed = true;
-    shell.updated(new Map());
+    shell.afterCommit();
+    shell.afterCommit();
+    runtime.context.navigation.update({ navCollapsed: true });
+    shell.afterCommit();
 
     expect(postMessage.mock.calls).toEqual([
       [{ type: "nav-state", collapsed: false, width: 280 }],
@@ -653,7 +642,7 @@ describe("OpenClaw native shell", () => {
 
   it("leaves plain Command-Comma to the browser", () => {
     const navigate = vi.fn();
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    const shell = createShellOwner() as unknown as ShellKeyboardState;
     shell.runtime = {
       context: {
         navigate,
@@ -666,140 +655,9 @@ describe("OpenClaw native shell", () => {
       cancelable: true,
     });
 
-    shell.handleDocumentKeydown(event);
+    document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
-  });
-});
-
-describe("OpenClaw shell update affordance", () => {
-  it("renders floating attention while keeping update actions in navigation", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const shared = {
-      mobileNavLayout: false,
-      onboarding: false,
-      refreshRequired: false,
-      onRefresh: vi.fn(),
-    };
-    const collapsed = navigationSurfaceIsHidden({
-      onboarding: false,
-      navCollapsed: true,
-      navDrawerOpen: false,
-      mobileNavLayout: false,
-    });
-    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
-    expect(
-      container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
-    ).not.toBeNull();
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
-
-    render(
-      renderFloatingUpdateCard({
-        ...shared,
-        navigationSurfaceHidden: collapsed,
-        refreshRequired: true,
-      }),
-      container,
-    );
-    const refreshCard = container.querySelector<
-      HTMLElement & { onRefresh: () => void; refreshRequired: boolean }
-    >("openclaw-sidebar-update-card");
-    expect(refreshCard?.refreshRequired).toBe(true);
-    refreshCard?.onRefresh();
-    expect(shared.onRefresh).toHaveBeenCalledOnce();
-
-    const visible = navigationSurfaceIsHidden({
-      onboarding: false,
-      navCollapsed: false,
-      navDrawerOpen: false,
-      mobileNavLayout: false,
-    });
-    render(
-      renderFloatingUpdateCard({
-        ...shared,
-        navigationSurfaceHidden: visible,
-        refreshRequired: true,
-      }),
-      container,
-    );
-    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
-    container.remove();
-  });
-
-  it("keeps attention in the closed mobile drawer while preserving stale-client refresh", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    try {
-      const navigationSurfaceHidden = navigationSurfaceIsHidden({
-        onboarding: false,
-        navCollapsed: false,
-        navDrawerOpen: false,
-        mobileNavLayout: true,
-      });
-      expect(navigationSurfaceHidden).toBe(true);
-      const shared = {
-        navigationSurfaceHidden,
-        mobileNavLayout: true,
-        onboarding: false,
-        refreshRequired: false,
-        onRefresh: vi.fn(),
-      };
-
-      render(renderFloatingUpdateCard(shared), container);
-      expect(
-        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
-      ).toBeNull();
-
-      render(renderFloatingUpdateCard({ ...shared, refreshRequired: true }), container);
-      const refreshCard = container.querySelector<
-        HTMLElement & { updateComplete: Promise<boolean> }
-      >("openclaw-sidebar-update-card");
-      await refreshCard?.updateComplete;
-      expect(refreshCard?.querySelector(".sidebar-update-card")).not.toBeNull();
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("keeps the stale-client refresh visible during onboarding", () => {
-    const container = document.createElement("div");
-    const shared = {
-      mobileNavLayout: false,
-      onboarding: true,
-      refreshRequired: true,
-      onRefresh: vi.fn(),
-    };
-    expect(
-      navigationSurfaceIsHidden({
-        onboarding: true,
-        navCollapsed: false,
-        navDrawerOpen: false,
-        mobileNavLayout: false,
-      }),
-    ).toBe(true);
-
-    for (const navigationSurfaceHidden of [false, true]) {
-      render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden }), container);
-      expect(
-        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
-      ).toBeNull();
-      const cards = container.querySelectorAll<HTMLElement & { refreshRequired: boolean }>(
-        "openclaw-sidebar-update-card",
-      );
-      expect(cards).toHaveLength(1);
-      expect(cards[0]?.refreshRequired).toBe(true);
-    }
-
-    render(
-      renderFloatingUpdateCard({
-        ...shared,
-        navigationSurfaceHidden: true,
-        refreshRequired: false,
-      }),
-      container,
-    );
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
   });
 });

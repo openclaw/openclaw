@@ -1,4 +1,5 @@
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -7,74 +8,40 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
-type DurableHistoryReadOperationRequest = Extract<
-  SessionTranscriptWorkerInput,
-  {
-    kind:
-      | "trajectory-events"
-      | "trajectory-retention"
-      | "board-snapshot"
-      | "board-widget-document"
-      | "transcript-match"
-      | "branch-summaries"
-      | "session-title-fields"
-      | "session-preview"
-      | "model-context"
-      | "context-messages"
-      | "transcript-watermark"
-      | "transcript-stats"
-      | "transcript-message-presence"
-      | "transcript-anchors"
-      | "transcript-raw-delta"
-      | "transcript-visible-delta"
-      | "transcript-latest-assistant"
-      | "session-memory-capture"
-      | "session-pending-input-receipts"
-      | "session-pending-input-source"
-      | "session-harness-completion-source";
-  }
->;
+const historyReadKinds = [
+  "trajectory-events",
+  "trajectory-retention",
+  "board-snapshot",
+  "board-widget-document",
+  "transcript-match",
+  "branch-summaries",
+  "session-title-fields",
+  "session-preview",
+  "model-context",
+  "context-messages",
+  "transcript-watermark",
+  "transcript-stats",
+  "transcript-message-presence",
+  "transcript-anchors",
+  "transcript-raw-delta",
+  "transcript-visible-delta",
+  "transcript-latest-assistant",
+  "session-memory-capture",
+  "session-pending-input-receipts",
+  "session-pending-input-source",
+  "session-harness-completion-source",
+] as const;
+const historyReadKindSet: ReadonlySet<string> = new Set(historyReadKinds);
 
-type BranchReadRequest = Extract<DurableHistoryReadOperationRequest, { kind: "branch-summaries" }>;
-export type SessionHistoryReadOperationRequest =
-  | Exclude<DurableHistoryReadOperationRequest, BranchReadRequest>
-  | {
-      kind: "branch-summaries";
-      database: BranchReadRequest["database"];
-      request: Omit<BranchReadRequest["request"], "databaseIdentity"> & {
-        databaseIdentity?: string;
-      };
-    };
+export type SessionHistoryReadOperationRequest = Extract<
+  SessionTranscriptWorkerInput,
+  { kind: (typeof historyReadKinds)[number] }
+>;
 
 export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
-): request is DurableHistoryReadOperationRequest {
-  switch (request.kind) {
-    case "trajectory-events":
-    case "trajectory-retention":
-    case "board-snapshot":
-    case "board-widget-document":
-    case "transcript-match":
-    case "branch-summaries":
-    case "session-title-fields":
-    case "session-preview":
-    case "model-context":
-    case "context-messages":
-    case "transcript-watermark":
-    case "transcript-stats":
-    case "transcript-message-presence":
-    case "transcript-anchors":
-    case "transcript-raw-delta":
-    case "transcript-visible-delta":
-    case "transcript-latest-assistant":
-    case "session-memory-capture":
-    case "session-pending-input-receipts":
-    case "session-pending-input-source":
-    case "session-harness-completion-source":
-      return true;
-    default:
-      return false;
-  }
+): request is SessionHistoryReadOperationRequest {
+  return historyReadKindSet.has(request.kind);
 }
 
 /** Load dependencies before the owner enters its synchronous, admitted read scope. */
@@ -124,35 +91,24 @@ async function prepareHistoryRead(
       });
     }
     case "trajectory-retention": {
-      const [
-        { withOpenClawAgentDatabaseReadOnly },
-        { assertOpenClawAgentDatabaseIdentity },
-        { prepareTrajectoryRuntimeRetention },
-        { adoptPreparedCanonicalSessionValidationSchema },
-      ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
-        import("../../state/openclaw-agent-db-identity.js"),
-        import("../../trajectory/runtime-retention.sqlite.js"),
-        import("../../state/openclaw-agent-canonical-validation-schema.js"),
-      ]);
-      if (request.schemaContract) {
-        adoptPreparedCanonicalSessionValidationSchema(request.schemaContract);
-      }
-      return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) => {
-            assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
-            const plan = prepareTrajectoryRuntimeRetention(database.db, request.input, request.now);
-            assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
-            return plan;
-          },
-          { ...request.database, env: request.env },
-        );
-        if (!read.found) {
-          throw new Error(`Trajectory retention cannot read its database: ${read.reason}`);
-        }
-        return { kind: request.kind, plan: read.value };
-      };
+      const [{ assertOpenClawAgentDatabaseIdentity }, { prepareTrajectoryRuntimeRetention }] =
+        await Promise.all([
+          import("../../state/openclaw-agent-db-identity.js"),
+          import("../../trajectory/runtime-retention.sqlite.js"),
+        ]);
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.env },
+        (database) => {
+          assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+          const plan = prepareTrajectoryRuntimeRetention(database.db, request.input, request.now);
+          assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+          return plan;
+        },
+        (reason) => {
+          throw new Error(`Trajectory retention cannot read its database: ${reason}`);
+        },
+      );
+      return () => ({ kind: request.kind, plan: read() });
     }
     case "session-memory-capture": {
       const { readSessionMemoryCapture } =
@@ -168,37 +124,26 @@ async function prepareHistoryRead(
         }));
     }
     case "transcript-latest-assistant": {
-      const [{ readLatestAssistantTextFromDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
-        await Promise.all([
-          import("./session-accessor.sqlite-transcript-metadata-read.js"),
-          import("../../state/openclaw-agent-db-readonly.js"),
-        ]);
-      return () =>
-        runWithSessionTranscriptReadFence(request.admission, () => {
-          const read = withOpenClawAgentDatabaseReadOnly(
-            (database) => readLatestAssistantTextFromDatabase(database, request.resolved),
-            { ...request.database, env: request.scope.env },
-            { snapshot: true },
-          );
-          return { kind: request.kind, result: read.found ? read.value : undefined };
-        });
+      const { readLatestAssistantTextFromDatabase } =
+        await import("./session-accessor.sqlite-transcript-metadata-read.js");
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.scope.env },
+        (database) => readLatestAssistantTextFromDatabase(database, request.resolved),
+        () => undefined,
+        { snapshot: true, admission: request.admission },
+      );
+      return () => ({ kind: request.kind, result: read() });
     }
     case "transcript-raw-delta": {
-      const [{ readTranscriptRawDeltaInDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
-        await Promise.all([
-          import("./session-accessor.sqlite-delta.js"),
-          import("../../state/openclaw-agent-db-readonly.js"),
-        ]);
-      return () =>
-        runWithSessionTranscriptReadFence(request.admission, () => {
-          const read = withOpenClawAgentDatabaseReadOnly(
-            (database) =>
-              readTranscriptRawDeltaInDatabase(database, request.resolved, request.limits),
-            { ...request.database, env: request.scope.env },
-            { snapshot: true },
-          );
-          return { kind: request.kind, result: read.found ? read.value : { kind: "missing" } };
-        });
+      const { readTranscriptRawDeltaInDatabase } =
+        await import("./session-accessor.sqlite-delta.js");
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.scope.env },
+        (database) => readTranscriptRawDeltaInDatabase(database, request.resolved, request.limits),
+        () => ({ kind: "missing" as const }),
+        { snapshot: true, admission: request.admission },
+      );
+      return () => ({ kind: request.kind, result: read() });
     }
     case "transcript-visible-delta": {
       const { readSessionTranscriptVisibleMessageDeltaCore } =
@@ -215,18 +160,18 @@ async function prepareHistoryRead(
     case "board-snapshot":
     case "board-widget-document": {
       const [
-        { withOpenClawAgentDatabaseReadOnly },
-        { runSqliteDeferredTransactionSync },
+        { withScopedOpenClawAgentDatabaseReadOnly },
+        { runSqliteReadSnapshotSync },
         { readBoardSnapshotWithHtmlViewMetadata, readBoardWidgetDocument },
       ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
+        import("../../state/openclaw-agent-db-readonly-scope.js"),
         import("../../infra/sqlite-transaction.js"),
         import("../../boards/sqlite-board-store.kernel.js"),
       ]);
       return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
+        const read = withScopedOpenClawAgentDatabaseReadOnly(
           (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
+            runSqliteReadSnapshotSync(database.db, () =>
               request.kind === "board-snapshot"
                 ? {
                     kind: request.kind,
@@ -248,84 +193,66 @@ async function prepareHistoryRead(
       };
     }
     case "transcript-anchors": {
-      const [
-        { withOpenClawAgentDatabaseReadOnly },
-        { readSessionTranscriptAnchorFactsInDatabase, prepareSessionTranscriptAnchorMessageReader },
-      ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
-        import("./session-transcript-anchor-read.kernel.js"),
-      ]);
+      const {
+        readSessionTranscriptAnchorFactsInDatabase,
+        prepareSessionTranscriptAnchorMessageReader,
+      } = await import("./session-transcript-anchor-read.kernel.js");
       const readMessage = await prepareSessionTranscriptAnchorMessageReader(request.selection);
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.resolved.env },
+        (database) =>
+          readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            request.resolved,
+            request.selection,
+            readMessage,
+            undefined,
+            request.preparedEntry,
+          ),
+        () => ({ anchors: [] }),
+      );
       return () => {
         assertExistingDatabaseIdentity(
           request.database.path,
           request.expectedIdentity.key,
           request.expectedIdentity.birthtime,
         );
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            readSessionTranscriptAnchorFactsInDatabase(
-              database,
-              request.resolved,
-              request.selection,
-              readMessage,
-              undefined,
-              request.preparedEntry,
-            ),
-          { ...request.database, env: request.resolved.env },
-        );
-        return { kind: request.kind, facts: read.found ? read.value : { anchors: [] } };
+        return { kind: request.kind, facts: read() };
       };
     }
     case "session-harness-completion-source": {
-      const [
-        { withOpenClawAgentDatabaseReadOnly },
-        { assertCapturedSessionEntryReadSource },
-        { readHarnessCompletionSourceInDatabase },
-      ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
-        import("./session-entry-read-source.js"),
-        import("./session-harness-completion-source.kernel.js"),
-      ]);
-      return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) => {
-            assertCapturedSessionEntryReadSource(request.source, database);
-            return runWithSessionTranscriptReadFence(request.admission, () =>
-              readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
-            );
-          },
-          { ...request.database, env: request.env },
-        );
-        return {
-          kind: request.kind,
-          snapshot: read.found ? read.value : { validInput: false },
-        };
-      };
+      const [{ assertCapturedSessionEntryReadSource }, { readHarnessCompletionSourceInDatabase }] =
+        await Promise.all([
+          import("./session-entry-read-source.js"),
+          import("./session-harness-completion-source.kernel.js"),
+        ]);
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.env },
+        (database) => {
+          assertCapturedSessionEntryReadSource(request.source, database);
+          return runWithSessionTranscriptReadFence(request.admission, () =>
+            readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
+          );
+        },
+        () => ({ validInput: false }),
+      );
+      return () => ({ kind: request.kind, snapshot: read() });
     }
     case "session-pending-input-source": {
-      const [
-        { withOpenClawAgentDatabaseReadOnly },
-        { assertCapturedSessionEntryReadSource },
-        { readPendingInputSourceInDatabase },
-      ] = await Promise.all([
-        import("../../state/openclaw-agent-db-readonly.js"),
-        import("./session-entry-read-source.js"),
-        import("./session-pending-input-source.kernel.js"),
-      ]);
-      return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) => {
-            assertCapturedSessionEntryReadSource(request.source, database);
-            return readPendingInputSourceInDatabase(database, request.input);
-          },
-          { ...request.database, env: request.env },
-        );
-        return {
-          kind: request.kind,
-          snapshot: read.found ? read.value : { kind: "source", current: false },
-        };
-      };
+      const [{ assertCapturedSessionEntryReadSource }, { readPendingInputSourceInDatabase }] =
+        await Promise.all([
+          import("./session-entry-read-source.js"),
+          import("./session-pending-input-source.kernel.js"),
+        ]);
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.env },
+        (database) => {
+          assertCapturedSessionEntryReadSource(request.source, database);
+          return readPendingInputSourceInDatabase(database, request.input);
+        },
+        () => ({ kind: "source" as const, current: false }),
+      );
+      return () => ({ kind: request.kind, snapshot: read() });
     }
     case "transcript-match": {
       const [{ findTranscriptEventMatchingInDatabase }, { withOpenClawAgentDatabaseReadOnly }] =
@@ -352,39 +279,33 @@ async function prepareHistoryRead(
     }
     case "branch-summaries": {
       const { readSessionBranchSnapshot, readSessionBranchSummariesInWorker } =
-        await import("./session-accessor.sqlite-branches.js");
+        await import("./session-accessor.sqlite-branches.worker.js");
       if (retainedDatabase) {
         return () => ({
           kind: request.kind,
           result: readSessionBranchSnapshot(retainedDatabase, {
             sessionKey: request.request.sessionKey,
-            sessionId: request.request.sessionId,
-            lifecycleRevision: request.request.lifecycleRevision,
             previous: request.request.previous,
           }),
         });
-      }
-      const databaseIdentity = request.request.databaseIdentity;
-      if (databaseIdentity === undefined) {
-        throw new Error("Durable branch reads require their captured database identity");
       }
       return () => ({
         kind: request.kind,
         result: readSessionBranchSummariesInWorker({
           ...request.request,
           database: request.database,
-          databaseIdentity,
         }),
       });
     }
     case "session-title-fields": {
       const { readSessionTitleFieldsFromTranscript } =
-        await import("../../gateway/session-transcript-title-reader.js");
+        await import("../../gateway/session-transcript-title-reader.worker.js");
       return () =>
         runWithSessionTranscriptReadFence(request.admission, () => ({
           kind: request.kind,
           fields: readSessionTitleFieldsFromTranscript(request.scope, {
             includeInterSession: request.includeInterSession,
+            skillCommands: request.skillCommands,
             readOnly: true,
           }),
         }));
@@ -450,35 +371,24 @@ async function prepareHistoryRead(
       };
     }
     case "transcript-stats": {
-      const [{ withOpenClawAgentDatabaseReadOnly }, { readTranscriptStatsFromDatabase }] =
-        await Promise.all([
-          import("../../state/openclaw-agent-db-readonly.js"),
-          import("./session-accessor.sqlite-transcript-stats.js"),
-        ]);
-      return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) => readTranscriptStatsFromDatabase(database, request.scope.sessionId),
-          { ...request.database, env: request.scope.env },
-        );
-        return {
-          kind: request.kind,
-          stats: read.found ? read.value : { eventCount: 0, maxSeq: 0, sizeBytes: 0 },
-        };
-      };
+      const { readTranscriptStatsFromDatabase } =
+        await import("./session-accessor.sqlite-transcript-stats.js");
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.scope.env },
+        (database) => readTranscriptStatsFromDatabase(database, request.scope.sessionId),
+        () => ({ eventCount: 0, maxSeq: 0, sizeBytes: 0 }),
+      );
+      return () => ({ kind: request.kind, stats: read() });
     }
     case "transcript-message-presence": {
-      const [{ withOpenClawAgentDatabaseReadOnly }, { hasSessionTranscriptMessageInDatabase }] =
-        await Promise.all([
-          import("../../state/openclaw-agent-db-readonly.js"),
-          import("./session-accessor.sqlite-transcript-metadata-read.js"),
-        ]);
-      return () => {
-        const read = withOpenClawAgentDatabaseReadOnly(
-          (database) => hasSessionTranscriptMessageInDatabase(database, request.scope.sessionId),
-          { ...request.database, env: request.scope.env },
-        );
-        return { kind: request.kind, present: read.found && read.value };
-      };
+      const { hasSessionTranscriptMessageInDatabase } =
+        await import("./session-accessor.sqlite-transcript-metadata-read.js");
+      const read = await prepareDatabaseRead(
+        { ...request.database, env: request.scope.env },
+        (database) => hasSessionTranscriptMessageInDatabase(database, request.scope.sessionId),
+        () => false,
+      );
+      return () => ({ kind: request.kind, present: read() });
     }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =
@@ -499,4 +409,22 @@ async function prepareHistoryRead(
     }
   }
   throw new Error("Unsupported session history read operation");
+}
+
+async function prepareDatabaseRead<Value, Missing>(
+  databaseOptions: OpenClawAgentDatabaseOptions,
+  read: (database: OpenClawAgentReadOnlyDatabase) => Value,
+  missing: (reason: "database-missing" | "schema-missing") => Missing,
+  options?: {
+    snapshot?: true;
+    admission?: Parameters<typeof runWithSessionTranscriptReadFence>[0];
+  },
+): Promise<() => Value | Missing> {
+  const { withOpenClawAgentDatabaseReadOnly } =
+    await import("../../state/openclaw-agent-db-readonly.js");
+  return () =>
+    runWithSessionTranscriptReadFence(options?.admission, () => {
+      const result = withOpenClawAgentDatabaseReadOnly(read, databaseOptions, options);
+      return result.found ? result.value : missing(result.reason);
+    });
 }

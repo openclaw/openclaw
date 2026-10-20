@@ -10,11 +10,12 @@ import { callGateway } from "../../../gateway/call.js";
 import * as workerCpu from "../../../infra/worker-cpu.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import { holdStateDatabaseWriteTransaction } from "../../../test-utils/state-database-contention.js";
-import { prepareSubagentRegistrationRows } from "./subagent-registration-rows.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 
 const fixture = useSubagentPersistenceFixture();
@@ -23,6 +24,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
   await fixture.allocateStateDir();
   vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
   const database = openOpenClawStateDatabase();
+  const db = requireNativeSqliteDatabase(database.db);
   const context = captureOpenClawStateWorkerContext();
   expect(context.admission.databasePath.startsWith(fixture.stateDir)).toBe(true);
   const runId = "contended-registration";
@@ -58,7 +60,7 @@ it("keeps ordinary subagent registration responsive while a SQLite writer is hel
         ],
         workerData: {
           ...options?.workerData,
-          testRegistrationPath: database.db.location(),
+          testRegistrationPath: db.location(),
           testRegistrationBegin: nativeBegin.buffer,
         },
       }),

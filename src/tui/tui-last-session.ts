@@ -1,4 +1,3 @@
-// Stores and resolves the last TUI session per workspace.
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty as normalizeMarker } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -64,13 +63,7 @@ export async function readTuiLastSessionKey(params: {
     type: "tui.lastSession.read",
     stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`,
   });
-  if (result === undefined) {
-    return null;
-  }
-  if (!result.ok || result.type !== "tui.lastSession.read") {
-    throw new Error("Unexpected remembered TUI session read result");
-  }
-  if (!result.row) {
+  if (!result?.row) {
     return null;
   }
   const stored: unknown = JSON.parse(result.row.value_json);
@@ -95,7 +88,7 @@ export async function writeTuiLastSessionKey(params: {
     captureOpenClawStateWorkerContext(stateDatabaseOptions(params.stateDir)),
     {
       type: "tui.lastSession.write",
-      input: { stateKey: `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${params.scopeKey}`, sessionKey },
+      input: { scopeKey: params.scopeKey, sessionKey },
     },
   );
 }

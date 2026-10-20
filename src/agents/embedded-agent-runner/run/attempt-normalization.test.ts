@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
@@ -14,8 +15,6 @@ import {
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  listSessionEntriesReadOnly: vi.fn(() => []),
-  loadSessionEntry: vi.fn(),
   patchSessionEntryCore:
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   updateSessionEntry: vi.fn(async () => undefined),
@@ -37,15 +36,13 @@ const sessionReaderMocks = vi.hoisted(() => ({
 
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionReaderMocks);
 
+// mock-isolation: Normalization fixtures control transcript lookup and persistence without starting storage.
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
   ...sessionAccessorMocks,
-  loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntry,
 }));
 
 beforeEach(() => {
-  sessionAccessorMocks.listSessionEntriesReadOnly.mockReset().mockReturnValue([]);
-  sessionAccessorMocks.loadSessionEntry.mockReset();
   sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
   sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
   sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
@@ -77,7 +74,6 @@ it.each([0, 2])(
       getLifecycleGeneration: () => generation,
       initialQueuedLifecycleGeneration: generation,
       globalLane: "normalization-stop-global",
-      sessionLane: "normalization-stop-session",
       setParams: vi.fn(),
       setLifecycleGeneration: vi.fn(),
     });
@@ -114,9 +110,9 @@ it.each([0, 2])(
 );
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("leaves the key absent when a marker has no stored mapping", () => {
+  it("leaves the key absent when a marker has no stored mapping", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
         sessionId: "stale-outer-session",
       }),
@@ -127,9 +123,9 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("uses the explicit agent owner without inventing a session key", () => {
+  it("uses the explicit agent owner without inventing a session key", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         agentId: "worker",
         config: {
           agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
@@ -145,8 +141,8 @@ describe("buildContextEngineCompactionSessionTarget", () => {
     });
   });
 
-  it("rejects a partial target that conflicts with the fixed-store owner", () => {
-    expect(() =>
+  it("rejects a partial target that conflicts with the fixed-store owner", async () => {
+    await expect(
       buildContextEngineCompactionSessionTarget({
         config: {
           agents: {
@@ -165,12 +161,12 @@ describe("buildContextEngineCompactionSessionTarget", () => {
           sessionKey: "global",
         },
       }),
-    ).toThrow(/belongs to "ops"/u);
+    ).rejects.toThrow(/belongs to "ops"/u);
   });
 
-  it("preserves an adopted session id without inventing a session key", () => {
+  it("preserves an adopted session id without inventing a session key", async () => {
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         sessionFile: "",
         sessionId: "previous-session",
         sessionTarget: {
@@ -214,14 +210,15 @@ describe("fixed-store session bootstrap", () => {
           throw callerError;
         }
       };
-      sessionAccessorMocks.patchSessionEntryCore.mockImplementationOnce(
-        async (_scope, _update, options) => {
+      const applyOperation = vi
+        .spyOn(sessionEntryWriter, "applySessionEntryOperation")
+        .mockImplementationOnce(async (_scope, _operation, options) => {
           closed = closeBeforeCommit;
           options?.workerGuard?.source?.();
           commitGuardAccepted = true;
           return null;
-        },
-      );
+        });
+      onTestFinished(() => applyOperation.mockRestore());
 
       const reset = resetNoRealConversationTokenSnapshot({ sessionTarget, assertActive });
       if (closeBeforeCommit) {
@@ -229,9 +226,9 @@ describe("fixed-store session bootstrap", () => {
       } else {
         await reset;
       }
-      expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledWith(
+      expect(applyOperation).toHaveBeenCalledWith(
         sessionTarget,
-        expect.any(Function),
+        expect.any(Object),
         expect.objectContaining({
           skipMaintenance: true,
           workerGuard: expect.objectContaining({ source: assertActive }),

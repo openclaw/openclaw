@@ -121,6 +121,10 @@ closing that scope; retained callbacks cannot write after it closes.
 Each catalog request carries the Gateway's committed shared-store ownership. A
 reused worker installs that fact before reading credentials, so the first login's
 empty-store relocation cannot leave discovery attached to the legacy location.
+Catalog preparation carries the persisted-store inspection result and selected
+display path with the credential view. Labels reuse that source selection for the
+request; the next refresh observes committed changes. External credential refresh
+and the final credential authority check remain unchanged.
 Temporary probe stores wait for their database work and shared-registry removal
 before deleting credential files. If disposal fails, cleanup retains the directory
 and reports its location.
@@ -390,6 +394,29 @@ For script compatibility, check errors keep this first line unchanged:
 `Auth profile credentials are missing or expired.`
 
 Human-friendly detail and the stable reason code follow on subsequent lines in the form `↳ Auth reason [code]: ...`.
+
+## Client identities and paired tokens
+
+Client private identities and paired device-token caches live in the separately
+versioned local `client/credentials.sqlite`, including when the Gateway uses
+PostgreSQL. These are distinct from model-provider auth profiles. Native bootstrap
+does not open the selected Gateway database. Gateway-issued pairing and revocation
+remain under the Gateway's authority; a local cache does not grant authorization.
+
+Migration preserves exact private keys, tokens, scope strings, and timestamps.
+Legacy JSON imports record consumption atomically with the local write. Revocation
+retains that record, so a restored or rewritten legacy file cannot resurrect its
+token. Refresh and removal compare the observed token with the current local row.
+
+If the shared SQLite main file is missing while its WAL, shared-memory file, or
+rollback journal remains, credential startup and session import require recovery.
+Restore the matching main database and sidecars before retrying. OpenClaw does not
+create a replacement identity from an incomplete source.
+
+Automatic rollback restores the pre-upgrade shared credentials. Credentials issued
+between upgrade and rollback are lost; affected clients pair again. A subsequent
+upgrade rebuilds any stale local store from the restored shared source. See
+[credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
 ## Related
 

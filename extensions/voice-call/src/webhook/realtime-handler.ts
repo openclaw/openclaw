@@ -26,7 +26,7 @@ import {
   type ResolvedRealtimeVoiceProvider,
   type RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { createSubsystemLogger, sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -72,13 +72,11 @@ const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
-const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const CALLER_SPEECH_RMS_THRESHOLD = 0.035;
-const logger = createSubsystemLogger("voice-call/realtime");
 
 function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
   const providerQuestion = readRealtimeVoiceConsultQuestion(args);
@@ -924,9 +922,6 @@ export class RealtimeCallHandler {
             partial.text = limitPartialUserTranscript(appendTranscriptText(partial.text, text));
             partial.raw = limitPartialUserTranscript(`${partial.raw ?? ""}${text}`);
             partial.updatedAt = Date.now();
-            console.log(
-              `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${partial.text.length}`,
-            );
           }
           return;
         }
@@ -952,9 +947,6 @@ export class RealtimeCallHandler {
           }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
           timer.unref?.();
           state.recentFinalTimer = timer;
-          console.log(
-            `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
-          );
         }
         const event: NormalizedEvent = {
           id: `realtime-${role === "user" ? "speech" : "bot"}-${callSid}-${randomUUID()}`,
@@ -984,10 +976,7 @@ export class RealtimeCallHandler {
             consultTranscript,
             userTranscriptOwner,
             clearAudio: () => {
-              const clearedBytes = audioPacer.clearAudio();
-              console.log(
-                `[voice-call] realtime forced consult cleared outbound audio callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
-              );
+              audioPacer.clearAudio();
             },
             beginConsultActivity: () => activity.beginConsult(),
             endConsultActivity: () => activity.endConsult(),
@@ -1017,9 +1006,6 @@ export class RealtimeCallHandler {
             callId: toolEvent.callId,
             payload: { name: toolEvent.name, args: toolEvent.args },
           });
-          console.log(
-            `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
-          );
           await this.executeToolCall(
             sessionLocal,
             callId,
@@ -1186,9 +1172,6 @@ export class RealtimeCallHandler {
       }
       if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
         outboundGreeting.claim();
-        console.log(
-          `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
-        );
         if (localBargeIn && !activity.isPaused()) {
           audioController.cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {
             session.handleBargeIn({ audioPlaybackActive });
@@ -1200,7 +1183,7 @@ export class RealtimeCallHandler {
     };
     const closeSession = session.close.bind(session);
     let sessionClosePromise: Promise<void> | undefined;
-    session.close = (): Promise<void> => {
+    const closeBridgeSession = (): Promise<void> => {
       if (sessionClosed) {
         return sessionClosePromise ?? Promise.resolve();
       }
@@ -1221,6 +1204,7 @@ export class RealtimeCallHandler {
       });
       return sessionClosePromise;
     };
+    session.close = closeBridgeSession;
 
     let bindingClosed = false;
     let bindingClosePromise: Promise<void> | undefined;
@@ -1231,7 +1215,7 @@ export class RealtimeCallHandler {
       bindingClosed = true;
       activity.close();
       const ownsCall = this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding;
-      const finishClose = () => {
+      const finishClose = async () => {
         const stillOwnsCall = this.activeTelephonyBindingsByCallId.get(callId) === telephonyBinding;
         if (stillOwnsCall) {
           this.activeTelephonyBindingsByCallId.delete(callId);
@@ -1244,19 +1228,8 @@ export class RealtimeCallHandler {
         if (ownsCall && stillOwnsCall && cause && cause !== "disconnect") {
           return emitCallEnd(cause);
         }
-        return Promise.resolve();
       };
-      let pending: Promise<void>;
-      try {
-        pending = Promise.resolve(session.close());
-      } catch (error) {
-        pending = Promise.reject(
-          error instanceof Error
-            ? error
-            : new Error("Realtime provider close failed", { cause: error }),
-        );
-      }
-      bindingClosePromise = pending.then(finishClose, async (error: unknown) => {
+      bindingClosePromise = closeBridgeSession().then(finishClose, async (error: unknown) => {
         console.warn(
           `[voice-call] Failed to close realtime bridge ${callSid}: ${formatErrorMessage(error)}`,
         );
@@ -1445,13 +1418,6 @@ export class RealtimeCallHandler {
   }): Promise<void> {
     const coordinator = params.harness.forcedConsults;
     coordinator.markStarted(params.handle);
-    const startedAt = Date.now();
-    logger.debug(
-      `[voice-call] realtime forced agent consult reason=${FORCED_CONSULT_REASON} consultPolicy=always callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
-    );
-    console.log(
-      `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
-    );
     params.clearAudio();
     params.beginConsultActivity();
     const abortController = new AbortController();
@@ -1499,9 +1465,6 @@ export class RealtimeCallHandler {
         params.clearAudio();
         params.session.sendUserMessage(buildForcedConsultSpeechPrompt(text));
       }
-      console.log(
-        `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
-      );
       consumeUserTranscript(params.userTranscriptOwner, params.consultTranscript);
     } catch (error) {
       if (!state.cancelled) {
@@ -1509,7 +1472,7 @@ export class RealtimeCallHandler {
         const failed = "error" in result;
         const report = failed ? console.warn : console.log;
         report(
-          `[voice-call] realtime forced agent consult ${failed ? "failed" : "cancelled"} callId=${params.callId} providerCallId=${params.callSid}${failed ? ` error=${result.error}` : ""}`,
+          `[voice-call] realtime forced agent consult ${failed ? "failed" : "cancelled"} callId=${params.callId} providerCallId=${params.callSid}`,
         );
       }
     } finally {
@@ -1654,9 +1617,6 @@ export class RealtimeCallHandler {
       handlerArgs: unknown,
       context: ToolHandlerContext,
     ): Promise<unknown> => {
-      console.log(
-        `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
-      );
       try {
         return handler
           ? await handler(handlerArgs, callId, context)
@@ -1667,10 +1627,11 @@ export class RealtimeCallHandler {
     };
     const logResult = (result: unknown): boolean => {
       const failed = hasResultError(result);
-      const error = failed ? formatErrorMessage(result.error ?? "unknown") : undefined;
-      console.log(
-        `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
-      );
+      if (failed) {
+        console.warn(
+          `[voice-call] realtime tool call failed callId=${callId} tool=${name} elapsedMs=${Date.now() - startedAt}`,
+        );
+      }
       return failed;
     };
     const submitWorkingResponse = async (): Promise<void> => {

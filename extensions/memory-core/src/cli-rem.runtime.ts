@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   shortenHomePath,
@@ -32,7 +33,7 @@ export async function runMemorySessionBackfill(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const workspaceDir = manager.status().workspaceDir?.trim();
+      const workspaceDir = (await readMemorySearchManagerStatus(manager)).workspaceDir?.trim();
       if (!workspaceDir) {
         throw new Error("Memory session-backfill requires a resolvable workspace directory.");
       }
@@ -123,7 +124,9 @@ export async function runMemoryRemHarness(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const managerWorkspaceDir = manager.status().workspaceDir?.trim();
+      const managerWorkspaceDir = (
+        await readMemorySearchManagerStatus(manager)
+      ).workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
       const nowMs = Date.now();
@@ -263,7 +266,7 @@ export async function runMemoryRemBackfill(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const workspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
       const remConfig = resolveMemoryRemDreamingConfig({

@@ -11,6 +11,10 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  setDiscordPolicyBindings,
+  type DiscordChannelPolicyBinding,
+} from "../channel-policy-state.js";
+import {
   resolveDiscordChannelAllowlist,
   type DiscordChannelResolution,
 } from "../resolve-channels.js";
@@ -92,20 +96,6 @@ function formatDiscordUserUnresolved(entry: DiscordUserResolution): string {
   ]);
 }
 
-function toGuildEntries(value: unknown): GuildEntries {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  const out: GuildEntries = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    out[key] = entry as DiscordGuildEntry;
-  }
-  return out;
-}
-
 function toAllowlistEntries(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -151,6 +141,8 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
   guildEntries: GuildEntries;
   fetcher: typeof fetch;
   runtime: RuntimeEnv;
+  channelPolicyBindings: DiscordChannelPolicyBinding[];
+  guildPolicyBindings: Map<string, string>;
 }): Promise<GuildEntries> {
   const entries = collectChannelResolutionInputs(params.guildEntries);
   if (entries.length === 0) {
@@ -175,6 +167,17 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
       if (!entry.resolved || !entry.guildId) {
         unresolved.push(formatDiscordChannelUnresolved(entry));
         continue;
+      }
+      // The first resolved alias owns the same precedence as nextGuilds below.
+      if (!params.guildPolicyBindings.has(entry.guildId)) {
+        params.guildPolicyBindings.set(entry.guildId, source.guildKey);
+      }
+      if (source.channelKey && entry.channelId && source.channelKey !== entry.channelId) {
+        params.channelPolicyBindings.push({
+          guildKey: source.guildKey,
+          channelKey: source.channelKey,
+          channelId: entry.channelId,
+        });
       }
       const target = entry.channelId ? `${entry.guildId}/${entry.channelId}` : entry.guildId;
       const existingGroup =
@@ -272,22 +275,28 @@ function collectGuildUserEntries(guildEntries: GuildEntries): Set<string> {
 }
 
 export async function resolveDiscordAllowlistConfig(params: {
+  accountId: string;
   token: string;
-  guildEntries: unknown;
+  guildEntries: GuildEntries | undefined;
   allowFrom: unknown;
   discordConfig: DiscordAccountConfig;
   fetcher: typeof fetch;
   runtime: RuntimeEnv;
 }): Promise<{ guildEntries: GuildEntries | undefined; allowFrom: string[] | undefined }> {
-  let guildEntries = toGuildEntries(params.guildEntries);
+  let guildEntries = params.guildEntries ?? {};
   let allowFrom = toAllowlistEntries(params.allowFrom);
+  const channelPolicyBindings: DiscordChannelPolicyBinding[] = [];
+  const guildPolicyBindings = new Map<string, string>();
 
   if (hasGuildEntries(guildEntries)) {
     guildEntries = await resolveGuildEntriesByChannelAllowlist({
       ...params,
       guildEntries,
+      channelPolicyBindings,
+      guildPolicyBindings,
     });
   }
+  setDiscordPolicyBindings(params.accountId, channelPolicyBindings, guildPolicyBindings);
 
   if (isDangerousNameMatchingEnabled(params.discordConfig)) {
     allowFrom = await resolveUserAllowlist(
@@ -313,13 +322,11 @@ export async function resolveDiscordAllowlistConfig(params: {
           for (const [guildKey, guildConfig] of Object.entries(nextGuilds)) {
             const nextGuild = { ...guildConfig };
             const channels = guildConfig.channels ?? {};
-            if (channels && typeof channels === "object") {
-              nextGuild.channels = patchAllowlistUsersInConfigEntries({
-                entries: channels,
-                resolvedMap,
-                strategy: "canonicalize",
-              });
-            }
+            nextGuild.channels = patchAllowlistUsersInConfigEntries({
+              entries: channels,
+              resolvedMap,
+              strategy: "canonicalize",
+            });
             nextGuilds[guildKey] = nextGuild;
           }
           return nextGuilds;

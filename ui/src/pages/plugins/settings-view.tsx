@@ -1,8 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
-import { renderNode } from "../../components/config-form.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { ConfigNode } from "../../components/config-form.node.tsx";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -16,20 +16,19 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import { renderArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
+import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
-  renderPluginDeclaredCapabilities,
+  renderPluginCompatibilityNotices,
+  renderPluginContentCapabilities,
   renderPluginMetadata,
-  renderPluginMcpServers,
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
@@ -55,6 +54,9 @@ type SharedProps = Omit<
   PluginSettingsEditorModel,
   "pluginId" | "configSchema" | "backHref" | "onBack"
 > & {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
+  registerIcon?: (readId: () => string) => () => void;
   loading: boolean;
   error: string | null;
   busy: Readonly<Record<string, PluginMutationAction>>;
@@ -160,9 +162,9 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
   );
   return (
     <>
-      {!props.connected ? (
+      {!props.connected && !props.result ? (
         <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
-      ) : props.loading ? (
+      ) : props.loading && !props.result ? (
         <SettingsLoadingSkeleton rows={4} carapace />
       ) : props.error && !props.result ? (
         renderRetryError(props.error, props.onRefresh)
@@ -189,27 +191,33 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                     }
                   }}
                 >
-                  {renderArtTile(plugin().id, plugin().name, {
-                    iconUrl: props.iconUrls[plugin().id],
-                    onIconError: () => props.onIconError(plugin().id),
-                    loading: props.iconLoading?.(plugin().id),
-                  })}
-                  <a
-                    class="settings-row__text plugins-settings-row__link oc-settings-row-content"
-                    href={props.pluginHref(plugin().id)}
-                    onClick={(event: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      props.onOpenPlugin(plugin().id);
-                    }}
-                  >
-                    <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
-                    <span class="settings-row__desc oc-settings-row-description">
-                      {plugin().description || t("pluginsPage.optionalCapability")}
-                    </span>
-                  </a>
+                  <PluginArtTile
+                    registerIcon={props.registerIcon}
+                    slug={plugin().id}
+                    name={plugin().name}
+                    iconUrl={props.iconUrls[plugin().id]}
+                    onIconError={() => props.onIconError(plugin().id)}
+                    loading={props.iconLoading?.(plugin().id)}
+                  />
+                  <div class="settings-row__text oc-settings-row-content">
+                    <a
+                      class="settings-row__text plugins-settings-row__link"
+                      href={props.pluginHref(plugin().id)}
+                      onClick={(event: MouseEvent) => {
+                        if (!shouldHandleNavigationClick(event)) {
+                          return;
+                        }
+                        event.preventDefault();
+                        props.onOpenPlugin(plugin().id);
+                      }}
+                    >
+                      <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
+                      <span class="settings-row__desc oc-settings-row-description">
+                        {plugin().description || t("pluginsPage.optionalCapability")}
+                      </span>
+                    </a>
+                    {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
+                  </div>
                   <div class="settings-row__control oc-settings-row-control">
                     {(() => {
                       const state = plugin().state;
@@ -239,7 +247,7 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
   });
   return (
     <Show
-      when={options.connected}
+      when={options.connected || Boolean(config())}
       fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
     >
       <Show
@@ -256,22 +264,20 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
       >
         {(current) => (
           <>
-            <LitContent
-              render={() =>
-                renderNode({
-                  rawAvailable: false,
-                  maskSensitive: true,
-                  schema: current().schema,
-                  value: current().value.plugins ?? {},
-                  path: ["plugins"],
-                  hints: options.configHints,
-                  unsupported: new Set(options.configUnsupportedPaths),
-                  disabled: !options.canEditConfig || options.configBusy,
-                  showLabel: false,
-                  onPatch: options.onConfigPatch,
-                  onRemove: options.onConfigRemove,
-                })
-              }
+            <ConfigNode
+              params={{
+                rawAvailable: false,
+                maskSensitive: true,
+                schema: current().schema,
+                value: current().value.plugins ?? {},
+                path: ["plugins"],
+                hints: options.configHints,
+                unsupported: new Set(options.configUnsupportedPaths),
+                disabled: !options.canEditConfig || options.configBusy,
+                showLabel: false,
+                onPatch: options.onConfigPatch,
+                onRemove: options.onConfigRemove,
+              }}
             />
             {options.configError
               ? renderRetryError(options.configError, options.onConfigWriteRetry)
@@ -306,73 +312,60 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
           </div>
         </>
       ) : (
-        <>
-          <div id="plugin-settings-advanced" class="settings-stack">
-            <PluginManager />
-            <SettingsSection
-              title={t("pluginsPage.advanced")}
-              description={t("pluginsPage.advancedDescription")}
-              actions={
-                <>
-                  <button
-                    type="button"
-                    class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-                    aria-label={t("common.reload")}
-                    disabled={props.configBusy || props.configSchemaLoading}
-                    onClick={props.onConfigReload}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </>
-              }
-              carapace={true}
-            >
-              <AdvancedSettings {...props} />
-            </SettingsSection>
-          </div>
-        </>
+        <div id="plugin-settings-advanced" class="settings-stack">
+          <PluginManager />
+          <SettingsSection
+            title={t("pluginsPage.advanced")}
+            description={t("pluginsPage.advancedDescription")}
+            actions={
+              <button
+                type="button"
+                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
+                aria-label={t("common.reload")}
+                disabled={props.configBusy || props.configSchemaLoading}
+                onClick={props.onConfigReload}
+              >
+                <Icon name="refresh" />
+              </button>
+            }
+            carapace
+          >
+            <AdvancedSettings {...props} />
+          </SettingsSection>
+        </div>
       )}
     </>
   );
   return (
     <SettingsPage carapace={true}>
       <SettingsPageHeader
+        registerHeading={props.registerRemovalHeading}
         title={t("tabs.plugins")}
         subtitle={t("pluginsPage.settingsDescription")}
       />
       <div class="plugins-settings-content">
-        <LitContent
-          render={() =>
-            renderHubTabs({
-              id: "plugin-settings",
-              active: props.tab,
-              tabs: [
-                {
-                  value: "installed",
-                  label: t("pluginsPage.settingsInstalled"),
-                },
-                {
-                  value: "advanced",
-                  label: t("pluginsPage.advanced"),
-                },
-              ],
-              ariaLabel: t("pluginsPage.settingsTabs"),
-              panelId: "plugin-settings-panel",
-              variant: "sub",
-              className: "plugins-settings-tabs",
-              carapace: true,
-              onSelect: props.onTabChange,
-            })
-          }
+        <HubTabs
+          id="plugin-settings"
+          active={props.tab}
+          tabs={[
+            { value: "installed", label: t("pluginsPage.settingsInstalled") },
+            { value: "advanced", label: t("pluginsPage.advanced") },
+          ]}
+          ariaLabel={t("pluginsPage.settingsTabs")}
+          panelId="plugin-settings-panel"
+          variant="sub"
+          class="plugins-settings-tabs"
+          carapace
+          onSelect={props.onTabChange}
         />
-        <wa-tab-panel
+        <div
           id="plugin-settings-panel"
-          name={props.tab}
-          prop:active={true}
+          role="tabpanel"
+          tabindex="0"
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}
-        </wa-tab-panel>
+        </div>
       </div>
     </SettingsPage>
   );
@@ -427,6 +420,7 @@ function PluginNotices(props: DetailProps) {
         </div>
       ) : null}
       {renderPluginRowMessage(props.messages[pluginRowKey(props.pluginId)])}
+      {renderPluginCompatibilityNotices(plugin()?.compatibilityNotices, true)}
     </>
   );
 }
@@ -436,7 +430,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
   );
   return (
     <>
-      {!props.connected ? (
+      {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
           <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />
         </SettingsPage>
@@ -484,20 +478,20 @@ function PluginOverview(props: DetailProps): JSX.Element {
   );
   const catalog = createMemo(() => props.catalog ?? props.inspection?.catalog);
   const components = createMemo(() => props.inspection?.components);
-  const catalogIcon = createMemo(() => {
+  const catalogIcon = () => {
     const url = catalog()?.plugin.catalog.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
-  const authorIcon = createMemo(() => {
+  };
+  const authorIcon = () => {
     const url = catalog()?.detail.author?.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
+  };
   const skills = createMemo(() =>
     (components()?.skills ?? []).map((name) => ({
       name,
@@ -514,22 +508,29 @@ function PluginOverview(props: DetailProps): JSX.Element {
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
+        registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
         backHref={props.backHref}
         backLabel={props.backLabel}
         onBack={props.onBack}
-        icon={renderArtTile(plugin().id, plugin().name, {
-          iconUrl: props.iconUrls[plugin().id] ?? catalogIcon().src,
-          onIconError: () => props.onIconError(plugin().id),
-          authorIconUrl: authorIcon().src,
-          loading:
-            props.iconLoading?.(plugin().id) ||
-            props.catalogLoading ||
-            catalogIcon().loading ||
-            authorIcon().loading,
-        })}
+        icon={
+          <PluginArtTile
+            registerIcon={props.registerIcon}
+            slug={plugin().id}
+            name={plugin().name}
+            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+            onIconError={() => props.onIconError(plugin().id)}
+            authorIconUrl={authorIcon().src}
+            loading={
+              props.iconLoading?.(plugin().id) ||
+              props.catalogLoading ||
+              catalogIcon().loading ||
+              authorIcon().loading
+            }
+          />
+        }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
         titleAction={
           <Show
@@ -544,6 +545,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
             )}
           >
             <PluginInstallAction
+              registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}
@@ -610,17 +612,12 @@ function PluginOverview(props: DetailProps): JSX.Element {
                 <Icon name="key" />
               ),
             )}
-            {renderPluginDeclaredCapabilities(
-              props.inspection?.overview?.capabilities?.contracts,
-              props.inspection?.overview?.capabilities?.ui,
-            )}
-            {props.skillsSection ??
-              renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills(), () => (
-                <Icon name="bookOpenText" />
-              ))}
-            {renderPluginCapabilitySection(
-              t("pluginsPage.detailTools"),
-              tools().map(({ name, description, parameters }) => ({
+            {renderPluginContentCapabilities({
+              contracts: props.inspection?.overview?.capabilities?.contracts,
+              uiCapabilities: props.inspection?.overview?.capabilities?.ui,
+              skillsSection: props.skillsSection,
+              skills: skills(),
+              tools: tools().map(({ name, description, parameters }) => ({
                 name,
                 description,
                 onOpen:
@@ -628,14 +625,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
                     ? () => props.onOpenTool?.(name)
                     : undefined,
               })),
-              () => (
-                <Icon name="wrench" />
-              ),
-            )}
-            {renderPluginMcpServers(
-              components()?.mcpServers ?? catalog()?.detail.mcpServers ?? [],
-              catalog()?.detail.mcpServerDetails,
-            )}
+              mcpServers: components()?.mcpServers ?? catalog()?.detail.mcpServers ?? [],
+              mcpServerDetails: catalog()?.detail.mcpServerDetails,
+            })}
           </>
         }
         readme={

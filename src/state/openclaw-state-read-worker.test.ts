@@ -4,17 +4,21 @@ import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-
 import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+  withDisposableOpenClawStateReads,
+} from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
@@ -54,14 +58,11 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
         await new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
-      } else {
-        await consumed.promise;
       }
+      await consumed.promise;
     });
-    const task = createRetainedOperation<OpenClawStateReadReply>(() => {});
-    const released = createRetainedOperation<void>(() => {});
-    released.resolve(undefined);
-    mock.runTask.mockReturnValueOnce({ ...task.operation, release: () => released.operation });
+    const task = createDeferredCore<OpenClawStateReadReply>();
+    mock.runTask.mockReturnValueOnce({ result: task.promise, close: async () => {} });
     const transport = captureOpenClawStateReadSource().createTransport(
       { type: "backup.runs" },
       undefined,
@@ -99,17 +100,22 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
         expect(() => authority.assertCurrent()).not.toThrow();
       }
       const closing = transport.startClose();
-      closing.service();
-      expect(closing.read()).toEqual({ status: "pending" });
+      const settled = vi.fn();
+      void closing.then(settled, settled);
+      // Let native close settle; an accepted consumer still owns its pending callback.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).not.toHaveBeenCalled();
       if (finish === "consumer-error") {
         consumed.reject(failure);
-      } else if (finish !== "worker-failure") {
+      } else {
         consumed.resolve();
       }
       await responseAssertion;
-      await closing.result;
+      await closing;
       if (finish === "worker-failure") {
-        await expect(reading.result).resolves.toEqual({ error: failure });
+        await expect(reading).resolves.toEqual({ error: failure });
         expect(controller.signal.aborted).toBe(false);
       }
       expect(onChunkAsync).toHaveBeenCalledOnce();
@@ -118,7 +124,40 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
       controller.abort(failure);
       consumed.resolve();
       task.resolve(emptyReply);
-      await Promise.allSettled([responseAssertion, reading.result, transport.startClose().result]);
+      await Promise.allSettled([responseAssertion, reading, transport.startClose()]);
+    }
+  },
+);
+
+it.each([true, false])(
+  "inherits work-scope cancellation only for inspection reads (%s)",
+  async (inspection) => {
+    const { pathname, options } = source();
+    const scope = new AsyncWorkScope();
+    const task = queueTask();
+    const failure = new Error("inspection deadline reached");
+    const read = () =>
+      scope.run(() => executeExistingOpenClawStateRead(options, { type: "backup.runs" }));
+    const reading = withExistingOpenClawStateSchema({ path: pathname }, () =>
+      inspection
+        ? withDisposableOpenClawStateReads(pathname, () => withArtifactPreservingStateReads(read))
+        : read(),
+    );
+    const outcome = inspection
+      ? expect(reading).rejects.toBe(failure)
+      : expect(reading).resolves.toEqual(emptyReply);
+    try {
+      await task.captured;
+      scope.beginClose(failure);
+      if (!inspection) {
+        expect(task.close).not.toHaveBeenCalled();
+        task.result.resolve(emptyReply);
+      }
+      await outcome;
+      expect(task.close).toHaveBeenCalledOnce();
+    } finally {
+      task.result.reject(failure);
+      await Promise.allSettled([reading, outcome]);
     }
   },
 );
@@ -181,10 +220,10 @@ it("lets an active reader's host callback finish a nested read before the parent
   const transport = captureOpenClawStateReadSource().createTransport(
     { type: "backup.runs" },
     () => {
-      nested = nestedTransport.startRead(location, authority).result;
+      nested = nestedTransport.startRead(location, authority);
     },
   );
-  const parent = transport.startRead(location, authority).result;
+  const parent = transport.startRead(location, authority);
   try {
     const submitted = await firstTask.submitted;
     await firstTask.captured;
@@ -204,7 +243,7 @@ it("lets an active reader's host callback finish a nested read before the parent
     firstTask.result.resolve(emptyReply);
     nestedTask.result.resolve(emptyReply);
     await Promise.allSettled([parent, nested]);
-    await Promise.all([transport.startClose().result, nestedTransport.startClose().result]);
+    await Promise.all([transport.startClose(), nestedTransport.startClose()]);
   }
 });
 
@@ -219,7 +258,8 @@ it("retains the shared pool after a resource drain fails until canonical retry",
   try {
     await expect(closeOpenClawStateDatabaseAsync()).rejects.toBe(failure);
     expect(mock.closePool).not.toHaveBeenCalled();
-    expect(() => captureOpenClawStateWorkerContext(options)).toThrow(/closed/i);
+    // The retained pool stays live, so reads resume until the retry seals again.
+    captureOpenClawStateWorkerContext(options);
     await closeOpenClawStateDatabaseAsync();
     expect(close).toHaveBeenCalledTimes(2);
     expect(mock.closePool).toHaveBeenCalledOnce();
@@ -283,8 +323,12 @@ it("reads externally created state after an absent read without allocating a wor
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
-it("retains read custody until release and retires failed native cleanup", async () => {
+it("retires a successful read without hydrating an error and retains custody until exit", async () => {
   const { options } = source();
+  const hydrate = vi.spyOn(
+    await import("./openclaw-state-worker-error.js"),
+    "hydrateOpenClawStateWorkerError",
+  );
   const task = queueTask();
   const stopping = createDeferredCore();
   const stopped = createDeferredCore();
@@ -317,11 +361,16 @@ it("retains read custody until release and retires failed native cleanup", async
       mock.create.mock.invocationCallOrder[0]!,
     );
     expect(settled).toBe(false);
+    expect(hydrate).not.toHaveBeenCalled();
     expect(mock.closePool).not.toHaveBeenCalled();
   } finally {
     task.result.resolve(reply);
     stopped.resolve();
-    await assertion;
+    try {
+      await assertion;
+    } finally {
+      hydrate.mockRestore();
+    }
   }
   expect(task.close).toHaveBeenCalledOnce();
 });
@@ -435,7 +484,6 @@ const captures = [
         ? {
             type,
             input: {
-              kind: "repository" as const,
               session: {
                 agentId: selector,
                 sessionKey: selector,
@@ -680,10 +728,10 @@ it.each(captures)(
     const baselineTask = queueTask(dispatch.promise);
     const task = queueTask(dispatch.promise);
     const baseline = baselineTransport
-      ? baselineTransport.startRead(location, authority).result
+      ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
     const result = transport
-      ? transport.startRead(location, authority).result
+      ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);
     try {
       const [baselineOptions, submitted] = await Promise.all([
@@ -721,7 +769,7 @@ it.each(captures)(
       baselineTask.result.resolve(emptyReply);
       task.result.resolve(fixture.reply);
       await Promise.allSettled([baseline, result]);
-      await Promise.all([baselineTransport?.startClose().result, transport?.startClose().result]);
+      await Promise.all([baselineTransport?.startClose(), transport?.startClose()]);
     }
   },
 );
@@ -762,8 +810,8 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
       assertCurrent: context.admission.assertCurrent,
     };
     const location = { context, location: options.path, checkFreshAdmission: true };
-    const baselineRead = baseline.startRead(location, authority).result;
-    const read = transport.startRead(location, authority).result;
+    const baselineRead = baseline.startRead(location, authority);
+    const read = transport.startRead(location, authority);
     try {
       const [baselineOptions, batchOptions] = await Promise.all([
         baselineTask.submitted,
@@ -821,7 +869,7 @@ it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] 
       baselineTask.result.resolve(emptyReply);
       task.result.resolve(emptyReply);
       await Promise.allSettled([baselineRead, read]);
-      await Promise.all([baseline.startClose().result, transport.startClose().result]);
+      await Promise.all([baseline.startClose(), transport.startClose()]);
     }
   },
 );

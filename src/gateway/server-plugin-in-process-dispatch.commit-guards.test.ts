@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -37,33 +38,31 @@ it.each(["runtime", "legacy"] as const)(
           },
         },
       });
-      const context = createContext();
       let nativeMutation = false;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "approval.get",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "approvals" },
-            handler: async (options: GatewayRequestHandlerOptions) => {
-              using authority = createApprovalRequestAuthority(options);
-              const sql = observeHostDataSql();
-              try {
-                const result = await getOperatorApprovalDetailed({
-                  id: "approval-expiry-routing",
-                  nowMs: 3,
-                  guard: authority.guard,
-                });
-                nativeMutation = sql.queries.some((query) =>
-                  /^update "operator_approvals" set\b/i.test(query),
-                );
-                options.respond(true, result);
-              } finally {
-                sql.restore();
-              }
-            },
+      const context = createContext([
+        [
+          "approval.get",
+          "operator.approvals",
+          "approvals",
+          async (options: GatewayRequestHandlerOptions) => {
+            using authority = createApprovalRequestAuthority(options);
+            const sql = observeHostDataSql();
+            try {
+              const result = await getOperatorApprovalDetailed({
+                id: "approval-expiry-routing",
+                nowMs: 3,
+                guard: authority.guard,
+              });
+              nativeMutation = sql.queries.some((query) =>
+                /^update "operator_approvals" set\b/i.test(query),
+              );
+              options.respond(true, result);
+            } finally {
+              sql.restore();
+            }
           },
-        ]);
+        ],
+      ]);
       const result = await withPluginRuntimeGatewayRequestScope(
         {
           context,
@@ -98,6 +97,7 @@ it.each(["direct", "tool"] as const)(
   "keeps opaque and prepared commit guards authoritative with worker writes on %s dispatch",
   async (entrypoint) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const scope = { agentId: "main", sessionKey: "agent:main:commit-guard-routing" };
       await upsertSessionEntryCore(scope, { sessionId: "guard-routing-session", updatedAt: 1 });
       const context = createContext();

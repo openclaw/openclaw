@@ -1,4 +1,3 @@
-/** Audits effective systemd service settings and managed unit backups. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -122,13 +121,13 @@ export async function auditSystemdUnit(
   inspectRewrite = false,
 ) {
   const unitPath = resolveSystemdUnitPath(env);
+  const backupInspectionError = await auditSystemdUnitBackup(unitPath, issues);
   let definitionDriftError =
     definitionDrift &&
     command?.sourcePath &&
     path.resolve(command.sourcePath) !== path.resolve(unitPath)
       ? "Systemd definition inspection skipped: the selected service is outside the managed user-unit path."
-      : undefined;
-  await auditSystemdUnitBackup(unitPath, issues);
+      : backupInspectionError;
   let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
@@ -353,8 +352,11 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
   let stat;
   try {
     stat = await fs.lstat(backupPath);
-  } catch {
-    return;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      return `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`;
+    }
+    return undefined;
   }
   const mode = stat.mode & 0o777;
   const embeddedKeys = new Set<string>();
@@ -383,7 +385,7 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     }
   }
   if (stat.isFile() && !unreadable && embeddedKeys.size === 0 && (mode & 0o077) === 0) {
-    return;
+    return undefined;
   }
   const detail = [
     backupPath,
@@ -403,4 +405,5 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     detail,
     level: "recommended",
   });
+  return undefined;
 }

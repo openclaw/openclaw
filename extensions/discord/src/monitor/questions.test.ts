@@ -3,7 +3,7 @@ import { InteractionResponseType, MessageFlags } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import {
   createInteraction as createDiscordInteraction,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
 } from "../internal/discord.js";
 import {
   attachRestMock,
@@ -13,7 +13,7 @@ import {
 import { createDiscordQuestionButton } from "./questions.js";
 
 type InteractionHarness = {
-  interaction: ButtonInteraction;
+  interaction: BaseComponentInteraction;
   acknowledge: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
 };
@@ -26,7 +26,7 @@ function createInteraction(): InteractionHarness {
     reply: vi.fn(),
     acknowledge,
     followUp,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
   return { interaction, acknowledge, followUp };
 }
 
@@ -120,7 +120,7 @@ describe("Discord question button", () => {
           global_name: null,
         },
       }),
-    ) as ButtonInteraction;
+    ) as BaseComponentInteraction;
     const resolveQuestion = vi.fn(async () => {
       if (testCase.error) {
         throw testCase.error;

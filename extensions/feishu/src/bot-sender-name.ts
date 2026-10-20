@@ -1,8 +1,4 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createFeishuClient } from "./client.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -78,16 +74,6 @@ function writeSenderNameCache(key: string, entry: SenderNameCacheEntry): void {
   pruneMapToMaxSize(senderNameCache, SENDER_NAME_CACHE_MAX_SIZE);
 }
 
-function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
-  if (senderId.startsWith("ou_")) {
-    return "open_id";
-  }
-  if (senderId.startsWith("on_")) {
-    return "union_id";
-  }
-  return "user_id";
-}
-
 export async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
   senderId: string;
@@ -105,9 +91,7 @@ export async function resolveFeishuSenderName(params: {
 
   const cacheKey = `${account.accountId}:${normalizedSenderId}`;
   const cached = senderNameCache.get(cacheKey);
-  const now = asDateTimestampMs(Date.now());
-  const cachedExpireAt = cached ? asDateTimestampMs(cached.expireAt) : undefined;
-  if (cached && now !== undefined && cachedExpireAt !== undefined && cachedExpireAt > now) {
+  if (cached && cached.expireAt > Date.now()) {
     return cached.kind === "resolved" ? { name: cached.name } : {};
   }
   if (cached) {
@@ -116,7 +100,11 @@ export async function resolveFeishuSenderName(params: {
 
   try {
     const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
+    const userIdType = normalizedSenderId.startsWith("ou_")
+      ? "open_id"
+      : normalizedSenderId.startsWith("on_")
+        ? "union_id"
+        : "user_id";
     const res = await client.contact.user.get({
       path: { user_id: normalizedSenderId },
       params: { user_id_type: userIdType },
@@ -125,10 +113,11 @@ export async function resolveFeishuSenderName(params: {
     const name = user?.name ?? user?.nickname ?? user?.en_name;
 
     if (name) {
-      const expireAt = resolveExpiresAtMsFromDurationMs(SENDER_NAME_TTL_MS);
-      if (expireAt !== undefined) {
-        writeSenderNameCache(cacheKey, { kind: "resolved", name, expireAt });
-      }
+      writeSenderNameCache(cacheKey, {
+        kind: "resolved",
+        name,
+        expireAt: Date.now() + SENDER_NAME_TTL_MS,
+      });
       return { name };
     }
     return {};
@@ -146,10 +135,10 @@ export async function resolveFeishuSenderName(params: {
     if (feishuErr?.code === FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE) {
       // 41050 means this app cannot see the user. Cache the account-scoped miss
       // so later messages avoid repeating the same failing API request and SDK log.
-      const expireAt = resolveExpiresAtMsFromDurationMs(SENDER_NAME_NEGATIVE_TTL_MS);
-      if (expireAt !== undefined) {
-        writeSenderNameCache(cacheKey, { kind: "unavailable", expireAt });
-      }
+      writeSenderNameCache(cacheKey, {
+        kind: "unavailable",
+        expireAt: Date.now() + SENDER_NAME_NEGATIVE_TTL_MS,
+      });
       return {};
     }
     log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);

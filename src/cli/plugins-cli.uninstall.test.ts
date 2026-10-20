@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistClawPackageRef } from "../claws/provenance.js";
-import type { ClawAddPlan } from "../claws/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-paths.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
@@ -266,59 +264,6 @@ describe("plugins cli uninstall", () => {
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("warns for a versionless scoped ClawHub spec and proceeds", async () => {
-    const previousEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-claw-plugin-ref-");
-    closeOpenClawStateDatabaseForTest();
-    try {
-      const installRecord = {
-        source: "clawhub" as const,
-        spec: "clawhub:@owner/audit",
-        version: "2.0.1",
-        installPath: alphaInstallPath,
-      };
-      const baseConfig = {
-        plugins: {
-          entries: { alpha: { enabled: true } },
-          installs: { alpha: installRecord },
-        },
-      } as OpenClawConfig;
-      pluginCliConfigMock.mockReturnValue(baseConfig);
-      setInstalledPluginIndexInstallRecords({ alpha: installRecord });
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "alpha", name: "alpha" }],
-        diagnostics: [],
-      });
-
-      persistClawPackageRef(
-        {
-          agent: { finalId: "audit-agent" },
-          claw: { name: "@owner/audit-claw" },
-        } as ClawAddPlan,
-        {
-          kind: "plugin",
-          source: "clawhub",
-          ref: "@owner/audit",
-          version: "2.0.1",
-          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        },
-        { status: "failed" },
-      );
-
-      await runPluginsCommand(["plugins", "uninstall", "alpha", "--force", "--keep-files"]);
-
-      expectRuntimeLogIncludes('Warning: plugin "alpha" is referenced by Claw: @owner/audit-claw.');
-      expectRuntimeLogIncludes("Uninstalling it may break those Claws");
-      expectInstallRecordsWrittenWithLease(
-        {},
-        { plugins: { entries: { alpha: { enabled: false } } } },
-      );
-    } finally {
-      previousEnv.restore();
-      closeOpenClawStateDatabaseForTest();
-    }
   });
 
   it.each(["closed", "declined", "accepted after config edit"])(

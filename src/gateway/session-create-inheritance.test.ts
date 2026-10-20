@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -8,6 +9,7 @@ import { prepareSessionCreateParent } from "./session-create-inheritance.js";
 
 it("inherits an in-process parent update after warming discovery", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const sessionKey = "agent:main:parent";
     const scope = { agentId: "main", sessionKey };
     await upsertSessionEntryCore(scope, {

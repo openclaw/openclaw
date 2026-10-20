@@ -19,7 +19,7 @@ import type { CronRunReceiptHandle } from "../cron/store/run-receipt.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -44,7 +44,7 @@ import {
 } from "./operator-approval-standing-grants.js";
 import { mintCronStandingGrantLocked } from "./operator-approval-standing-grants.worker.js";
 import {
-  closeOrphanedOperatorApprovals,
+  recoverOperatorApprovalsOnStartup,
   listCronStandingGrants,
   revokeCronStandingGrant,
   insertOperatorApproval,
@@ -186,7 +186,6 @@ function seedCronJob(
       job: loadedJob,
       agentId: "main",
       startedAtMs: NOW_MS,
-      observed: undefined,
     });
     receipts.set(
       databaseOptions,
@@ -195,7 +194,6 @@ function seedCronJob(
           claimCronRunReceiptInDatabaseForTest({
             database: db,
             prepared,
-            resolveAgentId: (current) => current.agentId ?? "main",
           }),
         databaseOptions,
       ),
@@ -805,7 +803,7 @@ describe("cron standing grant consumption", () => {
     closeOpenClawStateDatabaseForTest();
     // New runtime epoch: startup cancels orphaned pending approvals only; the
     // resolved allow-always parent and its grant remain valid durable truth.
-    closeOrphanedOperatorApprovals({
+    await recoverOperatorApprovalsOnStartup({
       runtimeEpoch: "epoch-2",
       nowMs: NOW_MS + 5_000,
       databaseOptions,

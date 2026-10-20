@@ -8,7 +8,6 @@ import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
-import { storeSessionLearning } from "./feedback-reflection-store.js";
 import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -65,21 +64,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("reflection produced no output");
     return;
   }
-  log.info("reflection complete", {
-    sessionKey,
-    responseLength: reflection.responseLength,
-    followUp: reflection.followUp,
-  });
-  try {
-    await storeSessionLearning({
-      storePath: reflection.storePath,
-      sessionKey,
-      learning: reflection.learning,
-    });
-  } catch (err) {
-    log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
-  }
-
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
   );
@@ -106,7 +90,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
         serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
       },
     );
-    log.info("sent reflection follow-up", { sessionKey });
   } catch (err) {
     log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
   }

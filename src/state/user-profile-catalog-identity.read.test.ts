@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { readUserProfileCatalogIdentity } from "./user-profile-catalog-identity.read.js";
@@ -22,7 +23,7 @@ it("invalidates retained cohorts after worker commits and rollback without fresh
         readUserProfileCatalogIdentity(database.db, input),
       );
     const counter = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["profiles", "identities", "freshness"],
       (sql) =>
         /data_version/iu.test(sql)
@@ -78,12 +79,13 @@ it("does not replay terminal cohort corruption as scalar profile reads", async (
       authenticationAlias: { kind: "email", email: "person@example.test" },
     });
     const { db } = openOpenClawStateDatabase();
-    const prepare = db.prepare.bind(db);
+    const sqlite = requireNativeSqliteDatabase(db);
+    const prepare = sqlite.prepare.bind(sqlite);
     const corruption = Object.assign(new Error("database disk image is malformed"), {
       code: "ERR_SQLITE_ERROR",
       errcode: 11,
     });
-    const failure = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+    const failure = vi.spyOn(sqlite, "prepare").mockImplementation((sql) => {
       if (sql.includes('from "user_profiles"')) {
         throw corruption;
       }

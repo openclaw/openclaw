@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -93,10 +94,9 @@ it.for([false, true])(
         ],
         { stdio: ["pipe", "pipe", "pipe"] },
       );
-      let stderr = "";
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
+      const output = createBoundedChildOutput();
+      child.stdout.on("data", output.append);
+      child.stderr.on("data", output.append);
       const closed = once(child, "close");
       void closed.catch(() => undefined);
       const lines = createInterface({ input: child.stdout });
@@ -104,17 +104,17 @@ it.for([false, true])(
         awaitGateBeforeSettlement(once(lines, "line"), closed, "Writer exited before admission"),
         signal,
       );
-      return { child, closed, ready, stderr: () => stderr };
+      return { child, closed, ready, output: () => output.text() };
     };
     const holder = launch("holder");
     let waiter: ReturnType<typeof launch> | undefined;
     try {
-      expect(JSON.parse((await holder.ready)[0]), holder.stderr()).toEqual({ phase: "holding" });
+      expect(JSON.parse((await holder.ready)[0]), holder.output()).toEqual({ phase: "holding" });
       waiter = launch("waiter", holder.child.pid);
       const observation = JSON.parse((await waiter.ready)[0]);
       holder.child.stdin.end("x");
       const results = await withinTest(Promise.all([holder.closed, waiter.closed]), signal);
-      expect(results, JSON.stringify(observation) + holder.stderr() + waiter.stderr()).toEqual([
+      expect(results, `holder: ${holder.output()}\nwaiter: ${waiter.output()}`).toEqual([
         [0, null],
         [0, null],
       ]);

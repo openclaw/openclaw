@@ -10,12 +10,43 @@ type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"]
 
 /**
  * Run failures get more room than schedule errors (10 vs. 3) because provider
- * and network errors are often transient, and restart-interrupted runs count too.
+ * and network errors are often transient.
  */
 const MAX_CONSECUTIVE_RUN_FAILURES = 10;
 
 function autoDisableReasonLabel(reason: CronAutoDisableReason): string {
   return reason === "consecutive-failures" ? "run failures" : "schedule errors";
+}
+
+/** The safety notice text: the same words reach the failure route and the owning agent. */
+export function buildCronAutoDisableNotice(params: {
+  job: Pick<CronJob, "id" | "name" | "state">;
+  reason: CronAutoDisableReason;
+  consecutiveErrors: number;
+}): string {
+  const { job } = params;
+  const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
+  const errorReason =
+    params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
+  return [
+    `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
+    ...cronFailureDetailLines(errorReason),
+    `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
+  ].join("\n");
+}
+
+/** Queues the in-app safety notice for the owning agent. */
+export function queueCronAutoDisableNotification(params: {
+  job: CronJob;
+  reason: CronAutoDisableReason;
+  consecutiveErrors: number;
+  deferredNotifications: DeferredCronNotifications;
+}): void {
+  params.deferredNotifications.push({
+    kind: "auto-disabled",
+    job: cronNotificationJob(params.job),
+    text: buildCronAutoDisableNotice(params),
+  });
 }
 
 /** Records one canonical auto-disable fact and queues its owning-agent notification. */
@@ -49,15 +80,7 @@ export function autoDisableCronJob(params: {
   if (params.notify === false) {
     return true;
   }
-  const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
-  const errorReason =
-    params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
-  const text = [
-    `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
-    ...cronFailureDetailLines(errorReason),
-    `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
-  ].join("\n");
-  params.deferredNotifications.push({ kind: "auto-disabled", job: cronNotificationJob(job), text });
+  queueCronAutoDisableNotification(params);
   return true;
 }
 
@@ -66,6 +89,8 @@ export function maybeAutoDisableCronJobAfterRunFailure(params: {
   job: CronJob;
   atMs: number;
   deferredNotifications: DeferredCronNotifications;
+  /** The caller owns the notice when the failure route decides who is told first. */
+  notify?: boolean;
 }): boolean {
   const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
   if (

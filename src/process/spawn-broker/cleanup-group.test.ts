@@ -51,7 +51,7 @@ it("retires delayed detached escalation when the captured leader is replaced", a
   boundary.identity.mockReturnValue(7);
   boundary.dead.mockReturnValue(false);
   const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-  const cleanup = terminateLostBrokerChild(pid, true, undefined, { pid, startedAt: 7 });
+  const cleanup = terminateLostBrokerChild(pid, true, { pid, startedAt: 7 });
   expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([[-pid, "SIGTERM"]]);
   boundary.identity.mockReturnValue(8);
   cleanup.force();
@@ -72,7 +72,7 @@ it.each(["gone", "reused", "unavailable"] as const)(
       }
       return true;
     });
-    const cleanup = terminateLostBrokerChild(pid, true, undefined, { pid, startedAt: 7 });
+    const cleanup = terminateLostBrokerChild(pid, true, { pid, startedAt: 7 });
     if (mode === "unavailable") {
       await expect(cleanup.settled).rejects.toThrow("identity is unavailable");
     } else {

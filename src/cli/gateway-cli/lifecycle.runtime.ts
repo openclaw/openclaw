@@ -3,10 +3,11 @@
 // must target the module that defines the symbol rather than a re-export facade;
 // a facade also evaluates its siblings and drags their graphs onto cold start.
 export { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
-export { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
+export { listActiveSessionRunIds } from "../../sessions/session-controller.queries.js";
 export { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 export {
   resolveGatewayRestartDecision,
+  registerGatewayRuntimeRecovery,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";
@@ -23,10 +24,7 @@ export {
   scheduleGatewayRestart,
 } from "../../infra/restart.js";
 export { prepareGatewayRestartIntentConsumption } from "../../infra/restart-intent.js";
-export {
-  prepareGatewayRestartHandoffRuntime,
-  writeGatewayRestartHandoff,
-} from "../../infra/restart-handoff.js";
+export { writeGatewayRestartHandoff } from "../../infra/restart-handoff.js";
 export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,

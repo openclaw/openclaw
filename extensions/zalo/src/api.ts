@@ -69,6 +69,7 @@ type ZaloWebhookInfo = {
 };
 
 type ZaloGetUpdatesParams = {
+  signal?: AbortSignal;
   /** Timeout in seconds (passed as string to API) */
   timeout?: number;
 };
@@ -115,6 +116,7 @@ export async function callZaloApi<T = unknown>(
   body?: Record<string, unknown>,
   options?: {
     timeoutMs?: number;
+    signal?: AbortSignal;
     fetch?: ZaloFetch;
     assertDirectAdapterHandoff?: () => void;
   },
@@ -135,7 +137,9 @@ export async function callZaloApi<T = unknown>(
         "Content-Type": "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: controller.signal,
+      signal: options?.signal
+        ? AbortSignal.any([controller.signal, options.signal])
+        : controller.signal,
     };
     const response = await captureEffectAuthority().initiate(() => {
       options?.assertDirectAdapterHandoff?.();
@@ -242,7 +246,11 @@ export async function getUpdates(
   const pollTimeoutSec = params?.timeout ?? 30;
   const timeoutMs = (pollTimeoutSec + 5) * 1000;
   const body = { timeout: String(pollTimeoutSec) };
-  return callZaloApi<ZaloUpdate>("getUpdates", token, body, { timeoutMs, fetch: fetcher });
+  return callZaloApi<ZaloUpdate>("getUpdates", token, body, {
+    timeoutMs,
+    signal: params?.signal,
+    fetch: fetcher,
+  });
 }
 
 export async function setWebhook(

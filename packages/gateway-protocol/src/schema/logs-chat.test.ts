@@ -24,11 +24,19 @@ describe("ChatStartupParamsSchema", () => {
     expect(
       Value.Check(ChatStartupParamsSchema, { sessionKey: "agent:main:main", cursor: "cursor" }),
     ).toBe(true);
+    expect(
+      Value.Check(ChatStartupParamsSchema, {
+        sessionKey: "agent:main:main",
+        cursor: "cursor",
+        knownState: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+      }),
+    ).toBe(true);
     expect(Value.Check(ChatHistoryParamsSchema, short)).toBe(false);
     for (const invalid of [
       { ...short, sessionKey: "agent:main:main" },
       { ...short, cursor: "cursor" },
       { shortId: "12345678" },
+      { sessionKey: "agent:main:main", knownState: { pendingInputs: "x".repeat(65) } },
     ]) {
       expect(Value.Check(ChatStartupParamsSchema, invalid)).toBe(false);
     }
@@ -46,6 +54,14 @@ describe("ChatHistoryCursorResultSchema", () => {
       sessionInfo,
     };
     expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
+    expect(
+      Value.Check(ChatHistoryCursorResultSchema, {
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-2",
+        stateRevision: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+      }),
+    ).toBe(true);
     expect(
       Value.Check(ChatHistoryCursorResultSchema, {
         ...delta,
@@ -95,6 +111,16 @@ describe("ChatHistoryCursorResultSchema", () => {
 });
 
 describe("ChatStatusEventSchema", () => {
+  it("accepts optional local model wait reasons and rejects unsupported claims", () => {
+    const event = { ...statusEvent, phase: "waiting_for_model" };
+    for (const waitReason of [undefined, "response", "slot"]) {
+      expect(
+        Value.Check(ChatEventSchema, { ...event, ...(waitReason ? { waitReason } : {}) }),
+      ).toBe(true);
+    }
+    expect(Value.Check(ChatEventSchema, { ...event, waitReason: "busy" })).toBe(false);
+  });
+
   it("accepts closed startup phases through the chat event union", () => {
     expect(Value.Check(ChatStatusEventSchema, statusEvent)).toBe(true);
     expect(Value.Check(ChatEventSchema, statusEvent)).toBe(true);
@@ -109,6 +135,14 @@ describe("ChatStatusEventSchema", () => {
       phase: "starting_model",
     };
     const retry = { attempt: 2, maxAttempts: 10, reason: "rate_limit" };
+    for (const reason of ["rate_limit", "overloaded", "server_error", "timeout", "output_limit"]) {
+      expect(
+        Value.Check(ChatEventSchema, {
+          ...event,
+          retry: { ...retry, reason, retryAt: 1_800_000_000_000 },
+        }),
+      ).toBe(true);
+    }
     for (const maxAttempts of [2, 10]) {
       expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, maxAttempts } })).toBe(
         true,
@@ -122,6 +156,8 @@ describe("ChatStatusEventSchema", () => {
       { maxAttempts: 2.5 },
       { maxAttempts: 11 },
       { reason: "unknown" },
+      { retryAt: -1 },
+      { retryAt: Infinity },
       { errorBody: "provider data" },
     ]) {
       expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, ...invalid } })).toBe(
@@ -139,6 +175,7 @@ describe("ChatErrorEventSchema", () => {
     model: "gpt-5.6-luna",
     failoverReason: "server_error",
     providerRuntimeFailureKind: "timeout",
+    providerErrorCode: "server_error",
     providerErrorType: "server_error",
     httpStatus: 502,
     providerErrorMessagePreview: "Upstream unavailable",

@@ -10,7 +10,6 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import type {
   ForkSessionEntryFromParentTargetResult,
-  ForkSessionFromParentTranscriptParams,
   ForkSessionFromParentTranscriptResult,
   SessionParentForkDecision,
 } from "./session-accessor.sqlite-contract.js";
@@ -24,6 +23,7 @@ import {
   buildForkedChildTranscriptEvents,
   estimateParentForkPromptTokens,
   planParentForkDecision,
+  resolveParentForkLimitDecision,
   resolveParentForkSourceTranscript,
   type ParentForkSourceTranscript,
 } from "./session-accessor.sqlite-parent-fork.js";
@@ -102,7 +102,7 @@ export function commitParentFork(input: ParentForkCommit, context: AgentWorkerOp
   );
 }
 
-export function commitParentForkInTransaction(
+function commitParentForkInTransaction(
   database: OpenClawAgentDatabase,
   input: ParentForkCommit,
   options: AgentWorkerOperationContext["options"],
@@ -323,25 +323,4 @@ function forkSqliteParentTranscriptInTransaction(
       sessionId,
     },
   };
-}
-
-function resolveParentForkLimitDecision(
-  params: Pick<
-    ForkSessionFromParentTranscriptParams,
-    "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
-  >,
-  source: ParentForkSourceTranscript,
-): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
-  if (!params.enforceTokenLimit) {
-    return undefined;
-  }
-  const decision = planParentForkDecision(
-    params.parentEntry,
-    estimateParentForkPromptTokens(source),
-    {
-      maxTokens: params.maxTokens,
-      preferTranscriptEstimate: params.forkFrom === "last-completed",
-    },
-  );
-  return decision.status === "skip" ? decision : undefined;
 }

@@ -29,6 +29,8 @@ describe("sessions_yield orchestration", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "sessions-yield.orchestration" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -46,7 +48,7 @@ describe("sessions_yield orchestration", () => {
       const registry = await import("../subagents/registry/subagent-registry.js");
       const { settleRequesterTurnAfterSessionSpawns } =
         await import("../subagents/registry/subagent-registry-requester-yield.js");
-      const { createReplyOperation } = await import("../../auto-reply/reply/reply-run-registry.js");
+      const { createReplyOperation } = await import("../../sessions/session-controller.js");
       const params = { ...createOverflowRunParams(state), runId: "yield-retry-parent" };
       const runs = new Map<string, SubagentRunRecord>();
       const persistOrThrow = vi.fn();
@@ -154,7 +156,6 @@ describe("sessions_yield orchestration", () => {
             requesterTurnRunId: undefined,
             requesterTurnYielded: undefined,
             requesterSettleWake: {
-              status: "pending",
               requesterYieldBatch: true,
               batchRunIds: [...runs.keys()].toSorted(),
             },

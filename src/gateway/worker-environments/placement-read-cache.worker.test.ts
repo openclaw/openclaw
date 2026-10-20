@@ -43,11 +43,29 @@ describe("worker placement read cache", () => {
     expect(await writer.readRecoveryCandidates()).toEqual([]);
     expect(recoveryReadCount()).toBe(1);
 
-    const remote = await writer.startDispatch({
-      sessionId: "recovery-remote",
+    const local = {
+      sessionId: "recovery-local",
       agentId: "main",
-      sessionKey: "agent:main:recovery-remote",
+      sessionKey: "agent:main:recovery-local",
+    };
+    const claim = await writer.claimTurn({
+      ...local,
+      owner: { kind: "local" },
+      claimId: "local-claim",
+      runId: "local-run",
     });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.releaseTurnIfOwned(claim);
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    await writer.retireSessionPlacementAsync({
+      sessionId: local.sessionId,
+      expectedState: "local",
+      expectedGeneration: claim.placementGeneration,
+    });
+    expect(await reader.readRecoveryCandidates()).toEqual([]);
+    expect(recoveryReadCount()).toBe(1);
+
+    const remote = await writer.startDispatch(local);
     const expected = [{ sessionId: remote.sessionId, environmentId: null, state: "requested" }];
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
     expect(await reader.readRecoveryCandidates()).toEqual(expected);
@@ -136,32 +154,37 @@ describe("worker placement read cache", () => {
       warn,
       now: () => nowMs,
     });
-    await monitor.sweep();
-    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    await monitor.sweep();
-    expect(reads).not.toHaveBeenCalled();
-    expect(runWorkspaceCommand).not.toHaveBeenCalled();
+    const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
+    try {
+      await monitor.sweep();
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      await monitor.sweep();
+      expect(reads).not.toHaveBeenCalled();
+      expect(runWorkspaceCommand).not.toHaveBeenCalled();
 
-    const active = await advancePlacementFixtureToActive(writer, database, {
-      sessionId: "disk-cache",
-      sessionKey: "agent:main:disk-cache",
-      agentId: "main",
-    });
-    await monitor.sweep();
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
-    expect(monitor.read(active)?.status).toBe("ok");
+      const active = await advancePlacementFixtureToActive(writer, database, {
+        sessionId: "disk-cache",
+        sessionKey: "agent:main:disk-cache",
+        agentId: "main",
+      });
+      await monitor.sweep();
+      expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+      expect(monitor.read(active)?.status).toBe("ok");
 
-    const draining = await writer.transition({
-      sessionId: active.sessionId,
-      from: "active",
-      to: "draining",
-      expectedGeneration: active.generation,
-    });
-    nowMs += 15 * 60_000;
-    await monitor.sweep();
-    expect(monitor.read(draining)).toBeUndefined();
-    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
+      const draining = await writer.transition({
+        sessionId: active.sessionId,
+        from: "active",
+        to: "draining",
+        expectedGeneration: active.generation,
+      });
+      nowMs += 15 * 60_000;
+      await monitor.sweep();
+      expect(monitor.read(draining)).toBeUndefined();
+      expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("claims and releases an existing worker placement with a NULL execution mode", async () => {
@@ -206,13 +229,31 @@ describe("worker placement read cache", () => {
       });
       const claimed = await reader.readProjection([identity.sessionId]);
       expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      // Borrowed owner facts reject both placement and nested claim mutation.
+      const warm = await reader.readProjection([identity.sessionId]);
+      expect(Reflect.set(warm.placements.get(identity.sessionId)!, "state", "requested")).toBe(
+        false,
+      );
+      expect(
+        Reflect.set(
+          warm.placements.get(identity.sessionId)!.turnClaim!,
+          "claimId",
+          "caller-change",
+        ),
+      ).toBe(false);
+      expect(
+        (await writer.readProjection([identity.sessionId])).placements.get(identity.sessionId),
+      ).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
       await writer.releaseTurnIfOwned(claim);
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),
       ).toMatchObject({ state: "local", turnClaim: null });
       expect(reads).toHaveBeenCalledTimes(preloaded ? 0 : 1);
-      // Returned snapshots cannot mutate the next reader's facts.
-      claimed.placements.get(identity.sessionId)!.state = "requested";
+      // A committed replacement leaves the earlier snapshot intact.
+      expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      expect(Reflect.set(claimed.placements.get(identity.sessionId)!, "state", "requested")).toBe(
+        false,
+      );
       expect(
         (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId)
           ?.state,
@@ -220,7 +261,7 @@ describe("worker placement read cache", () => {
     },
   );
 
-  it("reuses preservation until a writer adds a non-local placement", async () => {
+  it("updates prepared preservation from non-local writer receipts", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-preservation-cache-"));
     const database = openOpenClawStateDatabase();
     const reader = createWorkerSessionPlacementStore({ database });
@@ -239,13 +280,15 @@ describe("worker placement read cache", () => {
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
     expect(unchanged.placements).toEqual([]);
-    unchanged.release();
     expect(reads).not.toHaveBeenCalled();
     const remote = await writer.startDispatch({
       sessionId: "remote",
       agentId: "main",
       sessionKey: "agent:main:remote",
     });
+    expect(unchanged.placements).toEqual([remote]);
+    unchanged.assertCurrent();
+    unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
     expect(changed.placements).toEqual([remote]);
     changed.assertCurrent();

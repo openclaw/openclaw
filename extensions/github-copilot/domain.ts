@@ -1,5 +1,3 @@
-// GitHub Copilot data-residency domain resolution.
-//
 // The allowlist and env/config precedence are provider policy. Deprecated SDK
 // facades keep their dated compatibility copy until its removal window closes.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -43,8 +41,7 @@ export function normalizeGithubCopilotOAuthScope(raw: string | undefined): strin
 }
 
 function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | undefined {
-  const params = config?.models?.providers?.["github-copilot"]?.params;
-  const value = params && typeof params === "object" ? params.githubDomain : undefined;
+  const value = config?.models?.providers?.["github-copilot"]?.params?.githubDomain;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 

@@ -30,6 +30,15 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{x|num}" }], { x: 128 })).toBe("128");
   });
 
+  it("num formats millions while preserving signed thousands rounding", () => {
+    expect(render([{ text: "{x|num}" }], { x: 1_000_000 })).toBe("1.0m");
+    expect(render([{ text: "{x|num}" }], { x: 1_048_576 })).toBe("1.0m");
+    expect(render([{ text: "{x|num}" }], { x: 2_000_000 })).toBe("2.0m");
+    expect(render([{ text: "{x|num}" }], { x: -1_500_000 })).toBe("-1.5m");
+    expect(render([{ text: "{x|num}" }], { x: -10_500 })).toBe("-10k");
+    expect(render([{ text: "{x|num}" }], { x: 999_950 })).toBe("1000k");
+  });
+
   it.each([{ value: true, expected: ["1", "1.00", "0m", "1%", "99"] }])(
     "preserves numeric verb coercion and formatting for $value",
     ({ value, expected }) => {

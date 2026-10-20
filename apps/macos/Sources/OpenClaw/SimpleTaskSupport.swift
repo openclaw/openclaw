@@ -34,13 +34,11 @@ enum SimpleTaskSupport {
         task: inout Task<Void, Never>?,
         delay: TimeInterval,
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
-        beforeOperationCheck: @escaping @Sendable () -> Void = {},
         operation: @escaping @MainActor @Sendable () async -> Void)
     {
         task?.cancel()
         task = Task {
             guard await self.waitForNextOperation(interval: delay, sleep: sleep) else { return }
-            beforeOperationCheck()
             guard !Task.isCancelled else { return }
             await operation()
         }

@@ -37,7 +37,7 @@ describe("Anthropic plugin manifest", () => {
     {
       id: "claude-sonnet-5-5",
       name: "Claude Sonnet 5.5",
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
       thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
     },
     {

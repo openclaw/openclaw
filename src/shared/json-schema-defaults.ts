@@ -4,7 +4,7 @@ import {
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
@@ -270,10 +270,6 @@ function resolveSchemaRef(
 ): LocalRefResolution {
   const localTarget = resolveLocalRef(resourceRoot, ref, baseId);
   return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref, baseId);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function visitSchemaChildren<T>(
@@ -691,8 +687,8 @@ function applyObjectApplicatorDefaults(
       currentResourceRoot,
       currentResourceBaseId,
     );
+  const maxIterations = countSchemaNodes(schema);
   const settlePropertiesAndDependencies = () => {
-    const maxIterations = countSchemaNodes(schema);
     for (let index = 0; index < maxIterations; index++) {
       const before = JSON.stringify(value);
       const properties = isRecord(schema.properties) ? schema.properties : {};
@@ -821,7 +817,7 @@ function applySchemaDefaults(
     }
   }
 
-  const composedSchemas = [...(Array.isArray(schema.allOf) ? schema.allOf : [])];
+  const composedSchemas = Array.isArray(schema.allOf) ? schema.allOf : [];
   for (const branch of composedSchemas) {
     nextValue = applyChild(branch, nextValue);
   }

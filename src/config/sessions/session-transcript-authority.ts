@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSessionRowAssistantMessage } from "../../gateway/session-row-transcript-preview.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
   hasSqliteCommitReceiptCoverage,
-  type SqliteCommitReceipt,
   type SqliteCommittedFact,
 } from "../../infra/sqlite-commit-receipt.js";
 import {
@@ -18,6 +18,7 @@ import {
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
 import { advanceSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import { isSessionTranscriptTerminalModel } from "../../sessions/transcript-terminal-model.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -25,26 +26,15 @@ import {
   readPreparedSessionEntryPublicationSource,
   preparedSharingChanges,
 } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
-
-/** Context postimage; exact anchor membership still belongs to the native projection reader. */
-export type SessionTranscriptAuthority = SessionTranscriptContextVersion & {
-  sessionId: string;
-  sessionKey: string;
-  leafEventId: string | null;
-  indexedSeq: number | null;
-  activeMessageCount: number | null;
-  needsRebuild: number | null;
-};
-export type SessionTranscriptAuthorityReceipt = SqliteCommitReceipt<
+import { prepareSessionActorTranscriptAuthority } from "./session-actor-transaction.js";
+import type {
   SessionTranscriptAuthority,
-  SessionEntryPublicationSource
->;
+  SessionTranscriptAuthorityReceipt,
+} from "./session-transcript-authority.types.js";
 
 const staged = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityStaged"),
-  () => new WeakMap<DatabaseSync, Map<string, SessionTranscriptAuthorityReceipt>>(),
+  () => new WeakMap<EngineConnection, Map<string, SessionTranscriptAuthorityReceipt>>(),
 );
 const prepared = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityChanges"),
@@ -136,9 +126,26 @@ export function publishSessionTranscriptAuthority(
   database: OpenClawAgentDatabase,
   context: SessionTranscriptAuthority,
 ): void {
+  let preparedContext = context;
+  if (context.lastAssistantMessage === "unchanged") {
+    const previous = staged
+      .get(database.db)
+      ?.get(context.sessionKey)
+      ?.facts.get(context.sessionKey);
+    // A turn can append several messages before its one committed receipt is published.
+    if (previous?.kind === "postimage" && previous.value.sessionId === context.sessionId) {
+      preparedContext = {
+        ...context,
+        lastAssistantMessage:
+          previous.value.lastAssistantMessage === undefined
+            ? "unknown"
+            : previous.value.lastAssistantMessage,
+      };
+    }
+  }
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
-    value: Object.freeze(context),
+    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, preparedContext)),
   });
 }
 
@@ -150,7 +157,7 @@ export function publishUnchangedSessionTranscriptAuthority(
   publishTranscriptFact(database, sessionKey, { kind: "unchanged" });
 }
 
-export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSync }) {
+export function readStagedSessionTranscriptAuthority(database: { db: EngineConnection }) {
   const records = staged.get(database.db);
   // Actor-held state stays with its actor; a symbolic owner cannot become a file receipt.
   const transferable = [...(records?.values() ?? [])].filter(
@@ -161,7 +168,7 @@ export function readStagedSessionTranscriptAuthority(database: { db: DatabaseSyn
 
 /** A following entry write consumes the transcript owner's staged watermark. */
 export function readStagedSessionTranscriptUpdatedAt(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   sessionId: string,
 ): number | undefined {
   let updatedAt: number | undefined;
@@ -200,8 +207,15 @@ export function publishUnchangedSessionTranscriptReceipts(
   ) {
     throw new Error("Transcript materialization changed its content authority receipt");
   }
+  publishCommittedSessionTranscriptReceipts(receipts);
+}
+
+/** The native settlement owner publishes these while it still holds the writer FIFO. */
+export function publishCommittedSessionTranscriptReceipts(
+  receipts: readonly SessionTranscriptAuthorityReceipt[] | undefined,
+): void {
   sessionChanges.emitBatch(
-    receipts.flatMap((receipt) =>
+    (receipts ?? []).flatMap((receipt) =>
       receiptChanges(receipt, undefined, receipt.source.canonicalPath ?? receipt.source.filename),
     ),
   );
@@ -245,7 +259,18 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.generation !== null && typeof row.generation !== "string") ||
       (row.leafEventId !== null && typeof row.leafEventId !== "string") ||
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
-      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1)
+      (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
+      (row.lastMessagePreview !== undefined &&
+        row.lastMessagePreview !== null &&
+        typeof row.lastMessagePreview !== "string") ||
+      (row.lastAssistantMessage !== undefined &&
+        row.lastAssistantMessage !== null &&
+        row.lastAssistantMessage !== "unknown" &&
+        row.lastAssistantMessage !== "unchanged" &&
+        !isSessionRowAssistantMessage(row.lastAssistantMessage)) ||
+      (row.terminalModel !== undefined &&
+        row.terminalModel !== null &&
+        !isSessionTranscriptTerminalModel(row.terminalModel))
     ) {
       return false;
     }

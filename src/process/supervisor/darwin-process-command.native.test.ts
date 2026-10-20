@@ -37,7 +37,7 @@ it.runIf(process.platform === "darwin")(
         }),
       ]);
       const translated = process.arch === "x64" && os.cpus()[0]?.model.includes("Apple");
-      const inspect = () => readDarwinProcessCommand(child.pid!, process.getuid?.());
+      const inspect = () => readDarwinProcessCommand(child.pid!, "same");
       if (translated) {
         expect(inspect).toThrow(/under Rosetta/);
       } else {
@@ -60,7 +60,7 @@ it.runIf(process.platform === "darwin")(
       (async () => {
         if (!process.versions.bun) { (await import(workerData.loader)).register(); }
         const { readDarwinProcessCommand } = await import(workerData.module);
-        try { parentPort.postMessage({ command: readDarwinProcessCommand(workerData.pid, workerData.uid) }); }
+        try { parentPort.postMessage({ command: readDarwinProcessCommand(workerData.pid, workerData.owner) }); }
         catch (error) { parentPort.postMessage({ error: error.message }); }
       })().catch(error => { throw error; });
     `,
@@ -71,7 +71,7 @@ it.runIf(process.platform === "darwin")(
             loader: import.meta.resolve("tsx/esm/api"),
             module: new URL("./darwin-process-command.ts", import.meta.url).href,
             pid: child.pid,
-            uid: process.getuid?.(),
+            owner: "same",
           },
         },
       );

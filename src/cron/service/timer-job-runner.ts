@@ -1,4 +1,6 @@
+import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
@@ -294,6 +296,8 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error",
       error,
+      interruptedByRestart:
+        resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "restart",
       // A timeout raised by this service-owned watchdog is authoritative even
       // when the interrupted main-session heartbeat has no model attribution.
       errorClassification,
@@ -408,7 +412,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
     watchdog?.start();
     const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     commandSettlement = job.payload.kind === "command" ? corePromise : undefined;
-    const runPromise = corePromise.then(async (result) => {
+    // Cancellation returns early, but the launch still owns the core's cleanup and delivery tail.
+    const runPromise = trackAsyncWork(async () => {
+      const result = await corePromise;
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(
         state,

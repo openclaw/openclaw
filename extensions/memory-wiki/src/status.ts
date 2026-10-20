@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
+import { parseWikiMarkdown } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 const STATUS_WARNING_FIXES = {
   "vault-missing": "Run `openclaw wiki init` to create the vault layout.",
@@ -33,12 +36,9 @@ export type MemoryWikiStatus = Awaited<ReturnType<typeof resolveMemoryWikiStatus
 
 export type MemoryWikiDoctorReport = ReturnType<typeof buildMemoryWikiDoctorReport>;
 
-type ResolveMemoryWikiStatusDeps = {
+type MemoryWikiStatusOptions = {
   appConfig?: OpenClawConfig;
   callerAgentId?: string;
-  pathExists?: (inputPath: string) => Promise<boolean>;
-  listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
-  resolveCommand?: (command: string) => Promise<string | null>;
 };
 
 function createEmptyVaultCounts() {
@@ -61,41 +61,43 @@ function createEmptyVaultCounts() {
 
 async function collectVaultCounts(vaultPath: string) {
   const { pageCounts, sourceCounts } = createEmptyVaultCounts();
-  const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
-  for (const dir of dirs) {
-    for (const relativePath of await listMemoryWikiPagePaths(vaultPath, dir)) {
-      const absolutePath = path.join(vaultPath, relativePath);
-      const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
-      if (raw === null) {
-        continue;
-      }
-      const page = toWikiPageSummary({
-        absolutePath,
-        relativePath,
-        raw,
-      });
-      if (!page) {
-        continue;
-      }
-      pageCounts[page.kind] += 1;
-      if (page.kind !== "source") {
-        continue;
-      }
-      if (page.sourceType === "memory-bridge-events") {
-        sourceCounts.bridgeEvents += 1;
-      } else if (page.sourceType === "memory-bridge") {
-        sourceCounts.bridge += 1;
-      } else if (
-        page.provenanceMode === "unsafe-local" ||
-        page.sourceType === "memory-unsafe-local"
-      ) {
-        sourceCounts.unsafeLocal += 1;
-      } else if (!page.sourceType) {
-        sourceCounts.native += 1;
-      } else {
-        sourceCounts.other += 1;
-      }
-    }
+  for (const { dir, kind } of WIKI_PAGE_GROUPS) {
+    await runTasksWithConcurrency({
+      tasks: (await listMemoryWikiPagePaths(vaultPath, dir)).map((relativePath) => async () => {
+        const raw = await fs.readFile(path.join(vaultPath, relativePath), "utf8").catch(() => null);
+        if (raw === null) {
+          return;
+        }
+        let frontmatter: Record<string, unknown>;
+        try {
+          frontmatter = parseWikiMarkdown(raw).frontmatter;
+        } catch {
+          return;
+        }
+        pageCounts[kind] += 1;
+        if (kind !== "source") {
+          return;
+        }
+        const sourceType = normalizeOptionalString(frontmatter.sourceType);
+        if (sourceType === "memory-bridge-events") {
+          sourceCounts.bridgeEvents += 1;
+        } else if (sourceType === "memory-bridge") {
+          sourceCounts.bridge += 1;
+        } else if (
+          normalizeOptionalString(frontmatter.provenanceMode) === "unsafe-local" ||
+          sourceType === "memory-unsafe-local"
+        ) {
+          sourceCounts.unsafeLocal += 1;
+        } else if (!sourceType) {
+          sourceCounts.native += 1;
+        } else {
+          sourceCounts.other += 1;
+        }
+      }),
+      limit: 16,
+      errorMode: "stop",
+      throwOnError: true,
+    });
   }
   return { pageCounts, sourceCounts };
 }
@@ -150,25 +152,24 @@ function buildWarnings(params: {
 
 export async function resolveMemoryWikiStatus(
   config: ResolvedMemoryWikiConfig,
-  deps?: ResolveMemoryWikiStatusDeps,
+  options?: MemoryWikiStatusOptions,
 ) {
   const agentId = resolveMemoryWikiVaultAgentId(config);
-  const exists = deps?.pathExists ?? pathExists;
-  const vaultExists = await exists(config.vault.path);
+  const vaultExists = await pathExists(config.vault.path);
   const bridgePublicArtifactCount =
-    deps?.appConfig &&
+    options?.appConfig &&
     config.vaultMode === "bridge" &&
     config.bridge.enabled &&
     config.bridge.readMemoryArtifacts
       ? filterMemoryWikiBridgeArtifacts({
           config,
-          callerAgentId: deps.callerAgentId,
-          artifacts: await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
-            cfg: deps.appConfig,
+          callerAgentId: options.callerAgentId,
+          artifacts: await listActiveMemoryPublicArtifacts({
+            cfg: options.appConfig,
           }),
         }).length
       : null;
-  const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
+  const obsidianProbe = await probeObsidianCli();
   const counts = vaultExists
     ? await collectVaultCounts(config.vault.path)
     : createEmptyVaultCounts();
@@ -225,7 +226,7 @@ export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
     `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
     `Render mode: ${status.renderMode}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,
-    `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${typeof status.bridgePublicArtifactCount === "number" ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
+    `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${status.bridgePublicArtifactCount !== null ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
     `Pages: ${status.pageCounts.source} sources, ${status.pageCounts.entity} entities, ${status.pageCounts.concept} concepts, ${status.pageCounts.synthesis} syntheses, ${status.pageCounts.report} reports`,
     `Source provenance: ${status.sourceCounts.native} native, ${status.sourceCounts.bridge} bridge, ${status.sourceCounts.bridgeEvents} bridge-events, ${status.sourceCounts.unsafeLocal} unsafe-local, ${status.sourceCounts.other} other`,

@@ -2,6 +2,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -103,6 +104,7 @@ describe("memory session directory ownership", () => {
       delete process.env.OPENCLAW_CONFIG_PATH;
       clearRuntimeConfigSnapshot();
       clearConfigCache();
+      await captureRuntimeConfigAsyncReader()();
 
       const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
       const storePath = path.join(sessionsDir, "sessions.json");

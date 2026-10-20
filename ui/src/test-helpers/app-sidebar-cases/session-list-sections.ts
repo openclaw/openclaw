@@ -9,7 +9,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
   it("paginates each expanded section independently", async () => {
@@ -84,7 +84,7 @@ describe("AppSidebar session section visibility", () => {
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
-    expect(toolbar?.querySelector('[aria-label="New conversation"]')).not.toBeNull();
+    expect(sidebar.querySelector('.sidebar-rail [aria-label="New conversation"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
@@ -153,7 +153,7 @@ describe("AppSidebar session section visibility", () => {
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
 
     sidebar.sessionOrganizer.draggingSessionKey = "agent:main:alpha";
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
   });
@@ -189,8 +189,17 @@ describe("AppSidebar session section visibility", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:alpha"]')).toBeNull();
 
     // Membership changes reveal and hide groups without changing the preference.
-    alpha.category = "Empty";
-    harness.publish({ groups: ["Empty", "Alpha"] });
+    const result = harness.sessions.state.result!;
+    harness.publishList({
+      result: {
+        ...result,
+        sessions: result.sessions.with(result.sessions.indexOf(alpha), {
+          ...alpha,
+          category: "Empty",
+        }),
+      },
+      groups: ["Empty", "Alpha"],
+    });
     await settleLitElement(sidebar);
     expect(groupNames()).toEqual(["category:Empty"]);
     await chooseEmptyGroups("never");

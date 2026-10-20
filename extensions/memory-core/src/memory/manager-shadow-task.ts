@@ -4,13 +4,10 @@ import type { DatabaseSync } from "node:sqlite";
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
-  // Checkpoint cadence belongs to each connection's WAL maintenance owner, not to publication policy.
+  // The opener owns connection policy; publication only restores temporary transaction settings.
   pragmas: {
     busy_timeout: number;
-    synchronous: number;
     foreign_keys: number;
-    journal_size_limit: number;
-    checkpoint_fullfsync: number;
   };
 };
 
@@ -50,9 +47,6 @@ export function readMemoryConnectionPragmas(db: DatabaseSync, errorMessage: stri
   };
   return {
     busy_timeout: read("busy_timeout"),
-    synchronous: read("synchronous"),
     foreign_keys: read("foreign_keys"),
-    journal_size_limit: read("journal_size_limit"),
-    checkpoint_fullfsync: read("checkpoint_fullfsync"),
   };
 }

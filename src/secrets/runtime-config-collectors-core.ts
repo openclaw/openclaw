@@ -1,5 +1,8 @@
 /** Collects core config secret refs during runtime preparation. */
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
@@ -7,7 +10,11 @@ import {
   resolveConfiguredTalkSpeechProviderId,
 } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import type {
+  GitHubToolIdentityConfig,
+  MediaUnderstandingModelConfig,
+} from "../config/types.tools.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
@@ -49,6 +56,32 @@ type ConfigCollectorParams = {
   context: ResolverContext;
 };
 
+function collectGitHubAppAssignments(params: ConfigCollectorParams): void {
+  const collect = createConfigSecretInputCollector(params);
+  const collectIdentity = (identity: GitHubToolIdentityConfig | undefined, prefix: string) => {
+    if (identity?.kind !== "app-installation") {
+      return;
+    }
+    collect(identity.app, "privateKey", `${prefix}.app.privateKey`, {
+      owner: {
+        ownerKind: "capability",
+        ownerId: prefix,
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: identity,
+      },
+    });
+  };
+  collectIdentity(params.config.tools?.github, "tools.github");
+  for (const { entry, source } of listAgentEntriesWithSource(params.config)) {
+    const prefix =
+      source.kind === "entries"
+        ? `${appendConfigPathSegment("agents.entries", source.key)}.tools.github`
+        : `agents.list[${source.index}].tools.github`;
+    collectIdentity(entry.tools?.github, prefix);
+  }
+}
+
 function collectModelOrSkillAssignments(params: {
   entries: Record<string, ProviderLike>;
   kind: "model" | "skill";
@@ -73,7 +106,15 @@ function collectModelOrSkillAssignments(params: {
         contract: entry,
       } satisfies SecretAssignmentOwner,
     };
-    collect(entry, "apiKey", `${entryPath}.apiKey`, activity);
+    const usesManagedLocalService =
+      isModel && params.context.managedSyntheticAuthProviders?.has(normalizeProviderId(id));
+    collect(entry, "apiKey", `${entryPath}.apiKey`, {
+      ...activity,
+      active: active && !usesManagedLocalService,
+      inactiveReason: usesManagedLocalService
+        ? "managed local services use provider-owned authentication."
+        : activity.inactiveReason,
+    });
     if (!isModel) {
       continue;
     }
@@ -448,8 +489,8 @@ export function collectCoreConfigAssignments(params: {
       "connection",
       "database.postgres.connection",
       {
-        active: database.engine === "postgres",
-        inactiveReason: "database.engine is not postgres.",
+        active: Object.values(resolveDatabaseFamilyEngines(params.config)).includes("postgres"),
+        inactiveReason: "No database family selects postgres.",
         owner: {
           ownerKind: "gateway",
           ownerId: "database",
@@ -481,6 +522,7 @@ export function collectCoreConfigAssignments(params: {
   }
 
   collectAgentMemorySearchAssignments(params);
+  collectGitHubAppAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
   collectAgentSandboxAssignments(params);

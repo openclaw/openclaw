@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "./health.js";
+import { pluginHealthError } from "./health.test-fixtures.js";
 import {
   buildStatusHealthRows,
   buildStatusHeartbeatValue,
@@ -8,13 +9,12 @@ import {
   buildStatusModelSelectionLines,
   buildStatusSecurityAuditLines,
 } from "./status.command-sections.js";
+import { baseStatusSession, createStatusHealth } from "./status.test-support.ts";
 
-const identity = String;
 beforeEach(() => {
-  vi.spyOn(theme, "success").mockImplementation(identity);
-  vi.spyOn(theme, "warn").mockImplementation(identity);
-  vi.spyOn(theme, "muted").mockImplementation(identity);
-  vi.spyOn(theme, "error").mockImplementation(identity);
+  for (const color of ["success", "warn", "muted", "error"] as const) {
+    vi.spyOn(theme, color).mockImplementation(String);
+  }
   vi.stubEnv("OPENCLAW_PROFILE", undefined);
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
 });
@@ -36,34 +36,8 @@ it("renders native provider health without legacy index counters", () => {
   expect(value).toBe("plugin records · degraded · warming");
 });
 
-const baseHealth: HealthSummary = {
-  ok: true,
-  ts: 0,
-  durationMs: 42,
-  channels: {},
-  channelOrder: [],
-  channelLabels: {},
-  heartbeatSeconds: 60,
-  defaultAgentId: "main",
-  agents: [],
-  sessions: { path: "sessions", count: 0, recent: [] },
-};
-const session = {
-  kind: "direct" as const,
-  updatedAt: 1,
-  age: 5000,
-  model: null,
-  totalTokens: null,
-  totalTokensFresh: false,
-  remainingTokens: null,
-  percentUsed: null,
-  contextTokens: null,
-  flags: [],
-};
 const healthRows = (health: Partial<HealthSummary>) =>
-  buildStatusHealthRows({
-    health: { ...baseHealth, ...health },
-  });
+  buildStatusHealthRows({ health: createStatusHealth(health) });
 
 it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
   const agent = {
@@ -116,36 +90,34 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
 });
 
 it("distinguishes pinned sessions from automatic fallbacks in a session report", () => {
-  const lines = buildStatusModelSelectionLines({
-    recent: [
-      {
-        ...session,
-        key: "pinned",
-        configuredModel: "zhipu/glm-4.5-air",
-        selectedModel: "deepseek/deepseek-v4-flash",
-        modelSelectionReason: "session override",
-      },
-      {
-        ...session,
-        key: "fallback",
-        configuredModel: "minimax/MiniMax-M3",
-        selectedModel: "ollama/qwen3.6-blue:35b-a3b",
-        modelSelectionReason: "fallback selected",
-      },
-    ],
-  });
-  expect(lines).toContain(
-    "Session pinned is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
+  const lines = buildStatusModelSelectionLines([
+    {
+      ...baseStatusSession,
+      key: "pinned",
+      configuredModel: "first/a",
+      selectedModel: "second/b",
+      modelSelectionReason: "session override",
+    },
+    {
+      ...baseStatusSession,
+      key: "fallback",
+      configuredModel: "third/c",
+      selectedModel: "fourth/d",
+      modelSelectionReason: "fallback selected",
+    },
+  ]);
+  expect(lines).toEqual(
+    expect.arrayContaining([
+      "Session pinned is pinned to second/b; config primary first/a will apply to new/unpinned sessions.",
+      "  Configured default: first/a",
+      "  Session selected: second/b",
+      "  Reason: session override",
+      "  Clear with: /model default",
+      "Session fallback is running fourth/d (auto fallback); config primary is third/c.",
+      "  Reason: fallback selected",
+      "  Action: check provider availability or retry with /model",
+    ]),
   );
-  expect(lines).toContain("  Configured default: zhipu/glm-4.5-air");
-  expect(lines).toContain("  Session selected: deepseek/deepseek-v4-flash");
-  expect(lines).toContain("  Reason: session override");
-  expect(lines).toContain("  Clear with: /model default");
-  expect(lines).toContain(
-    "Session fallback is running ollama/qwen3.6-blue:35b-a3b (auto fallback); config primary is minimax/MiniMax-M3.",
-  );
-  expect(lines).toContain("  Reason: fallback selected");
-  expect(lines).toContain("  Action: check provider availability or retry with /model");
 });
 
 it("classifies a mixed channel report through the real health formatter", () => {
@@ -189,13 +161,10 @@ it("marks colon-bearing plugin failures as warnings", () => {
     plugins: {
       loaded: ["broken:ok"],
       errors: [
-        {
-          id: "broken:ok",
-          origin: "workspace",
+        pluginHealthError("broken:ok", "service scheduler: address already in use", {
           activated: true,
           failurePhase: "service",
-          error: "service scheduler: address already in use",
-        },
+        }),
       ],
     },
   });
@@ -263,18 +232,12 @@ it("warns when deep health says the retained Node executable is gone", () => {
   const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
   vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
   vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
-  const rows = buildStatusHealthRows({
-    health: {
-      ...baseHealth,
-      durationMs: 42,
-      childRuntime: { execPath, available: false },
-    },
-  });
+  const rows = healthRows({ childRuntime: { execPath, available: false } });
 
   expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
   expect(rows[1]).toEqual({
     Item: "Gateway runtime",
     Status: "warn(WARN)",
-    Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    Detail: `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
   });
 });

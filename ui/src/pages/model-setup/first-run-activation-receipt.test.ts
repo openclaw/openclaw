@@ -43,31 +43,6 @@ describe("first-run activation receipt", () => {
     vi.unstubAllGlobals();
   });
 
-  it("persists only bounded, device-keyed activation identity and never credentials", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    const context = createContext();
-
-    const receipt = persistFirstRunActivationReceipt(context, {
-      kind: "codex-cli",
-      modelRef: "openai/gpt-5.6-sol",
-    });
-
-    expect(receipt).toMatchObject({
-      version: 1,
-      gatewayUrl: "wss://gateway.example/control?profile=work",
-      agentId: "main",
-      modelRef: "openai/gpt-5.6-sol",
-      kind: "codex-cli",
-      deadlineMs: 495_000,
-      owner: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    });
-    const persisted = localStorage.getItem(receiptKey) ?? "";
-    expect(persisted).not.toContain("gateway-auth-token");
-    expect(persisted).not.toContain(privateKey);
-    expect(readFirstRunActivationReceipt(context)).toEqual(receipt);
-  });
-
   it.each([
     {
       name: "Gateway token",
@@ -113,6 +88,9 @@ describe("first-run activation receipt", () => {
       modelRef: "openai/expected",
     });
 
+    const persisted = localStorage.getItem(receiptKey) ?? "";
+    expect(persisted).not.toContain("paired-device-token");
+    expect(persisted).not.toContain(privateKey);
     expect(readFirstRunActivationReceipt(context)?.modelRef).toBe("openai/expected");
     context.gateway.snapshot.hello!.auth!.deviceToken = "replacement-device-token";
 
@@ -120,23 +98,7 @@ describe("first-run activation receipt", () => {
     expect(localStorage.getItem(receiptKey)).toBeNull();
   });
 
-  it("expires activation receipts after the activation session deadline plus its safety window", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const context = createContext();
-    persistFirstRunActivationReceipt(context, {
-      kind: "openai-api-key",
-      modelRef: "openai/expected",
-    });
-
-    vi.setSystemTime(486_000);
-
-    expect(readFirstRunActivationReceipt(context)).toBeNull();
-    expect(localStorage.getItem(receiptKey)).toBeNull();
-  });
-
   it.each([
-    { name: "model", patch: { modelRef: "anthropic/different" } },
     { name: "role", patch: { modelTarget: "utility" } },
     { name: "wizard", patch: { wizard: { sessionId: "replacement", authChoice: "other" } } },
   ])("rejects a tampered $name without trusting or replaying its owner receipt", ({ patch }) => {

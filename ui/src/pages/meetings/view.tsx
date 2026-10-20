@@ -1,11 +1,9 @@
-import type WaTabGroup from "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createEffect } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { syncTabGroupLabel } from "../../components/web-awesome-tabs.ts";
-import "../../styles/hub-tabs.css";
 import { registerMeetingsEnglish } from "../../i18n/locales/en-meetings.ts";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -13,7 +11,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { liveValue } from "../../lib/solid-dom.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import { MeetingSummary } from "./meeting-summary.tsx";
 import {
@@ -54,10 +52,16 @@ function transcriptSourceLabel(source: TranscriptSessionSummary["source"]) {
     .join(" · ");
 }
 
-function ReadError(props: { error: unknown; retry: () => void }) {
+function ReadError(props: {
+  error: unknown;
+  retry: () => void;
+  onFocusTarget?: (element: HTMLElement) => (() => void) | undefined;
+}) {
+  let element!: HTMLDivElement;
+  onSettled(() => props.onFocusTarget?.(element));
   const forbidden = () => isArchiveAccessDeniedError(props.error);
   return (
-    <div class="transcripts-notice" role="alert" tabindex="-1">
+    <div ref={(node) => (element = node)} class="transcripts-notice" role="alert" tabindex="-1">
       <h2>{t(forbidden() ? "transcripts.forbidden" : "transcripts.loadError")}</h2>
       <p>{forbidden() ? t("transcripts.forbiddenHint") : formatUiError(props.error)}</p>
       <button class="btn" onClick={() => props.retry()}>
@@ -77,6 +81,8 @@ function Loading(props: { label: string }) {
 }
 
 function FilterField(props: TranscriptsViewProps & { name: string; label: string; type?: string }) {
+  let input!: HTMLInputElement;
+  onSettled(() => (props.name === "query" ? props.onFocusTarget?.("search", input) : undefined));
   return (
     <label class="field">
       <span>{props.label}</span>
@@ -85,7 +91,7 @@ function FilterField(props: TranscriptsViewProps & { name: string; label: string
         type={props.type ?? "search"}
         aria-label={props.label}
         maxlength={TRANSCRIPT_QUERY_LIMIT}
-        ref={liveValue(() => props.drafts[props.name] ?? "")}
+        ref={[liveValue(() => props.drafts[props.name] ?? ""), (element) => (input = element)]}
         onInput={(event) => props.onDraft(props.name, event.currentTarget.value)}
       />
     </label>
@@ -305,12 +311,17 @@ function Library(props: TranscriptsViewProps) {
   );
 }
 
-function Reader(props: TranscriptsViewProps) {
-  let tabGroup: WaTabGroup | undefined;
-  createEffect(
-    () => t("transcripts.reader"),
-    (label) => syncTabGroupLabel(tabGroup, label),
+function ReaderHeading(props: Pick<TranscriptsViewProps, "onFocusTarget"> & { title: string }) {
+  let heading!: HTMLHeadingElement;
+  onSettled(() => props.onFocusTarget?.("reader-title", heading));
+  return (
+    <h1 ref={(element) => (heading = element)} tabindex="-1">
+      {props.title}
+    </h1>
   );
+}
+
+function Reader(props: TranscriptsViewProps) {
   const params = () => new URLSearchParams(props.search);
   const transcriptPage = () => props.reader.pages.at(-1);
   const page = () => props.reader.summary ?? transcriptPage();
@@ -339,7 +350,11 @@ function Reader(props: TranscriptsViewProps) {
         {t("transcripts.back")}
       </a>
       {props.reader.error ? (
-        <ReadError error={props.reader.error} retry={props.onReaderRetry} />
+        <ReadError
+          error={props.reader.error}
+          retry={props.onReaderRetry}
+          onFocusTarget={(element) => props.onFocusTarget?.("reader-error", element)}
+        />
       ) : null}
       {props.reader.loading && !tabPage() ? (
         <Loading
@@ -353,7 +368,10 @@ function Reader(props: TranscriptsViewProps) {
       {page() ? (
         <>
           <header class="transcripts-reader__header">
-            <h1 tabindex="-1">{page()!.session.title || page()!.session.sessionId}</h1>
+            <ReaderHeading
+              title={page()!.session.title || page()!.session.sessionId}
+              onFocusTarget={props.onFocusTarget}
+            />
             <p class="transcripts-caption">
               {page()!.session.providerName || page()!.session.providerId} ·{" "}
               <time datetime={page()!.session.startedAt}>
@@ -423,44 +441,18 @@ function Reader(props: TranscriptsViewProps) {
               </p>
             ) : null}
           </header>
-          <wa-tab-group
-            ref={(element) => {
-              tabGroup = element;
-              syncTabGroupLabel(element, t("transcripts.reader"));
-            }}
-            class="hub-tabs hub-tabs--sub transcript-reader-hub-tabs"
-            aria-label={t("transcripts.reader")}
-            prop:active={props.readerTab}
-            activation="manual"
-            without-scroll-controls
-          >
-            <For each={["summary", "text"] as const} keyed={(tab) => tab}>
-              {(tab) => (
-                <wa-tab
-                  id={`transcript-reader-tab-${tab()}`}
-                  panel={tab()}
-                  aria-controls="transcript-reader-panel"
-                  class="hub-tab"
-                  prop:active={props.readerTab === tab()}
-                  prop:tabIndex={props.readerTab === tab() ? 0 : -1}
-                  aria-selected={props.readerTab === tab() ? "true" : "false"}
-                  onClick={(event) => {
-                    if (event.detail > 0 || event.isTrusted) {
-                      props.onReaderTab(tab());
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (!event.repeat && (event.key === "Enter" || event.key === " ")) {
-                      event.preventDefault();
-                      props.onReaderTab(tab());
-                    }
-                  }}
-                >
-                  {t(tab() === "summary" ? "transcripts.summary" : "transcripts.text")}
-                </wa-tab>
-              )}
-            </For>
-          </wa-tab-group>
+          <HubTabs<TranscriptsViewProps["readerTab"]>
+            id="transcript-reader"
+            active={props.readerTab}
+            tabs={[
+              { value: "summary", label: t("transcripts.summary") },
+              { value: "text", label: t("transcripts.text") },
+            ]}
+            ariaLabel={t("transcripts.reader")}
+            panelId="transcript-reader-panel"
+            variant="sub"
+            onSelect={(tab) => props.onReaderTab(tab)}
+          />
           <div
             id="transcript-reader-panel"
             role="tabpanel"

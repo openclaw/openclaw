@@ -61,9 +61,9 @@ function prepareExec() {
 async function audit(env: NodeJS.ProcessEnv, input: AuditWriterRequest) {
   const result = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
     type: "audit.writer.process",
-    input,
+    input: [input],
   });
-  expect(result).toEqual({ status: "settled" });
+  expect(result).toEqual([{ status: "settled" }]);
 }
 
 type Surface = "roster" | "profiles" | "approval binding" | "message progress" | "message binding";
@@ -112,6 +112,7 @@ async function useFeature(surface: Surface, env: NodeJS.ProcessEnv, id: string) 
     };
     await audit(env, {
       type: "record-event",
+      eventId: `admission-${surface}`,
       input:
         surface === "message progress"
           ? {

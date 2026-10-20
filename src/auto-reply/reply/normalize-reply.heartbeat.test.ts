@@ -3,6 +3,18 @@ import { setReplyPayloadMetadata, stripReplyPayloadResponsePrefix } from "../rep
 import { HEARTBEAT_TOKEN } from "../tokens.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 
+it("preserves truncated control-looking text and attached media", () => {
+  expect(normalizeReplyPayloadOutcome({ text: "NO_R \n" })).toEqual({
+    kind: "deliver",
+    payload: { text: "NO_R \n" },
+  });
+  const mediaUrl = "https://example.test/report.png";
+  expect(normalizeReplyPayloadOutcome({ text: "NO_R", mediaUrl })).toEqual({
+    kind: "deliver",
+    payload: { text: "NO_R", mediaUrl },
+  });
+});
+
 it.each([
   ["Plain answer", "Plain answer"],
   ["[bot] authored prefix", "[bot] authored prefix"],

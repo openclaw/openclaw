@@ -17,10 +17,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  getCanonicalGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
@@ -30,15 +27,19 @@ import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execu
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
 import { resolveAgentIdentity } from "../identity.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import {
+  resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
+} from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
-import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/subagent-depth.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
+  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
@@ -186,9 +187,8 @@ export async function maybeSpawnVisibleSession(params: {
     );
   }
 
-  const resolveGatewayContext =
-    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
-    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const { gatewayContextResolver: resolveGatewayContext, requester } =
+    captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
     return {
@@ -236,7 +236,7 @@ export async function maybeSpawnVisibleSession(params: {
         });
   assertActive();
   const requesterEntry = controllerTarget.store[controllerTarget.canonicalKey];
-  const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
+  const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterKey, {
     cfg,
     agentId: params.options?.requesterAgentIdOverride,
   });
@@ -269,6 +269,7 @@ export async function maybeSpawnVisibleSession(params: {
   const resolveAdmission = (pendingChildren = 0) =>
     resolveSpawnAdmission({
       cfg,
+      callerDepth,
       requesterSessionKey: requesterKey,
       requesterAgentId,
       targetAgentId,
@@ -302,7 +303,7 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({
+  const requesterRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg,
     sessionKey: requesterKey,
     agentId: requesterAgentId,
@@ -406,6 +407,7 @@ export async function maybeSpawnVisibleSession(params: {
             requesterSessionKey: requesterKey,
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
+            gitContributorProfileId: params.options?.gitContributorProfileId,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
@@ -547,8 +549,7 @@ export async function maybeSpawnVisibleSession(params: {
                     assertDispatchCurrent,
                     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
                   },
-                  undefined,
-                  resolveGatewayContext,
+                  { gatewayContextResolver: resolveGatewayContext, requester },
                 ),
               )
             ).response;

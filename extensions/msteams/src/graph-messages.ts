@@ -8,6 +8,7 @@ import {
 } from "./graph-thread.js";
 import {
   deleteGraphRequest,
+  fetchAllGraphPages,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
   mutateGraphJson,
@@ -71,9 +72,7 @@ export async function resolveGraphConversationId(
 export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
-  chatId?: string;
   teamId?: string;
-  channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
   const separatorIndex = cleaned.indexOf("/");
@@ -84,7 +83,6 @@ export function resolveConversationPath(to: string): {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
-      channelId,
     };
   }
   // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
@@ -95,7 +93,6 @@ export function resolveConversationPath(to: string): {
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
-    chatId: cleaned,
   };
 }
 
@@ -104,9 +101,11 @@ type MSTeamsMessageTarget = {
   accountId?: string | null;
   to: string;
   messageId: string;
+  /** Thread root of a channel reply; Graph addresses replies only beneath it. */
+  threadRootId?: string;
 };
 
-async function resolveGraphMessageContext(
+export async function resolveGraphMessageContext(
   params: Pick<MSTeamsMessageTarget, "cfg" | "accountId" | "to">,
   options?: { preferDelegated?: boolean },
 ) {
@@ -134,9 +133,19 @@ async function resolveGraphPinContext(
   return context;
 }
 
+function resolveMessagePath(
+  conv: ReturnType<typeof resolveConversationPath>,
+  params: Pick<MSTeamsMessageTarget, "messageId" | "threadRootId">,
+): string {
+  const messageId = encodeURIComponent(params.messageId);
+  return conv.kind === "channel" && params.threadRootId && params.threadRootId !== params.messageId
+    ? `${conv.basePath}/messages/${encodeURIComponent(params.threadRootId)}/replies/${messageId}`
+    : `${conv.basePath}/messages/${messageId}`;
+}
+
 export async function getMessageMSTeams(params: MSTeamsMessageTarget) {
-  const { token, basePath } = await resolveGraphMessageContext(params);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
+  const { token, ...conv } = await resolveGraphMessageContext(params);
+  const path = resolveMessagePath(conv, params);
   const msg = await fetchGraphJson<GraphMessage>({ token, path });
   return {
     id: msg.id ?? params.messageId,
@@ -191,39 +200,24 @@ const LIST_PINS_MAX_PAGES = 10;
 
 export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
-
-  const path = `${basePath}/pinnedMessages?$expand=message`;
-  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
-    [];
-
-  let res = await fetchGraphJson<GraphResponse<GraphPinnedMessage>>({ token, path });
-  let pages = 1;
-
-  while (true) {
-    for (const pin of res.value ?? []) {
-      allPins.push({
-        id: pin.id ?? "",
-        pinnedMessageId: pin.id ?? "",
-        messageId: pin.message?.id,
-        text: pin.message?.body?.content,
-      });
-    }
-
-    const nextLink = res["@odata.nextLink"];
-    if (!nextLink || pages >= LIST_PINS_MAX_PAGES) {
-      break;
-    }
-
-    res = await fetchGraphAbsoluteUrl<GraphResponse<GraphPinnedMessage>>({ token, url: nextLink });
-    pages++;
-  }
-
-  return { pins: allPins };
+  const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
+    token,
+    path: `${basePath}/pinnedMessages?$expand=message`,
+    maxPages: LIST_PINS_MAX_PAGES,
+  });
+  return {
+    pins: items.map((pin) => ({
+      id: pin.id ?? "",
+      pinnedMessageId: pin.id ?? "",
+      messageId: pin.message?.id,
+      text: pin.message?.body?.content,
+    })),
+  };
 }
 
 type GraphReaction = {
   reactionType?: string;
-  user?: { id?: string; displayName?: string };
+  user?: { user?: { id?: string; displayName?: string | null } | null } | null;
   createdDateTime?: string;
 };
 
@@ -239,7 +233,6 @@ type ReactionSummary = {
   reactionType: string;
   /** Display name for the reaction (matches reactionType for known types). */
   name: string;
-  /** Emoji representation when available. */
   emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;
@@ -252,10 +245,10 @@ async function mutateMessageReaction(
   operation: "setReaction" | "unsetReaction",
 ): Promise<{ ok: true }> {
   const reactionType = resolveMSTeamsReactionEmoji(params.reactionType);
-  const { token, basePath } = await resolveGraphMessageContext(params, { preferDelegated: true });
+  const { token, ...conv } = await resolveGraphMessageContext(params, { preferDelegated: true });
   await mutateGraphJson<unknown>({
     token,
-    path: `${basePath}/messages/${encodeURIComponent(params.messageId)}/${operation}`,
+    path: `${resolveMessagePath(conv, params)}/${operation}`,
     method: "POST",
     body: { reactionType },
     beta: true,
@@ -276,8 +269,8 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
  * Uses Graph v1.0 (reactions are included in the message resource).
  */
 export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
-  const { token, basePath } = await resolveGraphMessageContext(params);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
+  const { token, ...conv } = await resolveGraphMessageContext(params);
+  const path = resolveMessagePath(conv, params);
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
   const grouped = new Map<
@@ -293,10 +286,11 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
     // Count every reaction regardless of whether the user ID is present
     // (deleted accounts, guests, or anonymous users may lack a user ID)
     group.count++;
-    if (reaction.user?.id) {
+    const user = reaction.user?.user;
+    if (user?.id) {
       group.users.push({
-        id: reaction.user.id,
-        displayName: reaction.user.displayName,
+        id: user.id,
+        displayName: user.displayName ?? undefined,
       });
     }
   }

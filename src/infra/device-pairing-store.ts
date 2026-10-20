@@ -1,7 +1,6 @@
 // SQLite row mapping for device pairing and bootstrap-token snapshots.
 // The worker owns runtime mutations; native callers hold offline or boot custody.
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { resolvePairingSetupAccess } from "../shared/device-bootstrap-profile.js";
 import {
   ensureDevicePairSetupBootstrapSchema,
@@ -11,6 +10,7 @@ import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-h
 import type {
   DB as OpenClawStateKyselyDatabase,
   DeviceBootstrapTokens,
+  DevicePairingPaired,
 } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -19,7 +19,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { sha256Base64Url } from "./crypto-digest.js";
-import { clearDeviceAuthTokenFromDatabase } from "./device-auth-store.kernel.js";
 import { resolveDeviceBootstrapTokenExpiresAtMs } from "./device-bootstrap.worker-types.js";
 import { bindCloudWorkerSetupCompletion } from "./device-pairing-cloud-worker.js";
 import type { PairedDeviceMetadataPatch } from "./device-pairing-core.types.js";
@@ -52,6 +51,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -72,6 +72,7 @@ const DEVICE_BOOTSTRAP_TOKEN_COLUMNS_WITHOUT_SETUP = [
 
 type DevicePairingStoreMutation<T> = {
   mutated: boolean;
+  pairedChanged?: boolean;
   value: T;
 };
 
@@ -83,6 +84,7 @@ type PairedDeviceUpdate<T> = {
 const boundDatabase = new AsyncLocalStorage<{
   database: OpenClawStateDatabase;
   paired?: Record<string, PairedDevice>;
+  revision?: { value: string };
 }>();
 
 /** Keep nested domain kernels on the broker's admitted physical connection. */
@@ -90,11 +92,12 @@ export function withDevicePairingStoreDatabase<T>(
   database: OpenClawStateDatabase,
   operate: () => T,
   paired?: Record<string, PairedDevice>,
+  revision?: { value: string },
 ): T {
-  return boundDatabase.run({ database, paired }, operate);
+  return boundDatabase.run({ database, paired, revision }, operate);
 }
 
-function transactionPairedRecords(db: DatabaseSync): Record<string, PairedDevice> | undefined {
+function transactionPairedRecords(db: EngineConnection): Record<string, PairedDevice> | undefined {
   const bound = boundDatabase.getStore();
   return bound?.database.db === db ? bound.paired : undefined;
 }
@@ -117,11 +120,16 @@ function runDevicePairingStoreMutation<T>(
   return runOpenClawStateWriteTransaction(
     (transactionDatabase) => {
       const result = mutate(transactionDatabase);
+      if (result.pairedChanged) {
+        const revision = bumpDevicePairingStoreRevision(transactionDatabase.db);
+        const bound = boundDatabase.getStore();
+        if (bound?.database.db === transactionDatabase.db && bound.revision) {
+          bound.revision.value = revision;
+        }
+      }
       if (result.mutated) {
         // Transaction-local reads bypass the cache; only real commits invalidate it.
         stageSqliteTransactionState(transactionDatabase.db, {
-          stage: () => undefined,
-          rollback: () => undefined,
           commit: () => {
             invalidateDevicePairingStoreCache(transactionDatabase);
             invalidateDevicePairingNodeSnapshot(transactionDatabase.path);
@@ -134,7 +142,16 @@ function runDevicePairingStoreMutation<T>(
   );
 }
 
-export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): DevicePairingStoreState {
+export function readDevicePairingStoreStateFromDatabase(
+  db: EngineConnection,
+): DevicePairingStoreState {
+  return {
+    pendingById: readDevicePairingPendingRecordsFromDatabase(db),
+    pairedByDeviceId: readPairedDevicePairingRecordsFromDatabase(db),
+  };
+}
+
+function readDevicePairingPendingRecordsFromDatabase(db: EngineConnection) {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const pendingById: Record<string, DevicePairingPendingRecord> = {};
   for (const row of executeSqliteQuerySync(
@@ -143,11 +160,89 @@ export function readDevicePairingStoreStateFromDatabase(db: DatabaseSync): Devic
   ).rows) {
     pendingById[row.request_id] = fromPendingRow(row);
   }
-  return { pendingById, pairedByDeviceId: readPairedDevicePairingRecordsFromDatabase(db) };
+  return pendingById;
 }
 
-export function readPairedDevicePairingRecordsFromDatabase(
-  db: DatabaseSync,
+const DEVICE_PAIRING_REVISION_KEY = "devicePairing.revision";
+
+function devicePairingRevisionQuery(db: EngineConnection) {
+  return getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+    .selectFrom("config_machine_state")
+    .select("value_json")
+    .where("state_key", "=", DEVICE_PAIRING_REVISION_KEY);
+}
+
+/** The pairing owner advances this row atomically with its paired-device writes. */
+function bumpDevicePairingStoreRevision(db: EngineConnection): string {
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  return executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("config_machine_state")
+      .values({
+        state_key: DEVICE_PAIRING_REVISION_KEY,
+        value_json: "1",
+        updated_at_ms: Date.now(),
+      })
+      .onConflict((conflict) =>
+        conflict.column("state_key").doUpdateSet((eb) => ({
+          value_json: eb.cast<string>(
+            // A bound JavaScript number uses SQLite REAL arithmetic; keep integer text.
+            eb(eb.cast<number>("config_machine_state.value_json", "bigint"), "+", eb.lit(1)),
+            "text",
+          ),
+          updated_at_ms: eb.ref("excluded.updated_at_ms"),
+        })),
+      )
+      .returning("value_json"),
+  ).rows[0]!.value_json;
+}
+
+/** One statement keeps the selected rows and their revision in the same snapshot. */
+export function readPairedDevicePairingSnapshotFromDatabase(
+  db: EngineConnection,
+  deviceId?: string,
+) {
+  const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+  const revision = kysely
+    .selectNoFrom((eb) =>
+      eb.fn.coalesce(devicePairingRevisionQuery(db), eb.val("0")).as("pairing_revision"),
+    )
+    .as("revision");
+  const query = kysely
+    .selectFrom(revision)
+    .leftJoin("device_pairing_paired as paired", (join) =>
+      deviceId === undefined ? join.onTrue() : join.on("paired.device_id", "=", deviceId),
+    )
+    .selectAll("paired")
+    .select("revision.pairing_revision");
+  const rows = executeSqliteQuerySync(db, query).rows;
+  // The seeded revision survives missing devices; a matched primary key proves a complete row.
+  const paired = rows.filter(
+    (row): row is typeof row & DevicePairingPaired => row.device_id !== null,
+  );
+  return {
+    pairedByDeviceId: Object.fromEntries(paired.map((row) => [row.device_id, fromPairedRow(row)])),
+    revision: rows[0]!.pairing_revision,
+  };
+}
+
+export function readDevicePairingStoreSnapshotFromDatabase(
+  db: EngineConnection,
+  deviceId?: string,
+) {
+  const { pairedByDeviceId, revision } = readPairedDevicePairingSnapshotFromDatabase(db, deviceId);
+  return {
+    state: {
+      pairedByDeviceId,
+      pendingById: deviceId === undefined ? readDevicePairingPendingRecordsFromDatabase(db) : {},
+    },
+    revision,
+  };
+}
+
+function readPairedDevicePairingRecordsFromDatabase(
+  db: EngineConnection,
 ): Record<string, PairedDevice> {
   const paired = transactionPairedRecords(db);
   if (paired) {
@@ -164,9 +259,11 @@ export function readPairedDevicePairingRecordsFromDatabase(
 export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStoreState {
   const database = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
   return structuredClone(
-    readCachedDevicePairingStoreSnapshot(database.db, database.path, () =>
-      readDevicePairingStoreStateFromDatabase(database.db),
-    ).state,
+    database.db.isTransaction
+      ? readDevicePairingStoreStateFromDatabase(database.db)
+      : readCachedDevicePairingStoreSnapshot(database.db, database.path, () =>
+          readDevicePairingStoreSnapshotFromDatabase(database.db),
+        ).state,
   );
 }
 
@@ -238,7 +335,7 @@ export function updatePairedDeviceInTransaction<T>(
     if (paired && stored) {
       paired[normalizedDeviceId] = fromPairedRow({ ...stored, ...columns });
     }
-    return { mutated: true, value: result.value };
+    return { mutated: true, pairedChanged: true, value: result.value };
   });
 }
 
@@ -249,7 +346,6 @@ export function persistDevicePairingStoreState(
   target: "pending" | "paired" | "both",
   options?: {
     clearApnsNodeIds?: readonly string[];
-    retiredNodeToken?: { deviceId: string; expectedToken: string };
   },
 ): void {
   runDevicePairingStoreMutation(baseDir, ({ db }) => {
@@ -272,9 +368,6 @@ export function persistDevicePairingStoreState(
     for (const nodeId of new Set(options?.clearApnsNodeIds ?? [])) {
       clearApnsRegistrationFromDatabase(db, nodeId);
     }
-    if (options?.retiredNodeToken) {
-      clearDeviceAuthTokenFromDatabase(db, { ...options.retiredNodeToken, role: "node" });
-    }
     const paired = transactionPairedRecords(db);
     if (paired && pairedRows) {
       for (const deviceId of Object.keys(paired)) {
@@ -289,7 +382,7 @@ export function persistDevicePairingStoreState(
         });
       }
     }
-    return { mutated: true, value: undefined };
+    return { mutated: true, pairedChanged: target !== "pending", value: undefined };
   });
 }
 
@@ -301,7 +394,7 @@ export function loadDeviceBootstrapTokenRecords(
 }
 
 export function readDeviceBootstrapTokenRecordsFromDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): Record<string, DeviceBootstrapTokenRecord> {
   const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
   const state: Record<string, DeviceBootstrapTokenRecord> = {};
@@ -490,7 +583,7 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
 
 /** The host retains this deadline until a shared-state writer receipt changes. */
 export function readDevicePairSetupCompletionExpiryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): number | undefined {
   if (!tableExists(db, "device_pair_setup_completions")) {
     return undefined;
@@ -507,7 +600,7 @@ export function readDevicePairSetupCompletionExpiryInDatabase(
 
 /** The maintenance command owns the write transaction and its live admission. */
 export function pruneExpiredDevicePairSetupCompletionsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   nowMs: number,
 ): number {
   if (!tableExists(db, "device_pair_setup_completions")) {

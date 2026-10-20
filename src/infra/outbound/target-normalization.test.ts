@@ -10,9 +10,6 @@ import {
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
-
-let registryVersion = 0;
 
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
@@ -22,17 +19,9 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
 }));
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-    getActivePluginChannelRegistryVersionMock(...args),
-}));
-
 beforeEach(() => {
   getLoadedChannelPluginMock.mockReset();
   getChannelPluginMock.mockReset();
-  getActivePluginChannelRegistryVersionMock.mockReset();
-  // Isolate fixtures through the owner's registry-generation cache contract.
-  getActivePluginChannelRegistryVersionMock.mockReturnValue(++registryVersion);
 });
 
 describe("normalizeTargetForProvider", () => {

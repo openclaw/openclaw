@@ -1,10 +1,11 @@
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as diagnostics from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { readUserProfileIdentity } from "../../state/user-profile-list.js";
+import { readResidentUserProfileIdentity } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -44,6 +45,7 @@ async function request(
 
 it("prepares the startup requester without SQLite and observes a merge after history work", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const original = ensureProfileForEmail("original@example.test");
     const current = ensureProfileForEmail("current@example.test");
     await upsertSessionEntryCore(scope, { sessionId: "requester-history", updatedAt: 1 });
@@ -142,6 +144,7 @@ it("prepares the startup requester without SQLite and observes a merge after his
 
 it("preserves legacy email creation and failed identity synchronization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
     const existing = ensureProfileForEmail("legacy@example.test");
     await upsertSessionEntryCore(scope, { sessionId: "requester-history", updatedAt: 1 });
     const readChatStartupProjection = vi.fn<
@@ -184,7 +187,7 @@ it("preserves legacy email creation and failed identity synchronization", async 
         expect(observedId, kind).toBe(kind === "legacy email" ? existing.id : undefined);
       }
       expect(sync, kind).not.toHaveBeenCalled();
-      expect(readUserProfileIdentity("missing-profile"), kind).toBeUndefined();
+      expect(readResidentUserProfileIdentity("missing-profile"), kind).toBeUndefined();
     }
   });
 });

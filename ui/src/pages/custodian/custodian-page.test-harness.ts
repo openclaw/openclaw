@@ -1,5 +1,5 @@
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 import type {
   GatewayBrowserClient,
   GatewayEventFrame,
@@ -36,15 +36,24 @@ type ContextHarness = {
 };
 
 export function createContext(
-  request: ReturnType<typeof vi.fn>,
+  request: Mock,
   methods: string[] = ["openclaw.chat"],
   options: {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     channelsSnapshot?: ChannelsStatusSnapshot | null;
     gatewayCapabilities?: string[];
+    healthRequest?: typeof request;
   } = {},
 ): ContextHarness {
-  const client = { request } as unknown as GatewayBrowserClient;
+  let healthSnapshot: unknown = { channels: {} };
+  const client = {
+    request: (method: string, ...args: unknown[]) =>
+      method === "health"
+        ? (options.healthRequest?.(method, ...args) ?? Promise.resolve(healthSnapshot))
+        : method === "openclaw.chat.history" && !methods.includes(method)
+          ? Promise.resolve({ turns: [] })
+          : request(method, ...args),
+  } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -121,6 +130,11 @@ export function createContext(
   const routeListeners = new Set<() => void>();
   const context = {
     gateway,
+    runtimeConfig: {
+      state: { configSnapshot: null, configLoading: false, lastError: null },
+      ensureLoaded: vi.fn(async () => undefined),
+      subscribe: () => () => undefined,
+    },
     router: {
       getState: () => ({ location: { pathname: window.location.pathname } }),
       subscribe: (listener: () => void) => {
@@ -197,6 +211,9 @@ export function createContext(
       }
     },
     emitGatewayEvent: (event) => {
+      if (event.event === "health") {
+        healthSnapshot = event.payload;
+      }
       for (const listener of eventListeners) {
         listener(event as GatewayEventFrame);
       }

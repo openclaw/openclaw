@@ -34,7 +34,7 @@ const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
 const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
 // Locale catalogs are named Vite chunks loaded only after a language selection.
-// Base and config-hint chunks share one budget because they activate atomically.
+// Keep one combined cap for base and on-demand config hints in every locale.
 const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [
   {
     locale,
@@ -52,15 +52,16 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  startupJsRequests: 18,
-  // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
-  // Allow 3 above the maximum while catching the roughly 19-request facade regression.
-  routeBootJsRequests: 35,
-  // Solid transition (Peter, 2026-10-11): Lit and Solid styles coexist at boot; restore 1 after the Lit sweep.
-  startupCssRequests: 2,
-  // Solid transition allowance (Peter, 2026-10-11): Lit and Solid runtimes coexist until the Lit sweep.
-  // Restore to the pre-transition 374_285 cap (or lower) once Lit is removed; the Solid shell saves about 18 KB.
-  startupJsGzipBytes: 450_000,
+  // Schema runtime deferrals use 7/25/20 requests; retain two per path.
+  startupJsRequests: 9,
+  chatBootJsRequests: 27,
+  newBootJsRequests: 22,
+  // Page-owned English copy measures 1,435,673 B for Chat and 1,000,561 B
+  // for New Session. Retain at least 32 KiB of headroom for each route.
+  chatBootJsGzipBytes: 1_470_000,
+  newBootJsGzipBytes: 1_035_000,
+  startupCssRequests: 1,
+  startupJsGzipBytes: 325_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -305,12 +306,20 @@ export function evaluateControlUiPerformanceBudgets(
   ];
   if (metrics.routeBoot) {
     for (const route of ["chat", "new"] as const) {
-      checks.push([
-        `${route} boot JS requests`,
-        metrics.routeBoot[route].js.requests,
-        budgets.routeBootJsRequests,
-        "count",
-      ]);
+      checks.push(
+        [
+          `${route} boot JS requests`,
+          metrics.routeBoot[route].js.requests,
+          budgets[`${route}BootJsRequests`],
+          "count",
+        ],
+        [
+          `${route} boot JS gzip`,
+          metrics.routeBoot[route].js.gzipBytes,
+          budgets[`${route}BootJsGzipBytes`],
+          "bytes",
+        ],
+      );
     }
   }
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
@@ -451,7 +460,7 @@ export function formatControlUiPerformanceReport(
     for (const route of ["chat", "new"] as const) {
       const boot = metrics.routeBoot[route];
       lines.push(
-        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limit: ${formatRequestCount(budgets.routeBootJsRequests)})`,
+        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limits: ${formatRequestCount(budgets[`${route}BootJsRequests`])}, ${budgets[`${route}BootJsGzipBytes`]} B gzip)`,
         `  ${route} boot CSS: ${formatAssetSummary(boot.css)}`,
       );
       if (baseMetrics) {
@@ -502,6 +511,16 @@ export function formatControlUiPerformanceReport(
     lines.push(
       `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest pair: ${largestLocalePair.locale}, ${formatControlUiPerformanceBytes(largestLocalePairSummary.gzipBytes)} gzip; limits: 1 base + 1 config-hint asset per locale, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} combined; forbidden at startup)`,
     );
+    for (const group of localeGroups.toSorted((left, right) =>
+      left.locale.localeCompare(right.locale),
+    )) {
+      const baseBytes = summarizeAssets(group.base).gzipBytes;
+      const configHintBytes = summarizeAssets(group.configHints).gzipBytes;
+      const pairBytes = baseBytes + configHintBytes;
+      lines.push(
+        `    ${group.locale}: ${pairBytes} B gzip (base ${baseBytes} B + config hints ${configHintBytes} B; cap ${CONTROL_UI_LOCALE_GZIP_BYTES} B; headroom ${CONTROL_UI_LOCALE_GZIP_BYTES - pairBytes} B)`,
+      );
+    }
   }
   if (
     startupBudgetBaseline &&
@@ -712,10 +731,15 @@ function main(argv: string[] = process.argv.slice(2)): void {
   }
   if (!reportOnly) {
     const artifactContractMetrics = new Set([
+      "chat boot JS requests",
+      "new boot JS requests",
+      "chat boot JS gzip",
+      "new boot JS gzip",
       "isolated Mermaid JS assets",
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",
       "locale config-hint JS assets per locale",
+      "largest locale catalog pair JS gzip",
       "startup locale catalog JS assets",
     ]);
     const metricFiles: Record<string, string> = {

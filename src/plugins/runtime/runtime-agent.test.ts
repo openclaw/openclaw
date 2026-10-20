@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readWorkspaceStateSnapshot } from "../../agents/workspace-state-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { createGatewaySession } from "../../gateway/session-create-service.js";
@@ -11,10 +15,10 @@ import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeAgentWorkAdmissions,
-  interruptSessionWorkAdmissions,
-  isSessionLifecycleMutationActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  interruptSessionControllerEffects,
+  isSessionMutationActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
@@ -259,6 +263,7 @@ describe("plugin runtime session creation", () => {
 
   it("fences work admission until trusted initialization completes", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-fence" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-fence";
       const callbackStarted = createDeferred();
@@ -286,7 +291,7 @@ describe("plugin runtime session creation", () => {
         },
       });
       await callbackStarted.promise;
-      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
+      expect(isSessionMutationActive(storePath, [key])).toBe(true);
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toMatchObject({
@@ -312,7 +317,7 @@ describe("plugin runtime session creation", () => {
       const created = await creation;
       await work;
       expect(workRan).toBe(true);
-      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(false);
+      expect(isSessionMutationActive(storePath, [key])).toBe(false);
       expect(created.entry.pluginExtensions).toEqual({
         codex: { supervision: { modelLocked: true } },
       });
@@ -381,6 +386,7 @@ describe("plugin runtime session creation", () => {
 
   it("rejects creation while pre-existing session work is admitted", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-session-create-active" }, async () => {
+      setRuntimeConfigSnapshot({});
       const runtime = createRuntimeAgent();
       const key = "agent:main:dashboard:codex-binding-active";
       const workStarted = createDeferred();
@@ -636,6 +642,7 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-restart-admission" },
       async () => {
+        setRuntimeConfigSnapshot({});
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-restart-pending";
         const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
@@ -648,7 +655,7 @@ describe("plugin runtime session creation", () => {
             initializationPending: true,
           },
         });
-        expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(false);
+        expect(isSessionMutationActive(storePath, [key])).toBe(false);
         let workRan = false;
 
         await expect(
@@ -665,6 +672,7 @@ describe("plugin runtime session creation", () => {
     await withOpenClawTestState(
       { label: "plugin-runtime-session-create-rollback-race" },
       async () => {
+        setRuntimeConfigSnapshot({});
         const runtime = createRuntimeAgent();
         const key = "agent:main:dashboard:codex-binding-race";
         let sessionId: string | undefined;
@@ -728,7 +736,9 @@ describe("plugin runtime session work admission", () => {
   const sessionKey = "agent:main:voice:caller";
   const sessionId = "voice-session-id";
 
+  afterEach(clearRuntimeConfigSnapshot);
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     await createRuntimeAgent().session.upsertSessionEntry({
@@ -764,7 +774,7 @@ describe("plugin runtime session work admission", () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
+    const mutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -796,7 +806,7 @@ describe("plugin runtime session work admission", () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
+    const mutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -814,14 +824,20 @@ describe("plugin runtime session work admission", () => {
     await mutationStarted.promise;
 
     const snapshotRead = createDeferred();
-    const readEntry = sessionEntryRead.readSessionEntryReadOnlyInWorker;
+    const readEntry = sessionEntryRead.withSessionEntryReadOnlyInWorker;
     using captureRead = vi
-      .spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker")
-      .mockImplementationOnce(async (...args) => {
-        const entry = await readEntry(...args);
-        snapshotRead.resolve();
-        return entry;
-      });
+      .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce((input, assertCurrent, consume, ...rest) =>
+        readEntry(
+          input,
+          assertCurrent,
+          async (...result) => {
+            snapshotRead.resolve();
+            return consume(...result);
+          },
+          ...rest,
+        ),
+      );
     const run = vi.fn(async () => {});
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
     try {
@@ -850,7 +866,7 @@ describe("plugin runtime session work admission", () => {
     });
     await workStarted.promise;
 
-    await interruptSessionWorkAdmissions({
+    await interruptSessionControllerEffects({
       scope: storePath,
       identities: [sessionKey, sessionId],
     });

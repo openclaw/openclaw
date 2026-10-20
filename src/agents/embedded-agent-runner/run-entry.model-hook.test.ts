@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -34,6 +36,20 @@ it.each([
     locked: false,
   },
   {
+    name: "null",
+    fallbacksOverride: null as unknown as string[],
+    expected: ["local"],
+    succeeds: false,
+    locked: false,
+  },
+  {
+    name: "bare string",
+    fallbacksOverride: "fixture/local-backup" as unknown as string[],
+    expected: ["local"],
+    succeeds: false,
+    locked: false,
+  },
+  {
     name: "omitted",
     fallbacksOverride: undefined,
     expected: ["primary", "configured-backup"],
@@ -57,11 +73,16 @@ it.each([
         },
       },
     };
-    const hook = vi.fn(() => ({
-      providerOverride: "fixture",
-      modelOverride: "local",
-      fallbacksOverride: scenario.fallbacksOverride,
-    }));
+    setRuntimeConfigSnapshot(cfg);
+    const dispatchOrder: string[] = [];
+    const hook = vi.fn(() => {
+      dispatchOrder.push("hook");
+      return {
+        providerOverride: "fixture",
+        modelOverride: "local",
+        fallbacksOverride: scenario.fallbacksOverride,
+      };
+    });
     const registry = createEmptyPluginRegistry();
     registry.typedHooks.push({
       pluginId: "local-routing",
@@ -84,6 +105,14 @@ it.each([
       },
       modelResolve: {
         prompt: "Synthetic local-only request",
+        context: withClaimingHookAdmission(
+          {},
+          {
+            prepare: async () => {
+              dispatchOrder.push("adopt");
+            },
+          },
+        ),
         modelSelectionLocked: scenario.locked,
         awaitSessionDiffBaseline: () => {
           captureAwaited.resolve();
@@ -123,6 +152,7 @@ it.each([
     } else {
       await expect(result).rejects.toThrow("Synthetic local endpoint unavailable");
     }
+    expect(dispatchOrder).toEqual(scenario.locked ? [] : ["adopt", "hook"]);
     expect(attempts).toEqual(
       scenario.expected.map((model, index) => ({
         model,

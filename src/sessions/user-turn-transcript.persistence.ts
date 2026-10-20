@@ -13,10 +13,18 @@ import type {
   PersistUserTurnTranscriptParams,
   PersistedUserTurnMessage,
   UserTurnTranscriptPersistResult,
+  UserTurnTranscriptTarget,
+  UserTurnTranscriptTargetResolver,
 } from "./user-turn-transcript.types.js";
 
 export type CommittedUserTurnTranscript = TranscriptMessageAppendResult<PersistedUserTurnMessage> &
   Pick<UserTurnTranscriptPersistResult, "sessionEntry" | "sessionTurnMutationResult">;
+
+export async function resolveUserTurnTranscriptTarget(
+  target: UserTurnTranscriptTargetResolver,
+): Promise<UserTurnTranscriptTarget | undefined> {
+  return typeof target === "function" ? await target() : target;
+}
 
 export function admittedUserTurnResult(
   committed: CommittedUserTurnTranscript,

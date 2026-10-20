@@ -1,67 +1,89 @@
-import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
+import { mountOpenClawApp } from "./app/app-root.tsx";
 import "./styles.css";
+import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
+import { bindControlUiDocumentHead } from "./app/control-ui-document-head.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
-import "./app/app-host.ts";
+import { isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
-  scheduleStaleChunkReload,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
-import { kbdStyles } from "./components/kbd-styles.ts";
-
-type ViteImportMeta = ImportMeta & {
-  readonly env?: {
-    readonly PROD?: boolean;
-  };
-};
+import kbdStyles from "./components/kbd.css?inline";
 
 if (!unsupportedControlUiBrowser) {
-  const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
+  const themeColors: HTMLMetaElement[] = [];
+  for (const id of ["openclaw-theme-color-light", "openclaw-theme-color-dark"]) {
+    const meta = document.getElementById(id);
+    if (meta instanceof HTMLMetaElement) {
+      themeColors.push(meta);
+    }
+  }
+  const favicons: HTMLLinkElement[] = [];
+  for (const [id, asset] of [
+    ["openclaw-favicon-svg", "favicon.svg"],
+    ["openclaw-favicon-png", "favicon-32.png"],
+    ["openclaw-apple-touch-icon", "apple-touch-icon.png"],
+    ["openclaw-manifest", "manifest.webmanifest"],
+  ] as const) {
+    const link = document.getElementById(id);
+    if (link instanceof HTMLLinkElement) {
+      link.href = inferControlUiPublicAssetPath(asset);
+      if (link.rel === "icon") {
+        favicons.push(link);
+      }
+    }
+  }
+  bindControlUiDocumentHead({ themeColors, favicons });
+
+  const root = document.getElementsByTagName("openclaw-app").item(0);
+  if (root instanceof HTMLElement) {
+    mountOpenClawApp(root);
+  }
+  const isProd = import.meta.env.PROD;
   const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 
   // Share the exact keyboard-hint rules with shadow roots without making renderers
   // depend on bundler-only CSS imports (they are also imported by Node consumers).
   const keyboardHintStyles = document.createElement("style");
-  keyboardHintStyles.textContent = kbdStyles.cssText;
+  keyboardHintStyles.textContent = kbdStyles;
   document.head.append(keyboardHintStyles);
 
-  for (const [selector, asset] of [
-    ['link[rel="icon"][type="image/svg+xml"]', "favicon.svg"],
-    ['link[rel="icon"][type="image/png"]', "favicon-32.png"],
-    ['link[rel="apple-touch-icon"]', "apple-touch-icon.png"],
-    ['link[rel="manifest"]', "manifest.webmanifest"],
-  ] as const) {
-    const link = document.querySelector<HTMLLinkElement>(selector);
-    if (link) {
-      link.href = inferControlUiPublicAssetPath(asset);
-    }
-  }
   installStaleChunkReloadListener();
   installMissingStylesheetRecovery();
 
-  if (isProd && "serviceWorker" in navigator) {
+  if (isRemoteControlUiIngress() && window.parent !== window) {
+    void import("./app/native-gateways.runtime.ts")
+      .then(({ nativeGatewaysCapability }) => nativeGatewaysCapability())
+      .catch((error: unknown) => {
+        console.warn("OpenClaw embedder Gateway switcher failed to load.", error);
+      });
+  }
+
+  if (isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
     const swUrl = new URL(inferControlUiPublicAssetPath("sw.js"), window.location.origin);
     swUrl.searchParams.set("v", currentControlUiBuildId);
     if (document.documentElement.dataset.openclawProxySessionEntry === "true") {
       swUrl.searchParams.set("session-entry", "1");
     }
-    navigator.serviceWorker.addEventListener("message", (event) => {
-      if (controlUiWorkerActivationRetires(event.data)) {
-        void scheduleStaleChunkReload({
-          canReload: () => event.source === navigator.serviceWorker.controller,
-        });
-      }
-      if (event.data?.type === "sw-version-probe") {
-        event.ports[0]?.postMessage({ version: currentControlUiBuildId });
-      }
-    });
     const refresh = () =>
       import("./app/sw-refresh.runtime.ts")
         .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
         .catch((error: unknown) => {
           console.warn("OpenClaw service worker refresh failed.", error);
         });
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (
+        event.source === navigator.serviceWorker.controller &&
+        controlUiWorkerActivationRetires(event.data)
+      ) {
+        // A fresh document can still be controlled by the preceding build.
+        void refresh();
+      }
+      if (event.data?.type === "sw-version-probe") {
+        event.ports[0]?.postMessage({ version: currentControlUiBuildId });
+      }
+    });
     navigator.serviceWorker.addEventListener("controllerchange", () => void refresh());
     void navigator.serviceWorker
       .register(swUrl, { updateViaCache: "none" })
@@ -69,7 +91,7 @@ if (!unsupportedControlUiBrowser) {
       .catch((error: unknown) => {
         console.warn("OpenClaw service worker registration failed.", error);
       });
-  } else if (!isProd && "serviceWorker" in navigator) {
+  } else if (!isProd && !isRemoteControlUiIngress() && "serviceWorker" in navigator) {
     // Unregister any leftover dev SW to avoid stale cache issues.
     void navigator.serviceWorker.getRegistrations().then((registrations) => {
       for (const r of registrations) {

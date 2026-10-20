@@ -20,6 +20,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { takeAuthProfileAuthorizationWriteIntents } from "./authorization-lifetime.js";
 import {
   AUTH_STORE_VERSION,
   authProfilesLog,
@@ -63,16 +64,20 @@ import {
 } from "./sqlite.js";
 import type { SaveAuthProfileStoreOptions } from "./store-save.js";
 import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
-import type {
-  AuthStoreUpdatePrepared,
-  AuthStoreUpdateCommitted,
-  AuthStoreUpdateResponse,
-} from "./store-update-kernel.js";
-import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
+import {
+  createAuthProfileStoreUpdatePublication,
+  publishAuthProfileStoreUpdate,
+} from "./store-update-publication.js";
 import {
   sendAuthProfileUpdateValue,
   receiveAuthProfileUpdateValue,
 } from "./store-update-transfer.js";
+import type {
+  AuthStoreUpdatePrepared,
+  AuthStoreUpdateCommitted,
+  AuthStoreUpdateResponse,
+  AuthStoreUpdateResponseWire,
+} from "./store-update.worker.js";
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
 import type { AuthProfileStore, PreparedAuthProfileStoreOwner } from "./types.js";
 import { reserveAuthProfileUsagePreparation, runAuthProfileUsage } from "./usage-lifecycle.js";
@@ -100,6 +105,25 @@ type AuthProfileStoreUpdate = {
     committedIsCurrent: () => boolean,
   ) => Promise<void>;
 };
+
+export function createAuthProfileStoreUpdatePublisher(
+  failureMessage?: string,
+): AuthProfileStoreUpdate["publish"] {
+  return async (committed, owner, ...publication) => {
+    if (!committed) {
+      return;
+    }
+    try {
+      await publishAuthProfileStoreUpdate(owner, committed, ...publication);
+    } catch (error) {
+      if (!failureMessage) {
+        throw error;
+      }
+      invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
+      reportCommittedInlineAuthFailure(failureMessage, error);
+    }
+  };
+}
 
 export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promise<void> {
   const env = prepareAuthProfileWriteEnvironment(params.options);
@@ -272,7 +296,18 @@ async function runPreparedAuthProfileStoreUpdate(
       if (params.envOnly && response.save) {
         captureSharedSource();
       }
-      sendAuthProfileUpdateValue(exchangePort, response);
+      sendAuthProfileUpdateValue(
+        exchangePort,
+        response.save
+          ? ({
+              ...response,
+              authorizationIntents:
+                "store" in response
+                  ? takeAuthProfileAuthorizationWriteIntents(response.store.profiles)
+                  : [],
+            } satisfies AuthStoreUpdateResponseWire)
+          : response,
+      );
       return true;
     };
     const collectCommitted = () => {
@@ -285,7 +320,14 @@ async function runPreparedAuthProfileStoreUpdate(
           | undefined;
         committed = received;
       }
+      return committed;
     };
+    const withCredentialPublication = createAuthProfileStoreUpdatePublication({
+      databasePath: owner.databasePath,
+      collectCommitted,
+      committedIsCurrent: () => committedIsCurrent(),
+      assertCurrent: () => assertAuthority(),
+    });
     const input = {
       owner: {
         databasePath: owner.databasePath,
@@ -318,7 +360,7 @@ async function runPreparedAuthProfileStoreUpdate(
         },
         {
           assertCurrent: assertOwner,
-          createAdmission: () => {
+          createAdmission: withCredentialPublication((collect) => () => {
             let phase: "waiting" | "transaction" | "commit" = "waiting";
             return {
               nativeLocations: [owner.databasePath],
@@ -328,7 +370,7 @@ async function runPreparedAuthProfileStoreUpdate(
                   assertRequest();
                   phase = "transaction";
                 } else if (phase === "transaction" && request.stage === "commit") {
-                  collectCommitted();
+                  collect();
                   assertRequest();
                   phase = "commit";
                 } else {
@@ -340,7 +382,7 @@ async function runPreparedAuthProfileStoreUpdate(
                 commitGranted ||= request.stage === "commit";
               }),
             };
-          },
+          }),
         },
       );
     }
@@ -353,7 +395,7 @@ async function runPreparedAuthProfileStoreUpdate(
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent,
       createAdmission(binding) {
-        return () => {
+        return withCredentialPublication((collect) => () => {
           let transactionFacts: unknown;
           return {
             nativeLocations: binding.nativeLocations,
@@ -379,7 +421,7 @@ async function runPreparedAuthProfileStoreUpdate(
                 binding.authorize(request);
               }
               if (request.stage === "commit") {
-                collectCommitted();
+                collect();
               }
               assertRequest();
               if (!grant()) {
@@ -388,7 +430,7 @@ async function runPreparedAuthProfileStoreUpdate(
               commitGranted ||= request.stage === "commit";
             }, binding.attachment),
           };
-        };
+        });
       },
     };
     let outcome: Result<void, unknown>;
@@ -611,25 +653,9 @@ export function createAuthProfileStoreUpdater(
             },
           };
         },
-        async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-          if (committed) {
-            try {
-              await publishAuthProfileStoreUpdate(
-                owner,
-                committed,
-                assertCurrent,
-                nativeCommits,
-                committedIsCurrent,
-              );
-            } catch (error) {
-              invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
-              reportCommittedInlineAuthFailure(
-                "Auth store committed before publication failed",
-                error,
-              );
-            }
-          }
-        },
+        publish: createAuthProfileStoreUpdatePublisher(
+          "Auth store committed before publication failed",
+        ),
       });
       return loadedStore!;
     } catch (error) {

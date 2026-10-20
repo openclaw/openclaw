@@ -17,7 +17,6 @@ import {
   resolveMatrixQaScenarioRoomId,
 } from "./scenario-contract.js";
 import {
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   createMatrixQaDriverScenarioClient,
   createMatrixQaScenarioClient,
@@ -458,14 +457,6 @@ async function runApprovalReactionScenario(params: {
     decision: params.decision,
     result,
   });
-  if (kind === "exec") {
-    advanceMatrixQaActorCursor({
-      actorId: "driver",
-      syncState: params.context.syncState,
-      nextSince: approval.since,
-      startSince,
-    });
-  }
   return {
     artifacts: {
       approval: buildMatrixApprovalArtifact(approval.event),
@@ -520,7 +511,7 @@ export async function runApprovalDenyReactionScenario(context: MatrixQaScenarioC
 }
 
 export async function runApprovalThreadTargetScenario(context: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const { client } = await primeMatrixQaDriverScenarioClient(context);
   const token = buildMatrixQaToken("MATRIX_QA_APPROVAL_THREAD_ROOT");
   const rootEventId = await client.sendTextMessage({
     body: `Matrix approval thread root ${token}`,
@@ -531,11 +522,6 @@ export async function runApprovalThreadTargetScenario(context: MatrixQaScenarioC
     decision: "allow-once",
     threadRootEventId: rootEventId,
     tokenPrefix: "MATRIX_QA_APPROVAL_THREAD",
-  });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    startSince,
   });
   return {
     artifacts: {

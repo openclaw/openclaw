@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { worktreeRegistryPublication } from "./registry-publication.js";
 import { assertWorktreeRegistryPredicates } from "./registry-run-end.worker.js";
@@ -17,7 +17,7 @@ export type WorktreeRunLeaseRowInput = {
 };
 
 export function admitWorktreeRunLeaseInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: WorktreeRunLeaseRowInput,
 ): void {
   if (params.observed) {
@@ -25,18 +25,7 @@ export function admitWorktreeRunLeaseInDatabase(
   }
   const k = getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
   const scope = worktreeRunLeaseScope(params.worktreeId);
-  const record = executeSqliteQuerySync(
-    db,
-    k.selectFrom("worktrees").select(["path", "removed_at"]).where("id", "=", params.worktreeId),
-  ).rows[0];
-  const worktreePath = record?.path ?? params.worktreeId;
-  if (!record || record.removed_at != null) {
-    throw new Error(`managed worktree was removed: ${worktreePath}`);
-  }
-  const { removingToken, liveCount, exclusive } = collectLiveRunLeases(db, k, scope);
-  if (removingToken !== undefined) {
-    throw new Error(`managed worktree was removed: ${worktreePath}`);
-  }
+  const { liveCount, exclusive } = readCurrentWorktreeRunState(db, params.worktreeId);
   if (exclusive || (params.exclusive && liveCount > 0)) {
     throw new Error("The worktree is in use; wait for its current run or publication to finish.");
   }
@@ -63,8 +52,38 @@ export function admitWorktreeRunLeaseInDatabase(
   worktreeRegistryPublication.rows(db, inserted);
 }
 
+/** Persistent writers recheck the existing removal/publication fence without a perpetual run lease. */
+export function assertWorktreePersistentExecutionCurrentInDatabase(
+  db: EngineConnection,
+  worktreeId: string,
+): void {
+  if (readCurrentWorktreeRunState(db, worktreeId).exclusive) {
+    throw new Error(
+      "The worktree has an exclusive publication owner; persistent execution must stop.",
+    );
+  }
+}
+
+function readCurrentWorktreeRunState(db: EngineConnection, worktreeId: string) {
+  const k = getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
+  const record = executeSqliteQuerySync(
+    db,
+    k.selectFrom("worktrees").select(["path", "removed_at"]).where("id", "=", worktreeId),
+  ).rows[0];
+  const worktreePath = record?.path ?? worktreeId;
+  if (!record || record.removed_at != null) {
+    throw new Error(`managed worktree was removed: ${worktreePath}`);
+  }
+  const state = collectLiveRunLeases(db, k, worktreeRunLeaseScope(worktreeId));
+  const { removingToken } = state;
+  if (removingToken !== undefined) {
+    throw new Error(`managed worktree was removed: ${worktreePath}`);
+  }
+  return state;
+}
+
 export function releaseWorktreeRunLeaseInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   worktreeId: string,
   token: string,
 ): void {

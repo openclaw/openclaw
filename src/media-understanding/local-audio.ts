@@ -10,7 +10,6 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
   command: string;
-  resolvedCommand?: string;
   available: boolean;
   ready: boolean;
   capableBackend?: "cuda" | "metal" | "mlx";
@@ -29,11 +28,11 @@ type LocalAudioSelection = {
 };
 
 type InspectionOptions = {
+  language?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   arch?: string;
   resolveBinary?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
-  resolveRealpath?: (filePath: string) => Promise<string>;
   inspectLinkedLibraries?: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
   listDirectory?: (dirPath: string) => Promise<string[]>;
 };
@@ -182,7 +181,6 @@ async function inspectWhisperBackend(params: {
   command: string;
   platform: NodeJS.Platform;
   arch: string;
-  realpath: (filePath: string) => Promise<string>;
   libraries: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
 }): Promise<Pick<LocalAudioCandidate, "capableBackend" | "evidence">> {
   const libraries = await params.libraries(params.command, params.platform);
@@ -193,7 +191,7 @@ async function inspectWhisperBackend(params: {
     };
   }
   if (params.platform === "darwin" && params.arch === "arm64") {
-    const realCommand = await params.realpath(params.command).catch(() => params.command);
+    const realCommand = await fs.realpath(params.command).catch(() => params.command);
     if (
       /(?:ggml[-_]?metal|Metal\.framework)/i.test(libraries ?? "") ||
       /\/Cellar\/whisper-cpp\/[^/]+\/bin\/whisper-cli$/.test(realCommand)
@@ -256,7 +254,6 @@ export async function inspectLocalAudioSelection(
         command: whisperCommand,
         platform,
         arch,
-        realpath: options.resolveRealpath ?? fs.realpath,
         libraries: options.inspectLinkedLibraries ?? inspectLinkedLibraries,
       })
     : {
@@ -309,6 +306,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
+    ...(options.language ? ["--language", "{{Language}}"] : []),
     "{{AttachmentPath}}",
   ];
 
@@ -357,15 +355,13 @@ export async function inspectLocalAudioSelection(
       reason: undefined,
       args: pythonArgs,
     },
-  ].map(({ args, reason, ...candidate }) =>
+  ].map(({ args, reason, resolvedCommand, ...candidate }) =>
     Object.assign(candidate, {
       command: candidate.id,
-      available: Boolean(candidate.resolvedCommand),
+      available: Boolean(resolvedCommand),
       selected: false,
-      reason: candidate.resolvedCommand ? reason : "command not found",
-      entry: candidate.ready
-        ? { type: "cli", command: candidate.resolvedCommand, args }
-        : undefined,
+      reason: resolvedCommand ? reason : "command not found",
+      entry: candidate.ready ? { type: "cli", command: resolvedCommand, args } : undefined,
     } satisfies Partial<LocalAudioCandidate>),
   );
   candidates.sort((left, right) => rank(left) - rank(right));

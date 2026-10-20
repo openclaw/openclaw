@@ -112,7 +112,7 @@ export function registerOpenAiHttpUploadTests({
         }
         publishUploads(false);
         await options.assertSourceCurrent();
-        return { payloads: [], meta: { durationMs: 0 } };
+        return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
       });
       const res = await postChatCompletions(getPort(), {
         model: "openclaw",
@@ -295,7 +295,7 @@ export function registerOpenResponsesHttpUploadTests({
         }
         publishUploads(false);
         await options.assertSourceCurrent();
-        return { payloads: [], meta: { durationMs: 0 } };
+        return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
       });
       const res = await postResponses(getPort(), {
         model: "openclaw",

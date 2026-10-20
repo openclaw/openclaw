@@ -6,6 +6,68 @@ import {
 } from "./prepared-model-runtime.configured.js";
 
 describe("configured runtime provider discovery", () => {
+  it.each(["fixture/decision", "fixture/decision@fixture:key"])(
+    "prepares configured Decision identity without a chat selection (%s)",
+    (decisionModel) => {
+      const config: OpenClawConfig = { agents: { defaults: { decisionModel } } };
+      const refs = collectPreparedModelRuntimeConfiguredRefs(config, "worker");
+      expect(refs).toEqual([
+        {
+          path: "agents.defaults.decisionModel",
+          value: "fixture/decision",
+          kind: "selector",
+          capability: "decision",
+        },
+      ]);
+      expect(collectPreparedModelRuntimeProviderIds(config, {}, false, refs)).toEqual(["fixture"]);
+      expect(config.agents?.defaults?.decisionModel).toBe(decisionModel);
+    },
+  );
+
+  it("strips only the Decision credential suffix from scoped agent refs", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          worker: {
+            decisionModel: "fixture/decision@20261018@iq4_xs@fixture:key",
+            models: { "fixture/literal@variant": {} },
+          },
+          other: { decisionModel: "other/model" },
+        },
+      },
+      channels: { modelByChannel: { fixture: { decisionModel: "fixture/channel@profile" } } },
+    };
+    expect(
+      collectPreparedModelRuntimeConfiguredRefs(config, "worker").map(({ value }) => value),
+    ).toEqual([
+      "fixture/decision@20261018@iq4_xs",
+      "fixture/literal@variant",
+      "fixture/channel@profile",
+    ]);
+  });
+
+  it.each(["decisionModel", "model"] as const)(
+    "includes a provider's configured chat harness only for chat selection (%s)",
+    (field) => {
+      const config: OpenClawConfig = {
+        agents: { defaults: { [field]: "fixture/model" } },
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid/v1",
+              models: [],
+              agentRuntime: { id: "fixture-harness" },
+            },
+          },
+        },
+      };
+      const refs = collectPreparedModelRuntimeConfiguredRefs(config, "worker");
+      expect(collectPreparedModelRuntimeProviderIds(config, {}, false, refs)).toEqual(
+        field === "decisionModel" ? ["fixture"] : ["fixture", "fixture-harness"],
+      );
+    },
+  );
+
   it("includes literal session selections in provider preparation", () => {
     const agentId = "worker";
     const config: OpenClawConfig = {

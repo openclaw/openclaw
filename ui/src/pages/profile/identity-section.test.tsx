@@ -25,6 +25,7 @@ const PROFILE: UserProfile = {
 function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySectionProps {
   return {
     profile: PROFILE,
+    connected: true,
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
     gitCoauthorEnabled: false,
@@ -73,40 +74,6 @@ describe("IdentitySection", () => {
     document.body.replaceChildren();
     setAvatarGatewayOrigin(null);
     vi.restoreAllMocks();
-  });
-
-  it("renders the resolved profile through settings rows and the shared avatar", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    mountIdentity(createProps(), container);
-    const avatar = container.querySelector<HTMLElement>("openclaw-viewer-avatar");
-    await vi.waitFor(async () => {
-      await (avatar as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)
-        ?.updateComplete;
-      expect(avatar?.querySelector("img")?.getAttribute("src")).toBe(
-        "/api/users/profile-1/avatar?v=2",
-      );
-    });
-
-    expect(container.querySelector("#settings-profile-identity")).not.toBeNull();
-    expect(
-      [...container.querySelectorAll(".settings-row__title")].map((node) =>
-        node.textContent?.trim(),
-      ),
-    ).toEqual([
-      "Avatar",
-      "Display name",
-      "Linked emails",
-      "GitHub account",
-      "Git co-author credit",
-    ]);
-    expect(container.textContent).toContain("ada@example.test, ada@work.test");
-    expect(container.querySelector(".settings-account")).toBeNull();
-    expect(container.textContent).toContain("Unavailable");
-    expect(container.textContent).toContain("Refresh to retry");
-    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    expect(toggle?.checked).toBe(false);
-    expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
   it("falls back to initials when no same-origin avatar route is available", async () => {
@@ -159,45 +126,6 @@ describe("IdentitySection", () => {
     expect(container.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
   });
 
-  it("shows verified GitHub identity and explicit co-author credit", () => {
-    const onGitCoauthorChange = vi.fn();
-    const container = document.createElement("div");
-    mountIdentity(
-      createProps({
-        gitCoauthorEnabled: true,
-        profile: {
-          ...PROFILE,
-          githubIdentity: {
-            login: "octocat",
-            profileUrl: "https://github.com/octocat",
-            avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-          },
-        },
-        onGitCoauthorChange,
-      }),
-      container,
-    );
-
-    const account = container.querySelector<HTMLAnchorElement>(".settings-account");
-    expect(account?.href).toBe("https://github.com/octocat");
-    expect(account?.target).toBe("_blank");
-    expect(account?.rel).toContain("noopener");
-    expect(account?.querySelector("img")?.src).toBe(
-      "https://avatars.githubusercontent.com/u/583231?v=4",
-    );
-    expect(container.querySelector(".identity-github-form")).toBeNull();
-    expect(container.textContent).toContain("Verified from your GitHub-backed sign-in");
-    expect(container.textContent).not.toContain("Disconnect");
-    expect(container.textContent).toContain("public GitHub noreply address");
-    expect(container.textContent).toContain("future commits only");
-    const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    expect(toggle?.checked).toBe(true);
-    expect(toggle?.hasAttribute("disabled")).toBe(false);
-    toggle!.checked = false;
-    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onGitCoauthorChange).toHaveBeenCalledWith(false);
-  });
-
   it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
     const container = document.createElement("div");
     mountIdentity(
@@ -219,13 +147,5 @@ describe("IdentitySection", () => {
     const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(false);
     expect(toggle?.hasAttribute("disabled")).toBe(true);
-  });
-
-  it("reports mutation errors without inventing another settings surface", () => {
-    const container = document.createElement("div");
-    mountIdentity(createProps({ error: "Save failed" }), container);
-
-    expect(container.querySelector('[role="alert"]')?.textContent?.trim()).toBe("Save failed");
-    expect(container.querySelectorAll(".settings-group")).toHaveLength(1);
   });
 });

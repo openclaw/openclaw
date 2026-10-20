@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryCandidates,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
+
+afterEach(() => memorySessionActorOwners.reset());
 
 it.each(["durable", "incognito", "shared durable"] as const)(
   "rejects collisions in %s storage without decoding unrelated durable entries",
@@ -36,7 +40,7 @@ it.each(["durable", "incognito", "shared durable"] as const)(
         ).run(key, JSON.stringify({ sessionId: "collision", updatedAt: 1 }));
         db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(key);
       } else {
-        replaceSessionEntrySync(
+        await replaceSessionEntry(
           { agentId, sessionKey: key },
           { sessionId: "collision", updatedAt: 1, incognito: true },
         );

@@ -1,11 +1,12 @@
-import { html } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
+import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
 } from "../../../components/panel-hosted-tabs.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -17,7 +18,9 @@ import {
   selectSessionWorkspacePreview,
   getSessionWorkspace,
   loadSessionWorkspace,
+  sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
+import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
 import "./chat-files-panel.tsx";
 
@@ -31,7 +34,6 @@ function host(): SessionWorkspaceHost {
     hello: null,
     sidebarContent: null,
     handleOpenSidebar: vi.fn(),
-    requestUpdate: vi.fn(),
   };
 }
 
@@ -69,10 +71,10 @@ function mountPanel() {
 
 // Arm after synchronous open/close notifications and before settling a controlled read.
 function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
-  const updated = new Promise<void>((resolve) => {
-    vi.mocked(state.requestUpdate!).mockImplementationOnce(() => resolve());
-  });
-  return vi.waitFor(() => updated);
+  const updated = createDeferred();
+  const stop = sessionWorkspaceForHost(state).subscribe(() => updated.resolve());
+  onTestFinished(stop);
+  return updated.promise.finally(stop);
 }
 
 afterEach(() => document.body.replaceChildren());
@@ -155,9 +157,11 @@ describe("workspace file tabs", () => {
         closeSessionWorkspacePreview(state, preview.id);
       }
       const workspace = getSessionWorkspace(state);
-      const updated = nextWorkspaceUpdate(state);
       read.resolve({ ...initial, file: { ...initial.file, content: "STALE" } });
-      await updated;
+      // Cross a browser task so all continuations of the retired read have settled.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(preview.content).toBe(content);
       expect(workspace.previews).toEqual([]);
     },
@@ -371,7 +375,7 @@ describe("workspace file tabs", () => {
   it("scopes main-view tab and content IDs to each panel and keeps them stable", async () => {
     const panels = [mountPanel(), mountPanel()];
     await Promise.all(panels.map((panel) => panel.updateComplete));
-    const tabs = panels.map((panel) => panel.querySelector<HTMLElement>("wa-tab")!);
+    const tabs = panels.map((panel) => panel.querySelector<HTMLElement>(".tabstrip-tab")!);
     const ids = tabs.map((tab) => tab.id);
     expect(new Set(ids).size).toBe(2);
     for (const [index, panel] of panels.entries()) {
@@ -380,7 +384,7 @@ describe("workspace file tabs", () => {
       expect(document.getElementById(tab.getAttribute("aria-controls")!)).toBe(content);
       panel.previews = [...panel.previews];
       await panel.updateComplete;
-      expect(panel.querySelector("wa-tab")?.id).toBe(ids[index]);
+      expect(panel.querySelector(".tabstrip-tab")?.id).toBe(ids[index]);
     }
   });
 
@@ -388,8 +392,8 @@ describe("workspace file tabs", () => {
     const panels = [mountPanel(), mountPanel()];
     await Promise.all(panels.map((panel) => panel.updateComplete));
     await Promise.resolve();
-    const firstTab = panels[0]!.querySelector<HTMLElement>("wa-tab")!;
-    const siblingTab = panels[1]!.querySelector<HTMLElement>("wa-tab")!;
+    const firstTab = panels[0]!.querySelector<HTMLElement>(".tabstrip-tab")!;
+    const siblingTab = panels[1]!.querySelector<HTMLElement>(".tabstrip-tab")!;
     firstTab.focus();
     expect(document.activeElement).toBe(firstTab);
     panels[1]!.previews = [...panels[1]!.previews];
@@ -488,14 +492,19 @@ describe("workspace file tabs", () => {
   });
 
   it("projects the shared hosted-tab contract and keeps inactive preview elements mounted", async () => {
+    const warning = vi.spyOn(console, "warn");
+    onTestFinished(() => {
+      warning.mockRestore();
+    });
     const state = host();
     const a = openSessionWorkspacePreview(state, "a", "a.md", { kind: "markdown", content: "A" });
-    openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
+    const b = openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
+    const Draft = () => Object.assign(document.createElement("textarea"), { textContent: "draft" });
     const panel = document.createElement("openclaw-chat-files-panel");
     Object.assign(panel, {
       previews: getSessionWorkspace(state).previews,
       activeId: "a",
-      renderDetail: () => html`<textarea>draft</textarea>`,
+      renderDetail: Draft,
       onSelect: (id: string | null) => selectSessionWorkspacePreview(state, id),
       onClose: (id: string) => closeSessionWorkspacePreview(state, id),
     });
@@ -510,23 +519,128 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     expect(panel.querySelector("textarea")).toBe(textarea);
     expect(textarea.value).toBe("unsaved");
-    expect(panel.querySelector("wa-tab-group")).toBeNull();
+    expect(panel.querySelector(".tabstrip")).toBeNull();
     panel.tabsInHeader = false;
     await panel.updateComplete;
-    expect(panel.querySelectorAll("wa-tab-group")).toHaveLength(1);
-    expect(panel.querySelectorAll("wa-tab")).toHaveLength(2);
+    expect(panel.querySelectorAll(".tabstrip")).toHaveLength(1);
+    expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(2);
     panel.tabsInHeader = true;
     await panel.updateComplete;
-    expect(panel.querySelector("wa-tab-group")).toBeNull();
+    expect(panel.querySelector(".tabstrip")).toBeNull();
     expect(panel.querySelector("textarea")).toBe(textarea);
+    panel.previews = [
+      { ...b, label: "renamed-b.txt" },
+      { ...a, label: "renamed-a.md" },
+    ];
+    await panel.updateComplete;
+    expect(readPanelHostedTabs(panel)?.hostedTabs.map((tab) => tab.label)).toEqual([
+      "renamed-b.txt",
+      "renamed-a.md",
+    ]);
+    expect([...panel.querySelectorAll("textarea")]).toContain(textarea);
+    expect(textarea.value).toBe("unsaved");
     await hosted.closeHostedTab("a");
     expect(getSessionWorkspace(state).previews).not.toContain(a);
+    panel.previews = getSessionWorkspace(state).previews;
+    await panel.updateComplete;
+    expect(textarea.isConnected).toBe(false);
+    panel.remove();
+    flush();
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
   });
+
+  it.each(["close", "reopen", "disconnect"])(
+    "handles %s while an App close is awaiting teardown",
+    async (outcome) => {
+      const pending = createDeferred();
+      const panel = document.createElement("openclaw-chat-files-panel");
+      const app = document.createElement("mcp-app-view");
+      const connectedAtTeardown: boolean[] = [];
+      const teardown = vi.fn(() => {
+        connectedAtTeardown.push(app.isConnected);
+        return pending.promise;
+      });
+      const headersAtRestart: boolean[] = [];
+      const restart = vi.fn(() =>
+        headersAtRestart.push(panel.querySelector(".rail-header") !== null),
+      );
+      Object.assign(app, { teardown, restartAfterTeardown: restart });
+      onTestFinished(registerMcpAppUnmountTarget(app));
+      const editor = document.createElement("textarea");
+      const previews: SessionWorkspacePreview[] = [
+        {
+          id: "app",
+          label: "Parts tray",
+          content: {
+            kind: "mcp-app",
+            title: "Parts tray",
+            launch: {
+              owner: createGatewayBrowserClientFixture(),
+              sessionKey: "agent:main:files",
+              serverName: "parts",
+              entrypoint: {
+                title: "Parts tray",
+                toolName: "tray",
+                resourceUri: "ui://parts/tray",
+                entrypoint: { type: "thread" },
+              },
+            },
+          },
+        },
+        { id: "file", label: "notes.md", content: { kind: "markdown", content: "Notes" } },
+      ];
+      panel.previews = previews;
+      panel.activeId = "app";
+      panel.renderDetail = ({ content }) => (content.kind === "mcp-app" ? app : editor);
+      panel.onClose = (id) => {
+        panel.previews = panel.previews.filter((preview) => preview.id !== id);
+        panel.activeId = "file";
+      };
+      document.body.append(panel);
+      await panel.updateComplete;
+      flush();
+      editor.value = "Unsaved draft";
+
+      await panel.closeHostedTab("app");
+      flush();
+      expect(connectedAtTeardown).toEqual([true]);
+      expect(panel.querySelector("mcp-app-view")).toBe(app);
+      expect(app.isConnected).toBe(true);
+      expect(restart).not.toHaveBeenCalled();
+
+      panel.tabsInHeader = false;
+      if (outcome === "reopen") {
+        panel.previews = previews;
+        panel.activeId = "app";
+      } else if (outcome === "disconnect") {
+        panel.remove();
+      }
+      await panel.updateComplete;
+      flush();
+      pending.resolve();
+      await pending.promise;
+      await waitForSolid(() => {
+        if (outcome === "reopen") {
+          expect(restart).toHaveBeenCalledOnce();
+          expect(headersAtRestart).toEqual([true]);
+          expect(panel.querySelector("mcp-app-view")).toBe(app);
+        } else {
+          expect(app.isConnected).toBe(false);
+          expect(restart).not.toHaveBeenCalled();
+        }
+      });
+      expect(teardown).toHaveBeenCalledOnce();
+      if (outcome !== "disconnect") {
+        expect(panel.querySelector("textarea")).toBe(editor);
+        expect(editor.value).toBe("Unsaved draft");
+      }
+    },
+  );
 
   it("opens the file browser from its action hosted outside the panel", async () => {
     const panel = mountPanel();
     panel.tabsInHeader = true;
-    panel.browser = html`<button>reports</button>`;
+    panel.browser = Object.assign(document.createElement("button"), { textContent: "reports" });
     const onSelect = vi.fn((id: string | null) => {
       panel.activeId = id;
     });
@@ -554,8 +668,11 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     expect(changed).toHaveBeenCalledOnce();
 
-    panel.browser = html`<div>Refreshed workspace</div>`;
-    panel.renderDetail = () => html`<div>File contents</div>`;
+    panel.browser = Object.assign(document.createElement("div"), {
+      textContent: "Refreshed workspace",
+    });
+    panel.renderDetail = () =>
+      Object.assign(document.createElement("div"), { textContent: "File contents" });
     panel.onSelect = vi.fn();
     panel.onClose = vi.fn();
     await panel.updateComplete;

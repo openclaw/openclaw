@@ -28,7 +28,6 @@ type McpLoopbackToolCallObservers = {
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
-  onRequestFinish?: () => void;
   onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
   onToolCallUpdate?: (calls: {
     previous: McpLoopbackToolCallStart;
@@ -41,7 +40,6 @@ type McpLoopbackToolCallObservers = {
 type McpLoopbackToolCallCapture = McpLoopbackToolCallObservers & {
   generation: number;
   inFlight: number;
-  activityVersion: number;
   activityWaiters: Set<() => void>;
 };
 
@@ -92,7 +90,6 @@ function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
 }
 
 function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCapture): void {
-  capture.activityVersion += 1;
   for (const resolve of capture.activityWaiters) {
     resolve();
   }
@@ -113,7 +110,6 @@ export function beginMcpLoopbackToolCallCapture({
     ...observers,
     generation: nextToolCallCaptureGeneration,
     inFlight: 0,
-    activityVersion: 0,
     activityWaiters: new Set(),
   });
 }
@@ -178,7 +174,6 @@ export function markMcpLoopbackRequestFinished(
   markMcpLoopbackRequestClassified(captureHandle);
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  observeCapture(() => capture.onRequestFinish?.());
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }
@@ -284,12 +279,11 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
   }
 }
 
-/** Wait for admitted calls to settle and for a quiet request-admission grace. */
+/** Wait for admitted requests and tool calls to settle before closing their grant. */
 export async function waitForMcpLoopbackToolCallCaptureIdle(
   captureKey: string,
   options: {
     timeoutMs: number;
-    admissionGraceMs: number;
   },
 ): Promise<boolean> {
   const normalizedKey = captureKey.trim();
@@ -297,9 +291,9 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
   if (!capture) {
     return true;
   }
-  const deadline = Date.now() + Math.max(0, options.timeoutMs);
+  const deadline = performance.now() + Math.max(0, options.timeoutMs);
   while (toolCallCaptures.get(normalizedKey) === capture) {
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
       return false;
     }
@@ -307,21 +301,7 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
       await waitForMcpLoopbackToolCallCaptureActivity(capture, remainingMs);
       continue;
     }
-    const admissionGraceMs = Math.max(0, options.admissionGraceMs);
-    if (admissionGraceMs === 0) {
-      return true;
-    }
-    const activityVersion = capture.activityVersion;
-    const quietWaitMs = Math.min(admissionGraceMs, remainingMs);
-    const sawActivity = await waitForMcpLoopbackToolCallCaptureActivity(capture, quietWaitMs);
-    if (
-      !sawActivity &&
-      quietWaitMs === admissionGraceMs &&
-      capture.inFlight === 0 &&
-      capture.activityVersion === activityVersion
-    ) {
-      return true;
-    }
+    return true;
   }
   return true;
 }

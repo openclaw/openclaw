@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { MAX_IMAGE_BYTES, saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
@@ -7,11 +6,7 @@ const MAX_IMAGES_PER_MESSAGE = 8;
 type TlonInboundMedia = { path: string; contentType: string };
 
 /** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
-export function buildTlonInboundMediaPrompt(
-  messageText: string,
-  attachments: readonly TlonInboundMedia[],
-) {
-  const media = attachments.map((attachment) => ({ ...attachment }));
+export function buildTlonInboundMediaPrompt(messageText: string, media: TlonInboundMedia[]) {
   if (media.length === 0) {
     return { body: messageText, media };
   }
@@ -50,7 +45,7 @@ async function downloadMedia(url: string, maxBytes?: number): Promise<TlonInboun
   try {
     const parsedUrl = new URL(url);
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      console.warn(`[tlon-media] Rejected non-http(s) URL: ${url}`);
+      console.warn("[tlon-media] Rejected non-http(s) media URL");
       return null;
     }
 
@@ -65,8 +60,8 @@ async function downloadMedia(url: string, maxBytes?: number): Promise<TlonInboun
       path: saved.path,
       contentType: saved.contentType ?? "application/octet-stream",
     };
-  } catch (error: unknown) {
-    console.error(`[tlon-media] Error downloading ${url}: ${formatErrorMessage(error)}`);
+  } catch {
+    console.error("[tlon-media] Error downloading inbound media");
     return null;
   }
 }

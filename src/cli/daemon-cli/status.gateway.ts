@@ -31,17 +31,6 @@ type GatewayStatusSummary = {
 
 type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
 
-function appendProbeNote(
-  existing: string | undefined,
-  extra: string | undefined,
-): string | undefined {
-  const values = [existing, extra].filter((value): value is string => Boolean(value?.trim()));
-  if (values.length === 0) {
-    return undefined;
-  }
-  return uniqueStrings(values).join(" ");
-}
-
 export function resolveGatewayStatusProbeConfig(params: {
   config: OpenClawConfig;
   hasUrlOverride: boolean;
@@ -114,14 +103,17 @@ export async function resolveGatewayStatusSummary(params: {
           basePath: params.daemonCfg.gateway?.controlUi?.basePath,
           tlsEnabled,
         });
-  let probeNote =
+  const bindNote =
     !probeUrlOverride && bindMode === "lan"
       ? `bind=lan listens on 0.0.0.0 (all interfaces); checking via ${probeHost}.`
       : !probeUrlOverride && bindMode === "loopback"
         ? "Loopback-only gateway; only local clients can connect."
         : undefined;
-  probeNote = appendProbeNote(probeNote, bindHostWarning);
-  probeNote = appendProbeNote(probeNote, tailnetWarning);
+  const probeNote = uniqueStrings(
+    [bindNote, bindHostWarning, tailnetWarning].filter((value): value is string =>
+      Boolean(value?.trim()),
+    ),
+  ).join(" ");
 
   const gateway: GatewayStatusSummary = {
     bindMode,

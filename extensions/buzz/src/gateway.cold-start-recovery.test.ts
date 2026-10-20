@@ -95,7 +95,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
             handlers.onevent(event);
           }
         }
-        handlers.oneose?.();
+        queueMicrotask(() => handlers.oneose?.());
         if (carriesMessages && relayMocks.dropSubscriptionReason) {
           const reason = relayMocks.dropSubscriptionReason;
           relayMocks.dropSubscriptionReason = undefined;
@@ -119,6 +119,13 @@ const inboundMocks = vi.hoisted(() => ({
 
 vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
+}));
+
+// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
+// most of waitForSettled's budget before the reconnect even starts.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
 }));
 
 import { startBuzzGatewayAccount } from "./gateway.js";

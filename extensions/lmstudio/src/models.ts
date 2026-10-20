@@ -1,6 +1,7 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
@@ -14,7 +15,11 @@ import {
   normalizeUniqueTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
+import {
+  LMSTUDIO_DEFAULT_BASE_URL,
+  LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+  LMSTUDIO_PROVIDER_ID,
+} from "./defaults.js";
 import {
   buildLmstudioReasoningEffortMap,
   LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
@@ -47,47 +52,6 @@ type LmstudioReasoningCapabilityWire = {
   allowed_options?: unknown;
   default?: unknown;
 };
-
-type LmstudioConfiguredCatalogEntry = {
-  id: string;
-  name?: string;
-  contextWindow?: number;
-  contextTokens?: number;
-  reasoning?: boolean;
-  input?: ("text" | "image" | "document")[];
-  compat?: ModelDefinitionConfig["compat"];
-};
-
-const LMSTUDIO_CONFIGURED_BOOLEAN_COMPAT_FIELDS = [
-  "supportsStore",
-  "supportsPromptCacheKey",
-  "supportsDeveloperRole",
-  "supportsReasoningEffort",
-  "supportsTemperature",
-  "supportsUsageInStreaming",
-  "supportsTools",
-  "supportsStrictMode",
-  "supportsJsonSchemaResponseFormat",
-  "requiresStringContent",
-  "strictMessageKeys",
-  "requiresToolResultName",
-  "requiresAssistantAfterToolResult",
-  "requiresThinkingAsText",
-  "requiresReasoningContentOnAssistantMessages",
-  "requiresOpenAiAnthropicToolPayload",
-] as const satisfies readonly (keyof NonNullable<ModelDefinitionConfig["compat"]>)[];
-
-const LMSTUDIO_CONFIGURED_THINKING_FORMATS = [
-  "openai",
-  "openrouter",
-  "deepseek",
-  "together",
-  "qwen",
-  "qwen-chat-template",
-  "zai",
-] as const satisfies readonly NonNullable<
-  NonNullable<ModelDefinitionConfig["compat"]>["thinkingFormat"]
->[];
 
 function normalizeReasoningOptions(value: unknown): string[] {
   return uniqueStrings(normalizeTrimmedStringList(value).map((option) => option.toLowerCase()));
@@ -214,76 +178,36 @@ function isLikelyHostBaseUrl(value: string): boolean {
   );
 }
 
-function normalizeConfiguredReasoningEffortMap(value: unknown): Record<string, string> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function normalizeConfiguredReasoningEffortMap(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!value) {
     return undefined;
   }
   const normalized = Object.fromEntries(
     Object.entries(value).flatMap(([key, mapped]) => {
       const normalizedKey = key.trim();
-      const normalizedValue = typeof mapped === "string" ? mapped.trim() : "";
+      const normalizedValue = mapped.trim();
       return normalizedKey && normalizedValue ? [[normalizedKey, normalizedValue] as const] : [];
     }),
   );
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeConfiguredCompatStringList(value: unknown): string[] | undefined {
-  if (
-    !Array.isArray(value) ||
-    !value.every((entry): entry is string => typeof entry === "string" && entry.length > 0)
-  ) {
+function normalizeLmstudioConfiguredCompat(
+  value: ModelDefinitionConfig["compat"],
+): ModelDefinitionConfig["compat"] {
+  if (!value) {
     return undefined;
   }
-  return [...value];
-}
-
-function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfig["compat"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const supportedReasoningEfforts = normalizeReasoningOptions(record.supportedReasoningEfforts);
-  const reasoningEffortMap = normalizeConfiguredReasoningEffortMap(record.reasoningEffortMap);
-  const compat: NonNullable<ModelDefinitionConfig["compat"]> = {};
-  for (const key of LMSTUDIO_CONFIGURED_BOOLEAN_COMPAT_FIELDS) {
-    const configuredValue = record[key];
-    if (typeof configuredValue === "boolean") {
-      compat[key] = configuredValue;
-    }
-  }
-  if (record.codeMode === "preferred" || record.codeMode === "capable") {
-    compat.codeMode = record.codeMode;
-  }
-  for (const key of ["visibleReasoningDetailTypes", "unsupportedToolSchemaKeywords"] as const) {
-    const configuredValue = normalizeConfiguredCompatStringList(record[key]);
-    if (configuredValue) {
-      compat[key] = configuredValue;
-    }
-  }
-  if (record.maxTokensField === "max_completion_tokens" || record.maxTokensField === "max_tokens") {
-    compat.maxTokensField = record.maxTokensField;
-  }
-  const thinkingFormat = LMSTUDIO_CONFIGURED_THINKING_FORMATS.find(
-    (format) => format === record.thinkingFormat,
-  );
-  if (thinkingFormat) {
-    compat.thinkingFormat = thinkingFormat;
-  }
-  for (const key of ["toolSchemaProfile", "toolCallArgumentsEncoding"] as const) {
-    if (typeof record[key] === "string") {
-      compat[key] = record[key];
-    }
-  }
-  if (supportedReasoningEfforts.length > 0) {
-    compat.supportedReasoningEfforts = supportedReasoningEfforts;
-  }
-  if (reasoningEffortMap) {
-    compat.reasoningEffortMap = reasoningEffortMap;
-  }
-  return Object.keys(compat).length > 0
-    ? normalizeLmstudioTransportReasoningCompat(compat)
-    : undefined;
+  const { supportedReasoningEfforts, reasoningEffortMap, ...compat } = value;
+  const normalizedEfforts = normalizeReasoningOptions(supportedReasoningEfforts);
+  const normalizedMap = normalizeConfiguredReasoningEffortMap(reasoningEffortMap);
+  return normalizeLmstudioTransportReasoningCompat({
+    ...compat,
+    ...(normalizedEfforts.length > 0 ? { supportedReasoningEfforts: normalizedEfforts } : {}),
+    ...(normalizedMap ? { reasoningEffortMap: normalizedMap } : {}),
+  });
 }
 
 export function toFetchableLmstudioBaseUrl(value: string): string {
@@ -347,48 +271,33 @@ export function normalizeLmstudioProviderConfig(
   };
 }
 
-export function normalizeLmstudioConfiguredCatalogEntry(
-  entry: unknown,
-): LmstudioConfiguredCatalogEntry | null {
-  if (!entry || typeof entry !== "object") {
-    return null;
-  }
-  const record = entry as Record<string, unknown>;
-  if (typeof record.id !== "string" || record.id.trim().length === 0) {
-    return null;
-  }
-  const id = record.id.trim();
-  const name = typeof record.name === "string" && record.name.trim().length > 0 ? record.name : id;
-  const contextWindow = asPositiveSafeInteger(record.contextWindow);
-  const contextTokens = asPositiveSafeInteger(record.contextTokens);
-  const reasoning = typeof record.reasoning === "boolean" ? record.reasoning : undefined;
-  const input = Array.isArray(record.input)
-    ? record.input.filter(
-        (item): item is "text" | "image" | "document" =>
-          item === "text" || item === "image" || item === "document",
-      )
-    : undefined;
-  const compat = normalizeLmstudioConfiguredCompat(record.compat);
-  return {
-    id,
-    name,
-    contextWindow,
-    contextTokens,
-    reasoning,
-    input: input && input.length > 0 ? input : undefined,
-    compat,
-  };
-}
-
 export function normalizeLmstudioConfiguredCatalogEntries(
-  models: unknown,
-): LmstudioConfiguredCatalogEntry[] {
-  if (!Array.isArray(models)) {
-    return [];
-  }
-  return models
-    .map((entry) => normalizeLmstudioConfiguredCatalogEntry(entry))
-    .filter((entry): entry is LmstudioConfiguredCatalogEntry => entry !== null);
+  models: readonly ModelDefinitionConfig[] = [],
+) {
+  return models.flatMap((entry) => {
+    const id = entry.id.trim();
+    if (!id) {
+      return [];
+    }
+    const parameterCount = asPositiveSafeInteger(entry.parameterCount);
+    const input = entry.input?.filter((item) => item === "text" || item === "image");
+    return [
+      {
+        provider: LMSTUDIO_PROVIDER_ID,
+        id,
+        name: entry.name?.trim() ? entry.name : id,
+        ...(parameterCount !== undefined ? { parameterCount } : {}),
+        contextWindow: asPositiveSafeInteger(entry.contextWindow),
+        contextTokens: asPositiveSafeInteger(entry.contextTokens),
+        reasoning: entry.reasoning,
+        input: input && input.length > 0 ? input : undefined,
+        compat: {
+          ...normalizeLmstudioConfiguredCompat(entry.compat),
+          supportsUsageInStreaming: true,
+        },
+      },
+    ];
+  });
 }
 
 export function buildLmstudioModelName(model: {
@@ -521,3 +430,31 @@ export function mapLmstudioWireModels(
     })
     .filter((entry): entry is ModelDefinitionConfig => entry !== null);
 }
+
+export function normalizeLmstudioModelKey(modelId: string): string {
+  const trimmed = modelId.trim();
+  if (trimmed.toLowerCase().startsWith("lmstudio/")) {
+    return trimmed.slice("lmstudio/".length).trim();
+  }
+  return trimmed;
+}
+
+export const getUnlistedLmstudioConfiguredModelIds: NonNullable<
+  NonNullable<ProviderPlugin["catalog"]>["getUnlistedConfiguredModelIds"]
+> = (catalog, configuredModels) => {
+  const modelIds = new Set(catalog.modelIds);
+  const aliases = new Set(catalog.aliases?.map((alias) => alias.toLowerCase()));
+  return configuredModels
+    .filter((model) => {
+      if (
+        model.provider !== "lmstudio" ||
+        (model.baseUrl &&
+          resolveLmstudioServerBase(model.baseUrl) !== resolveLmstudioServerBase(catalog.baseUrl))
+      ) {
+        return false;
+      }
+      const modelKey = normalizeLmstudioModelKey(model.modelId);
+      return !modelIds.has(modelKey) && !aliases.has(modelKey.toLowerCase());
+    })
+    .map((model) => model.modelId);
+};

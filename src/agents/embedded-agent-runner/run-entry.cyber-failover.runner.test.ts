@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown, markAuthProfileFailure } from "../auth-profiles/usage.js";
 import { FailoverError } from "../failover-error.js";
@@ -64,8 +68,10 @@ type RunCandidate = Parameters<
 >[0]["runCandidate"];
 
 function runEntry(runId: string, runCandidate: RunCandidate, hasCommittedSideEffect = () => false) {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   return runEmbeddedAgentEntry({
-    selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
+    selection: { cfg: config, provider: "openai", model: "gpt-5.6" },
     identity: { runId, agentId: "main", sessionId: "session-1" },
     harness: createDirectHarness(),
     behavior: { kind: "command-rpc", hasCommittedSideEffect },
@@ -79,6 +85,77 @@ describe("runEmbeddedAgentEntry cyber failover against the real fallback runner"
     resetFallbackSkipCacheForTest();
     authStoreRuntimeMocks.state.store = undefined;
     authStoreRuntimeMocks.updateAuthProfileStoreWithLock.mockClear();
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([false, true])(
+    "accounts completed candidates with the real runner (exhausted: %s)",
+    async (exhausted) => {
+      setRuntimeConfigSnapshot({});
+      const { result } = await runEmbeddedAgentEntry({
+        selection: {
+          cfg: {},
+          provider: "openai",
+          model: "gpt-5.6",
+          fallbacksOverride: ["openai/gpt-5.6-mini"],
+        },
+        identity: {
+          runId: "run-real-fallback-accounting",
+          agentId: "main",
+          sessionId: "session-1",
+        },
+        harness: createDirectHarness(),
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model) => {
+          const primary = model === "gpt-5.6";
+          const candidate = makeResult(provider, model, false);
+          if (primary || exhausted) {
+            candidate.payloads = [];
+            candidate.meta.agentHarnessResultClassification = "empty";
+          }
+          if (exhausted) {
+            candidate.meta.error = {
+              kind: "incomplete_turn",
+              message: "Completed candidate needs recovery",
+              fallbackSafe: true,
+            };
+          }
+          candidate.meta.agentMeta = {
+            sessionId: "session-1",
+            provider,
+            model,
+            usage: { input: primary ? 100 : 200, cost: { total: primary ? 0.2 : 0.7 } },
+            lastCallUsage: { input: primary ? 90 : 20 },
+          };
+          return candidate;
+        },
+      });
+      expect(result.meta.agentMeta?.usage?.input).toBe(300);
+      expect(result.meta.agentMeta?.usage?.cost?.total).toBeCloseTo(0.9, 9);
+      expect(result.meta.agentMeta?.lastCallUsage).toEqual({ input: 20 });
+    },
+  );
+
+  it("retains completed policy-retry usage when restoring the original refusal", async () => {
+    const { result } = await runEntry("run-cyber-restored-accounting", async (provider, model) => {
+      const retry = model === "gpt-daybreak-blue-latest";
+      const candidate = makeResult(provider, model, true);
+      candidate.meta.agentMeta!.usage = {
+        input: retry ? 200 : 100,
+        cost: { total: retry ? 0.7 : 0.2 },
+      };
+      return candidate;
+    });
+    expect(result.meta.agentMeta).toMatchObject({
+      model: "gpt-5.6",
+      usage: { input: 300 },
+    });
+    expect(result.meta.agentMeta?.usage?.cost?.total).toBeCloseTo(0.9, 9);
+    expect(result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
   });
 
   it("propagates a recognized provider error thrown after the Daybreak retry delivered", async () => {

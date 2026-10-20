@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
@@ -19,32 +20,40 @@ import { createCronStoreHarness, createNoopLogger } from "../service.test-harnes
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-manual-ack-durability-" });
 
-it("records the exact acknowledged manual request after SIGKILL before worker activation", async () => {
+async function admissionFixture(id: string, count: number, command = false) {
   const { storePath } = await makeStorePath();
   const now = Date.now();
-  const job: CronJob = {
-    id: "manual-before-dispatch",
-    agentId: "main",
-    name: "manual-before-dispatch",
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "at", at: new Date(now + 3_600_000).toISOString() },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "command", argv: ["unused"] },
-    state: { nextRunAtMs: now + 3_600_000 },
-  };
-  const blockers = Array.from({ length: 8 }, (_, index) => ({
+  const job = createDueIsolatedJob({
+    id,
+    nowMs: now,
+    nextRunAtMs: now + (command ? 3_600_000 : 60_000),
+  });
+  if (command) {
+    job.agentId = "main";
+    job.payload = { kind: "command", argv: ["unused"] };
+    delete job.delivery;
+    delete job.deleteAfterRun;
+  }
+  const blockers = Array.from({ length: count }, (_, index) => ({
     ...job,
-    id: `manual-crash-blocker-${index}`,
-    name: `manual-crash-blocker-${index}`,
+    id: `manual-blocker-${index}`,
+    name: command ? `manual-blocker-${index}` : job.name,
   }));
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
+  return { storePath, job, blockers };
+}
+
+function receipt(runId: string, jobId: string) {
+  const sql =
+    "SELECT status, error_text FROM cron_run_receipts WHERE request_run_id = ? AND job_id = ?";
+  return openOpenClawStateDatabase().db.prepare(sql).get(runId, jobId);
+}
+
+it("records the exact acknowledged manual request after SIGKILL before worker activation", async () => {
+  const { storePath, job, blockers } = await admissionFixture("manual-before-dispatch", 8, true);
   const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
   const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
@@ -62,8 +71,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
           import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
           let started = 0;
-          let reportStarted;
-          const blockersStarted = new Promise((resolve) => { reportStarted = resolve; });
+          const { promise: blockersStarted, resolve: reportStarted } = Promise.withResolvers();
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
             storePath: ${JSON.stringify(storePath)},
@@ -73,10 +81,9 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
             enqueueSystemEvent() {}, requestHeartbeat() {},
             runIsolatedAgentJob: async () => { throw new Error("unexpected execution"); },
             runCommandJob: async ({ job }) => {
-              if (!job.id.startsWith("manual-crash-blocker-")) throw new Error("unexpected execution");
+              if (!job.id.startsWith("manual-blocker-")) throw new Error("unexpected execution");
               if (++started === 8) reportStarted();
               await new Promise(() => {});
-              return { status: "ok" };
             },
           });
           await cron.start();
@@ -106,17 +113,14 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
   expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
   const restarted = await runChild(false);
   expect(restarted.code, restarted.stderr.toString()).toBe(0);
-  const receipt = openOpenClawStateDatabase()
-    .db.prepare(
-      "SELECT status, error_text FROM cron_run_receipts WHERE request_run_id = ? AND job_id = ?",
-    )
-    .get(ack.runId, job.id);
-  expect(receipt).toEqual({
+  expect(receipt(ack.runId, job.id)).toEqual({
     status: "skipped",
     error_text: "cron: queued request lost its launch context",
   });
   const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
-  expect(persisted?.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
+  expect(persisted?.state).toMatchObject({
+    nextRunAtMs: job.state.nextRunAtMs,
+  });
   expect(persisted?.state.queuedAtMs).toBeUndefined();
   expect(persisted?.state.runningAtMs).toBeUndefined();
 }, 45_000);
@@ -124,21 +128,10 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
 it.each(["removed", "write-failed"] as const)(
   "preserves accounting on manual admission failure: %s",
   async (failure) => {
-    const { storePath } = await makeStorePath();
-    const now = Date.now();
-    const job = createDueIsolatedJob({
-      id: `manual-${failure}`,
-      nowMs: now,
-      nextRunAtMs: now + 60_000,
-    });
-    const blockers =
-      failure === "removed"
-        ? Array.from({ length: 8 }, (_, index) => ({
-            ...job,
-            id: `manual-remove-blocker-${index}`,
-          }))
-        : [];
-    await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
+    const { storePath, job, blockers } = await admissionFixture(
+      `manual-${failure}`,
+      failure === "removed" ? 8 : 0,
+    );
     const finished = createDeferredCore();
     const blockersStarted = createDeferredCore();
     const releaseBlockers = createDeferredCore();
@@ -170,9 +163,7 @@ it.each(["removed", "write-failed"] as const)(
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
     const database = openOpenClawStateDatabase().db;
     const completion = createCronMutationCompletion("cron.run");
-    if (!completion) {
-      throw new Error("Expected cron mutation completion");
-    }
+    assert(completion, "Expected cron mutation completion");
     if (failure === "write-failed") {
       database.exec(`CREATE TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
         WHEN NEW.store_key = '${cronStoreKey(storePath).replaceAll("'", "''")}'
@@ -191,19 +182,13 @@ it.each(["removed", "write-failed"] as const)(
       } else {
         const ack = await pending;
         expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
-        if (!ack.ok || !("runId" in ack)) {
-          throw new Error("Expected manual run acknowledgement");
-        }
+        assert(ack.ok && "runId" in ack, "Expected manual run acknowledgement");
         expect(completion.isCommitted()).toBe(true);
         await cron.remove(job.id);
         releaseBlockers.resolve();
         await Promise.all(active);
         await finished.promise;
-        expect(
-          database
-            .prepare("SELECT status, error_text FROM cron_run_receipts WHERE request_run_id = ?")
-            .get(ack.runId),
-        ).toEqual({
+        expect(receipt(ack.runId, job.id)).toEqual({
           status: "skipped",
           error_text: "cron: queued job was removed",
         });
@@ -214,7 +199,9 @@ it.each(["removed", "write-failed"] as const)(
       if (failure === "removed") {
         expect(persisted).toBeUndefined();
       } else {
-        expect(persisted?.state.nextRunAtMs).toBe(job.state.nextRunAtMs);
+        expect(persisted?.state).toMatchObject({
+          nextRunAtMs: job.state.nextRunAtMs,
+        });
         expect(persisted?.state.queuedAtMs).toBeUndefined();
       }
     } finally {

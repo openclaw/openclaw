@@ -567,6 +567,18 @@ describe("renderModelSetup", () => {
     },
   );
 
+  it("notifies the discovery owner only when its own modal is shown", () => {
+    const onDiscoveryShown = vi.fn();
+    const container = mount(props({ embedded: true, onDiscoveryShown }));
+    const modal = container.querySelector("openclaw-modal-dialog")!;
+    const content = modal.querySelector(".model-setup-discovery")!;
+
+    content.dispatchEvent(new CustomEvent("overlay-after-show", { bubbles: true }));
+    expect(onDiscoveryShown).not.toHaveBeenCalled();
+    modal.dispatchEvent(new CustomEvent("overlay-after-show", { bubbles: true }));
+    expect(onDiscoveryShown).toHaveBeenCalledOnce();
+  });
+
   it.each(["wizard", "primary", "utility"] as const)(
     "leaves the %s dialog in control of its action",
     (mode) => {

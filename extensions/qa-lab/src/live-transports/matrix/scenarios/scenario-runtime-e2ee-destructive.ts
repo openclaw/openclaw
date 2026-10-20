@@ -666,84 +666,65 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
 export async function runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  const setup = await prepareMatrixQaDestructiveSetup(
+  return runMatrixQaDestructiveRecoveryScenario(
     context,
     "matrix-e2ee-server-device-deleted-local-state-intact",
+    async (setup, createRecovery) => {
+      const {
+        device,
+        restore,
+        status: readStatus,
+      } = await createRecovery({
+        accountId: "deleted-device",
+        deviceName: "OpenClaw Matrix QA Deleted Device",
+        label: "server-device-deleted-local-state-intact",
+      });
+      const restored = await restore("restore-before-device-delete", setup.encodedRecoveryKey);
+      assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device preflight");
+      await setup.owner.deleteOwnDevices([device.deviceId]);
+      const ownerDevicesAfterDelete = await setup.owner.listOwnDevices();
+      await setup.owner.stop().catch(() => undefined);
+      const defaultStatus = await readStatus("status-after-device-delete-default", {
+        allowNonZero: true,
+      });
+      if (isMatrixQaVerifyStatusHealthy(defaultStatus)) {
+        throw new Error("default deleted device status reported healthy local state");
+      }
+      const status = await readStatus("status-after-device-delete-degraded", {
+        allowNonZero: true,
+        allowDegradedLocalState: true,
+      });
+      const ownerDeviceListContainsDeletedDevice = ownerDevicesAfterDelete.some(
+        (entry) => entry.deviceId === device.deviceId,
+      );
+      const invalidation = isMatrixQaDeletedDeviceStatus({
+        ownerDeviceListContainsDeletedDevice,
+        status,
+      });
+      if (!invalidation.invalidated) {
+        throw new Error("deleted device status did not report homeserver device invalidation");
+      }
+      return {
+        artifacts: {
+          defaultStatusError: defaultStatus.payload.error,
+          defaultStatusExitCode: defaultStatus.result.exitCode,
+          deletedDeviceId: device.deviceId,
+          serverDeviceKnown: status.payload.serverDeviceKnown ?? null,
+          statusError: status.payload.error,
+          statusExitCode: status.result.exitCode,
+        },
+        details: [
+          "server-side device deletion invalidated the surviving local credentials",
+          `deleted device: ${device.deviceId}`,
+          `default status exit code: ${defaultStatus.result.exitCode}`,
+          `degraded status exit code: ${status.result.exitCode}`,
+          invalidation.authInvalidated
+            ? `status error: ${status.payload.error}`
+            : `device present on server: ${invalidation.deviceMissing ? "no" : "yes"}`,
+        ].join("\n"),
+      };
+    },
   );
-  let cli: MatrixQaCliRuntime | undefined;
-  let deviceToDelete: string | undefined;
-  try {
-    const device = await loginMatrixQaRecoveryDevice({
-      context,
-      deviceName: "OpenClaw Matrix QA Deleted Device",
-      password: setup.ownerPassword,
-      userId: setup.ownerUserId,
-    });
-    deviceToDelete = device.deviceId;
-    cli = await createMatrixQaRecoveryCliRuntime({
-      accountId: "deleted-device",
-      accessToken: device.accessToken,
-      context,
-      deviceId: device.deviceId,
-      label: "server-device-deleted-local-state-intact",
-      userId: device.userId,
-    });
-    const recovery = createMatrixQaRecoveryCommands(cli, "deleted-device", context);
-    const restored = await recovery.restore(
-      "restore-before-device-delete",
-      setup.encodedRecoveryKey,
-    );
-    assertMatrixQaCliBackupRestoreSucceeded(restored.payload, "deleted-device preflight");
-    await setup.owner.deleteOwnDevices([device.deviceId]);
-    deviceToDelete = undefined;
-    const ownerDevicesAfterDelete = await setup.owner.listOwnDevices();
-    await setup.owner.stop().catch(() => undefined);
-    const defaultStatus = await recovery.status("status-after-device-delete-default", {
-      allowNonZero: true,
-    });
-    if (isMatrixQaVerifyStatusHealthy(defaultStatus)) {
-      throw new Error("default deleted device status reported healthy local state");
-    }
-    const status = await recovery.status("status-after-device-delete-degraded", {
-      allowNonZero: true,
-      allowDegradedLocalState: true,
-    });
-    const ownerDeviceListContainsDeletedDevice = ownerDevicesAfterDelete.some(
-      (entry) => entry.deviceId === device.deviceId,
-    );
-    const invalidation = isMatrixQaDeletedDeviceStatus({
-      ownerDeviceListContainsDeletedDevice,
-      status,
-    });
-    if (!invalidation.invalidated) {
-      throw new Error("deleted device status did not report homeserver device invalidation");
-    }
-    return {
-      artifacts: {
-        defaultStatusError: defaultStatus.payload.error,
-        defaultStatusExitCode: defaultStatus.result.exitCode,
-        deletedDeviceId: device.deviceId,
-        serverDeviceKnown: status.payload.serverDeviceKnown ?? null,
-        statusError: status.payload.error,
-        statusExitCode: status.result.exitCode,
-      },
-      details: [
-        "server-side device deletion invalidated the surviving local credentials",
-        `deleted device: ${device.deviceId}`,
-        `default status exit code: ${defaultStatus.result.exitCode}`,
-        `degraded status exit code: ${status.result.exitCode}`,
-        invalidation.authInvalidated
-          ? `status error: ${status.payload.error}`
-          : `device present on server: ${invalidation.deviceMissing ? "no" : "yes"}`,
-      ].join("\n"),
-    };
-  } finally {
-    await cli?.dispose().catch(() => undefined);
-    await setup.owner.stop().catch(() => undefined);
-    if (deviceToDelete) {
-      await setup.owner.deleteOwnDevices([deviceToDelete]).catch(() => undefined);
-    }
-  }
 }
 
 export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(

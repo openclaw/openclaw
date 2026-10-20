@@ -48,6 +48,12 @@ A file sent with a caption, or multiple files in one message, arrives as a
 rich-text `post` with a top-level `files[]` array. OpenClaw downloads those
 files through the same inbound attachment path as a standalone `file` message.
 
+Merged-forward messages include each child's original sender and UTC timestamp
+when available. Sender names use the account's `resolveSenderNames` setting;
+if a name cannot be resolved or lookups are disabled, the sender ID is preserved.
+Child mentions remain attached to the original message. Name lookups are limited
+to the first 50 children in chronological order, matching the rendered history.
+
 Inbound Feishu/Lark audio messages are normalized as media placeholders instead
 of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
 downloads the voice-note resource and runs shared audio transcription before the

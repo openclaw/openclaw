@@ -281,11 +281,10 @@ export abstract class AgentSessionExtensions extends AgentSessionCompaction {
       type: "session_shutdown",
       reason: "reload",
     });
-    await this.settingsManager.reload();
     this.agent.steeringMode = this.settingsManager.getSteeringMode();
     this.agent.followUpMode = this.settingsManager.getFollowUpMode();
     await this.sessionResourceLoader.reload();
-    this.sessionModelRegistry.refresh();
+    await this.sessionModelRegistry.refreshAsync();
     this.buildRuntime({
       activeToolNames: this.getActiveToolNames(),
       flagValues: previousFlagValues,

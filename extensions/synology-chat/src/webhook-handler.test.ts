@@ -50,16 +50,6 @@ type TestLog = {
   error: (...args: unknown[]) => void;
 };
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function deliveredMessage(deliver: TestDeliver) {
   expect(deliver).toHaveBeenCalledTimes(1);
   const message = vi.mocked(deliver).mock.calls[0]?.[0];
@@ -94,13 +84,17 @@ function makeAccount(
   };
 }
 
-const validBody = makeFormBody({
-  token: "valid-token",
-  user_id: "123",
-  username: "testuser",
-  text: "Hello bot",
-  post_id: "post-123",
-});
+function formBody(overrides: Record<string, string> = {}) {
+  return makeFormBody({
+    token: "valid-token",
+    user_id: "123",
+    username: "testuser",
+    text: "Hello bot",
+    post_id: "post-123",
+    ...overrides,
+  });
+}
+const validBody = formBody();
 
 async function postToWebhook(
   handler: ReturnType<typeof createWebhookHandler>,
@@ -114,37 +108,6 @@ async function postToWebhook(
   const res = makeRes();
   await handler(req, res);
   return res;
-}
-
-async function runDangerousNameMatchReply(
-  log: TestLog,
-  options: {
-    resolvedChatUserId?: number;
-    accountIdSuffix: string;
-  },
-) {
-  vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(options.resolvedChatUserId);
-  const deliver = vi.fn().mockResolvedValue(undefined);
-  const handler = createWebhookHandler({
-    account: makeAccount({
-      accountId: `${options.accountIdSuffix}-${Date.now()}`,
-      dangerouslyAllowNameMatching: true,
-    }),
-    deliver,
-    log,
-  });
-
-  const res = await postToWebhook(handler);
-
-  expect(res.status).toBe(204);
-  expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
-    incomingUrl: "https://nas.example.com/incoming",
-    mutableWebhookUsername: "testuser",
-    allowInsecureSsl: true,
-    log,
-  });
-
-  return { deliver };
 }
 
 describe("createWebhookHandler", () => {
@@ -161,17 +124,17 @@ describe("createWebhookHandler", () => {
     };
   });
 
+  function admissionHandler(receive: WebhookHandlerDeps["receive"]) {
+    return createWebhookHandlerWithIngress({ account: makeAccount(), receive, log });
+  }
+
   async function expectForbiddenByPolicy(params: {
     account: Partial<ResolvedSynologyChatAccount>;
     bodyContains: string;
     deliver?: TestDeliver;
   }) {
     const deliver = params.deliver ?? vi.fn();
-    const handler = createWebhookHandler({
-      account: makeAccount(params.account),
-      deliver,
-      log,
-    });
+    const { handler } = makeTestHandler({ account: params.account, deliver });
 
     const res = await postToWebhook(handler);
 
@@ -180,50 +143,41 @@ describe("createWebhookHandler", () => {
     expect(deliver).not.toHaveBeenCalled();
   }
 
-  function makeTestHandler(params: {
-    accountIdSuffix: string;
-    deliver?: TestDeliver;
-    account?: Partial<ResolvedSynologyChatAccount>;
-  }) {
+  function makeTestHandler(
+    params: {
+      deliver?: TestDeliver;
+      account?: Partial<ResolvedSynologyChatAccount>;
+    } = {},
+  ) {
     const deliver = params.deliver ?? vi.fn().mockResolvedValue(null);
     return {
       deliver,
       handler: createWebhookHandler({
-        account: makeAccount({
-          accountId: `${params.accountIdSuffix}-${Date.now()}`,
-          ...params.account,
-        }),
+        account: makeAccount(params.account),
         deliver,
         log,
       }),
     };
   }
 
-  async function expectTokenlessBodyAccepted(params: {
-    accountIdSuffix: string;
-    options: Parameters<typeof makeReq>[2];
-  }) {
-    const { deliver, handler } = makeTestHandler({ accountIdSuffix: params.accountIdSuffix });
-    const res = await postToWebhook(
-      handler,
-      makeFormBody({
-        post_id: `post-${params.accountIdSuffix}`,
-        user_id: "123",
-        username: "testuser",
-        text: "hello",
-      }),
-      params.options,
-    );
-    expect(res.status).toBe(204);
-    expect(deliver).toHaveBeenCalled();
+  async function runDangerousNameMatchReply(resolvedChatUserId?: number) {
+    resolveLegacyWebhookNameToChatUserId.mockResolvedValueOnce(resolvedChatUserId);
+    const { deliver, handler } = makeTestHandler({
+      account: { dangerouslyAllowNameMatching: true },
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+    expect((await postToWebhook(handler)).status).toBe(204);
+    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+      incomingUrl: "https://nas.example.com/incoming",
+      mutableWebhookUsername: "testuser",
+      allowInsecureSsl: true,
+      log,
+    });
+    return deliver;
   }
 
   it("rejects non-POST methods with 405", async () => {
-    const handler = createWebhookHandler({
-      account: makeAccount(),
-      deliver: vi.fn(),
-      log,
-    });
+    const { handler } = makeTestHandler();
 
     const req = makeReq("GET", "");
     const res = makeRes();
@@ -238,11 +192,7 @@ describe("createWebhookHandler", () => {
       resolveAdmission = resolve;
     });
     const receive = vi.fn(() => admission);
-    const handler = createWebhookHandlerWithIngress({
-      account: makeAccount(),
-      receive,
-      log,
-    });
+    const handler = admissionHandler(receive);
 
     const res = makeRes();
     const pending = handler(makeReq("POST", validBody), res);
@@ -258,11 +208,7 @@ describe("createWebhookHandler", () => {
 
   it("returns 503 without acknowledging when durable admission fails", async () => {
     const receive = vi.fn().mockRejectedValue(new Error("sqlite unavailable"));
-    const handler = createWebhookHandlerWithIngress({
-      account: makeAccount(),
-      receive,
-      log,
-    });
+    const handler = admissionHandler(receive);
 
     const res = await postToWebhook(handler);
 
@@ -273,11 +219,7 @@ describe("createWebhookHandler", () => {
 
   it("returns 400 without admission when the request stream fails", async () => {
     const receive = vi.fn();
-    const handler = createWebhookHandlerWithIngress({
-      account: makeAccount(),
-      receive,
-      log,
-    });
+    const handler = admissionHandler(receive);
 
     const req = makeStalledReq("POST");
     const res = makeRes();
@@ -355,11 +297,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "preauth-inflight-test-" + Date.now() }),
-      deliver: vi.fn(),
-      log,
-    });
+    const { handler } = makeTestHandler({ deliver: vi.fn() });
 
     const requests = Array.from({ length: 12 }, () => {
       const req = makeStalledReq("POST");
@@ -372,8 +310,8 @@ describe("createWebhookHandler", () => {
     );
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
-    expect(countMatching(responses, (res) => res.status === 0)).toBe(8);
-    expect(countMatching(responses, (res) => res.status === 429)).toBe(4);
+    expect(responses.filter((res) => res.status === 0)).toHaveLength(8);
+    expect(responses.filter((res) => res.status === 429)).toHaveLength(4);
 
     for (const req of requests) {
       req.emit("end");
@@ -384,7 +322,6 @@ describe("createWebhookHandler", () => {
   it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
     const weakToken = "00000129";
     const { deliver, handler } = makeTestHandler({
-      accountIdSuffix: "weak-token-bruteforce",
       account: { token: weakToken, rateLimitPerMinute: 5 },
     });
 
@@ -393,16 +330,9 @@ describe("createWebhookHandler", () => {
 
     for (let i = 0; i < 130; i += 1) {
       const candidate = String(i).padStart(8, "0");
-      const res = await postToWebhook(
-        handler,
-        makeFormBody({
-          token: candidate,
-          user_id: "123",
-          username: "testuser",
-          text: "Hello bot",
-        }),
-        { remoteAddress: "203.0.113.10" },
-      );
+      const res = await postToWebhook(handler, formBody({ token: candidate }), {
+        remoteAddress: "203.0.113.10",
+      });
 
       if (res.status === 429) {
         saw429 = true;
@@ -419,16 +349,9 @@ describe("createWebhookHandler", () => {
 
     expect(saw429).toBe(true);
     expect(guessedToken).toBeNull();
-    const lockedRes = await postToWebhook(
-      handler,
-      makeFormBody({
-        token: weakToken,
-        user_id: "123",
-        username: "testuser",
-        text: "Hello bot",
-      }),
-      { remoteAddress: "203.0.113.10" },
-    );
+    const lockedRes = await postToWebhook(handler, formBody({ token: weakToken }), {
+      remoteAddress: "203.0.113.10",
+    });
 
     expect(lockedRes.status).toBe(429);
     expect(deliver).not.toHaveBeenCalled();
@@ -436,7 +359,6 @@ describe("createWebhookHandler", () => {
 
   it("does not spend invalid-token budget on successful requests", async () => {
     const { deliver, handler } = makeTestHandler({
-      accountIdSuffix: "invalid-token-budget",
       account: { rateLimitPerMinute: 30 },
     });
 
@@ -451,7 +373,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("accepts application/json with alias fields", async () => {
-    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "json-test" });
+    const { deliver, handler } = makeTestHandler();
 
     const res = await postToWebhook(
       handler,
@@ -466,19 +388,21 @@ describe("createWebhookHandler", () => {
     );
 
     expect(res.status).toBe(204);
-    const message = deliveredMessage(deliver);
-    expect(message.body).toBe("Hello from json");
-    expect(message.from).toBe("123");
-    expect(message.senderName).toBe("json-user");
-    expect(message.provider).toBe("synology-chat");
-    expect(message.chatType).toBe("direct");
-    expect(message.commandAuthorized).toBe(true);
-    expect(message.chatUserId).toBe("123");
+    expect(deliveredMessage(deliver)).toMatchObject({
+      body: "Hello from json",
+      from: "123",
+      senderName: "json-user",
+      chatType: "direct",
+      commandAuthorized: true,
+      chatUserId: "123",
+    });
     expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain("Hello from json");
+    expect(log.info).toHaveBeenCalledWith("Message from json-user (123): len=15");
   });
 
   it("rejects malformed application/json with a stable parser error", async () => {
-    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "json-malformed" });
+    const { deliver, handler } = makeTestHandler();
 
     const res = await postToWebhook(handler, "{not json", {
       headers: { "content-type": "application/json" },
@@ -493,37 +417,29 @@ describe("createWebhookHandler", () => {
     );
   });
 
-  it("accepts token from query when body token is absent", async () => {
-    await expectTokenlessBodyAccepted({
-      accountIdSuffix: "query-token-test",
-      options: {
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        url: "/webhook/synology?token=valid-token",
-      },
+  it.each([
+    { url: "/webhook/synology?token=valid-token" },
+    { headers: { authorization: "Bearer valid-token" } },
+  ])("accepts a token outside the body: %j", async (options) => {
+    const { deliver, handler } = makeTestHandler();
+    const body = makeFormBody({
+      post_id: "post-tokenless",
+      user_id: "123",
+      username: "testuser",
+      text: "hello",
     });
-  });
-
-  it("accepts token from authorization header when body token is absent", async () => {
-    await expectTokenlessBodyAccepted({
-      accountIdSuffix: "header-token-test",
-      options: {
-        headers: {
-          "content-type": "application/x-www-form-urlencoded",
-          authorization: "Bearer valid-token",
-        },
-      },
+    const res = await postToWebhook(handler, body, {
+      ...options,
+      headers: { "content-type": "application/x-www-form-urlencoded", ...options.headers },
     });
+    expect(res.status).toBe(204);
+    expect(deliver).toHaveBeenCalled();
   });
 
   it("returns 403 when allowlist policy is set with empty allowedUserIds", async () => {
-    const deliver = vi.fn();
     await expectForbiddenByPolicy({
-      account: {
-        dmPolicy: "allowlist",
-        allowedUserIds: [],
-      },
+      account: { dmPolicy: "allowlist", allowedUserIds: [] },
       bodyContains: "Allowlist is empty",
-      deliver,
     });
   });
 
@@ -535,32 +451,17 @@ describe("createWebhookHandler", () => {
   });
 
   it("returns 429 when rate limited", async () => {
-    const account = makeAccount({
-      accountId: "rate-test-" + Date.now(),
-      rateLimitPerMinute: 1,
-    });
-    const handler = createWebhookHandler({
-      account,
-      deliver: vi.fn(),
-      log,
-    });
-
-    // First request succeeds
+    const { handler } = makeTestHandler({ account: { rateLimitPerMinute: 1 } });
     const res1 = await postToWebhook(handler);
     expect(res1.status).toBe(204);
-
-    // Second request should be rate limited
     const res2 = await postToWebhook(handler);
     expect(res2.status).toBe(429);
   });
 
   it("strips trigger word from message", async () => {
-    const { deliver, handler } = makeTestHandler({ accountIdSuffix: "trigger-test" });
+    const { deliver, handler } = makeTestHandler();
 
-    const body = makeFormBody({
-      token: "valid-token",
-      user_id: "123",
-      username: "testuser",
+    const body = formBody({
       text: "!bot Hello there",
       trigger_word: "!bot",
       post_id: "post-trigger",
@@ -569,42 +470,28 @@ describe("createWebhookHandler", () => {
     const res = await postToWebhook(handler, body);
 
     expect(res.status).toBe(204);
-    // deliver should have been called with the stripped text
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
   it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
-    const { deliver } = await runDangerousNameMatchReply(log, {
-      resolvedChatUserId: 456,
-      accountIdSuffix: "dangerous-name-match-test",
-    });
-    const message = deliveredMessage(deliver);
-    expect(message.from).toBe("123");
-    expect(message.chatUserId).toBe("456");
+    const deliver = await runDangerousNameMatchReply(456);
+    expect(deliveredMessage(deliver)).toMatchObject({ from: "123", chatUserId: "456" });
   });
 
   it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
-    const { deliver } = await runDangerousNameMatchReply(log, {
-      accountIdSuffix: "dangerous-name-fallback-test",
-    });
+    const deliver = await runDangerousNameMatchReply();
     expect(log.warn).toHaveBeenCalledWith(
       'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
     );
-    const message = deliveredMessage(deliver);
-    expect(message.from).toBe("123");
-    expect(message.chatUserId).toBe("123");
+    expect(deliveredMessage(deliver)).toMatchObject({ from: "123", chatUserId: "123" });
   });
 
   it("awaits deliver directly with no local hardcoded timeout wrapper", async () => {
-    // Previously this webhook handler wrapped deliver with a hardcoded 120s
-    // Promise.race that overrode the configurable agents.defaults.timeoutSeconds
-    // from core. That wrapper created a setTimeout(_, 120000) on every deliver
-    // call. We spy on setTimeout to prove no such call exists in the current code.
+    // The former 120s wrapper overrode agents.defaults.timeoutSeconds.
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
     try {
       const deliver = vi.fn().mockResolvedValue(undefined);
       const { handler } = makeTestHandler({
-        accountIdSuffix: "no-hardcoded-timeout",
         deliver,
       });
 
@@ -612,10 +499,7 @@ describe("createWebhookHandler", () => {
 
       expect(res.status).toBe(204);
 
-      // Collect all setTimeout delays used during this handler run
       const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
-      // Every delay should be well under 120s — the old hardcoded wrapper would
-      // have produced exactly one call with delay === 120000.
       const longDelays = delays.filter((d) => typeof d === "number" && d >= 120_000);
       expect(longDelays).toEqual([]);
     } finally {

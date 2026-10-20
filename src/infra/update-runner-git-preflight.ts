@@ -4,13 +4,16 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
-import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
+import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
+import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
 import {
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
@@ -115,86 +118,6 @@ async function resolveExplicitTarget(params: {
     }
   }
   return null;
-}
-
-async function resolveUpstreamCandidates(params: {
-  gitRoot: string;
-  needsCheckoutMain: boolean;
-  refreshedRemotes: readonly string[];
-  step: StepFactory;
-}): Promise<
-  | {
-      status: "ok";
-      sha: string;
-      candidates: string[];
-      selectedDevUpstream: string | null;
-      localDevBranchExists: boolean | null;
-    }
-  | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> }
-> {
-  const step = createGitStepFactory(params.gitRoot, params.step);
-  let localDevBranchExists: boolean | null = null;
-  let remoteBranchRefs: string[] = [];
-  if (params.needsCheckoutMain) {
-    const localMainStep = await runStep(
-      step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
-    );
-    localDevBranchExists = localMainStep.exitCode === 0;
-  }
-  if (params.needsCheckoutMain && localDevBranchExists === false) {
-    remoteBranchRefs = params.refreshedRemotes.map(
-      (remote) => `refs/remotes/${remote}/${DEV_BRANCH}`,
-    );
-  }
-  const upstreamRefs = resolveDevUpstreamRefs(params.needsCheckoutMain, remoteBranchRefs);
-  let upstreamSha: string | null = null;
-  let selectedDevUpstream: string | null = null;
-  let sawResolvableUpstreamRef = false;
-  for (const upstreamRef of upstreamRefs) {
-    let resolvedUpstreamRef = upstreamRef;
-    if (upstreamRef.endsWith("@{upstream}")) {
-      const upstreamStep = await runStep(
-        step("upstream-check", "rev-parse", "--symbolic-full-name", upstreamRef),
-      );
-      if (isFailedUpdateStep(upstreamStep)) {
-        continue;
-      }
-      sawResolvableUpstreamRef = true;
-      resolvedUpstreamRef = upstreamStep.stdoutTail?.trim() ?? upstreamRef;
-    }
-    const shaStep = await runStep(step("git-resolve-upstream", "rev-parse", upstreamRef));
-    const sha = shaStep.stdoutTail?.trim();
-    if (!isFailedUpdateStep(shaStep) && sha) {
-      upstreamSha = sha;
-      selectedDevUpstream = /^refs\/remotes\/(.+)$/u.exec(resolvedUpstreamRef)?.[1] ?? null;
-      break;
-    }
-    if (!isFailedUpdateStep(shaStep)) {
-      sawResolvableUpstreamRef = true;
-    }
-  }
-  if (!upstreamSha) {
-    return sawResolvableUpstreamRef
-      ? { status: "error", reason: "no-upstream-sha" }
-      : { status: "skipped", reason: "no-upstream" };
-  }
-  const revListStep = await runStep(
-    step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
-  );
-  if (isFailedUpdateStep(revListStep)) {
-    return { status: "error", reason: "preflight-revlist-failed" };
-  }
-  const candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
-  if (candidates.length === 0) {
-    return { status: "error", reason: "preflight-no-candidates" };
-  }
-  return {
-    status: "ok",
-    sha: upstreamSha,
-    candidates,
-    selectedDevUpstream,
-    localDevBranchExists,
-  };
 }
 
 type PreflightCandidateResult =
@@ -446,6 +369,7 @@ export async function runGitCandidatePreflight(params: {
   artifactRoot: string;
   devTarget?: DevUpdateTarget;
   refreshedRemotes: readonly string[];
+  devSource?: GitFetchTarget & { revision?: string };
   targetRevision?: string;
   beforeSha?: string | null;
   referenceSource?: {
@@ -527,7 +451,7 @@ export async function runGitCandidatePreflight(params: {
           "merge-base",
           "--is-ancestor",
           targetSha,
-          `${params.devTarget.upstreamRef}^{commit}`,
+          `${params.devSource?.revision ?? params.devTarget.upstreamRef}^{commit}`,
         ),
       );
       if (isFailedUpdateStep(ancestryStep)) {
@@ -535,14 +459,41 @@ export async function runGitCandidatePreflight(params: {
       }
     }
   } else {
-    const upstream = await resolveUpstreamCandidates(params);
-    if (upstream.status !== "ok") {
-      return upstream;
+    if (params.needsCheckoutMain) {
+      const localMainStep = await runStep(
+        step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
+      );
+      localDevBranchExists = localMainStep.exitCode === 0;
     }
-    preflightBaseSha = upstream.sha;
-    candidates = upstream.candidates;
-    selectedDevUpstream = upstream.selectedDevUpstream;
-    localDevBranchExists = upstream.localDevBranchExists;
+    const readGit = async (...args: string[]) => {
+      const result = await runStep(step("upstream-check", ...args));
+      return !isFailedUpdateStep(result) ? result.stdoutTail?.trim() || null : null;
+    };
+    const source = params.devSource;
+    if (!source || (source.remote !== "." && !params.refreshedRemotes.includes(source.remote))) {
+      return { status: "skipped", reason: "no-upstream" };
+    }
+    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
+    if (!upstreamRef) {
+      return { status: "skipped", reason: "no-upstream" };
+    }
+    const upstreamSha = await readGit("rev-parse", "--verify", `${upstreamRef}^{commit}`);
+    if (!upstreamSha) {
+      return { status: "error", reason: "no-upstream-sha" };
+    }
+    // Local branches are operator state, not remote cache refs to publish after admission.
+    selectedDevUpstream = upstreamRef.startsWith("refs/heads/") ? null : upstreamRef;
+    const revListStep = await runStep(
+      step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
+    );
+    if (isFailedUpdateStep(revListStep)) {
+      return { status: "error", reason: "preflight-revlist-failed" };
+    }
+    candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
+    if (candidates.length === 0) {
+      return { status: "error", reason: "preflight-no-candidates" };
+    }
+    preflightBaseSha = upstreamSha;
   }
 
   // Reference builds must consume operator inputs even when their Git HEAD is current.
@@ -628,7 +579,15 @@ export async function runGitCandidatePreflight(params: {
     }
   } catch (error) {
     cleanupUncertain = hasCommandProcessCleanupError(error);
-    throw error;
+    const failedStep = params.steps.findLast(isFailedUpdateStep);
+    throw cleanupUncertain ||
+      failedStep?.name !== "preflight-runtime-stage" ||
+      error instanceof UpdatePreMutationError
+      ? error
+      : new UpdatePreMutationError("git-preflight-failed", formatErrorMessage(error), {
+          cause: error,
+          stepResult: { steps: params.steps, failedStep },
+        });
   } finally {
     if (!cleanupUncertain) {
       const cleanup = () => cleanupGitPreflight(params, worktreeDir, preflightRoot);

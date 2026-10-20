@@ -19,7 +19,7 @@ type GitPullRequestBranchFacts = {
   stats: { additions: number; deletions: number; changedFiles: number } | null;
 };
 
-export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string } & (
+export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string; summaryOnly?: boolean } & (
   | {
       scope?: "all" | "uncommitted";
       commit?: never;
@@ -43,7 +43,15 @@ export type GitReadOperations = {
     >;
   };
   "checkout.revision": {
-    input: { root: string; includeIndex: boolean; branch?: string; defaultBranch?: string };
+    input: {
+      root: string;
+      scope: "context" | "refs" | "worktree" | "diff";
+      branch?: string;
+      defaultBranch?: string;
+      summaryOnly?: boolean;
+      /** Previously displayed paths whose Git attributes can affect the cached diff. */
+      paths?: string[];
+    };
     output: string | null;
   };
   "checkout.context": {

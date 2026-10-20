@@ -34,13 +34,13 @@ function matchingFiles(pattern: RegExp, owners: readonly string[] = []): string[
 
 describe("shared control ownership", () => {
   it("keeps dialogs, menus, and tabs on shared primitives", () => {
-    expect(matchingFiles(/<dialog\b/u, ["components/modal-dialog.ts"])).toEqual([]);
+    expect(matchingFiles(/<dialog\b/u, ["components/solid/modal-dialog.ts"])).toEqual([]);
     expect(
       matchingFiles(/<[a-z][^>]*\srole=["'](?:menu|menubar|menuitem|tab|tablist)["']/u, [
         "components/menu-surface.ts",
-        "components/web-awesome.ts",
-        "components/panel-tab-strip.ts",
-        "components/hub-tabs.ts",
+        "components/panel-tab-strip-solid.ts",
+        "components/solid/menu.ts",
+        "components/solid/tabs.ts",
       ]),
     ).toEqual([]);
     expect(
@@ -56,11 +56,11 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette-view.ts",
       "components/multi-select.ts",
-      "components/select-picker.ts",
+      "components/select-picker-view.ts",
       "pages/chat/components/chat-composer-menu.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
-      "pages/chat/components/chat-model-picker.ts",
+      "pages/chat/components/chat-model-picker-panel.ts",
       "pages/new-session/checkout-chip.ts",
       "pages/new-session/place-browser.ts",
     ]);
@@ -72,7 +72,6 @@ describe("shared control ownership", () => {
     expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
       "components/assistant-panel-view.ts",
-      "components/dock-layout-controller.ts",
       "components/dock-layout-solid.ts",
       "pages/chat/chat-page-pane-render.ts",
       "pages/chat/components/chat-sidebar-region.runtime.ts",

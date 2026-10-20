@@ -840,7 +840,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     }
   });
 
-  it("reloads the selected agent and clears a failed model draft after reconnect", async () => {
+  it("refreshes saved models while retaining rejection feedback until access changes", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -901,7 +901,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
+      await agentPicker.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
@@ -975,7 +975,10 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           ),
         )
         .toBe("openai/reconnected-model");
-      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+      expect(await page.getByRole("alert").textContent()).toContain(
+        "synthetic model save rejected",
+      );
+      expect(await gateway.getRequests("config.patch")).toHaveLength(failedPatchCount + 1);
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
@@ -987,6 +990,21 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       if (recordVisuals) {
         await captureProviderProof("06-reconnected-model.png", primary);
       }
+
+      const accessChangeAuthCount = (await gateway.getRequests("models.authStatus")).length;
+      await gateway.setOperatorScopes(["operator.read"]);
+      await gateway.closeLatest(1012, "model provider access-change proof");
+      await expect
+        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
+        .toBeGreaterThan(accessChangeAuthCount);
+      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+      await primary.locator(".picker-select__trigger").click();
+      const readOnlyModel = primary.locator(
+        '[role="option"][data-value="openai/reconnected-model"]',
+      );
+      expect(await readOnlyModel.getAttribute("aria-disabled")).toBe("true");
+      await readOnlyModel.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(failedPatchCount + 1);
     } finally {
       await context.close();
     }

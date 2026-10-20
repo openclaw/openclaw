@@ -39,6 +39,15 @@ shared `message` tool. Your plugin owns:
   channel: its current channel, or the only configured channel. A `message`
   tool send to another channel does not get that channel's rules, and external
   ACP agents do not receive it. Keep all formatting rules in this one hook.
+- **Message guidance** - `agentPrompt.messageToolHints` supplies account-scoped
+  instructions. Set `agentPrompt.customInlineButtonHint: true` when the channel
+  owns inline-button guidance; core then omits its generic callback example and
+  capability-configuration hint. Return no button instructions when the account
+  has buttons disabled. The flag defaults to `false`.
+- **Question input** - declare `agentPrompt.questionInputMode: "buttons"` only
+  when your channel supports native `ask_user` controls. Core resolves this from
+  the inbound channel when preparing the conversation's tool capabilities;
+  omission keeps `ask_user` out of the tool catalog so the agent asks in plain text.
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch. For configured agent group
@@ -62,6 +71,16 @@ supplied context is public. Unknown audience metadata must deny publication.
 owner; never derive this field from message text, stored permalinks, or model
 arguments. The ordinary decision-only resolver does not grant authority.
 
+For mutable source policy, the intent may also supply
+`prepare: async () => assertCurrent`. The host invokes it once at run admission
+and retains the returned synchronous guard for child publication. The channel
+must reacquire current authorization and routing with bounded retries and return
+`null` if the prepared prompt's route, access tier, or public-context proof is no
+longer valid. This drops the turn without trying another model or publishing a
+generic model-failure reply. Throw operational failures instead; these stop model
+fallback but produce a retryable access-verification error. Preparation cannot
+renew an already admitted run; use-time checks and revocation remain mandatory.
+
 An exact host resolver-to-context handoff binds the intent to one admitted
 run. Only its fresh immediate isolated visible children can receive public
 grants, in their creation commits before launch. Private/draft, incognito, existing,
@@ -69,7 +88,7 @@ forked, retargeted, and descendant sessions do not qualify. The intent cannot
 be serialized for future turns or transport fallback. This does not grant
 creator/admin authority or change Team collaboration permissions. Consumers
 of `onVisibleWorkSessions` may use `publicRead: true` as the creation receipt;
-a canonical URL alone is not proof of anonymous access.
+a normalized URL alone is not proof of anonymous access.
 
 The host awaits `onVisibleWorkSessions(sessions, creation)` for fresh visible
 children before their first turn starts, so a channel can persist session-scoped
@@ -205,6 +224,15 @@ when initialization must finish before the child runs.
     config-only bootstrap activation remain separate; persisted credentials alone
     do not enable a channel.
 
+    `gateway.loginWithQrStart` receives an optional
+    `assertCredentialPersistenceCurrent()` callback. Retain it with the QR login
+    and invoke it immediately before credential writes, including deferred writes
+    after the RPC returns. It throws when the Gateway's account configuration or
+    plugin lifetime changes. Compose it with the plugin's own active-login guard;
+    do not replace that guard or tie QR lifetime to the initiating RPC. Omitted
+    account IDs retain plugin-specific single-account profile selection; the
+    Gateway rejects omission when multiple accounts are configured.
+
     Create `src/channel.ts`:
 
     ```typescript src/channel.ts
@@ -311,7 +339,7 @@ when initialization must finish before the child runs.
     });
     ```
 
-    For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
+    For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
@@ -397,6 +425,40 @@ when initialization must finish before the child runs.
       while retaining terminal errors and host-marked command results.
       It classifies the reply lane; it does not check content, sendability, or authority.
 
+      `isHostNoticePayload(payload)` from the same subpath identifies host errors,
+      status notices, and metadata-only host diagnostics. Agent-to-agent channels
+      can exclude these in `messaging.transformReplyPayload` while still preserving
+      run failures through `replyOptions.onAgentRunTerminalOutcome` and their native
+      task status. This callback stays bound to the originating request when its
+      turn runs as a queued followup; collected turns notify every source's terminal
+      observer. Human-facing channels should continue to
+      deliver useful host notices.
+
+      `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
+      (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
+      source. These messages will not run, so channels should finalize their status
+      without waiting for `onAgentRunTerminalOutcome`. Overflow retained for a summary
+      remains pending; sources evicted from the summary cap report `queue-cap-old`.
+
+      A `queuedDeliveryCorrelations` entry stays bound to its source through collect
+      batching. Its optional `shouldSuppressReply(payload)` applies before an
+      origin-routed send, which bypasses the immediate reply dispatcher. All source
+      policies in a collected batch must agree to suppress it; an explicit request
+      can therefore retain feedback alongside passive messages. `onReplyDelivered`
+      runs only after confirmed origin delivery, so deduplication must not record
+      a failed or transport-pending send as delivered.
+      Its `begin()` cleanup receives an optional settlement with `visibleReplySent`,
+      `failed`, and `completed` after delivery and presentation cleanup finish.
+      `completed` identifies successful execution, including deliberate silence;
+      cancellation does not count as recovery from an earlier failure.
+      `transportPending: true` means delivery remains owned by transport without a
+      later callback to this source; clear activity UI without claiming success or failure
+      unless `visibleReplySent` or `failed` already proves the outcome.
+      An omitted settlement means the attempt deferred, queued a source retry,
+      or uses a separate source-owned delivery outcome (such as a Gateway reply batch).
+      Use the settlement for delivery-dependent completion UI; an agent's successful
+      execution callback can arrive before any reply is sent.
+
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
@@ -404,6 +466,13 @@ when initialization must finish before the child runs.
       replies whose confirmed delivery the shared dispatcher will record. Channel
       adapters must skip their own transcript mirror for those replies, including
       fallback sends, while still reporting the delivery outcome normally.
+
+      The shared channel turn lifecycle owns pending-final delivery admission.
+      It records direct-send custody immediately before platform I/O, or transfers
+      custody to the durable delivery queue. Its reply dispatcher skips the
+      intermediate queued claim; terminal settlement and replay suppression remain
+      owned by the delivery lifecycle.
+
       When recovering a payload from earlier source text, apply
       `preserveReplyPayloadMediaSelection(current, recovered)` from
       `openclaw/plugin-sdk/channel-outbound`.
@@ -457,9 +526,31 @@ when initialization must finish before the child runs.
       to avoid reparsing literal text in its own normalization code.
     </Accordion>
 
-    ### Group tool-policy adapters
+    <a id="group-tool-policy-adapters"></a>
 
-    A channel that implements `group.resolveToolPolicy` and supports
+    ### Conversation tool-policy adapters
+
+    Resolve configured permissions at execution admission. Direct conversations
+    use `security.resolveDirectToolPolicy(context)`; shared conversations use
+    `groups.resolveToolPolicy(context)`. The host passes current `cfg` and the
+    original authenticated account, sender, and conversation facts. Direct
+    callbacks receive an explicit `conversationId`; use that value rather than
+    inferring a chat from the destination execution session key.
+    Resolve through your plugin's existing account/config helpers.
+
+    Preserve requester facts across delegation, not previously calculated policy.
+    A new delegated execution resolves destination policy for the original
+    requester; an already admitted execution keeps its prepared policy. Human
+    input still waiting for admission uses current configuration when admitted.
+    Shared history is unchanged, and delegation may reach a more capable agent
+    under its destination authorization.
+
+    `access.toolPolicy` and `MsgContext.ConversationToolPolicy` remain deprecated
+    original-request snapshots for external plugins. Migrate configuration-derived
+    producers to the adapters above; see the
+    [compatibility lifetime](/plugins/sdk-migration/compatibility-policy#channel-prepared-tool-policy).
+
+    A channel that implements `groups.resolveToolPolicy` and supports
     `toolsBySender` must forward the complete `ChannelGroupContext` to its
     shared policy resolver. In particular, honor `senderPolicyMode: "never"`
     by skipping sender-specific overlays at both the matched-group and wildcard
@@ -737,7 +828,7 @@ remains supported for older plugins and hosts, with no removal version scheduled
 Keep its return type strictly `boolean`: older hosts treat a returned promise as
 truthy rather than awaiting it. Hosts predating the async companion ignore the new
 field and use only the synchronous callback. An async-only alias therefore cannot
-prove equivalence on those hosts; exact canonical target matching still works.
+prove equivalence on those hosts; exact normalized target matching still works.
 
 Verified official installed plugins can delegate supported conversation, metadata, and attachment
 reads to provider-owned access checks. Channel-origin requests need server-owned
@@ -967,7 +1058,7 @@ the plugin does not grant additional authority to an existing job.
 </CardGroup>
 
 <Note>
-Some bundled helper seams still exist for bundled-plugin maintenance and
+Some bundled helper interfaces still exist for bundled-plugin maintenance and
 compatibility. They are not the recommended pattern for new channel plugins;
 prefer the generic channel/setup/reply/runtime subpaths from the common SDK
 surface unless you are maintaining that bundled plugin family directly.

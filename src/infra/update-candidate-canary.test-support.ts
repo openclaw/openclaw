@@ -1,10 +1,14 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import { resolveUpdateResultNextAction } from "../cli/update-cli/update-recovery-guidance.js";
 import type { SpawnResult } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import * as diskSpace from "./disk-space.js";
+import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export class FakeChild extends EventEmitter {
@@ -114,4 +118,63 @@ export function renderSteps(steps: UpdateStepResult[]) {
     presentation.progress.onStepComplete?.({ ...step, index, total: steps.length });
   }
   return log.mock.calls.flat().join("\n");
+}
+
+export function registerCanarySnapshotCapacityTests({
+  canaryStateOptions,
+  getRoot,
+  mocks,
+}: {
+  canaryStateOptions: () => Parameters<typeof validateUpdateCandidateCanary>[0];
+  getRoot: () => string;
+  mocks: { snapshot: ReturnType<typeof vi.fn>; spawn: ReturnType<typeof vi.fn> };
+}) {
+  it("records a typed capacity refusal before notifying the snapshot failure", async () => {
+    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: 0,
+      totalBytes: 1024,
+    }));
+    const onStep = vi.fn();
+    try {
+      const env = { TMPDIR: "/synthetic/tmp" };
+      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env, onStep });
+      expect(result).toMatchObject({
+        status: "error",
+        phase: "snapshot",
+        reason: "candidate-snapshot-failed",
+      });
+      const updateResult = { ...result, mode: "git" as const, root: getRoot() };
+      const nextAction = resolveUpdateResultNextAction({
+        result: updateResult,
+        verifiedServingVersion: "2026.10.5-beta.2",
+        env,
+      });
+      const report = renderUpdateRunReport(updateRunReportInputFromResult(updateResult), {
+        nextAction,
+      });
+      expect(report.headline).toContain("OpenClaw update failed: candidate-snapshot-failed");
+      expect(report.markdown).toContain(
+        "Fix candidate-snapshot-failed then run `openclaw update` again.",
+      );
+      const failed = canaryOutcomeStep(result.steps);
+      expect(failed).toMatchObject({
+        name: "candidate-state-snapshot",
+        exitCode: 1,
+        snapshotCapacity: {
+          reason: "snapshot-capacity-insufficient",
+          selection: null,
+        },
+      });
+      expect(
+        failed?.snapshotCapacity?.candidates.map((candidate) => candidate.availableBytes),
+      ).toEqual([0, 0, 0]);
+      expect(onStep).toHaveBeenCalledExactlyOnceWith(failed);
+      expect(mocks.snapshot).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } finally {
+      capacity.mockRestore();
+    }
+  });
 }

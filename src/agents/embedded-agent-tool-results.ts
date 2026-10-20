@@ -1,4 +1,3 @@
-/** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import {
   asOptionalObjectRecord,
@@ -11,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { readNodePermissionError } from "./node-permission-error.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -62,23 +62,25 @@ export function truncateLiveExecOutput(text: string): string {
 }
 
 export function capLiveExecResult(result: unknown): unknown {
-  const details = readToolResultDetails(result);
+  const record = readRecord(result);
+  const details = readToolResultDetails(record);
   if (!details || typeof details.status !== "string" || typeof details.aggregated !== "string") {
     return result;
   }
-  const aggregated = truncateLiveExecOutput(details.aggregated);
-  if (aggregated === details.aggregated) {
-    return result;
-  }
-  if (Array.isArray(result)) {
-    return result;
-  }
+  const { aggregated, ...liveDetails } = details;
+  const content = record?.content;
+  const hasText =
+    Array.isArray(content) &&
+    content.some((block) => {
+      const entry = asOptionalObjectRecord(block);
+      return entry?.type === "text" && typeof entry.text === "string" && entry.text.length > 0;
+    });
+  // Live clients render content; details-only worker results still need their output.
   return {
-    ...(result as Record<string, unknown>),
-    details: {
-      ...details,
-      aggregated,
-    },
+    ...record,
+    details: hasText
+      ? liveDetails
+      : { ...liveDetails, aggregated: truncateLiveExecOutput(aggregated) },
   };
 }
 
@@ -156,6 +158,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
   const errorRecord = readRecord(error);
   const rawDetails = readRecord(errorRecord?.details);
   const nodeError = readRecord(rawDetails?.nodeError);
+  const permissionMissing = readNodePermissionError(error);
   const gatewayCode =
     normalizeOptionalString(errorRecord?.gatewayCode) ?? normalizeOptionalString(errorRecord?.code);
   const message = error instanceof Error ? error.message : String(error);
@@ -166,6 +169,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
       error: message,
       ...(gatewayCode ? { gatewayCode } : {}),
       ...(nodeError ? { nodeError } : {}),
+      ...(permissionMissing ? { permissionMissing } : {}),
     },
   };
 }

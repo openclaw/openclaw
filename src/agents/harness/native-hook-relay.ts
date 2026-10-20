@@ -20,7 +20,6 @@ import {
   retainNativeHookRelayOperation,
   renewNativeHookRelayBridgeRecord,
   unregisterNativeHookRelayBridge,
-  isRetryableNativeHookRelayBridgeLookupError,
 } from "./native-hook-relay-bridge.js";
 import {
   normalizeNativeHookInvocation,
@@ -125,7 +124,8 @@ function scheduleNativeHookRelayExpiry(
     if (relays.get(relayId) !== registration) {
       return;
     }
-    const remainingMs = registration.expiresAtMs - Date.now();
+    const remainingMs =
+      (lifetime.expiresAtMonotonicMs ?? registration.expiresAtMs) - performance.now();
     if (remainingMs < 0) {
       unregisterNativeHookRelay(relayId, registration);
       return;
@@ -138,6 +138,14 @@ function scheduleNativeHookRelayExpiry(
 
 function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
   return resolveExpiresAtMsFromDurationMs(normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS));
+}
+
+function resolveNativeHookRelayMonotonicExpiresAtMs(ttlMs: number | undefined): number | undefined {
+  const ttlMsValue = normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
+  if (ttlMsValue === undefined) {
+    return undefined;
+  }
+  return performance.now() + ttlMsValue;
 }
 
 export function registerNativeHookRelay(
@@ -162,6 +170,9 @@ function registerNativeHookRelayInternal(
   params: RegisterNativeHookRelayParams,
   owner?: NativeHookRelayOwnerOptions,
 ): OwnedNativeHookRelayRegistrationHandle {
+  if (params.requirePreToolUse && !params.runBeforeToolCall) {
+    throw new Error("Required native PreToolUse relay needs a host runBeforeToolCall capability.");
+  }
   const { retention, approvalHost } = owner ?? {};
   const executionAdmission = snapshotNativeHookRelayExecutionAdmission(owner?.executionAdmission);
   pruneExpiredNativeHookRelays();
@@ -171,6 +182,7 @@ function registerNativeHookRelayInternal(
   const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
   const now = Date.now();
   const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
+  const expiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(params.ttlMs);
   if (expiresAtMs === undefined) {
     throw new Error("Native hook relay expiry is outside the supported Date range");
   }
@@ -184,9 +196,8 @@ function registerNativeHookRelayInternal(
     stateDbPath,
     () => partialRegistration !== undefined && relays.get(relayId) === partialRegistration,
   );
-  const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
+  unregisterNativeHookRelay(relayId, undefined, {
     deferListenerCloseMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
-    deferOnUnregister: true,
   });
   try {
     const retained =
@@ -214,6 +225,7 @@ function registerNativeHookRelayInternal(
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
       preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
+      requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
       ...(params.signal ? { signal: params.signal } : {}),
@@ -234,6 +246,7 @@ function registerNativeHookRelayInternal(
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
       policyReady,
+      expiresAtMonotonicMs,
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
       ...(executionAdmission ? { executionAdmission } : {}),
@@ -295,7 +308,8 @@ function registerNativeHookRelayInternal(
           return;
         }
         const renewedExpiresAtMs = resolveNativeHookRelayExpiresAtMs(ttlMs);
-        if (renewedExpiresAtMs === undefined) {
+        const renewedExpiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(ttlMs);
+        if (renewedExpiresAtMs === undefined || renewedExpiresAtMonotonicMs === undefined) {
           return;
         }
         pendingRenewal = pendingRenewal.then(async () => {
@@ -327,6 +341,10 @@ function registerNativeHookRelayInternal(
           }
           current.expiresAtMs = renewedExpiresAtMs;
           handle.expiresAtMs = renewedExpiresAtMs;
+          const renewedLifetime = readRelayLifetime(current);
+          if (renewedLifetime) {
+            renewedLifetime.expiresAtMonotonicMs = renewedExpiresAtMonotonicMs;
+          }
           scheduleNativeHookRelayExpiry(relayId, current);
         });
       },
@@ -338,26 +356,20 @@ function registerNativeHookRelayInternal(
       unregisterNativeHookRelay(relayId, partialRegistration);
     }
     throw error;
-  } finally {
-    // The successor is authoritative before the old callback runs. A reentrant
-    // callback can therefore replace this registration normally instead of
-    // being overwritten by the outer replacement path. Finally also preserves
-    // the old callback if successor setup aborts partway through.
-    deliverReplacedRegistrationUnregister?.();
   }
 }
 
 function unregisterNativeHookRelay(
   relayId: string,
   expectedRegistration?: ActiveNativeHookRelayRegistration,
-  options?: { deferListenerCloseMs?: number; deferOnUnregister?: boolean },
-): (() => void) | undefined {
+  options?: { deferListenerCloseMs?: number },
+): void {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
-    return undefined;
+    return;
   }
   const registration = expectedRegistration ?? relays.get(relayId);
   if (!registration) {
-    return undefined;
+    return;
   }
   const lifetime = readRelayLifetime(registration);
   const bridge = relayBridges.get(relayId);
@@ -380,23 +392,11 @@ function unregisterNativeHookRelay(
   removeNativeHookRelayInvocations(relayId);
   const cancelApprovals = detachNativeHookRelayApprovalState(relayId);
   cancelApprovals();
-  const deliverOnUnregister = () => {
-    try {
-      lifetime?.retention?.onDispose();
-    } catch (error) {
-      try {
-        log.warn("native hook relay unregister callback failed", { error, relayId });
-      } catch {
-        // Teardown has already detached every identity-bound resource. Logging
-        // must not turn an observer callback failure into a cleanup failure.
-      }
-    }
-  };
-  if (options?.deferOnUnregister) {
-    return deliverOnUnregister;
+  try {
+    lifetime?.retention?.onDispose();
+  } catch (error) {
+    log.warn("native hook relay unregister callback failed", { error, relayId });
   }
-  deliverOnUnregister();
-  return undefined;
 }
 
 function deactivateNativeHookRelayForeground(
@@ -659,9 +659,6 @@ export const testing = {
   ): Promise<Record<string, unknown> | undefined> {
     const record = await readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
-  },
-  isNativeHookRelayBridgeLookupRetryableForTests(error: unknown, elapsedMs = 0): boolean {
-    return isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs });
   },
   formatPermissionApprovalDescriptionForTests,
   permissionRequestContentFingerprintForTests,

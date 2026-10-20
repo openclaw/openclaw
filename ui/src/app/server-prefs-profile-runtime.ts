@@ -1,7 +1,6 @@
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeTabIconPreference,
-  normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
@@ -18,6 +17,8 @@ import {
   prefValuesEqual,
   isNavigationPref,
   SYNCED_PREFS,
+  extractProfileUiPrefs,
+  PROFILE_UI_PREFERENCE_KEYS,
   UI_NAVIGATION_PREFERENCE_KEYS,
   type ServerUiPrefs,
 } from "./server-prefs-state.ts";
@@ -220,33 +221,13 @@ export async function readProfileAppearancePrefs(
   profileId: string,
 ): Promise<ServerUiPrefs | null> {
   const params = {
-    keys: [
-      ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
-      ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
-    ],
+    keys: PROFILE_UI_PREFERENCE_KEYS,
   };
   const result = await loadUserPreferences(client, profileId, params);
   if (result.status !== "ok") {
     return null;
   }
-  const prefs: ServerUiPrefs = {};
-  for (const [key, preferenceKey] of Object.entries(UI_APPEARANCE_PREFERENCE_KEYS)) {
-    if (!isAppearancePref(key)) {
-      continue;
-    }
-    const value = normalizeUiAppearancePreference(preferenceKey, result.entries[preferenceKey]);
-    if (value !== undefined) {
-      Object.assign(prefs, { [key]: value });
-    }
-  }
-  for (const key of Object.keys(UI_NAVIGATION_PREFERENCE_KEYS).filter(isNavigationPref)) {
-    const preferenceKey = UI_NAVIGATION_PREFERENCE_KEYS[key];
-    const value = SYNCED_PREFS[key].extract(result.entries[preferenceKey]);
-    if (value !== undefined) {
-      Object.assign(prefs, { [key]: value });
-    }
-  }
-  return prefs;
+  return extractProfileUiPrefs(result.entries);
 }
 
 /** Called only after the existing async reader boundary, with the profile owner held by reference. */

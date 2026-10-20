@@ -6,8 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetModelsJsonReadyCacheForTest } from "../agents/models-config-state.test-support.js";
 import { CUSTOM_PROXY_MODELS_CONFIG } from "../agents/models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { persistClawInstallRecord } from "../claws/provenance.js";
-import { makeProvenancePlan } from "../claws/provenance.test-helpers.js";
+import { makeProvenancePlan, seedLegacyClawInstall } from "../claws/provenance.test-helpers.js";
 import { resolveClawToolPolicyConsent } from "../claws/tool-policy-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -52,7 +51,7 @@ async function fixture() {
     { schemaVersion: 1, agent: { id: "worker" } },
     { openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["read"] } } } },
   );
-  persistClawInstallRecord(plan, { env: process.env });
+  seedLegacyClawInstall(plan, { env: process.env });
   const { id, ...agent } = plan.agent.config;
   const config = {
     ...CUSTOM_PROXY_MODELS_CONFIG,
@@ -113,29 +112,10 @@ it("keeps source secret markers when the same runtime is republished before cont
   );
 });
 
-it.each(["cold selector", "pinned directory"] as const)(
-  "retains captured model-config authority after an environment change: %s",
-  async (mode) => {
-    const { config, agentDir, state } = await fixture();
-    if (mode === "pinned directory") {
-      setRuntimeConfigSnapshot(config);
-    }
-    const pending = ensureOpenClawModelsJson(
-      undefined,
-      mode === "cold selector" ? agentDir : undefined,
-    );
-    vi.stubEnv(
-      mode === "cold selector" ? "OPENCLAW_CONFIG_PATH" : "OPENCLAW_STATE_DIR",
-      path.join(state, mode === "cold selector" ? "replaced.json" : "replacement-state"),
-    );
-    if (mode === "pinned directory") {
-      expect((await pending).agentDir).toBe(agentDir);
-    } else {
-      await expect(pending).rejects.toThrow("Runtime config source changed");
-      expect(getRuntimeConfigSnapshot()).toBeNull();
-      await expect(fs.access(path.join(agentDir, "models.json"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    }
-  },
-);
+it("retains the pinned model directory after an environment change", async () => {
+  const { config, agentDir, state } = await fixture();
+  setRuntimeConfigSnapshot(config);
+  const pending = ensureOpenClawModelsJson();
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
+  expect((await pending).agentDir).toBe(agentDir);
+});

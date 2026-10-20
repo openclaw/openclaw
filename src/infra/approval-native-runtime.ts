@@ -1,4 +1,3 @@
-// Creates channel-native approval runtimes and delivery flows.
 import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,
@@ -15,7 +14,7 @@ import type {
   ChannelNativeApprovalDeliveryCallbacks,
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
-import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
+import { classifyApprovalRequestChannelRouteAsync } from "./approval-request-account-binding.js";
 import type {
   ApprovalRequestInput,
   ApprovalResolved,
@@ -117,7 +116,7 @@ export function createChannelNativeApprovalRuntimeAsync<
     // SAFETY: the route coordinator receives only normalized requests from this runtime.
     shouldHandle: (request) => adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
     classifyRoute: (request) =>
-      classifyApprovalRequestChannelRoute({
+      classifyApprovalRequestChannelRouteAsync({
         cfg: adapter.cfg,
         request,
         channel: adapter.channel ?? "",

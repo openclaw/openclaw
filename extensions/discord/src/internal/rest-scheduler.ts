@@ -111,15 +111,6 @@ export class RestScheduler<TData> {
     this.rejectPending(new Error("Discord request queue cleared"));
   }
 
-  abortPending(): void {
-    this.queueGeneration += 1;
-    this.rejectPending(new DOMException("Aborted", "AbortError"));
-  }
-
-  get queueSize(): number {
-    return this.queuedRequests;
-  }
-
   private getBucket(key: string): BucketState<TData> {
     const existing = this.buckets.get(key);
     if (existing) {
@@ -133,15 +124,6 @@ export class RestScheduler<TData> {
     };
     this.buckets.set(key, bucket);
     return bucket;
-  }
-
-  private hasBucketReference(key: string): boolean {
-    for (const bucketKey of this.routeBuckets.values()) {
-      if (bucketKey === key) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private isBucketRateLimited(bucket: BucketState<TData>, now = Date.now()): boolean {
@@ -312,12 +294,9 @@ export class RestScheduler<TData> {
       for (const routeKey of bucket.routeKeys) {
         if (this.routeBuckets.get(routeKey) === key) {
           this.routeBuckets.delete(routeKey);
-          bucket.routeKeys.delete(routeKey);
         }
       }
-      if (this.routeBuckets.get(key) !== key && !this.hasBucketReference(key)) {
-        this.buckets.delete(key);
-      }
+      this.buckets.delete(key);
     }
   }
 

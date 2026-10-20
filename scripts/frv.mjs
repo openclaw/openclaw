@@ -27,8 +27,10 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  isReleaseGhServerError,
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
+  readReleaseJobListing,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -69,6 +71,8 @@ const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCH_POLL_MS = 60_000;
 const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_FILENAME = "full-release-execution-plan.json";
+const USAGE =
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
 
 function requiredValue(value, label) {
   const normalized = String(value ?? "").trim();
@@ -125,6 +129,9 @@ function parseArgs(argv) {
     runId: "",
   };
   const publicationRequested = argv.includes("--publication-run");
+  if (["--help", "-h", "help"].includes(command) && argv.length === 1) {
+    return { ...options, command: "help" };
+  }
   const seen = new Set();
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -167,9 +174,7 @@ function parseArgs(argv) {
   if (
     !["cancel", "continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)
   ) {
-    throw new Error(
-      "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>",
-    );
+    throw new Error(USAGE);
   }
   if (options.force && command !== "cancel") {
     throw new Error("--force is valid only with cancel");
@@ -281,7 +286,7 @@ function isUnknownAllowEscapeSequencesFlag(error) {
   );
 }
 
-async function execGhRead(args, options = {}) {
+async function execGhRead(args, { smallerPageFallback = false, ...options } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     const remaining =
       options.operationDeadline === undefined
@@ -295,6 +300,7 @@ async function execGhRead(args, options = {}) {
     } catch (error) {
       if (
         attempt === 4 ||
+        (smallerPageFallback && isReleaseGhServerError(error)) ||
         releaseGhRateLimitRetryAt(error) !== undefined ||
         classifyReleaseGhTransportError(error) !== "transient"
       ) {
@@ -1014,15 +1020,24 @@ export function createClient(repository, dependencies = {}) {
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
   const execute = dependencies.execCommand ?? execCommand;
-  const readJobs = async (path, options) => {
-    const output = await apiText(path, ".jobs[] | @json", [], options);
-    return output
-      ? output
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => JSON.parse(line))
-      : [];
-  };
+  const readJobs = (path, options) =>
+    readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+      const output = await apiText(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=${perPage}`,
+        ".jobs[] | @json",
+        [],
+        {
+          ...options,
+          smallerPageFallback,
+        },
+      );
+      return output
+        ? output
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+        : [];
+    });
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -1065,7 +1080,7 @@ export function createClient(repository, dependencies = {}) {
     getAttemptJobs:
       dependencies.getAttemptJobs ??
       ((runId, runAttempt, options) =>
-        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
+        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs`, options)),
     getRef(fullRef, options) {
       const ref = fullRef
         .replace(/^refs\//u, "")
@@ -1083,8 +1098,7 @@ export function createClient(repository, dependencies = {}) {
     getRunAttempt(runId, runAttempt, options) {
       return apiJson(`actions/runs/${runId}/attempts/${runAttempt}`, options);
     },
-    getParentJobs: (runId, options) =>
-      readJobs(`actions/runs/${runId}/jobs?filter=all&per_page=100`, options),
+    getParentJobs: (runId, options) => readJobs(`actions/runs/${runId}/jobs?filter=all`, options),
     async getJobLog(jobId, options) {
       // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
       // real gh ignores the flag off-TTY, so the controller works with either binary.
@@ -1174,7 +1188,11 @@ async function reconcileAttemptStarts(
   mutationResults,
   operationDeadline,
   onStarted,
+  retryServerError,
 ) {
+  if (minimumAttempts.size !== mutationResults.length) {
+    throw new Error("rerun mutation results do not match admitted run identities");
+  }
   const reconcileDeadline = Math.min(
     operationDeadline,
     Date.now() +
@@ -1220,8 +1238,45 @@ async function reconcileAttemptStarts(
       );
     }
   }
+  const runIds = [...minimumAttempts.keys()];
+  const retryable =
+    retryServerError === undefined
+      ? []
+      : [...pending].filter((runId) => {
+          const result = mutationResults[runIds.indexOf(runId)];
+          return result?.status === "rejected" && isReleaseGhServerError(result.reason);
+        });
+  if (retryable.length > 0) {
+    const retryPriorRuns = new Map();
+    await Promise.all(
+      retryable.map(async (runId) => {
+        const priorRun = priorRuns.get(runId);
+        const current = await client.getRun(runId, { operationDeadline });
+        if (
+          JSON.stringify(exactTerminalRunState(current, runId)) !==
+          JSON.stringify(exactTerminalRunState(priorRun, runId))
+        ) {
+          throw new Error(`rerun source ${runId} changed before mutation retry`);
+        }
+        retryPriorRuns.set(runId, current);
+      }),
+    );
+    const retryResults = await Promise.allSettled(
+      retryable.map((runId) => retryServerError(runId)),
+    );
+    await reconcileAttemptStarts(
+      new Map(retryable.map((runId) => [runId, minimumAttempts.get(runId)])),
+      retryPriorRuns,
+      client,
+      retryResults,
+      operationDeadline,
+      onStarted,
+    );
+    for (const runId of retryable) {
+      pending.delete(runId);
+    }
+  }
   if (pending.size > 0) {
-    const runIds = [...minimumAttempts.keys()];
     const failures = [...pending].flatMap((runId) => {
       const result = mutationResults[runIds.indexOf(runId)];
       if (result?.status !== "rejected") {
@@ -1695,6 +1750,9 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       const selected = status.children.find((child) => child.key === target.childKey);
       if (selected.status !== "active" && !ownedAttempts.has(selected.runId)) {
         if (target.name === undefined) {
+          if (selected.status === "passed") {
+            return { action: "nothing-to-rerun", status };
+          }
           if (selected.status !== "failed") {
             throw new Error(`child ${selected.key} is ${selected.status}; nothing to rerun`);
           }
@@ -1799,6 +1857,7 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
         }),
       );
       if (sentRunIds.size > 0) {
+        const requestsByRunId = new Map(requests.map((request) => [request.child.runId, request]));
         await reconcileAttemptStarts(
           new Map([...minimumAttempts].filter(([runId]) => sentRunIds.has(runId))),
           priorRuns,
@@ -1806,6 +1865,24 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
           mutationResults.filter((_result, index) => sentRunIds.has(requests[index].child.runId)),
           operationDeadline,
           (run) => report(run, true),
+          async (runId) => {
+            const source = exactTerminalRunState(priorRuns.get(runId), runId);
+            assertRootRunIdentity(
+              await client.getRun(rootRunId, { operationDeadline }),
+              parentBinding,
+              true,
+            );
+            const current = exactTerminalRunState(
+              await client.getRun(runId, { operationDeadline }),
+              runId,
+            );
+            if (JSON.stringify(current) !== JSON.stringify(source)) {
+              throw new Error(`child ${runId} changed before mutation retry`);
+            }
+            const { child, job } = requestsByRunId.get(runId);
+            remainingOperationTime(operationDeadline);
+            await (job ? client.rerunJob(job.id) : client.rerunFailed(child.runId));
+          },
         );
       }
       const admissionFailure = mutationResults.find(
@@ -1935,6 +2012,17 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       mutationResults,
       operationDeadline,
       (run) => report(run, true),
+      async () => {
+        const retryParent = exactTerminalRunState(
+          await client.getRun(rootRunId, { operationDeadline }),
+          rootRunId,
+        );
+        if (JSON.stringify(retryParent) !== JSON.stringify(terminalParent)) {
+          throw new Error(`verification parent run changed before mutation retry: ${rootRunId}`);
+        }
+        remainingOperationTime(operationDeadline);
+        await client.rerunParent(rootRunId);
+      },
     );
     ownedAttempts.set(rootRunId, minimumAttempts.get(rootRunId));
     await waitForTerminal([rootRunId], client, operationDeadline, minimumAttempts);
@@ -2049,7 +2137,9 @@ async function createPublicationReader(repository) {
     const ids = new Set();
     let total;
     for (let page = 1; page <= limits.pages; page += 1) {
-      const value = json(`${path}?per_page=${limits.pageSize}&page=${page}`);
+      const value = json(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=${limits.pageSize}&page=${page}`,
+      );
       requirePublication(
         Number.isSafeInteger(value?.total_count) &&
           value.total_count >= 0 &&
@@ -2079,13 +2169,15 @@ async function createPublicationReader(repository) {
     }
     throw new PublicationStatusError("limits");
   }
-  async function getRun(runId) {
+  async function getRun(runId, options = {}) {
+    const event = options.event ?? "workflow_dispatch";
     const key = String(runId);
     requirePublication(/^[1-9][0-9]*$/u.test(key) && Number.isSafeInteger(Number(key)), "limits");
     if (!runs.has(key)) {
       requirePublication(runs.size < limits.runs, "limits");
-      runs.set(key, parsePublicationRun(json(`actions/runs/${key}`), repository, key));
+      runs.set(key, parsePublicationRun(json(`actions/runs/${key}`), repository, key, event));
     }
+    requirePublication(runs.get(key).event === event);
     return runs.get(key);
   }
   async function authenticate(run, path) {
@@ -2103,6 +2195,7 @@ async function createPublicationReader(repository) {
       json(`actions/runs/${runId}/attempts/${attempt}`),
       repository,
       String(runId),
+      current.event,
     );
     requirePublication(
       observed.run_attempt === attempt &&
@@ -2190,6 +2283,17 @@ async function createPublicationReader(repository) {
     authenticate,
     readArtifact,
     listArtifacts,
+    findLinuxBuilders(request) {
+      requirePublication(request.created_at, "incomplete");
+      const title = `Linux App Release request=${request.id} attempt=${request.run_attempt}`;
+      // workflow_run uses current main, which can reject an older request.
+      // Filter by request creation, not SHA, so that rejection remains visible.
+      const created = encodeURIComponent(`>=${request.created_at}`);
+      return collection(
+        `actions/workflows/linux-app-release.yml/runs?event=workflow_run&branch=main&created=${created}`,
+        "workflow_runs",
+      ).filter((run) => run.display_title === title);
+    },
     async getAttemptJobs(runId, attempt) {
       return parsePublicationJobs(
         collection(`actions/runs/${runId}/attempts/${attempt}/jobs`, "jobs"),
@@ -2202,7 +2306,7 @@ async function createPublicationReader(repository) {
         try {
           assertPublicationRunUnchanged(
             run,
-            parsePublicationRun(json(`actions/runs/${runId}`), repository, runId),
+            parsePublicationRun(json(`actions/runs/${runId}`), repository, runId, run.event),
           );
         } catch (error) {
           throw new PublicationStatusError(publicationFailure(error), runId);
@@ -2232,6 +2336,8 @@ async function inspectPublicationStatus(options) {
     joinPublicationValidation,
     observePublicationChild,
     parseWindowsDispatch,
+    parseLinuxDispatch,
+    observeLinuxAdmission,
     observeWindowsMarker,
     parseClawHubDispatch,
   } = policy;
@@ -2418,6 +2524,110 @@ async function inspectPublicationStatus(options) {
         );
       }
     }
+    const linux = await reader.readArtifact(
+      publisher,
+      `linux-release-dispatch-${publisher.id}-${publisher.run_attempt}`,
+      "linux-dispatch.json",
+      PUBLICATION_LIMITS.diagnosticBytes,
+    );
+    if (linux.state === "available") {
+      requireArtifactUploadJob(
+        jobs,
+        "Request Linux assets after publication",
+        "Retain Linux request evidence",
+      );
+      const dispatch = parseLinuxDispatch(linux.value, plan.targetSha);
+      requirePublication(
+        !diagnostic?.context.releaseTag || dispatch.tag === diagnostic.context.releaseTag,
+      );
+      const surface = publication.surfaces.nativeLinux;
+      surface.selection = "selected";
+      surface.operation.state =
+        dispatch.state === "request-dispatched" || dispatch.state === "request-reused"
+          ? "awaiting-admission"
+          : dispatch.state;
+      publication.dispatches.push({
+        scope: "linux",
+        state: dispatch.requestRunId ? "acknowledged" : "unknown",
+        runId: String(publisher.id),
+        runAttempt: publisher.run_attempt,
+        artifactId: linux.artifactId,
+      });
+      if (dispatch.requestRunId && !dispatch.requestRunAttempt) {
+        surface.operation.state = "request-attempt-unknown";
+      }
+      if (dispatch.requestRunId && dispatch.requestRunAttempt) {
+        const currentRequest = await reader.getRun(dispatch.requestRunId);
+        await reader.authenticate(
+          currentRequest,
+          ".github/workflows/linux-app-release-request.yml",
+        );
+        const request = await reader.getRunAttempt(
+          dispatch.requestRunId,
+          Number(dispatch.requestRunAttempt),
+        );
+        requirePublication(
+          request.head_branch === "main" &&
+            request.head_sha === dispatch.workflowSha &&
+            [
+              `Linux App Release Request [${dispatch.tag}] desktop=false`,
+              `Linux App Release Request [${dispatch.tag}] desktop=true`,
+            ].includes(request.display_title),
+        );
+        const builders = reader.findLinuxBuilders(request);
+        requirePublication(builders.length <= 1);
+        if (
+          !builders.length &&
+          request.status === "completed" &&
+          request.conclusion !== "success"
+        ) {
+          surface.operation.state = `request-${request.conclusion ?? "unknown"}`;
+        }
+        if (builders.length) {
+          const builder = await reader.getRun(String(builders[0].id), { event: "workflow_run" });
+          await reader.authenticate(builder, ".github/workflows/linux-app-release.yml");
+          requirePublication(
+            builder.head_branch === "main" &&
+              builder.display_title ===
+                `Linux App Release request=${request.id} attempt=${request.run_attempt}`,
+          );
+          observePublicationChild(publication, "nativeLinux", builder, null, "dispatch-record");
+          surface.operation.state =
+            builder.status === "completed"
+              ? (builder.conclusion ?? "unknown")
+              : "awaiting-admission";
+          const admission = await reader.readArtifact(
+            builder,
+            `linux-release-admission-${request.id}-${request.run_attempt}-${builder.id}-${builder.run_attempt}`,
+            "linux-release-admission.json",
+            PUBLICATION_LIMITS.diagnosticBytes,
+          );
+          if (admission.state === "available") {
+            const builderJobs = await reader.getAttemptJobs(
+              String(builder.id),
+              builder.run_attempt,
+            );
+            requireArtifactUploadJob(
+              builderJobs,
+              "Validate release tag",
+              "Retain Linux builder admission",
+            );
+            observeLinuxAdmission(
+              publication,
+              admission.value,
+              request,
+              builder,
+              dispatch.tag,
+              plan.targetSha,
+              admission.artifactId,
+            );
+            if (builder.status !== "completed") {
+              surface.operation.state = surface.terminalMarker.state;
+            }
+          }
+        }
+      }
+    }
     const windows = await reader.readArtifact(
       publisher,
       `windows-release-dispatch-${publisher.id}-${publisher.run_attempt}`,
@@ -2435,6 +2645,10 @@ async function inspectPublicationStatus(options) {
         !diagnostic?.context.releaseTag || dispatch.tag === diagnostic.context.releaseTag,
       );
       publication.surfaces.nativeWindows.selection = "selected";
+      publication.surfaces.nativeWindows.target = {
+        tag: dispatch.tag,
+        sourceTag: dispatch.sourceTag,
+      };
       publication.dispatches.push({
         scope: "windows",
         state: dispatch.state === "dispatched" ? "acknowledged" : "unknown",
@@ -2948,6 +3162,10 @@ function print(value, json) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.command === "help") {
+    console.log(USAGE);
+    return;
+  }
   if (options.publicationRunId) {
     const value = await inspectPublicationStatus(options);
     print(value, options.json);

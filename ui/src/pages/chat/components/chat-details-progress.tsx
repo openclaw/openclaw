@@ -1,108 +1,20 @@
-import { Show, onCleanup } from "solid-js";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
-import "../../../components/web-awesome.ts";
+import { Show } from "solid-js";
+import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
+import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  defineSolidBridge,
-  LitContent,
-  type SolidBridgeElement,
-} from "../../../lit/solid-bridge.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-type Props = { props?: ChatDetailsProps; presented: boolean };
-export type ChatDetailsProgress = SolidBridgeElement<Props>;
+type Props = {
+  props?: ChatDetailsProps;
+  presented: boolean;
+  menuRef?: (menu: MenuHandle) => void;
+  onHideProgress?: () => void;
+};
 
 /** The pane owns the durable card, lifetime and all actions. */
-export const ChatDetailsProgress = defineSolidBridge<Props>(
-  "openclaw-chat-details-progress",
-  (props) => {
-    let menu!: HTMLElement;
-    const stopSummaryToggle = (event: MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    <wa-dropdown
-      ref={(element) => {
-        menu = element;
-        // Lit inserts this menu into a summary outside Solid's delegated event tree.
-        menu.addEventListener("click", stopSummaryToggle);
-      }}
-      class="chat-details-progress__menu"
-      placement="bottom-end"
-      onWa-select={(event: CustomEvent<{ item: { value?: string } }>) => {
-        if (!props.presented) {
-          return;
-        }
-        const current = props.props;
-        switch (event.detail.item.value) {
-          case "hide":
-            current?.onHideTaskProgress?.();
-            break;
-          case "collapse":
-            current?.onCollapseTaskProgressChange?.(!current.collapseTaskProgress);
-            break;
-          case "settings":
-            current?.onOpenTaskProgressSettings?.();
-            break;
-          case "clear":
-            if (current?.progressCard) {
-              current.onClearSavedProgressCard?.(current.progressCard);
-            }
-            break;
-          default:
-            break;
-        }
-      }}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="session-progress-card__refresh"
-        aria-label={t("chat.sessionDetails.progressOptions")}
-      >
-        <Icon name="moreHorizontal" />
-      </button>
-      <wa-dropdown-item value="hide">{t("chat.sessionDetails.hideProgress")}</wa-dropdown-item>
-      <wa-dropdown-item
-        value="collapse"
-        type="checkbox"
-        prop:checked={props.props?.collapseTaskProgress === true}
-      >
-        {t("chat.sessionDetails.collapseDefault")}
-      </wa-dropdown-item>
-      <wa-dropdown-item value="settings">{t("chat.sessionDetails.settings")}</wa-dropdown-item>
-      {props.props?.onClearSavedProgressCard && (
-        <wa-dropdown-item value="clear">{t("sessionProgressCard.clearSaved")}</wa-dropdown-item>
-      )}
-    </wa-dropdown>;
-    onCleanup(() => menu.removeEventListener("click", stopSummaryToggle));
-    const card = () => {
-      t("chat.sessionDetails.title");
-      const current = props.props;
-      const session = current?.selectedSession;
-      return renderSessionProgressCard(
-        current?.progressCard,
-        "details",
-        current?.onDismissProgressCard,
-        session?.status,
-        session?.startedAt,
-        session?.endedAt,
-        current?.runActive,
-        current?.collapseTaskProgress,
-        {
-          presented: props.presented,
-          gatewayScope: current?.gatewayScope,
-          sessionIdentity: current?.progressCardIdentity,
-          cardLifetime: current?.progressCardLifetime,
-          manualOnly: true,
-        },
-        current?.progressCardRefresh,
-        undefined,
-        menu,
-      );
-    };
-    return (
+export function ChatDetailsProgress(props: Props) {
+  return (
+    <openclaw-chat-details-progress>
       <Show
         when={props.props?.progressCard}
         fallback={
@@ -113,20 +25,55 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
           )
         }
       >
-        <LitContent render={() => card()} />
+        <SessionProgressCard
+          card={props.props?.progressCard}
+          placement="details"
+          onDismiss={props.props?.onDismissProgressCard}
+          onClearSaved={props.props?.onClearSavedProgressCard}
+          sessionStatus={props.props?.selectedSession?.status}
+          startedAt={props.props?.selectedSession?.startedAt}
+          endedAt={props.props?.selectedSession?.endedAt}
+          hasActiveRun={props.props?.runActive}
+          collapseComposerByDefault={props.props?.collapseTaskProgress}
+          composerDisclosureContext={{
+            presented: props.presented,
+            gatewayScope: props.props?.gatewayScope,
+            sessionIdentity: props.props?.progressCardIdentity,
+            cardLifetime: props.props?.progressCardLifetime,
+            manualOnly: true,
+          }}
+          refreshAction={props.props?.progressCardRefresh}
+          menuRef={props.menuRef}
+          menuOptions={{
+            class: "chat-details-progress__menu",
+            disabled: !props.presented,
+            items: [
+              { id: "hide", label: t("chat.sessionDetails.hideProgress") },
+              {
+                id: "collapse",
+                label: t("chat.sessionDetails.collapseDefault"),
+                type: "checkbox",
+                checked: props.props?.collapseTaskProgress === true,
+              },
+              { id: "settings", label: t("chat.sessionDetails.settings") },
+            ],
+            onSelect: (item) => {
+              switch (item.id) {
+                case "hide":
+                  props.onHideProgress?.();
+                  props.props?.onHideTaskProgress?.();
+                  break;
+                case "collapse":
+                  props.props?.onCollapseTaskProgressChange?.(!props.props?.collapseTaskProgress);
+                  break;
+                case "settings":
+                  props.props?.onOpenTaskProgressSettings?.();
+                  break;
+              }
+            },
+          }}
+        />
       </Show>
-    );
-  },
-  {
-    properties: {
-      props: { default: undefined, attribute: false },
-      presented: { default: false, type: Boolean },
-    },
-  },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-chat-details-progress": ChatDetailsProgress;
-  }
+    </openclaw-chat-details-progress>
+  );
 }

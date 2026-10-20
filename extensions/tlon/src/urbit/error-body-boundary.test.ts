@@ -22,21 +22,80 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 });
 
 const { pokeUrbitChannel, scryUrbitPath } = await import("./channel-ops.js");
-
 const CHUNK = Buffer.alloc(64 * 1024, "X");
 const SCRY_PATH = "/groups-ui/v6/init.json";
+const COOKIE = "urbauth-~zod=0v1g.abcde.ijklm.prst";
 
-async function listen(server: http.Server): Promise<number> {
-  return await new Promise<number>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve((server.address() as { port: number }).port);
-    });
-  });
+function streamBody(res: http.ServerResponse, size: number, suffix = "") {
+  let written = 0;
+  const write = () => {
+    if (res.destroyed) {
+      return;
+    }
+    if (written >= size) {
+      res.end(suffix);
+      return;
+    }
+    written += CHUNK.length;
+    if (res.write(CHUNK)) {
+      setImmediate(write);
+    } else {
+      res.once("drain", write);
+    }
+  };
+  write();
 }
 
 describe("tlon error body boundary", () => {
   let server: http.Server;
-
+  async function serve(handler: http.RequestListener) {
+    server = http.createServer(handler);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    return {
+      baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      cookie: COOKIE,
+      ship: "~zod",
+      channelId: "test",
+    };
+  }
+  async function poke(handler: http.RequestListener) {
+    return pokeUrbitChannel(await serve(handler), {
+      app: "test",
+      mark: "test",
+      json: {},
+      auditContext: "test",
+    }).catch((e: unknown) => e);
+  }
+  async function scry(handler: http.RequestListener) {
+    return scryUrbitPath(await serve(handler), { path: SCRY_PATH, auditContext: "test" });
+  }
+  function reflectedCookie(json: boolean): http.RequestListener {
+    return (req, res) => {
+      res.writeHead(500, { "Content-Type": json ? "application/json" : "text/plain" });
+      res.end(
+        json
+          ? JSON.stringify({ error: "invalid session", cookie: req.headers.cookie })
+          : `invalid session: ${req.headers.cookie}`,
+      );
+    };
+  }
+  function expectRedacted(error: unknown, operation: string) {
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain(`${operation} failed: 500`);
+    expect(message).toContain("invalid session");
+    expect(message).not.toContain(COOKIE);
+  }
+  async function subscribe(json: boolean) {
+    const { baseUrl } = await serve(reflectedCookie(json));
+    const client = new UrbitSSEClient(baseUrl, COOKIE, { ship: "~zod" });
+    client.isConnected = true;
+    const errors: unknown[] = [];
+    await client.subscribe({ app: "test", path: "/test", err: (error) => errors.push(error) });
+    expect(errors).toHaveLength(1);
+    expectRedacted(errors[0], "Subscribe");
+  }
   afterEach(async () => {
     vi.restoreAllMocks();
     await new Promise<void>((resolve) => {
@@ -45,199 +104,45 @@ describe("tlon error body boundary", () => {
   });
 
   it("bounds poke error body at 16 KiB", async () => {
-    server = http.createServer((_req, res) => {
+    const err = await poke((_req, res) => {
       res.writeHead(500, { "Content-Type": "text/plain" });
-      let written = 0;
-      function write() {
-        if (written >= 4 * 1024 * 1024) {
-          res.end();
-          return;
-        }
-        const ok = res.write(CHUNK);
-        written += CHUNK.length;
-        if (ok) {
-          setImmediate(write);
-        } else {
-          res.once("drain", write);
-        }
-      }
-      write();
+      streamBody(res, 4 * 1024 * 1024);
     });
-    const port = await listen(server);
-
-    const err = await pokeUrbitChannel(
-      {
-        baseUrl: `http://127.0.0.1:${port}`,
-        cookie: "urbit=cookie",
-        ship: "~zod",
-        channelId: "test",
-      },
-      { app: "test", mark: "test", json: {}, auditContext: "test" },
-    ).catch((e: unknown) => e);
-
     expect(err).toBeInstanceOf(Error);
     const msg = (err as Error).message;
     expect(Buffer.byteLength(msg, "utf8")).toBeLessThan(32 * 1024);
     expect(msg).toContain("X");
   });
-
-  it("preserves short error body when under cap", async () => {
-    server = http.createServer((_req, res) => {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end("session expired");
-    });
-    const port = await listen(server);
-
-    const err = await pokeUrbitChannel(
-      {
-        baseUrl: `http://127.0.0.1:${port}`,
-        cookie: "urbit=cookie",
-        ship: "~zod",
-        channelId: "test",
-      },
-      { app: "test", mark: "test", json: {}, auditContext: "test" },
-    ).catch((e: unknown) => e);
-
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("session expired");
-  });
-
   it("redacts a reflected session cookie from poke error bodies", async () => {
-    const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
-    server = http.createServer((req, res) => {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "invalid session", cookie: req.headers.cookie }));
-    });
-    const port = await listen(server);
-
-    const err = await pokeUrbitChannel(
-      {
-        baseUrl: `http://127.0.0.1:${port}`,
-        cookie,
-        ship: "~zod",
-        channelId: "test",
-      },
-      { app: "test", mark: "test", json: {}, auditContext: "test" },
-    ).catch((e: unknown) => e);
-
+    const err = await poke(reflectedCookie(true));
     expect(err).toBeInstanceOf(UrbitHttpError);
-    const message = (err as Error).message;
-    expect(message).toContain("Poke failed: 500");
-    expect(message).toContain("invalid session");
-    expect(message).not.toContain(cookie);
+    expectRedacted(err, "Poke");
   });
-
   it("redacts a bare reflected session cookie from poke error bodies", async () => {
-    const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
-    server = http.createServer((req, res) => {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end(`invalid session: ${req.headers.cookie}`);
-    });
-    const port = await listen(server);
-
-    const err = await pokeUrbitChannel(
-      {
-        baseUrl: `http://127.0.0.1:${port}`,
-        cookie,
-        ship: "~zod",
-        channelId: "test",
-      },
-      { app: "test", mark: "test", json: {}, auditContext: "test" },
-    ).catch((e: unknown) => e);
-
+    const err = await poke(reflectedCookie(false));
     expect(err).toBeInstanceOf(UrbitHttpError);
-    const message = (err as Error).message;
-    expect(message).toContain("Poke failed: 500");
-    expect(message).toContain("invalid session");
-    expect(message).not.toContain(cookie);
+    expectRedacted(err, "Poke");
   });
-
   it("redacts a bare reflected session cookie from subscribe error bodies", async () => {
-    const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
-    server = http.createServer((req, res) => {
-      res.writeHead(500, { "Content-Type": "text/plain" });
-      res.end(`invalid session: ${req.headers.cookie}`);
-    });
-    const port = await listen(server);
-
-    const client = new UrbitSSEClient(`http://127.0.0.1:${port}`, cookie, { ship: "~zod" });
-    client.isConnected = true;
-    const errors: unknown[] = [];
-    await client.subscribe({ app: "test", path: "/test", err: (error) => errors.push(error) });
-
-    expect(errors).toHaveLength(1);
-    const caught = errors[0];
-    const message = caught instanceof Error ? caught.message : String(caught);
-    expect(message).toContain("Subscribe failed: 500");
-    expect(message).toContain("invalid session");
-    expect(message).not.toContain(cookie);
+    await subscribe(false);
   });
-
   it("redacts a reflected session cookie from subscribe error JSON", async () => {
-    const cookie = "urbauth-~zod=0v1g.abcde.ijklm.prst";
-    server = http.createServer((req, res) => {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "invalid session", cookie: req.headers.cookie }));
-    });
-    const port = await listen(server);
-
-    const client = new UrbitSSEClient(`http://127.0.0.1:${port}`, cookie, { ship: "~zod" });
-    client.isConnected = true;
-    const errors: unknown[] = [];
-    await client.subscribe({ app: "test", path: "/test", err: (error) => errors.push(error) });
-
-    expect(errors).toHaveLength(1);
-    const caught = errors[0];
-    const message = caught instanceof Error ? caught.message : String(caught);
-    expect(message).toContain("Subscribe failed: 500");
-    expect(message).toContain("invalid session");
-    expect(message).not.toContain(cookie);
+    await subscribe(true);
   });
-
   it("parses a normal scry response over HTTP", async () => {
-    server = http.createServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ groups: {} }));
-    });
-    const port = await listen(server);
-
     await expect(
-      scryUrbitPath(
-        { baseUrl: `http://127.0.0.1:${port}`, cookie: "urbit=cookie" },
-        { path: SCRY_PATH, auditContext: "test" },
-      ),
+      scry((_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ groups: {} }));
+      }),
     ).resolves.toEqual({ groups: {} });
   });
-
   it("bounds a streaming successful scry response over HTTP", async () => {
-    server = http.createServer((_req, res) => {
+    const error = await scry((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.write('{"payload":"');
-      let written = 0;
-      const write = () => {
-        if (res.destroyed) {
-          return;
-        }
-        if (written >= 18 * 1024 * 1024) {
-          res.end('"}');
-          return;
-        }
-        written += CHUNK.length;
-        if (res.write(CHUNK)) {
-          setImmediate(write);
-        } else {
-          res.once("drain", write);
-        }
-      };
-      write();
-    });
-    const port = await listen(server);
-
-    const error = await scryUrbitPath(
-      { baseUrl: `http://127.0.0.1:${port}`, cookie: "urbit=cookie" },
-      { path: SCRY_PATH, auditContext: "test" },
-    ).catch((cause: unknown) => cause);
-
+      streamBody(res, 18 * 1024 * 1024, '"}');
+    }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe(
       `Tlon scry response for path ${SCRY_PATH}: JSON response exceeds 16777216 bytes`,

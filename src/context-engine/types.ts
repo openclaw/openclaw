@@ -1,9 +1,6 @@
-// Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-
-// Result types
 
 export type AssembleResult = {
   /** Ordered messages to use as model context */
@@ -511,6 +508,12 @@ export interface ContextEngine {
      * fires; engines should stop work and reject promptly when it aborts.
      */
     abortSignal?: AbortSignal;
+    /**
+     * Report meaningful compaction progress to refresh the host's idle window.
+     * Requires "onProgress" in info.acceptedHostParams. The same ten-window
+     * overall ceiling applies; reports after completion or abort have no effect.
+     */
+    onProgress?: () => void;
   }): Promise<CompactResult>;
 
   /**

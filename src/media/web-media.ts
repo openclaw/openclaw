@@ -14,15 +14,13 @@ import {
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { EncodedImage } from "rastermill";
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { resolveUserPath } from "../utils.js";
@@ -118,25 +116,6 @@ async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | nu
     }
     throw err;
   }
-}
-
-async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | null> {
-  const registry = getPluginRegistryForContext();
-  for (const entry of registry?.hostedMediaResolvers ?? []) {
-    try {
-      const resolved = await entry.resolver(mediaUrl);
-      if (typeof resolved === "string" && resolved.trim()) {
-        return resolved;
-      }
-    } catch (err) {
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `Hosted media resolver failed (${entry.pluginId ?? "unknown"}): ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-  }
-  return null;
 }
 
 function resolveWebMediaOptions(params: {
@@ -516,8 +495,6 @@ function toImageFileName(fileName: string | undefined, mimeType: string): string
     : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
-const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
-const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
 const DEFAULT_VISION_MAX_SIDE = 2048;
 const LOW_IMAGE_SIDE_FALLBACKS = [640, 512, 384, 256, 192, 128] as const;
 
@@ -618,41 +595,6 @@ function assertImageSatisfiesHardDimensionPolicy(
   throw new Error(`Image dimensions exceed model image limits${detail}`);
 }
 
-function resolvePreservableOriginalImageContentType(params: {
-  buffer: Buffer;
-  cap: number;
-  contentType?: string;
-  policy?: ImageCompressionPolicy;
-}): string | null {
-  if (params.buffer.length > params.cap) {
-    return null;
-  }
-  const declaredContentType = normalizeMimeType(params.contentType);
-  const probe = readImageProbeFromHeader(params.buffer);
-  const actualContentType = probe ? `image/${probe.format}` : undefined;
-  if (!probe || !isPreservableImageMime(actualContentType)) {
-    return null;
-  }
-  const declaredPreservableContentType = isPreservableImageMime(declaredContentType)
-    ? declaredContentType
-    : undefined;
-  if (declaredPreservableContentType && declaredPreservableContentType !== actualContentType) {
-    return null;
-  }
-  if (declaredContentType?.startsWith("image/") && !declaredPreservableContentType) {
-    return null;
-  }
-  const preferredSide =
-    resolveImageCompressionGrid(params.policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
-  if (
-    Math.max(probe.width, probe.height) > preferredSide ||
-    !imageSatisfiesHardDimensionPolicy(params.buffer, params.policy, probe)
-  ) {
-    return null;
-  }
-  return declaredPreservableContentType ?? actualContentType;
-}
-
 function isPreservableImageMime(
   contentType: string | undefined,
 ): contentType is "image/png" | "image/jpeg" | "image/webp" {
@@ -691,45 +633,25 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
+const IMAGE_COMPRESSION_GRIDS = {
+  efficient: { sides: [1024, 800], qualities: [70, 60, 50, 40] },
+  high: {
+    sides: [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800],
+    qualities: [92, 85, 78, 70, 62, 52, 42],
+  },
+  balanced: { sides: [2048, 1536, 1280, 1024, 800], qualities: [80, 70, 60, 50, 40] },
+} as const;
+
 function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
 } {
   const preference = effectiveImageQualityPreference(policy);
-  const side = sideForPreference(preference, policy);
-  switch (preference) {
-    case "efficient":
-      return {
-        sides: buildDescendingLadder(side, [1024, 800]),
-        qualities: [70, 60, 50, 40],
-      };
-    case "high":
-      return {
-        sides: buildDescendingLadder(side, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
-        qualities: [92, 85, 78, 70, 62, 52, 42],
-      };
-    default:
-      return {
-        sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
-        qualities: [...DEFAULT_JPEG_QUALITIES],
-      };
-  }
-}
-
-function logOptimizedImage(originalSize: number, optimized: EncodedImage): void {
-  if (!shouldLogVerbose() || optimized.bytes >= originalSize) {
-    return;
-  }
-  const resizeSide = optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height);
-  if (optimized.format === "png") {
-    logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px)`,
-    );
-    return;
-  }
-  logVerbose(
-    `Optimized media from ${formatMediaSize(originalSize)} to ${formatMediaSize(optimized.bytes)} (side<=${resizeSide}px, q=${optimized.chosen.quality})`,
-  );
+  const grid = IMAGE_COMPRESSION_GRIDS[preference];
+  return {
+    sides: buildDescendingLadder(sideForPreference(preference, policy), grid.sides),
+    qualities: [...grid.qualities],
+  };
 }
 
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
@@ -752,12 +674,35 @@ export async function optimizeImageBufferForWebMedia(params: {
     }
     assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
   } else {
-    originalContentType = resolvePreservableOriginalImageContentType({
-      buffer: params.buffer,
-      cap,
-      contentType: params.contentType,
-      policy: params.imageCompression,
-    });
+    originalContentType = (() => {
+      const { buffer, contentType, imageCompression: policy } = params;
+      if (buffer.length > cap) {
+        return null;
+      }
+      const declaredContentType = normalizeMimeType(contentType);
+      const probe = readImageProbeFromHeader(buffer);
+      const actualContentType = probe ? `image/${probe.format}` : undefined;
+      if (!probe || !isPreservableImageMime(actualContentType)) {
+        return null;
+      }
+      const declaredPreservableContentType = isPreservableImageMime(declaredContentType)
+        ? declaredContentType
+        : undefined;
+      if (declaredPreservableContentType && declaredPreservableContentType !== actualContentType) {
+        return null;
+      }
+      if (declaredContentType?.startsWith("image/") && !declaredPreservableContentType) {
+        return null;
+      }
+      const preferredSide = resolveImageCompressionGrid(policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
+      if (
+        Math.max(probe.width, probe.height) > preferredSide ||
+        !imageSatisfiesHardDimensionPolicy(buffer, policy, probe)
+      ) {
+        return null;
+      }
+      return declaredPreservableContentType ?? actualContentType;
+    })();
   }
   if (originalContentType) {
     return {
@@ -782,10 +727,6 @@ export async function optimizeImageBufferForWebMedia(params: {
     search: { maxSide: grid.sides, quality: grid.qualities },
     transparency: "auto",
   });
-  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
-  }
-  logOptimizedImage(params.buffer.length, optimized);
   if (optimized.data.length > cap) {
     throw new ImageOptimizationLimitError(
       formatCapReduce("Media", cap, optimized.data.length),
@@ -831,10 +772,7 @@ async function loadWebMediaInternal(
       throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
-  mediaUrl =
-    resolveCanvasHttpPathToLocalPath(mediaUrl) ??
-    (await resolveHostedPluginMediaUrl(mediaUrl)) ??
-    mediaUrl;
+  mediaUrl = resolveCanvasHttpPathToLocalPath(mediaUrl) ?? mediaUrl;
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
   const clampAndFinalize = async (params: WebMediaResult): Promise<WebMediaResult> => {

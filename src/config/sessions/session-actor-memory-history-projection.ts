@@ -7,6 +7,7 @@ import type {
   SessionTranscriptSourceCursor,
 } from "../../gateway/session-transcript-read.types.js";
 import {
+  SessionTranscriptSourceMessageTooLargeError,
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
 } from "../../gateway/session-transcript-source-pages.js";
@@ -25,21 +26,14 @@ import type {
   TranscriptReadWindowOptions,
 } from "../../sessions/transcript-read-window.js";
 import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
-import {
-  createVisibleMessageCursor,
-  encodeVisibleMessageCursor,
-  normalizeVisibleDeltaLimits,
-  parseVisibleMessageCursor,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
-  SessionTranscriptVisibleMessageDeltaLimits,
-  SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.types.js";
 import { readSessionActorMemoryBoundedTail } from "./session-actor-memory-history-facts.js";
 import {
   createSessionActorMemoryHistoryNavigation,
+  resolveSessionActorMemoryHistoryStart,
   type SessionActorMemoryHistoryRow,
 } from "./session-actor-memory-history-navigation.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
@@ -128,92 +122,6 @@ export function readSessionActorMemoryRawDelta(
   };
 }
 
-export function readSessionActorMemoryVisibleDelta(
-  window: SessionActorMemoryWindow,
-  scope: SessionActorMemoryHistoryScope,
-  limits: SessionTranscriptVisibleMessageDeltaLimits,
-): SessionTranscriptVisibleMessageDeltaResult {
-  const { maxBytes, maxMessages } = normalizeVisibleDeltaLimits(limits);
-  const generation = window.hot.transcript.version.generation;
-  const sessionId = window.hot.entry?.sessionId;
-  if (!generation || !sessionId) {
-    return { kind: "missing" };
-  }
-  const initial = createVisibleMessageCursor({ agentId: scope.agentId, sessionId, generation });
-  const reset = (
-    reason: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "reset" }>["reason"],
-  ): SessionTranscriptVisibleMessageDeltaResult => ({
-    kind: "reset",
-    cursor: encodeVisibleMessageCursor(initial),
-    reason,
-  });
-  const cursor = limits.cursor === undefined ? initial : parseVisibleMessageCursor(limits.cursor);
-  if (!cursor) {
-    return reset("invalid_cursor");
-  }
-  if (cursor.agentId !== scope.agentId || cursor.sessionId !== sessionId) {
-    return reset("scope_mismatch");
-  }
-  if (cursor.generation !== generation) {
-    return reset("generation_mismatch");
-  }
-  if (
-    scope.readFence &&
-    cursor.lastMessagePosition >= scope.readFence.beforeActiveMessagePosition
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      "Transcript read cursor has crossed the current-turn admission fence",
-    );
-  }
-  const navigation = createSessionActorMemoryHistoryNavigation(window);
-  const messages = navigation.active.filter((row) => row.messagePosition !== null);
-  if (cursor.lastEventSeq >= 0) {
-    const anchor = messages.find((row) => row.rawSeq === cursor.lastEventSeq);
-    if (!anchor) {
-      return reset("anchor_missing");
-    }
-    if (anchor.messagePosition !== cursor.lastMessagePosition) {
-      return reset("anchor_moved");
-    }
-  }
-  let serializedBytes = 0;
-  let hasMore = false;
-  let requiredBytes: number | undefined;
-  let lastEventSeq = cursor.lastEventSeq;
-  let lastMessagePosition = cursor.lastMessagePosition;
-  const events: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "page" }>["events"] =
-    [];
-  for (const row of messages) {
-    if (row.messagePosition! <= cursor.lastMessagePosition) {
-      continue;
-    }
-    if (events.length >= maxMessages || serializedBytes + row.serializedBytes > maxBytes) {
-      hasMore = true;
-      if (!events.length) {
-        requiredBytes = row.serializedBytes;
-      }
-      break;
-    }
-    serializedBytes += row.serializedBytes;
-    lastEventSeq = row.rawSeq;
-    lastMessagePosition = row.messagePosition!;
-    events.push({
-      event: row.event,
-      eventSeq: row.rawSeq,
-      seq: row.messagePosition! + 1,
-      parentId: navigation.active[row.activePosition - 1]?.node?.id ?? null,
-    });
-  }
-  return {
-    kind: "page",
-    cursor: encodeVisibleMessageCursor({ ...cursor, lastEventSeq, lastMessagePosition }),
-    events,
-    hasMore,
-    serializedBytes,
-    ...(requiredBytes === undefined ? {} : { requiredBytes }),
-  };
-}
-
 /** History readers borrow rows and materialize only the selected response. */
 export function readSessionActorMemoryProjection(
   window: SessionActorMemoryWindow,
@@ -275,27 +183,6 @@ export function readSessionActorMemoryProjection(
       ? undefined
       : { anchorSeq: seq };
   };
-  const startByBytes = (
-    rows: SessionActorMemoryHistoryRow[],
-    start: number,
-    end: number,
-    maxBytes: number,
-    maxMessages: number,
-    allowOversized: boolean,
-    initialBytes = 0,
-  ) => {
-    let selected = end;
-    let bytes = initialBytes;
-    while (selected > start && end - selected < maxMessages) {
-      const row = rows[selected - 1]!;
-      if ((!allowOversized || selected < end) && bytes + row.serializedBytes > maxBytes) {
-        break;
-      }
-      bytes += row.serializedBytes;
-      selected--;
-    }
-    return selected;
-  };
   const recent = (
     options: {
       maxMessages: number;
@@ -309,11 +196,14 @@ export function readSessionActorMemoryProjection(
     const start =
       !maxMessages || !maxLines
         ? history.length
-        : startByBytes(
+        : resolveSessionActorMemoryHistoryStart(
             history,
             Math.max(0, history.length - maxLines),
             history.length,
-            resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
+            Math.min(
+              resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
+              SOURCE_PAGE_MAX_BYTES,
+            ),
             maxMessages,
             true,
           );
@@ -328,6 +218,67 @@ export function readSessionActorMemoryProjection(
       ...(changed ? { windowReset: true } : {}),
       transcriptPath: window.hot.target.sessionKey,
       transcriptSource: "active" as const,
+    };
+  };
+  const readPage = (
+    inputOptions: Extract<SessionTranscriptProjectionSelection, { kind: "page" }>["options"],
+  ) => {
+    let options = inputOptions;
+    const changed = change(options.expectedReadWindow);
+    if (changed) {
+      options = {
+        ...options,
+        captureReadWindow: true,
+        expectedReadWindow: undefined,
+        ...(changed.anchorSeq !== undefined && options.expectedReadWindow?.anchor
+          ? {
+              beforeSeq:
+                options.beforeSeq === undefined
+                  ? undefined
+                  : options.beforeSeq + changed.anchorSeq - options.expectedReadWindow.anchor.seq,
+            }
+          : { beforeSeq: undefined, offset: 0 }),
+      };
+    }
+    const end = resolveTranscriptPageEnd(history.length, options);
+    if (options.recentAtHead && end === history.length) {
+      return {
+        ...recent({ ...options.recentAtHead, captureReadWindow: options.captureReadWindow }),
+        ...(changed ? { windowReset: true } : {}),
+      };
+    }
+    const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
+    const requestedStart = Math.max(0, end - maxMessages);
+    const start = resolveSessionActorMemoryHistoryStart(
+      history,
+      requestedStart,
+      end,
+      resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
+      maxMessages,
+      options.allowOversizedFirst ?? options.maxBytes === undefined,
+      0,
+      options.maxBytes === undefined,
+    );
+    const omittedOversized = maxMessages > 0 && end > 0 && start === end;
+    const consumedStart = omittedOversized ? end - 1 : start;
+    const rows = history.slice(start, end);
+    return {
+      messages: messages(rows, start),
+      totalMessages: history.length,
+      activeLeafEntryId: tree.leafId,
+      displaySource,
+      transcriptPath: window.hot.target.sessionKey,
+      transcriptSource: "active" as const,
+      ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
+        ? {
+            olderOffset:
+              resolveTranscriptPageEnd(history.length, { beforeSeq: options.beforeSeq }) -
+              consumedStart,
+          }
+        : {}),
+      ...(omittedOversized ? { omittedOversized: true } : {}),
+      ...(options.captureReadWindow ? { readWindow: capture(rows, start) } : {}),
+      ...(changed ? { windowReset: true } : {}),
     };
   };
   const closedHistory = (row: SessionActorMemoryHistoryRow) => {
@@ -384,66 +335,8 @@ export function readSessionActorMemoryProjection(
     }
     case "recent":
       return recent(selection.options);
-    case "page": {
-      let options = selection.options;
-      const changed = change(options.expectedReadWindow);
-      if (changed) {
-        options = {
-          ...options,
-          captureReadWindow: true,
-          expectedReadWindow: undefined,
-          ...(changed.anchorSeq !== undefined && options.expectedReadWindow?.anchor
-            ? {
-                beforeSeq:
-                  options.beforeSeq === undefined
-                    ? undefined
-                    : options.beforeSeq + changed.anchorSeq - options.expectedReadWindow.anchor.seq,
-              }
-            : { beforeSeq: undefined, offset: 0 }),
-        };
-      }
-      const end = resolveTranscriptPageEnd(history.length, options);
-      if (options.recentAtHead && end === history.length) {
-        return {
-          ...recent({ ...options.recentAtHead, captureReadWindow: options.captureReadWindow }),
-          ...(changed ? { windowReset: true } : {}),
-        };
-      }
-      const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
-      const requestedStart = Math.max(0, end - maxMessages);
-      const start =
-        options.maxBytes === undefined
-          ? requestedStart
-          : startByBytes(
-              history,
-              requestedStart,
-              end,
-              resolveIntegerOption(options.maxBytes, 1024 * 1024, { min: 1024 }),
-              maxMessages,
-              options.allowOversizedFirst ?? false,
-            );
-      const omittedOversized = maxMessages > 0 && end > 0 && start === end;
-      const consumedStart = omittedOversized ? end - 1 : start;
-      const rows = history.slice(start, end);
-      return {
-        messages: messages(rows, start),
-        totalMessages: history.length,
-        activeLeafEntryId: tree.leafId,
-        displaySource,
-        transcriptPath: window.hot.target.sessionKey,
-        transcriptSource: "active",
-        ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
-          ? {
-              olderOffset:
-                resolveTranscriptPageEnd(history.length, { beforeSeq: options.beforeSeq }) -
-                consumedStart,
-            }
-          : {}),
-        ...(omittedOversized ? { omittedOversized: true } : {}),
-        ...(options.captureReadWindow ? { readWindow: capture(rows, start) } : {}),
-        ...(changed ? { windowReset: true } : {}),
-      };
-    }
+    case "page":
+      return readPage(selection.options);
     case "by-id": {
       const row = find(selection.messageId);
       if (!row) {
@@ -507,9 +400,10 @@ export function readSessionActorMemoryProjection(
       const changed = change(options.expectedReadWindow);
       if (changed && (!row || !history.includes(row))) {
         return {
-          ...recent({
+          ...readPage({
+            offset: 0,
             maxMessages: options.maxMessages,
-            maxBytes: options.maxBytes,
+            maxBytes: Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES),
             captureReadWindow: true,
           }),
           windowReset: true,
@@ -548,22 +442,21 @@ export function readSessionActorMemoryProjection(
         anchor = rows.length - 1;
       }
       const range = resolveHistoryAnchorPageRange(rows.length, anchor, options);
-      const start =
-        options.maxBytes === undefined
-          ? range.readStart
-          : startByBytes(
-              rows,
-              range.readStart,
-              range.endExclusive,
-              Math.max(1024, Math.floor(options.maxBytes)),
-              Infinity,
-              false,
-              2,
-            );
+      const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
+      const start = resolveSessionActorMemoryHistoryStart(
+        rows,
+        range.readStart,
+        range.endExclusive,
+        Math.max(1024, Math.floor(limit)),
+        Infinity,
+        options.maxBytes === undefined,
+        2,
+        options.maxBytes === undefined,
+      );
       let selected = rows.slice(start, range.endExclusive);
       let selectedStart = start;
       if (options.maxBytes !== undefined) {
-        const limit = Math.max(1024, Math.floor(options.maxBytes));
+        const responseLimit = Math.max(1024, Math.floor(limit));
         let bytes = 2;
         let index = selected.length;
         while (index > 0) {
@@ -575,7 +468,7 @@ export function readSessionActorMemoryProjection(
             displayPosition: position(candidate),
           });
           const separator = index === selected.length ? 0 : 1;
-          if (bytes + size + separator > limit) {
+          if (bytes + size + separator > responseLimit) {
             break;
           }
           bytes += size + separator;
@@ -588,7 +481,7 @@ export function readSessionActorMemoryProjection(
         found: true,
         messages: messages(selected, selectedStart),
         totalMessages: rows.length,
-        hasOverreadContext: range.hasOverreadContext,
+        hasOverreadContext: range.hasOverreadContext && selectedStart === range.readStart,
         offset: range.offset,
         displaySource,
         transcriptPath: window.hot.target.sessionKey,
@@ -662,9 +555,7 @@ export function readSessionActorMemoryProjection(
         }
         const size = Buffer.byteLength(row.eventJson) + 1;
         if (size > SOURCE_PAGE_MAX_BYTES) {
-          throw new Error(
-            `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-          );
+          throw new SessionTranscriptSourceMessageTooLargeError();
         }
         if (bytes + size > SOURCE_PAGE_MAX_BYTES) {
           break;

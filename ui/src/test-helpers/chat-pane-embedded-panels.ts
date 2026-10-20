@@ -1,26 +1,38 @@
-import { html, render, type LitElement } from "lit";
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
+import type { SidebarPanelDefinitionParams } from "../pages/chat/chat-pane-embedded-types.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
 import { renderSidebarRegion } from "../pages/chat/chat-pane-sidebar-layout.ts";
+import { SidebarRegionView } from "../pages/chat/chat-pane-sidebar-view.tsx";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createSessionCapabilityFixture,
 } from "../pages/chat/chat-pane.test-support.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
-import type { ChatProps } from "../pages/chat/chat-view.ts";
-import { renderChatDetailSlot } from "../pages/chat/components/chat-detail-slot.ts";
 import "../pages/chat/components/chat-detail-panel.tsx";
-import {
-  createSessionWorkspaceProps,
-  renderSessionWorkspaceRail,
-} from "../pages/chat/components/chat-session-workspace.ts";
+import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";
 import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
-import { threadProps } from "../pages/chat/components/chat-transcript.test-support.ts";
+import { createSessionWorkspaceProps } from "../pages/chat/components/chat-session-workspace.ts";
 import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
+import { mountSolid } from "./solid-render.tsx";
+
+const panelViews = new WeakMap<
+  HTMLElement,
+  {
+    primary: HTMLElement;
+    update: (props: ReturnType<typeof renderSidebarRegion>) => void;
+  }
+>();
+
+function ChatPanelPrimary() {
+  const primary = document.createElement("main");
+  primary.textContent = "Chat";
+  return primary;
+}
 
 export async function renderPanelFixture(
   mount: HTMLElement,
@@ -28,35 +40,90 @@ export async function renderPanelFixture(
   definitions: ReturnType<typeof sidebarPanelDefinitions>,
   closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
 ) {
-  render(
-    renderSidebarRegion({
-      presentationId: "sidebar-layout-fixture",
-      availableWidth: 1400,
-      callbacks: {
-        activatePanel: vi.fn(),
-        togglePanelExpanded: vi.fn(),
-        closeSlot: closePanelSlot,
-        openSlot: vi.fn(),
-        reorderPanel: vi.fn(),
-        resizePanel: vi.fn(),
-        setOpen: vi.fn(),
-      },
-      layout,
-      narrow: false,
-      panelDefinitions: definitions,
-      primary: html`<main>Chat</main>`,
-      requestUpdate: vi.fn(),
-    }),
-    mount,
-  );
+  const existing = panelViews.get(mount);
+  const primary = existing?.primary ?? ChatPanelPrimary();
+  const props = renderSidebarRegion({
+    presentationId: "sidebar-layout-fixture",
+    availableWidth: 1400,
+    callbacks: {
+      activatePanel: vi.fn(),
+      togglePanelExpanded: vi.fn(),
+      closeSlot: closePanelSlot,
+      openSlot: vi.fn(),
+      reorderPanel: vi.fn(),
+      resizePanel: vi.fn(),
+      setOpen: vi.fn(),
+    },
+    layout,
+    narrow: false,
+    panelDefinitions: definitions,
+    primary,
+  });
+  if (existing) {
+    existing.update(props);
+  } else {
+    const view = mountSolid(SidebarRegionView, props, mount);
+    panelViews.set(mount, { primary, update: (next) => view.update(next) });
+    onTestFinished(() => {
+      panelViews.delete(mount);
+    });
+  }
   await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-  await mount.querySelector<LitElement>("openclaw-chat-files-panel")?.updateComplete;
+  await mount.querySelector("openclaw-chat-files-panel")?.updateComplete;
   await Promise.all(
-    [...mount.querySelectorAll<LitElement>("openclaw-chat-detail-panel")].map(
-      (panel) => panel.updateComplete,
-    ),
+    [...mount.querySelectorAll("openclaw-chat-detail-panel")].map((panel) => panel.updateComplete),
   );
-  await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
+}
+
+export function sidebarPanelFixtureParams(
+  state: ChatPageHost,
+  overrides: Partial<SidebarPanelDefinitionParams> = {},
+): SidebarPanelDefinitionParams {
+  return {
+    state,
+    paneId: "review-intent",
+    panePresentationId: "review-intent",
+    subagentsInputRegion: "page",
+    subagentsPresented: false,
+    subagentsAvailable: false,
+    onSubagentSessionSelect: vi.fn(),
+    themeMode: "dark",
+    agentId: "main",
+    browserPresented: false,
+    browserTabsInHeader: true,
+    terminalTabsInHeader: true,
+    browserRefreshOnPresentation: false,
+    desktopPresented: false,
+    desktopRefreshOnPresentation: false,
+    desktopAvailable: false,
+    desktopSource: null,
+    desktopRuntimeConfig: null,
+    desktopFocusHref: "",
+    onDesktopFocusTargetChange: vi.fn(),
+    dashboard: null,
+    digest: null,
+    activeRunId: null,
+    pullRequests: [],
+    companion: { turns: [], loading: false, draft: "" },
+    companionPresented: false,
+    companionFocusRequest: undefined,
+    onCompanionSubmit: vi.fn(),
+    onCompanionDraftChange: vi.fn(),
+    connected: true,
+    onClearCompanion: vi.fn(),
+    discussion: null,
+    discussionAvailable: false,
+    discussionOpenUrl: null,
+    discussionSourceGeneration: 0,
+    pluginPanels: [],
+    isPluginPanelPresented: () => false,
+    detail: {
+      chat: createChatProps({ sessionKey: state.sessionKey }),
+      host: state,
+    },
+    workspace: createSessionWorkspaceProps(state),
+    ...overrides,
+  };
 }
 
 export function createReviewFixture() {
@@ -68,11 +135,7 @@ export function createReviewFixture() {
   });
   const mount = document.body.appendChild(document.createElement("div"));
   const context = { ...createInitializationContext(), sessions };
-  const state = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    mount,
-  );
+  const state = createPageState(context, { afterCommit: () => () => {} }, mount);
   state.client = createGatewayBrowserClientFixture();
   state.connected = true;
   state.connectionEpoch = 1;
@@ -110,17 +173,7 @@ export function createReviewFixture() {
   });
   const renderPanels = async () => {
     const { closePanelSlot } = rails();
-    const definitions = sidebarPanelDefinitions({
-      state,
-      renderDetail: (content) =>
-        renderChatDetailSlot({
-          chat: threadProps("review-intent", state.sessionKey) as ChatProps,
-          content,
-          host: state,
-          requestUpdate: vi.fn(),
-        }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state)),
-    } as Parameters<typeof sidebarPanelDefinitions>[0]);
+    const definitions = sidebarPanelDefinitions(sidebarPanelFixtureParams(state));
     await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
   };
   return { context, file, list, mount, preview, rails, renderPanels, sessions, state };

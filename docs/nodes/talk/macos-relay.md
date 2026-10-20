@@ -15,6 +15,7 @@ sidebarTitle: "macOS and Gateway relay"
 - Phase notifications are best-effort: a failed update does not start the local Gateway or restart its tunnel. Starting Talk retains normal connection recovery.
 - On a short pause (silence window), the current transcript is sent.
 - Replies are written to WebChat (same as typing).
+- Talk observes an accepted agent run until the Gateway reports completion, then speaks that run's complete reply. A slow local model does not expire a separate app-side response window. Stop still prevents late playback.
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
 
 ## Realtime Talk over the Gateway relay (macOS)

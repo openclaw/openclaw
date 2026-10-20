@@ -36,12 +36,11 @@ declare global {
 /** Observe accepted application events before the connect reply can arrive. */
 export async function installChatLoadingReadinessObserver(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const sample: Window["chatLoadingReadiness"] = {
+    const sample: Window["chatLoadingReadiness"] = (window.chatLoadingReadiness = {
       connects: 0,
       observerAttached: false,
       startups: [],
-    };
-    window.chatLoadingReadiness = sample;
+    });
     const NativeWebSocket = WebSocket;
     const stops: Array<() => void> = [];
     const cleanup = () => {
@@ -49,9 +48,34 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
         stop();
       }
     };
-    const context = () =>
-      document.querySelector<HTMLElement & { context?: ApplicationContext }>("openclaw-app")
-        ?.context;
+    let application: ApplicationContext | undefined;
+    const receiveContext = (event: Event) => {
+      const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
+      if (
+        provider.context !== "openclaw.application" ||
+        provider.contextTarget?.localName !== "openclaw-app"
+      ) {
+        return;
+      }
+      // Request the root's context before connect, without waiting for the shell.
+      const consumer = document.createElement("span");
+      provider.contextTarget.append(consumer);
+      try {
+        consumer.dispatchEvent(
+          Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+            context: "openclaw.application",
+            contextTarget: consumer,
+            subscribe: false,
+            callback: (value: ApplicationContext) => {
+              application = value;
+            },
+          }),
+        );
+      } finally {
+        consumer.remove();
+      }
+    };
+    window.addEventListener("context-provider", receiveContext);
     const captureSource = (owner: ApplicationContext, socket: WebSocket) => {
       const { gateway, sessions } = owner;
       const { client, hello } = gateway.snapshot;
@@ -61,7 +85,7 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
         !retired &&
         client !== null &&
         hello !== null &&
-        context() === owner &&
+        application === owner &&
         owner.sessions === sessions &&
         !owner.lifecycleAbortSignal?.aborted &&
         gateway.snapshot.phase === "connected" &&
@@ -87,7 +111,7 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
           return super.send(data);
         }
         const frame = JSON.parse(data) as RequestFrame;
-        const owner = context();
+        const owner = application;
         if (frame.method === "connect") {
           cleanup();
           resolution = undefined;
@@ -126,20 +150,23 @@ export async function installChatLoadingReadinessObserver(page: Page): Promise<v
             sentAtMs: Date.now(),
             resolutionRequestId: resolution?.id,
             resolutionSourceCurrent: resolution?.current(this) ?? false,
-            ...(prepared
-              ? {
-                  prepared: {
-                    ...prepared.identity,
-                    sourceCurrent:
-                      prepared.current(this) && location.pathname === prepared.identity.pathname,
-                  },
-                }
-              : {}),
+            prepared: prepared && {
+              ...prepared.identity,
+              sourceCurrent:
+                prepared.current(this) && location.pathname === prepared.identity.pathname,
+            },
           });
         }
         return super.send(data);
       }
     };
-    window.addEventListener("pagehide", cleanup, { once: true });
+    window.addEventListener(
+      "pagehide",
+      () => {
+        cleanup();
+        window.removeEventListener("context-provider", receiveContext);
+      },
+      { once: true },
+    );
   });
 }

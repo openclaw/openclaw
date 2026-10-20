@@ -19,7 +19,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
-import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
+import { readGatewayLastShutdownAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
@@ -230,7 +230,9 @@ async function gatherDaemonStatusImpl(
   const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
   const shouldInspectLocalGateway = !hasUrlOverride;
   const lastShutdown =
-    opts.deep && shouldInspectLocalGateway ? readGatewayLastShutdown(mergedDaemonEnv) : undefined;
+    opts.deep && shouldInspectLocalGateway
+      ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
+      : undefined;
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
@@ -244,9 +246,7 @@ async function gatherDaemonStatusImpl(
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
           bind: gateway.bindMode,
-          mode: "quick",
           port: daemonPort,
-          platform: process.platform,
         })
       : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
@@ -506,7 +506,6 @@ async function gatherDaemonStatusImpl(
         ? {
             gatewayHeap: inspectGatewayHeapLimit(
               command.environment?.NODE_OPTIONS,
-              {},
               command.programArguments,
             ),
           }

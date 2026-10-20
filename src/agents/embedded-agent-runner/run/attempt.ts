@@ -1,8 +1,10 @@
+import { getRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "../../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { runWithAsyncWorkResources } from "../../../shared/async-work-resources.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
@@ -52,6 +54,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import { resolveFinalMessageRawText } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import type {
@@ -92,6 +95,7 @@ export async function runEmbeddedAttempt(
     modelExecution?.assertCurrent();
     return result;
   } finally {
+    input.continuation = undefined;
     modelExecution?.release();
   }
 }
@@ -134,9 +138,19 @@ async function runEmbeddedAttemptOwned(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
+  let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
+  let abortSessionForYield: (() => void) | null = null;
+  let queueYieldInterruptForSession: (() => void) | null = null;
   const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
-    runOwnedAgentCleanup({ ...params, step, cleanup, log });
+    runOwnedAgentCleanup({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      oneShotCliRun: params.oneShotCliRun,
+      step,
+      cleanup,
+      log,
+    });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
       clearToolSearchCatalog({ catalogRef: toolSearchCatalogRef });
@@ -205,11 +219,6 @@ async function runEmbeddedAttemptOwned(
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
-    if (isRawModelRun && log.isEnabled("debug")) {
-      log.debug(
-        `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
-      );
-    }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
     if (activeContextEngine && activeContextEngine.info.id !== "legacy") {
       assertContextEngineHostSupport({
@@ -224,7 +233,6 @@ async function runEmbeddedAttemptOwned(
     const { diagnosticTrace, runTrace, emitCompleted } = startEmbeddedAttemptDiagnostics(params);
     emitDiagnosticRunCompleted = emitCompleted;
     const corePluginToolStages = createStageTimingTracker(Date.now);
-    let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     const executeCatalogTool = (
       toolParams: Parameters<ToolSearchCatalogToolExecutor>[0],
       surface: "Tool Search" | "Code Mode",
@@ -245,6 +253,9 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          // The controller records the yield and closes injection before this
+          // backend ends its own turn; a racing steer stays queued as a followup.
+          params.replyOperation?.yield();
           queueYieldInterruptForSession?.();
           runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
           abortSessionForYield?.();
@@ -283,9 +294,6 @@ async function runEmbeddedAttemptOwned(
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
-    // Late-binding reference so onYield can abort the session (declared after tool creation)
-    let abortSessionForYield: (() => void) | null = null;
-    let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
@@ -327,7 +335,6 @@ async function runEmbeddedAttemptOwned(
         setup,
         bootstrap: preparedBootstrap,
         capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-        requireExplicitMessageTarget: preparedToolBase.requireExplicitMessageTarget,
         effectiveTools,
         isRawModelRun,
         modelToolsEnabled: toolsEnabled,
@@ -375,7 +382,6 @@ async function runEmbeddedAttemptOwned(
       );
       const promptToolPolicy = createPromptBuildToolPolicy({
         session: preparedSessionRuntime.agentSession.activeSession,
-        readModelTools: () => preparedSessionRuntime.agentSession.activeSession.agent.state.tools,
         effectiveTools,
         uncompactedEffectiveTools,
         tools: preparedBundleTools.tools,
@@ -417,6 +423,8 @@ async function runEmbeddedAttemptOwned(
         lifecycle: {
           applyPermissionMode: (mode, revokeApprovals) =>
             withRuntimeToolSchemaQuarantine(async (recordQuarantine) => {
+              // Record within the current operator's synchronous authorization scope.
+              params.permissionChange?.recordApplied(mode);
               await preparedToolBase.refreshPermissionMode(mode, revokeApprovals);
               preparedBundleTools.refreshTools(recordQuarantine);
               preparedToolCatalog.refreshTools(recordQuarantine);
@@ -431,7 +439,6 @@ async function runEmbeddedAttemptOwned(
                       })
                   : undefined,
               );
-              params.permissionChange?.recordApplied(mode);
             }),
           readYieldState: () => ({
             yieldAbortSettled,
@@ -445,6 +452,16 @@ async function runEmbeddedAttemptOwned(
           },
         },
       });
+      // Run-completed diagnostics carry the model's raw final-answer text for
+      // content capture; the finally-phase cleanup reads it from the shared state.
+      executionState.diagnosticFinalResponse = resolveDiagnosticModelContentCapturePolicy(
+        getRuntimeConfigSnapshot(),
+      ).outputMessages
+        ? resolveFinalMessageRawText(
+            executionResult.currentAttemptAssistant ??
+              executionResult.currentAttemptCompletedAssistant,
+          )
+        : undefined;
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
       const catalogSession = toolSearchCatalogRef?.current;
@@ -466,8 +483,8 @@ async function runEmbeddedAttemptOwned(
           : {}),
       };
     } finally {
-      // Retained review callbacks must lose the live transcript before cleanup awaits.
-      sessionResources.releaseReview();
+      // Retained tool callbacks must not keep the history after cleanup settles.
+      const releasedResources = sessionResources.takeForCleanup();
       // Transfer resources to the session cleanup owner before awaiting it. A
       // bounded timeout must not let outer early-exit cleanup dispose them twice.
       const sessionBundleRuntimes = { ...bundleRuntimes };
@@ -477,7 +494,7 @@ async function runEmbeddedAttemptOwned(
       await cleanupStep("embedded-session", () =>
         cleanupEmbeddedAttemptSessionPhase({
           attempt: params,
-          ...sessionResources.resources,
+          ...releasedResources,
           transcriptLifecycle: sessionLock.transcriptLifecycle,
           ...sessionBundleRuntimes,
           toolSearchCatalogRef,
@@ -505,6 +522,9 @@ async function runEmbeddedAttemptOwned(
     }
     throw error;
   } finally {
+    // The logical run owns retry history; settled attempt callbacks need none of it.
+    params.continuation = undefined;
+    input.continuation = undefined;
     const resolveCleanupReason = () => {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
       return terminal.timedOut ||
@@ -523,11 +543,16 @@ async function runEmbeddedAttemptOwned(
         await cleanupStep("embedded-registered-resources", async () => {
           try {
             await releasePreparedTools?.(cleanupReason);
+            releasePreparedTools = undefined;
+            toolSearchCatalogExecutor = undefined;
+            abortSessionForYield = null;
+            queueYieldInterruptForSession = null;
           } catch {
             recordAgentCleanupFailure();
           }
         });
       } finally {
+        setup[Symbol.dispose]();
         externalAbortController.dispose();
       }
     };

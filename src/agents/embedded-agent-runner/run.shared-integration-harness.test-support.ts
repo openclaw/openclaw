@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -24,9 +25,15 @@ export function loadSharedRunIntegrationHarness(): Promise<TestRunEmbeddedAgent>
     const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "shared-run-warmup" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { defaults: { workspace: state.workspaceDir } },
+        session: { store: path.join(state.agentDir(), "openclaw-agent.sqlite") },
+      };
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot(config);
       const guard = await guardRunWorkspaceOwnership(state);
       try {
-        await warmRunOverflowCompactionHarness(runEmbeddedAgent, state);
+        await warmRunOverflowCompactionHarness(runEmbeddedAgent, state, { config });
       } finally {
         guard.verifyAndRestore();
       }
@@ -45,7 +52,8 @@ export async function cleanupSharedRunIntegrationSessions(): Promise<void> {
 export async function createSharedRunIntegrationSession() {
   const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
   const { captureEnv } = await import("../../test-utils/env.js");
-  const { resetConfigRuntimeState } = await import("../../config/runtime-snapshot.js");
+  const { resetConfigRuntimeState, setRuntimeConfigSnapshot } =
+    await import("../../config/runtime-snapshot.js");
   const { drainSessionStateForTest } = await import("../../test-utils/session-state-cleanup.js");
   const { loadSessionEntry, replaceSessionEntry } =
     await import("../../config/sessions/session-accessor.js");
@@ -69,6 +77,11 @@ export async function createSharedRunIntegrationSession() {
     sessionKey,
     storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
   };
+  const config: OpenClawConfig = {
+    agents: { defaults: { workspace: workspaceDir } },
+    session: { store: sessionTarget.storePath },
+  };
+  setRuntimeConfigSnapshot(config);
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
@@ -88,6 +101,7 @@ export async function createSharedRunIntegrationSession() {
     return {
       runParams: {
         ...baseRunParams,
+        config,
         sessionId,
         sessionKey,
         runId: `run-integration-${caseId}`,

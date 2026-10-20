@@ -1,11 +1,7 @@
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.ts";
 
-export const page = definePage({
-  ...routePageSpec("skill-workshop"),
-  component: () =>
-    import("./skill-workshop-page.tsx").then(() => ({
-      render: () => html`<openclaw-skill-workshop-page></openclaw-skill-workshop-page>`,
-    })),
-});
+export const page = defineSolidPage(
+  "skill-workshop",
+  () => import("./skill-workshop-page.tsx").then((module) => module.SkillWorkshopPage),
+  { header: false },
+);

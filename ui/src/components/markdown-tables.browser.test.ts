@@ -1,18 +1,22 @@
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
-import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
+import { MessageMarkdown } from "../pages/chat/components/chat-message-text-view.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import "../styles/base.css";
 import "../styles/chat/text.css";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
 
 const originalDirection = document.documentElement.getAttribute("dir");
 let owner: HTMLElement | undefined;
+let unmount: (() => void) | undefined;
 
 afterEach(() => {
   if (owner) {
     releaseMarkdownTables(owner);
-    render(nothing, owner);
+    unmount?.();
+    unmount = undefined;
     owner.remove();
     owner = undefined;
   }
@@ -31,15 +35,17 @@ describe("expanded Markdown table direction", () => {
     document.documentElement.dir = fixture.pageDirection;
     owner = document.body.appendChild(document.createElement("section"));
     owner.addEventListener("click", handleMarkdownTableInteraction);
-    render(
-      renderMessageMarkdown(
-        `${fixture.message}\n\n| First | Second | Third |\n| --- | --- | --- |\n| A | B | C |`,
-        "table-direction",
-        { role: "assistant", isStreaming: false },
-        { tableInteractions: "enabled" },
-      ),
-      owner,
-    );
+    ({ unmount } = mountSolid(
+      () =>
+        createComponent(MessageMarkdown, {
+          markdown: `${fixture.message}\n\n| First | Second | Third |\n| --- | --- | --- |\n| A | B | C |`,
+          messageKey: "table-direction",
+          options: { role: "assistant", isStreaming: false },
+          markdownOptions: { tableInteractions: "enabled" },
+        }),
+      { container: owner },
+    ));
+    flush();
 
     const inlineTable = owner.querySelector("table")!;
     const firstColumnOnRight = (table: HTMLTableElement) => {

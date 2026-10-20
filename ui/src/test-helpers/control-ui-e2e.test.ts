@@ -1,14 +1,18 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { format } from "node:util";
 import type { Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
+import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
-import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
+import {
+  installControlUiE2ePageDiagnosticRing,
+  recordControlUiE2eFailureFacts,
+} from "./control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -61,6 +65,7 @@ describe("shared proof capture", () => {
       } as unknown as Page;
       const original = new Error("original request failure");
       original.name = "TimeoutError";
+      recordControlUiE2eFailureFacts(page, { avatarPresent: false, avatarRequests: 1 });
       let observed: unknown;
       const failedAction = (async () => {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -89,6 +94,7 @@ describe("shared proof capture", () => {
           hostBeforeRead: { pageClosed: false, browserConnected: true },
           lifecycle: null,
           rendererRead: stage === "evaluation" ? "deadline" : "completed",
+          scenarioFacts: { avatarPresent: false, avatarRequests: 1 },
         });
         expect(report.failure).toMatchObject({
           name: "TimeoutError",
@@ -117,100 +123,128 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { stall: "script", paused: true },
-    { stall: "native", paused: false },
-  ])("publishes $stall renderer stall evidence without page origins", async ({ paused }) => {
-    vi.useFakeTimers();
-    const parent = tempDirs.make("control-ui-renderer-stall-");
-    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const sent: string[] = [];
-    let samples = 0;
-    const session = Object.assign(new EventEmitter(), {
-      send: async (method: string) => {
-        sent.push(method);
-        if (method === "Performance.getMetrics") {
-          samples += 1;
-          const elapsed = samples === 1 ? 0 : 0.5;
-          return {
-            metrics: [
-              { name: "TaskDuration", value: 10 + elapsed },
-              { name: "ScriptDuration", value: 4 + elapsed },
-              { name: "LayoutDuration", value: 1 },
-            ],
-          };
-        }
-        if (method === "Debugger.pause" && paused) {
-          queueMicrotask(() =>
-            session.emit("Debugger.paused", {
-              callFrames: [
+    { stall: "script", paused: true, metrics: true },
+    { stall: "native", paused: false, metrics: true },
+    { stall: "unavailable metrics", paused: true, metrics: false },
+  ])(
+    "publishes $stall renderer stall evidence without page origins",
+    async ({ paused, metrics }) => {
+      vi.useFakeTimers();
+      const parent = tempDirs.make("control-ui-renderer-stall-");
+      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const sent: string[] = [];
+      let samples = 0;
+      const session = Object.assign(new EventEmitter(), {
+        send: async (method: string) => {
+          sent.push(method);
+          if (method === "Debugger.enable") {
+            session.emit("Debugger.scriptParsed", {
+              scriptId: "bundle",
+              url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
+            });
+            session.emit("Debugger.scriptParsed", {
+              scriptId: "blob",
+              url: "blob:https://private.invalid/id",
+            });
+            session.emit("Debugger.scriptParsed", {
+              scriptId: "private-path",
+              url: "https://private.invalid/private-session/report.js?token=private",
+            });
+          }
+          if (method === "Performance.getMetrics") {
+            if (!metrics) {
+              return new Promise(() => {});
+            }
+            samples += 1;
+            const elapsed = samples === 1 ? 0 : 0.5;
+            return {
+              metrics: [
+                { name: "TaskDuration", value: 10 + elapsed },
+                { name: "ScriptDuration", value: 4 + elapsed },
+                { name: "LayoutDuration", value: 1 },
+              ],
+            };
+          }
+          if (method === "Debugger.pause" && paused) {
+            queueMicrotask(() =>
+              session.emit("Debugger.paused", {
+                callFrames: [
+                  {
+                    functionName: "layoutPins",
+                    url: "",
+                    location: { scriptId: "bundle", lineNumber: 9, columnNumber: 3 },
+                  },
+                  {
+                    functionName: "",
+                    url: "blob:https://private.invalid/id",
+                    location: { scriptId: "blob", lineNumber: 0, columnNumber: 0 },
+                  },
+                  {
+                    functionName: "privatePath",
+                    url: "",
+                    location: { scriptId: "private-path", lineNumber: 0, columnNumber: 0 },
+                  },
+                ],
+              }),
+            );
+          }
+          return {};
+        },
+        detach: async () => {
+          sent.push("detach");
+        },
+      });
+      const stalled = createDeferredCore<unknown>();
+      // SAFETY: a never-settling read models a renderer whose main thread stays busy.
+      const page = {
+        addInitScript: async () => {},
+        evaluate: () => stalled.promise,
+        screenshot: async () => Buffer.from("proof"),
+        frames: () => [],
+        context: () => ({
+          browser: () => ({ isConnected: () => true }),
+          newCDPSession: async () => session,
+        }),
+        isClosed: () => false,
+        url: () => "http://127.0.0.1:4173/chat",
+      } as unknown as Page;
+      await installControlUiE2eRendererStallProbe(page);
+      const capture = captureControlUiE2eFailureDiagnostics(page, {
+        error: new Error("click timed out"),
+        label: "comment pin",
+      });
+      await vi.advanceTimersByTimeAsync(5_000 + 3_000);
+      await capture;
+      const root = path.join(parent, readdirSync(parent)[0]!);
+      const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+      expect(report).toMatchObject({
+        rendererRead: "deadline",
+        rendererStall: {
+          busyMs: metrics ? { task: 500, script: 500, layout: 0, style: 0 } : null,
+          sampleMs: metrics ? 500 : 0,
+          stack: paused
+            ? [
                 {
                   functionName: "layoutPins",
-                  url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
-                  location: { lineNumber: 9, columnNumber: 3 },
+                  script: "/assets/index-private.js",
+                  line: 10,
+                  column: 4,
                 },
-                {
-                  functionName: "",
-                  url: "blob:https://private.invalid/id",
-                  location: { lineNumber: 0, columnNumber: 0 },
-                },
-              ],
-            }),
-          );
-        }
-        return {};
-      },
-      detach: async () => {
-        sent.push("detach");
-      },
-    });
-    const stalled = createDeferredCore<unknown>();
-    // SAFETY: a never-settling read models a renderer whose main thread stays busy.
-    const page = {
-      addInitScript: async () => {},
-      evaluate: () => stalled.promise,
-      screenshot: async () => Buffer.from("proof"),
-      frames: () => [],
-      context: () => ({
-        browser: () => ({ isConnected: () => true }),
-        newCDPSession: async () => session,
-      }),
-      isClosed: () => false,
-      url: () => "http://127.0.0.1:4173/chat",
-    } as unknown as Page;
-    await installControlUiE2eRendererStallProbe(page);
-    const capture = captureControlUiE2eFailureDiagnostics(page, {
-      error: new Error("click timed out"),
-      label: "comment pin",
-    });
-    await vi.advanceTimersByTimeAsync(5_000 + 3_000);
-    await capture;
-    const root = path.join(parent, readdirSync(parent)[0]!);
-    const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
-    expect(report).toMatchObject({
-      rendererRead: "deadline",
-      rendererStall: {
-        busyMs: { task: 500, script: 500, layout: 0, style: 0 },
-        sampleMs: 500,
-        stack: paused
-          ? [
-              {
-                functionName: "layoutPins",
-                script: "/assets/index-private.js",
-                line: 10,
-                column: 4,
-              },
-              { functionName: "(anonymous)", script: "", line: 1, column: 1 },
-            ]
-          : null,
-      },
-    });
-    expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid/u);
-    expect(sent).toContain("Debugger.pause");
-    expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
-    expect(vi.getTimerCount()).toBe(0);
-    stalled.resolve(null);
-  });
+                { functionName: "(anonymous)", script: "", line: 1, column: 1 },
+                { functionName: "privatePath", script: "", line: 1, column: 1 },
+              ]
+            : null,
+        },
+      });
+      expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid|private-session/u);
+      expect(sent).toContain("Debugger.pause");
+      expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      expect(session.listenerCount("Debugger.scriptParsed")).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      stalled.resolve(null);
+    },
+  );
 
   it.each([
     { observed: true, closed: false, connected: true },
@@ -320,29 +354,44 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { shardIndex: "5", shardCount: "6", failure: "none", sendLabel: "Send message" },
-    { shardIndex: undefined, shardCount: undefined, failure: "none", sendLabel: "Loading chat" },
+    {
+      shardIndex: "5",
+      shardCount: "6",
+      failure: "none",
+      sendLabel: "Send message",
+      catalogSource: "snapshot",
+    },
+    {
+      shardIndex: undefined,
+      shardCount: undefined,
+      failure: "none",
+      sendLabel: "Loading chat",
+      catalogSource: "none",
+    },
     {
       shardIndex: undefined,
       shardCount: undefined,
       failure: "evaluation",
       sendLabel: "Send message",
+      catalogSource: "list",
     },
     {
       shardIndex: undefined,
       shardCount: undefined,
       failure: "screenshot",
       sendLabel: "private-label",
+      catalogSource: "list",
     },
     {
       shardIndex: undefined,
       shardCount: undefined,
       failure: "storage",
       sendLabel: "Sending message...",
+      catalogSource: "list",
     },
   ])(
-    "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount)",
-    async ({ shardIndex, shardCount, failure, sendLabel }) => {
+    "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount; $catalogSource catalog)",
+    async ({ shardIndex, shardCount, failure, sendLabel, catalogSource }) => {
       vi.useFakeTimers();
       const parent = tempDirs.make("control-ui-failure-proof-");
       const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
@@ -354,7 +403,20 @@ describe("shared proof capture", () => {
       vi.spyOn(performance, "getEntriesByType").mockReturnValue([]);
       const app = document.createElement("openclaw-app");
       vi.stubGlobal("openclawControlUi", {
+        snapshot: (): ReturnType<ControlUiReadiness["hook"]["snapshot"]> => ({
+          generation: 7,
+          booted: true,
+          gatewayPhase: "connected",
+          routeReady: true,
+          rosterReady: false,
+          ready: false,
+          basePath: "/private-base",
+          sessionKey: "private-session",
+          route: null,
+          terminalActivationReady: false,
+        }),
         diagnostics: () => ({
+          settlementError: failure === "storage" ? "private-settlement-error" : null,
           gateway: {
             phase: failure === "storage" ? "private-phase" : "connected",
             hello: {
@@ -432,9 +494,23 @@ describe("shared proof capture", () => {
         return widget;
       });
       document.body.append(app, composer, send, providerHead, agentPage, ...canvasWidgets);
+      const snapshot =
+        catalogSource === "snapshot"
+          ? {
+              event: "models.snapshot",
+              payload: {
+                scope: { agentId: "private-agent" },
+                catalog: {
+                  models: [{ id: "private-model", available: true }],
+                  pendingProviders: ["private-provider"],
+                  providerOutcomes: [{ provider: "private-provider", status: "ready" }],
+                },
+              },
+            }
+          : undefined;
       const modelResponses =
-        failure === "none"
-          ? {}
+        catalogSource !== "list"
+          ? { snapshot }
           : {
               list: {
                 ok: true,
@@ -630,6 +706,15 @@ describe("shared proof capture", () => {
             failure === "evaluation"
               ? { available: false }
               : {
+                  readiness: {
+                    generation: 7,
+                    booted: true,
+                    gatewayPhase: "connected",
+                    routeReady: true,
+                    rosterReady: false,
+                    ready: false,
+                    settlementFailed: failure === "storage",
+                  },
                   gatewayPhase: failure === "storage" ? "unknown" : "connected",
                   connected: true,
                   canvasWidgets: [
@@ -677,6 +762,17 @@ describe("shared proof capture", () => {
           models: {
             listSeen: failure !== "none",
             listOk: failure === "none" ? null : true,
+            snapshot: {
+              seen: snapshot !== undefined,
+              models: snapshot ? 1 : null,
+              available: snapshot ? 1 : null,
+              unavailable: snapshot ? 0 : null,
+              unknownAvailability: snapshot ? 0 : null,
+              pendingProviders: snapshot ? 1 : null,
+              providerOutcomes: snapshot
+                ? { ready: 1, "auth-rejected": 0, unavailable: 0, unknown: 0 }
+                : null,
+            },
             models: failure === "none" ? null : failure === "screenshot" ? 0 : 3,
             available: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
             unavailable: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
@@ -796,6 +892,29 @@ describe("resolvePlaywrightChromiumExecutablePath", () => {
       ).toBe(expected);
     },
   );
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("prefers the newest installed Chromium revision over system browsers", () => {
+    const browsersRoot = tempDirs.make("control-ui-playwright-browsers-");
+    const installed = [
+      path.join(browsersRoot, "chromium-1100", "chrome-linux", "chrome"),
+      path.join(browsersRoot, "chromium-1194", "chrome-linux", "chrome"),
+    ];
+    for (const executable of installed) {
+      mkdirSync(path.dirname(executable), { recursive: true });
+      writeFileSync(executable, "");
+    }
+
+    expect(
+      resolvePlaywrightChromiumExecutablePath(
+        path.join(browsersRoot, "chromium-1243", "chrome-linux64", "chrome"),
+        {},
+        (candidate) =>
+          existsSync(candidate) || candidate === systemChromiumExecutableCandidates.at(-1),
+      ),
+    ).toBe(installed[1]);
+  });
 });
 
 describe("waitForControlUiRoute", () => {

@@ -2,7 +2,6 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildFamilyForwardCompatModel,
@@ -37,6 +36,7 @@ import {
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
+  normalizeOpenAICodexCatalogModel,
   readCodexReasoningLevels,
   readCodexModelRows,
   shouldIncludeCodexModelRow,
@@ -59,17 +59,15 @@ import {
   OPENAI_GPT_54_PRO_MODEL_ID,
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_56_LUNA_MODEL_ID,
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
-  OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
   OPENAI_GPT_61_SOL_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
-  resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import {
   buildOpenAICodexReadyOutcome,
@@ -100,7 +98,6 @@ const PROVIDER_ID = "openai";
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
-const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CHAT_LATEST_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
 const OPENAI_CATALOG_AUGMENTATIONS = [
@@ -141,11 +138,8 @@ const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
-  baseUrl?: string;
+  baseUrl: string;
   discoveryApiKey?: string;
-  env?: Record<string, string | undefined>;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 };
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -175,8 +169,7 @@ function buildOpenAIStaticPlatformProviderConfig(
 async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<OpenAILiveProviderCatalog> {
-  const baseUrl =
-    normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
+  const baseUrl = params.baseUrl;
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
@@ -216,8 +209,6 @@ async function buildOpenAILiveProviderConfig(
       models: catalogModels,
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
       ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
       auditContext: "openai-model-discovery",
     });
@@ -248,35 +239,6 @@ async function buildOpenAILiveProviderConfig(
     }
     return { provider: fallback, outcome: { provider: PROVIDER_ID, status: "unavailable" } };
   }
-}
-
-function normalizeOpenAICodexCatalogModel(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  const modelId = normalizeLowercaseStringOrEmpty(model.id);
-  if (
-    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
-    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
-    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
-  ) {
-    const supportedReasoningEfforts = resolveOpenAICodexReasoningEfforts(
-      modelId,
-      model.compat?.supportedReasoningEfforts?.filter((effort) => effort !== "none"),
-    );
-    return {
-      ...model,
-      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-      thinkingLevelMap: { ...model.thinkingLevelMap, off: null },
-      ...(model.compat
-        ? {
-            compat: {
-              ...model.compat,
-              ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
-            },
-          }
-        : {}),
-    };
-  }
-  return model;
 }
 
 function resolveCodexModelFallback(modelId: string): ModelDefinitionConfig | undefined {
@@ -397,47 +359,49 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   catalogContext?: OpenAICodexModelsEndpointContext;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
-  const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
+  const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
+  const { fetchLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
   const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
   try {
-    const rows = await getCachedLiveProviderModelRows({
-      providerId: PROVIDER_ID,
-      endpoint,
-      discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
+    return await getCachedLiveCatalogValue({
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
-      auditContext: "openai-model-discovery",
-      readRows: readCodexModelRows,
-      buildRequestHeaders: ({ discoveryApiKey }) => ({
-        Accept: "application/json",
-        ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
-        ...(params.accountId ? { "ChatGPT-Account-ID": params.accountId } : {}),
-      }),
-      cacheKeyParts: [
+      keyParts: [
         PROVIDER_ID,
-        "codex-model-rows",
+        "codex-catalog",
         endpoint,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],
-    });
-    const models = rows
-      .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
-      .filter((model): model is ModelDefinitionConfig => Boolean(model));
-    return {
-      provider: {
-        baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-        api: "openai-chatgpt-responses",
-        auth: "oauth",
-        models,
+      load: async (signal): Promise<OpenAILiveProviderCatalog> => {
+        const rows = await fetchLiveProviderModelRows({
+          providerId: PROVIDER_ID,
+          endpoint,
+          discoveryApiKey: params.discoveryApiKey,
+          signal,
+          auditContext: "openai-model-discovery",
+          readRows: readCodexModelRows,
+          buildRequestHeaders: ({ discoveryApiKey }) => ({
+            Accept: "application/json",
+            ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
+            ...(params.accountId ? { "ChatGPT-Account-ID": params.accountId } : {}),
+          }),
+        });
+        // The backend also sends prompt templates; retain only account catalog facts.
+        return {
+          provider: {
+            baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+            api: "openai-chatgpt-responses",
+            auth: "oauth",
+            models: rows
+              .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
+              .filter((model): model is ModelDefinitionConfig => Boolean(model)),
+          },
+          outcome: buildOpenAICodexReadyOutcome(rows),
+        };
       },
-      outcome: buildOpenAICodexReadyOutcome(rows),
-    };
+    });
   } catch (error) {
     if (
       error instanceof LiveModelCatalogHttpError &&
@@ -576,12 +540,7 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
     patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
   },
   {
-    match: [
-      OPENAI_GPT_56_MODEL_ID,
-      OPENAI_GPT_56_SOL_MODEL_ID,
-      OPENAI_GPT_56_TERRA_MODEL_ID,
-      OPENAI_GPT_56_LUNA_MODEL_ID,
-    ],
+    match: [OPENAI_GPT_56_MODEL_ID, ...OPENAI_GPT_56_VARIANT_MODEL_IDS],
     templateIds: [OPENAI_GPT_55_MODEL_ID],
   },
   {
@@ -608,9 +567,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   if (
     OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||
     OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
-    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
-    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
-    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+    OPENAI_GPT_56_VARIANT_MODEL_IDS.some((id) => id === modelId)
   ) {
     if (exactModel) {
       return exactModel;
@@ -897,7 +854,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
-    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
+    classifyFailoverReason: ({ code, errorMessage }) =>
+      /^Provider (?:finish_reason|incomplete_reason): content_filter$/.test(errorMessage)
+        ? "format"
+        : classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat, thinkingLevelMap }) =>
       normalizeProviderId(provider) === PROVIDER_ID

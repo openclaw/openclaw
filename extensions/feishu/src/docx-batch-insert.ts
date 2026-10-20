@@ -101,10 +101,7 @@ export async function insertBlocksInBatches(
       );
     }
 
-    if (
-      currentBatch.blocks.length + newBlocks.length > BATCH_SIZE &&
-      currentBatch.blocks.length > 0
-    ) {
+    if (currentBatch.blocks.length + newBlocks.length > BATCH_SIZE) {
       batches.push(currentBatch);
       currentBatch = { firstLevelIds: [], blocks: [] };
     }

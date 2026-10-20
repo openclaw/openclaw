@@ -15,7 +15,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -192,7 +192,7 @@ describe("on-demand prepared worker admission", () => {
         profileSnapshot: intent.profileSnapshot,
         preparation: {
           purpose: "reserve",
-          key: intent.preparationKey!,
+          key: intent.profileSnapshot.project!.preparation!.key,
           demandAtMs: 1_000,
           expiresAtMs: 11_000,
         },

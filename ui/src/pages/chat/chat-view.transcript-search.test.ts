@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
+import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -21,7 +20,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    render(null, container);
+    disposeChatView(container);
   }
   resetChatViewState();
   resetTranscriptTestDom();
@@ -41,9 +40,8 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: () => render(renderChat(props), container),
   });
-  render(renderChat(props), container);
+  renderChatPropsInto(container, props);
   const composer = expectDefined(
     container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
     "composer",
@@ -58,8 +56,7 @@ function createPane(paneId = "primary") {
     composer.dispatchEvent(
       new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
     );
-    await Promise.resolve();
-    expect(document.activeElement).toBe(search());
+    await waitForSolid(() => expect(document.activeElement).toBe(search()));
     if (query !== null) {
       search().value = query;
       search().dispatchEvent(new Event("input", { bubbles: true }));
@@ -78,6 +75,22 @@ function escape() {
 }
 
 describe("transcript search Escape", () => {
+  it("returns to the composer when the shortcut origin has been removed", async () => {
+    const pane = createPane();
+    const chat = expectDefined(pane.container.querySelector(".chat"), "chat shortcut owner");
+    const trigger = chat.appendChild(document.createElement("button"));
+    trigger.focus();
+    trigger.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.search()));
+    trigger.remove();
+    pane.search().dispatchEvent(escape());
+    await waitForSolid(() => expect(document.activeElement).toBe(pane.composer));
+    expect(pane.onClearReply).not.toHaveBeenCalled();
+    expect(pane.onAbort).not.toHaveBeenCalled();
+  });
+
   it("closes from the search button after its tooltip and restores focus without clearing reply or stopping", async () => {
     const pane = createPane();
     await pane.openSearch();
@@ -86,6 +99,9 @@ describe("transcript search Escape", () => {
       "search control",
     );
     target.focus();
+    const tooltip = expectDefined(target.closest("openclaw-tooltip"), "search tooltip");
+    await tooltip.updateComplete;
+    expect(tooltip.hasAttribute("open")).toBe(true);
     // Its focused tooltip owns the first Escape, before search receives it.
     target.dispatchEvent(escape());
     await Promise.resolve();

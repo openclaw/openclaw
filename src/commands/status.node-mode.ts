@@ -1,4 +1,3 @@
-// Detects node-only hosts for status output.
 // On these machines the local gateway daemon is absent by design, but the node service may point at a remote gateway.
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";

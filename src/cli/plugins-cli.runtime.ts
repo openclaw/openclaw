@@ -6,7 +6,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { collectConfiguredRuntimePluginIds } from "../commands/doctor/shared/configured-runtime-plugin-owners.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -99,9 +99,11 @@ function collectConfiguredRuntimePluginWarnings(params: {
           : `Enable the "${pluginId}" plugin, or ${alternative}.`;
       return [`${prefix}, but "${pluginId}" is disabled. ${guidance}`];
     }
-    const installSpec = resolvePluginInstallSources(candidate)[0]?.spec ?? candidate.pluginId;
+    const installSource = resolvePluginInstallSources(candidate)[0];
+    const installSpec = installSource?.spec ?? candidate.pluginId;
+    const installTarget = installSource?.source === "npm" ? `npm:${installSpec}` : installSpec;
     return [
-      `${prefix}, but no enabled "${pluginId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
+      `${prefix}, but no enabled "${pluginId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installTarget}".`,
     ];
   });
 }
@@ -228,7 +230,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     const refresh = (assertCurrent: () => void) =>
       withPluginLifecycleLease({ assertCurrent }, async (lease) => {
-        const config = getRuntimeConfig();
+        const config = await captureRuntimeConfigAsyncReader()();
         const index = await refreshPluginRegistry({
           config,
           reason: "manual",
@@ -273,7 +275,9 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     return await runWithLocalPluginState("registry --refresh", refresh);
   }
 
-  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
+  const inspection = await inspectPluginRegistry({
+    config: await captureRuntimeConfigAsyncReader()(),
+  });
   if (opts.json) {
     defaultRuntime.writeJson({
       state: inspection.state,
@@ -315,7 +319,7 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
     isStalePluginAutoRepairBlocked,
     scanStalePluginConfig,
   } = await import("../commands/doctor/shared/stale-plugin-config.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const configSnapshot = await readConfigFileSnapshot().catch(() => null);
   const sourceCfg = configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg;
   let exitCode = 1;
@@ -744,7 +748,7 @@ async function runPluginMarketplaceEntriesLocal(
   opts: PluginMarketplaceEntriesOptions,
 ): Promise<void> {
   const catalog = await import("../plugins/official-external-plugin-catalog.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries({
     ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
@@ -807,7 +811,7 @@ async function runPluginMarketplaceRefreshLocal(
 ): Promise<void> {
   const { loadConfiguredHostedOfficialExternalPluginCatalogEntries } =
     await import("../plugins/official-external-plugin-catalog.js");
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const expectedSha256 = normalizeMarketplaceExpectedSha256(opts.expectedSha256);
   const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries({
     ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),

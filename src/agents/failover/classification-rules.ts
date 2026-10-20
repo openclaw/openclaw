@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
@@ -22,12 +23,13 @@ function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
 export function inferSignalStatus(signal: FailoverSignal): number | undefined {
-  if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
+  if (Number.isFinite(signal.status)) {
     return signal.status;
   }
-  return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
+  const message = stripErrorPrefix(signal.message?.trim() ?? "");
+  return extractLeadingHttpStatus(message)?.code ?? extractProviderWrappedHttpStatus(message)?.code;
 }
-function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): boolean {
+function isExplicitNoBodyHttpMessage(raw: string | undefined, status: number): boolean {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return false;
@@ -35,7 +37,7 @@ function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): 
   const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
   const leadingStatus = extractLeadingHttpStatus(candidate);
   if (leadingStatus) {
-    if (typeof status === "number" && leadingStatus.code !== status) {
+    if (leadingStatus.code !== status) {
       return false;
     }
     return NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus.rest);
@@ -188,7 +190,7 @@ export function classifyFailoverClassificationFromHttpStatus(
   opts?: { preserveProviderSignalClassification?: boolean },
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
-  if (typeof status !== "number" || !Number.isFinite(status)) {
+  if (status === undefined || !Number.isFinite(status)) {
     return null;
   }
   if (status === 402) {
@@ -302,6 +304,7 @@ export function classifyFailoverClassificationFromHttpStatus(
 // Only cross-provider structured codes classify in core; provider-native
 // mappings belong to provider hooks.
 const FAILOVER_CODE_REASONS = new Map<string, FailoverReason>([
+  ["DEGENERATE_OUTPUT", "server_error"],
   ["UNKNOWN_PARAMETER", "format"],
   ["RESOURCE_EXHAUSTED", "rate_limit"],
   ["RATE_LIMIT", "rate_limit"],

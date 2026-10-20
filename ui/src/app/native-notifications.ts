@@ -1,4 +1,4 @@
-import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
@@ -69,13 +69,11 @@ export function createNativeNotificationsCapability() {
     permission: "unknown" as const,
     test: null,
   };
-  const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
+  let render: ((snapshot: NativeNotificationsSnapshot) => void) | undefined;
 
   const publish = (next: NativeNotificationsSnapshot) => {
     snapshot = next;
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
+    render?.(snapshot);
   };
   const handleStatus = (event: Event) => {
     const next = snapshotFrom((event as CustomEvent<unknown>).detail);
@@ -86,16 +84,22 @@ export function createNativeNotificationsCapability() {
   // Permission may change in System Settings while the app is backgrounded.
   const refreshStatus = () => postMessage({ type: "status" });
 
-  window.addEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
-  window.addEventListener("focus", refreshStatus);
+  const stops = [
+    listen(window, NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus),
+    listen(window, "focus", refreshStatus),
+  ];
   refreshStatus();
 
   return {
     get snapshot() {
       return snapshot;
     },
-    subscribe: (listener: (snapshot: NativeNotificationsSnapshot) => void) =>
-      registerListener(listeners, listener),
+    subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     requestPermission(this: void) {
       postMessage({ type: "request-permission" });
     },
@@ -110,9 +114,8 @@ export function createNativeNotificationsCapability() {
       postMessage({ type: "background-session-completed", ...completion });
     },
     dispose(this: void) {
-      window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);
-      window.removeEventListener("focus", refreshStatus);
-      listeners.clear();
+      stops.forEach((stop) => stop());
+      render = undefined;
     },
   };
 }

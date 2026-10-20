@@ -80,7 +80,6 @@ export function createConnectedContext(
         assistantIdentity: {
           name: "OpenClaw",
           avatar: null,
-          avatarSource: null,
           avatarStatus: null,
           avatarReason: null,
         },
@@ -102,6 +101,12 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
+      snapshot = { ...snapshot, ...next };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
     emitHello(hello: ApplicationGatewaySnapshot["hello"]) {
       snapshot = { ...snapshot, hello };
       for (const listener of listeners) {

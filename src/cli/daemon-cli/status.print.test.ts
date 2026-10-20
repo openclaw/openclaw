@@ -315,42 +315,30 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "wsl hint");
   });
 
-  it.each([{ name: "report-only", keepAlive: false, gatewayActions: [], warning: false }])(
-    "uses the appropriate status severity for $name jobs",
-    (testCase) => {
-      const job = {
-        label: "ai.openclaw.test.w15.other",
-        program: "/tmp/openclaw-test/other.sh",
-        keepAlive: testCase.keepAlive,
-        gatewayActions: testCase.gatewayActions,
-        safeToRemove: false,
-      };
-      printDaemonStatus({
-        service: {
-          runtime: { status: "running", pid: 8000 },
-          foreignLaunchdJobs: [job],
-          forcedRestartSummary: { count: 3, windowMs: 600_000 },
-        },
-      });
+  it("reports non-lifecycle launchd jobs without warnings or restart attribution", () => {
+    const job = {
+      label: "ai.openclaw.test.w15.other",
+      program: "/tmp/openclaw-test/other.sh",
+      keepAlive: false,
+      gatewayActions: [],
+      safeToRemove: false,
+    };
+    printDaemonStatus({
+      service: {
+        runtime: { status: "running", pid: 8000 },
+        foreignLaunchdJobs: [job],
+        forcedRestartSummary: { count: 3, windowMs: 600_000 },
+      },
+    });
 
-      const report = testCase.warning ? runtime.error : runtime.log;
-      const otherOutput = testCase.warning ? runtime.log : runtime.error;
-      expectMockLineContains(
-        report,
-        testCase.warning
-          ? "Foreign launchd jobs detected (macOS)."
-          : "Other OpenClaw launchd jobs (macOS)",
-      );
-      expectMockLineContains(report, job.label);
-      expectMockLineContains(report, job.program);
-      expectMockLineContains(report, "Report only; left unchanged.");
-      expect(output(otherOutput)).not.toContain(job.label);
-      if (!testCase.warning) {
-        expect(runtime.error).not.toHaveBeenCalled();
-        expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
-      }
-    },
-  );
+    expectMockLineContains(runtime.log, "Other OpenClaw launchd jobs (macOS)");
+    expectMockLineContains(runtime.log, job.label);
+    expectMockLineContains(runtime.log, job.program);
+    expectMockLineContains(runtime.log, "Report only; left unchanged.");
+    expect(output(runtime.error)).not.toContain(job.label);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
+  });
 
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus({

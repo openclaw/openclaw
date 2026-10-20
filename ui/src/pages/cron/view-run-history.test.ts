@@ -2,14 +2,34 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob,
   getElement,
-  renderCronView as renderView,
+  openCronMenu,
+  renderCronView,
 } from "./view.test-support.ts";
+
+function renderView(props: Parameters<typeof renderCronView>[0] = {}, scope = "overview") {
+  return renderCronView({
+    listTab: "activity",
+    detailTab: "history",
+    editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
+    ...props,
+  });
+}
 
 function createRun(overrides: Partial<CronRunLogEntry>): CronRunLogEntry {
   return { ts: 1, jobId: "job-1", action: "finished", status: "ok", ...overrides };
+}
+
+function entryText(entry: Element | undefined, part: string) {
+  return entry?.querySelector(`.cron-run-entry__${part}`)?.textContent;
+}
+
+const statusFilter = '[data-filter="status"]';
+function clickStatus(container: Element, value: string) {
+  getElement(container, `${statusFilter} [data-value="${value}"]`, HTMLButtonElement).click();
 }
 
 describe("cron view run history", () => {
@@ -18,18 +38,14 @@ describe("cron view run history", () => {
     async (scope) => {
       const restoreI18n = captureI18nStateForTesting();
       const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+      const runs = [
+        createRun({ ts: timestamp, runAtMs: 0 }),
+        createRun({ runAtMs: Number.NaN, jobId: "job-2" }),
+      ];
       try {
         for (const locale of ["en", "fr", "en"] as const) {
           await i18n.setLocale(locale);
-          const container = renderView({
-            listTab: "activity",
-            editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
-            detailTab: "history",
-            runs: [
-              { ts: timestamp, runAtMs: 0, jobId: "job-1", action: "finished", status: "ok" },
-              { ts: 1, runAtMs: Number.NaN, jobId: "job-2", action: "finished", status: "ok" },
-            ],
-          });
+          const container = renderView({ runs }, scope);
           const entries = container.querySelectorAll(".cron-run-entry__meta");
           const dateOptions: Intl.DateTimeFormatOptions = {
             year: "numeric",
@@ -52,19 +68,18 @@ describe("cron view run history", () => {
     },
   );
 
-  it("renders runs sorted newest first and wires run filters", () => {
-    const onRunsFiltersChange = vi.fn();
+  it("renders runs sorted newest first and wires run filters", async () => {
+    const onChange = vi.fn();
     const container = renderView({
-      listTab: "activity",
-      onRunsFiltersChange,
+      onRunsFiltersChange: onChange,
       runs: [
-        { ts: 1_000, jobId: "job-1", action: "finished", status: "ok", summary: "older run" },
-        { ts: 2_000, jobId: "job-2", action: "finished", status: "ok", summary: "newer run" },
+        createRun({ ts: 1_000, summary: "older run" }),
+        createRun({ ts: 2_000, jobId: "job-2", summary: "newer run" }),
       ],
       status: { enabled: true, triggersEnabled: true, jobs: 2 },
     });
 
-    const titles = Array.from(container.querySelectorAll(".cron-run-entry__title")).map((el) =>
+    const titles = Array.from(container.querySelectorAll(".cron-run-entry__title"), (el) =>
       el.textContent?.trim(),
     );
     expect(titles[0]).toContain("job-2");
@@ -73,177 +88,88 @@ describe("cron view run history", () => {
     const search = getElement(container, ".cron-run-filter-search input", HTMLInputElement);
     search.value = "fail";
     search.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
+    expect(onChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
 
-    const statusOption = container.querySelector<HTMLElement & { checked: boolean }>(
-      '[data-filter="status"] wa-dropdown-item[value="option:error"]',
+    const statusTrigger = await openCronMenu(container, statusFilter);
+    clickStatus(container, "option:error");
+    await waitForSolid(() =>
+      expect(onChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] }),
     );
-    expect(statusOption).not.toBeNull();
-    statusOption
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: statusOption }, bubbles: true }),
-      );
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
+    expect(statusTrigger.getAttribute("aria-expanded")).toBe("true");
 
-    const clearCommand = container.querySelector<HTMLElement>(
-      '[data-filter="status"] wa-dropdown-item[value="command:clear"]',
-    );
-    clearCommand
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: clearCommand }, bubbles: true }),
-      );
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
+    clickStatus(container, "command:clear");
+    await waitForSolid(() => expect(onChange).toHaveBeenCalledWith({ cronRunsStatuses: [] }));
+    await waitForSolid(() => expect(statusTrigger.getAttribute("aria-expanded")).toBe("false"));
   });
 
   it.each(["overview", "job"] as const)(
     "shows whole-run completion beside execution status in %s history",
-    (scope) => {
-      const onRunsFiltersChange = vi.fn();
-      const cases = [
-        {
-          status: "ok",
-          completionStatus: "failed",
-          deliveryStatus: "not-delivered",
-          expected: "OK · Error",
-        },
-        {
-          status: "ok",
-          completionStatus: "unknown",
-          deliveryStatus: "unknown",
-          expected: "OK · Unknown",
-        },
-        {
-          status: "ok",
-          completionStatus: "succeeded",
-          deliveryStatus: "delivered",
-          expected: "OK",
-        },
-        { status: "ok", expected: "OK" },
-        { status: "error", completionStatus: "failed", expected: "Error" },
-        { status: "skipped", completionStatus: "failed", expected: "Skipped" },
-        {
-          status: "ok",
-          completionStatus: "succeeded",
-          deliveryStatus: "not-delivered",
-          deliveryError: "Synthetic best-effort delivery failure.",
-          expected: "OK",
-        },
-        {
-          status: "ok",
-          completionStatus: "succeeded",
-          deliveryStatus: "not-delivered",
-          deliverySuppressionReason: "silent",
-          expected: "OK",
-        },
-      ] as const;
-      const container = renderView({
-        listTab: "activity",
-        editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
-        detailTab: "history",
-        onRunsFiltersChange,
-        runs: cases.map(({ expected: _expected, ...entry }, index) => ({
-          ts: index + 1,
-          jobId: "job-1",
-          action: "finished",
-          ...entry,
-        })),
-      });
+    async (scope) => {
+      const onChange = vi.fn();
+      const succeeded = { completionStatus: "succeeded", deliveryStatus: "not-delivered" } as const;
+      const cases: Array<[Partial<CronRunLogEntry>, string]> = [
+        [{ completionStatus: "failed", deliveryStatus: "not-delivered" }, "OK · Error"],
+        [{ completionStatus: "unknown", deliveryStatus: "unknown" }, "OK · Unknown"],
+        [{ completionStatus: "succeeded", deliveryStatus: "delivered" }, "OK"],
+        [{}, "OK"],
+        [{ status: "error", completionStatus: "failed" }, "Error"],
+        [{ status: "skipped", completionStatus: "failed" }, "Skipped"],
+        [{ ...succeeded, deliveryError: "Synthetic best-effort delivery failure." }, "OK"],
+        [{ ...succeeded, deliverySuppressionReason: "silent" }, "OK"],
+      ];
+      const runs = cases.map(([entry], index) => createRun({ ts: index + 1, ...entry }));
+      const container = renderView({ onRunsFiltersChange: onChange, runs }, scope);
 
       const titles = Array.from(container.querySelectorAll(".cron-run-entry__title"), (title) =>
         title.textContent?.replace(/\s+/g, " ").trim(),
       );
-      expect(titles).toEqual(cases.toReversed().map(({ expected }) => `job-1 · ${expected}`));
+      expect(titles).toEqual(cases.toReversed().map(([, expected]) => `job-1 · ${expected}`));
 
-      const okOption = container.querySelector<HTMLElement>(
-        '[data-filter="status"] wa-dropdown-item[value="option:ok"]',
-      );
-      expect(okOption).not.toBeNull();
-      okOption
-        ?.closest("wa-dropdown")
-        ?.dispatchEvent(
-          new CustomEvent("wa-select", { detail: { item: okOption }, bubbles: true }),
-        );
-      expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+      await openCronMenu(container, statusFilter);
+      clickStatus(container, "option:ok");
+      await waitForSolid(() => expect(onChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] }));
     },
   );
 
   it("formats run token counts and durations in the rendered entry", () => {
     const container = renderView({
-      listTab: "activity",
       runs: [
-        createRun({ ts: 6, jobId: "job-hour-seconds", durationMs: 3_630_000 }),
-        createRun({ ts: 5, jobId: "job-day-minutes", durationMs: 86_460_000 }),
-        createRun({
-          ts: 4,
-          jobId: "job-total",
-          summary: "total usage",
-          durationMs: 90_000,
-          usage: { total_tokens: 1_234_567 },
-        }),
-        createRun({
-          ts: 3,
-          jobId: "job-split",
-          summary: "split usage",
-          durationMs: 500,
-          usage: { input_tokens: 50_000, output_tokens: 999 },
-        }),
-        createRun({ ts: 2, jobId: "job-zero", summary: "zero duration", durationMs: 0 }),
-        createRun({ ts: 1.5, jobId: "job-invalid", summary: "invalid duration", durationMs: -1 }),
-        createRun({ ts: 1, jobId: "job-unknown", summary: "unknown duration" }),
-      ],
+        { jobId: "hour-seconds", durationMs: 3_630_000 },
+        { jobId: "day-minutes", durationMs: 86_460_000 },
+        { jobId: "total", durationMs: 90_000, usage: { total_tokens: 1_234_567 } },
+        { jobId: "split", durationMs: 500, usage: { input_tokens: 50_000, output_tokens: 999 } },
+        { jobId: "zero", durationMs: 0 },
+        { jobId: "invalid", durationMs: -1 },
+        { jobId: "unknown" },
+      ].map((entry, index) => createRun({ ts: 7 - index, ...entry })),
     });
     const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
     const entryFor = (jobId: string) => {
-      const entry = entries.find((candidate) =>
-        candidate.querySelector(".cron-run-entry__title")?.textContent?.includes(jobId),
-      );
+      const entry = entries.find((candidate) => entryText(candidate, "title")?.includes(jobId));
       expect(entry).toBeInstanceOf(HTMLDivElement);
       return entry;
     };
 
-    expect(
-      entryFor("job-hour-seconds")?.querySelector(".cron-run-entry__meta")?.textContent,
-    ).toContain("1h 30s");
-    expect(
-      entryFor("job-day-minutes")?.querySelector(".cron-run-entry__meta")?.textContent,
-    ).toContain("1d 1m");
+    expect(entryText(entryFor("hour-seconds"), "meta")).toContain("1h 30s");
+    expect(entryText(entryFor("day-minutes"), "meta")).toContain("1d 1m");
 
-    const total = entryFor("job-total");
-    expect(total?.querySelector(".cron-run-entry__facts")?.textContent).toContain("1.2M Tokens");
-    expect(total?.querySelector(".cron-run-entry__meta")?.textContent).toContain("1m 30s");
+    const total = entryFor("total");
+    expect(entryText(total, "facts")).toContain("1.2M Tokens");
+    expect(entryText(total, "meta")).toContain("1m 30s");
     expect(total?.textContent).not.toContain("1234567");
     expect(total?.textContent).not.toContain("90000ms");
 
-    const split = entryFor("job-split");
-    expect(split?.querySelector(".cron-run-entry__facts")?.textContent).toContain(
-      "50k in / 999 out",
-    );
-    expect(split?.querySelector(".cron-run-entry__meta")?.textContent).toContain("500ms");
-    expect(entryFor("job-zero")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
-      "0ms",
-    );
-    expect(entryFor("job-invalid")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
-      "n/a",
-    );
-    expect(entryFor("job-unknown")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
-      "n/a",
-    );
+    const split = entryFor("split");
+    expect(entryText(split, "facts")).toContain("50k in / 999 out");
+    expect(entryText(split, "meta")).toContain("500ms");
+    expect(entryText(entryFor("zero"), "meta")).toContain("0ms");
+    expect(entryText(entryFor("invalid"), "meta")).toContain("n/a");
+    expect(entryText(entryFor("unknown"), "meta")).toContain("n/a");
   });
 
   it("renders run summaries as sanitized markdown", () => {
     const container = renderView({
-      listTab: "activity",
-      runs: [
-        {
-          ts: 1,
-          jobId: "job-1",
-          action: "finished",
-          status: "ok",
-          summary: "**bold** <script>alert(1)</script>",
-        },
-      ],
+      runs: [createRun({ summary: "**bold** <script>alert(1)</script>" })],
     });
     const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
     expect(body.querySelector("strong")?.textContent).toBe("bold");
@@ -254,7 +180,7 @@ describe("cron view run history", () => {
     for (const runsState of ["idle", "pending", "failed"] as const) {
       for (const runsQuery of ["", "fail"]) {
         const onRefresh = vi.fn();
-        const container = renderView({ listTab: "activity", runsState, runsQuery, onRefresh });
+        const container = renderView({ runsState, runsQuery, onRefresh });
         expect(container.textContent).not.toContain("No runs yet");
         expect(container.textContent).not.toContain("No matching runs.");
         expect(container.querySelector('[data-test-id="cron-runs-loading"]') !== null).toBe(
@@ -272,27 +198,25 @@ describe("cron view run history", () => {
       }
     }
     const retained = renderView({
-      listTab: "activity",
       runsState: "failed",
       error: "History unavailable",
-      runs: [{ ts: 1, jobId: "job-1", action: "finished", summary: "Previously accepted run" }],
+      runs: [createRun({ status: undefined, summary: "Previously accepted run" })],
     });
     expect(retained.querySelector(".cron-run-entry")?.textContent).toContain(
       "Previously accepted run",
     );
     expect(retained.textContent).toContain("History unavailable");
-    const empty = renderView({ listTab: "activity" });
+    const empty = renderView();
     expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No runs yet");
 
-    const filtered = renderView({ listTab: "activity", runsQuery: "fail" });
+    const filtered = renderView({ runsQuery: "fail" });
     expect(filtered.querySelector(".cron-runs__empty")?.textContent).toContain("No matching runs.");
   });
 
   it.each(["overview", "job"] as const)(
     "shows recorded suppression without reclassifying delivery in %s history",
     (scope) => {
-      const reasons = ["empty", "silent", "heartbeat", "channel_transform"];
-      const runs = reasons.map((reason, index) =>
+      const runs = ["empty", "silent", "heartbeat", "channel_transform"].map((reason, index) =>
         createRun({
           ts: index + 1,
           completionStatus: "succeeded",
@@ -302,43 +226,24 @@ describe("cron view run history", () => {
           summary: `Recorded ${reason}`,
         }),
       );
-      runs.push(
-        createRun({
-          ts: 5,
-          completionStatus: "succeeded",
-          deliveryStatus: "not-delivered",
-          deliveryError: "Synthetic delivery target unavailable.",
-          summary: "Best-effort failure",
-        }),
-        createRun({
-          ts: 6,
-          status: "error",
-          error: "Synthetic execution failure.",
-          deliveryStatus: "not-delivered",
-          summary: "Execution failure",
-        }),
-        createRun({
-          ts: 7,
-          deliveryStatus: "delivered",
-          summary: "Successful delivery",
-        }),
-        createRun({
-          ts: 8,
-          deliveryStatus: "not-requested",
-          summary: "Internal run",
-        }),
-        createRun({
-          ts: 9,
-          deliveryStatus: "not-delivered",
-          summary: "No recorded reason",
-        }),
+      const otherRuns: Partial<CronRunLogEntry>[] = [
+        { completionStatus: "succeeded", deliveryError: "Synthetic delivery target unavailable." },
+        { status: "error", error: "Synthetic execution failure." },
+        { deliveryStatus: "delivered" },
+        { deliveryStatus: "not-requested" },
+        {},
+      ];
+      otherRuns.forEach((entry, index) =>
+        runs.push(
+          createRun({
+            ts: index + 5,
+            deliveryStatus: "not-delivered",
+            summary: `Other run ${index}`,
+            ...entry,
+          }),
+        ),
       );
-      const container = renderView({
-        listTab: "activity",
-        editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
-        detailTab: "history",
-        runs,
-      });
+      const container = renderView({ runs }, scope);
       const history = getElement(
         container,
         scope === "overview" ? ".cron-activity" : ".cron-history",
@@ -348,14 +253,14 @@ describe("cron view run history", () => {
       expect(entries).toHaveLength(runs.length);
       for (const run of runs) {
         const entry = entries.find((candidate) =>
-          candidate.querySelector(".cron-run-entry__body")?.textContent?.includes(run.summary!),
+          entryText(candidate, "body")?.includes(run.summary!),
         );
         expect(entry).toBeDefined();
-        const facts = entry?.querySelector(".cron-run-entry__facts")?.textContent ?? "";
+        const facts = entryText(entry, "facts") ?? "";
         if (run.deliverySuppressionReason) {
           expect(facts).toContain(`Delivery suppression: ${run.deliverySuppressionReason}`);
           expect(facts).toContain("Not delivered");
-          expect(entry?.querySelector(".cron-run-entry__title")?.textContent).toContain("OK");
+          expect(entryText(entry, "title")).toContain("OK");
         } else {
           expect(facts).not.toContain("Delivery suppression:");
         }
@@ -365,7 +270,7 @@ describe("cron view run history", () => {
         }
         if (run.error) {
           expect(entry?.textContent).toContain(run.error);
-          expect(entry?.querySelector(".cron-run-entry__title")?.textContent).toContain("Error");
+          expect(entryText(entry, "title")).toContain("Error");
         }
         if (run.deliveryStatus === "delivered") {
           expect(facts).toContain("Delivered");
@@ -379,16 +284,11 @@ describe("cron view run history", () => {
 
   it("redacts and escapes server-provided suppression text in run facts", () => {
     const container = renderView({
-      listTab: "activity",
       runs: [
-        {
-          ts: 1,
-          jobId: "job-1",
-          action: "finished",
-          status: "ok",
+        createRun({
           deliveryStatus: "not-delivered",
           deliverySuppressionReason: "silent <img src=x onerror=alert(1)> Bearer abcdefghijkl",
-        },
+        }),
       ],
     });
     const facts = getElement(container, ".cron-run-entry__facts", HTMLDivElement);

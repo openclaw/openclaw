@@ -23,9 +23,38 @@ describe("system prompt messaging routing", () => {
       );
       expect(prompt).toContain("normal tool permissions and approvals still apply");
       expect(prompt).toContain(
-        "user explicitly requests only a reaction to the current source message: use `message(action=react, final=true)`",
+        "or a final reaction to the current source message: `message(action=react, final=true)`",
       );
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
+      expect(prompt).not.toContain("NO_REPLY");
+      expect(prompt).not.toContain("user explicitly requests only a reaction");
     },
   );
+  it.each([
+    { channel: "telegram", chatType: "direct", mode: "automatic", silent: true },
+    { channel: "discord", chatType: "group", mode: "automatic", silent: true },
+    { channel: "telegram", chatType: "direct", mode: "message_tool_only", silent: false },
+    { channel: "webchat", chatType: "direct", mode: "automatic", silent: false },
+  ] as const)("keeps explicit silence guidance scoped to $channel/$mode", (testCase) => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sourceReplyDeliveryMode: testCase.mode,
+      toolNames: ["message"],
+      runtimeInfo: { channel: testCase.channel, chatType: testCase.chatType },
+    });
+    expect(prompt.includes("## Silent Replies")).toBe(testCase.silent);
+    expect(prompt.includes("Only that whole reply is silent.")).toBe(testCase.silent);
+  });
+
+  it("omits silence guidance for a private completion on an external channel", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPromptMode: "none",
+      toolNames: ["message"],
+      runtimeInfo: { channel: "telegram" },
+    });
+    expect(prompt).not.toContain("NO_REPLY");
+    expect(prompt).not.toContain("## Silent Replies");
+  });
 });

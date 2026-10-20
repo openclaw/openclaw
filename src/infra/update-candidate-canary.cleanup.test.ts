@@ -279,7 +279,7 @@ describe("canary teardown evidence", () => {
         await rejected;
         expect(remove).not.toHaveBeenCalled();
         expect(onWarning).not.toHaveBeenCalled();
-        await expect(fs.access(directory)).resolves.toBeUndefined();
+        await fs.access(directory);
       } finally {
         receipt.resolve();
         await pending.catch(() => undefined);
@@ -361,7 +361,7 @@ describe("canary teardown evidence", () => {
       if (!retained) {
         throw new Error("Gateway did not capture its rehearsal state directory");
       }
-      await expect(fs.access(path.join(retained, "openclaw.json"))).resolves.toBeUndefined();
+      await fs.access(path.join(retained, "openclaw.json"));
     } finally {
       response.resolve(Response.json({ status: "started", ready: true }));
       gateway?.emit("close", 0);
@@ -599,7 +599,7 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each(["close", "error", "cancelled"] as const)(
+  it.each(["close", "error", "cancelled", "startup-error"] as const)(
     "reports incomplete %s evidence without changing validation outcomes",
     async (missing) => {
       let now = 2_000_000;
@@ -624,6 +624,14 @@ describe("canary teardown evidence", () => {
           }
           if (missing === "cancelled") {
             controller.abort();
+          }
+          if (missing === "startup-error") {
+            const child = controlled;
+            queueMicrotask(() => {
+              child.stderr.write("plugin load failed: discord: synthetic failure\n");
+              child.exitCode = 1;
+              child.emit("exit", 1, null);
+            });
           }
           return controlled;
         },
@@ -684,6 +692,21 @@ describe("canary teardown evidence", () => {
           expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(
             false,
           );
+        } else if (missing === "startup-error") {
+          expect(result).toMatchObject({ status: "error", phase: "startup" });
+          const failures = result.steps.filter((step) => step.name === name);
+          expect(failures).toHaveLength(1);
+          expect(failures[0]).toMatchObject({
+            exitCode: 1,
+            failureFacts: [
+              {
+                code: "candidate-startup-failed",
+                message: "plugin load failed",
+                pluginId: "discord",
+              },
+            ],
+          });
+          expect(onStep.mock.calls.filter(([step]) => step.name === name)).toEqual([[failures[0]]]);
         } else {
           expect(result).toMatchObject({ status: "ok", phase: "readiness" });
           expect(result.steps).toContainEqual(expect.objectContaining({ name, exitCode: 0 }));

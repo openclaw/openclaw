@@ -42,6 +42,7 @@ it("keeps fast status lazy and preserves the deep runtime projections", async ()
     runtimeIntent: { runtimeIntent: { status: "known", stored: false, revision: "empty" } },
   });
   expect(inspection.service).toHaveBeenCalledWith({
+    kind: "gateway",
     service: params.service,
     command: params.state.command,
     env: params.env,

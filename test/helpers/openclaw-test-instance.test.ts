@@ -367,7 +367,7 @@ if (kind === "legacy-no-advice") { process.stderr.write("Legacy session store re
 if (kind === "startup-no-advice") { process.stderr.write(legacyRefusal.split("\\n").slice(0, -1).join("\\n") + "\\n"); process.exit(78); }
 if (kind === "startup-warning") { process.stderr.write(legacyRefusal.split("\\n").slice(1).join("\\n") + "\\n"); process.exit(78); }
 if (kind === "config-refuse") { process.stderr.write("unrelated configuration failure\\n"); process.exit(78); }
-if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
+if (kind === "refuse") { process.stderr.write("notice\\n" + refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
   spawnInheritedWriter("stderr", refusal + " delayed fixture\\n");
   process.exit(1);
@@ -380,6 +380,7 @@ if (kind === "terminal-drain" || kind === "refusal-drain") {
   process.stderr.write(kind === "refusal-drain" ? refusal + " held fixture\\n" : "terminal startup failure\\n"); process.exit(kind === "refusal-drain" ? 1 : 7);
 }
 if (kind === "near") { process.stderr.write(refusal.slice(0, -1) + " fixture\\n"); process.exit(1); }
+if (kind === "prefixed") { process.stderr.write("prefix " + refusal + " fixture\\n"); process.exit(1); }
 if (kind === "stdout") { process.stdout.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "status2") { process.stderr.write(refusal + " fixture\\n"); process.exit(2); }
 if (kind === "signal") { process.stderr.write(refusal + " fixture\\n"); process.kill(process.pid, "SIGTERM"); }
@@ -1364,9 +1365,7 @@ describe("openclaw test instance", () => {
     await expectPathMissing(instance.state.root);
   });
 
-  it
-    .runIf(process.platform === "linux" && !process.versions.bun)
-    .for(["cleanup", "forced-stop"] as const)(
+  it.runIf(process.platform === "linux").for(["cleanup", "forced-stop"] as const)(
     "reclaims a stopped detached descendant before releasing Gateway state (%s)",
     async (action, { signal }) => {
       const { instance, tracePath } = await createFakeGateway("detached-stopped");
@@ -1445,19 +1444,6 @@ describe("openclaw test instance", () => {
       }
     },
   );
-
-  it("classifies only exact stderr convergence refusals with status 1", () => {
-    const classify = testing.isGatewayMigrationConvergenceRefusal;
-    expect(classify(1, null, `notice\n${MIGRATION_CONVERGENCE_REFUSAL} retry\n`)).toBe(true);
-    for (const candidate of [
-      [2, null, MIGRATION_CONVERGENCE_REFUSAL],
-      [1, "SIGTERM", MIGRATION_CONVERGENCE_REFUSAL],
-      [1, null, MIGRATION_CONVERGENCE_REFUSAL.slice(0, -1)],
-      [1, null, `prefix ${MIGRATION_CONVERGENCE_REFUSAL}`],
-    ]) {
-      expect(classify(...(candidate as [number, NodeJS.Signals | null, string]))).toBe(false);
-    }
-  });
 
   it.for([
     "legacy-refuse",
@@ -1628,7 +1614,7 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.for(["near", "stdout", "status2", "signal", "unrelated"])(
+  it.for(["near", "prefixed", "stdout", "status2", "signal", "unrelated"])(
     "keeps %s convergence lookalikes terminal",
     async (action, context) => {
       // A Windows self-SIGTERM is status 1/null, already covered by the refusal case.
@@ -1636,7 +1622,12 @@ describe("openclaw test instance", () => {
         context.skip();
       }
       const { instance, readAttempts } = await createFakeGateway(`${action},ready`);
-      const startup = instance.startGateway();
+      // Classification owns native exit and drained output, not startup deadline expiry.
+      context.signal.throwIfAborted();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const restoreClock = () => clock.mockRestore();
+      context.signal.addEventListener("abort", restoreClock, { once: true });
+      const startup = trackOperation(instance.startGateway());
       try {
         await expect(startup).rejects.toThrow("gateway exited before readiness");
       } catch (error) {
@@ -1646,6 +1637,10 @@ describe("openclaw test instance", () => {
           await startup.catch((startupError: unknown) => startupError),
         );
         throw error;
+      } finally {
+        restoreClock();
+        context.signal.removeEventListener("abort", restoreClock);
+        await Promise.allSettled([startup]);
       }
       expect(await readAttempts()).toHaveLength(1);
       expect(instance.logs()).not.toContain(RESTART_MARKER);
@@ -2172,11 +2167,98 @@ describe("openclaw test instance", () => {
     });
   });
 
+  it.each(["transport failure", "proxy refusal"] as const)(
+    "backs off readiness probes during a %s and recovers when the listener returns",
+    async (failure) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      let listening = false;
+      const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+        if (!listening) {
+          if (failure === "transport failure") {
+            throw new TypeError("fetch failed");
+          }
+          return new Response("synthetic upstream refusal", { status: 502 });
+        }
+        return new Response(
+          url === "http://127.0.0.1:12345/startupz"
+            ? '{"ok":true,"status":"started"}'
+            : '{"ready":true}',
+        );
+      });
+      const record = vi.fn<(diagnostic: GatewayReadinessDiagnostic) => void>();
+      const completion = testing.waitForGatewayReady(
+        createGatewayProcessState(),
+        [],
+        [],
+        12345,
+        8_000,
+        fetchImpl,
+        undefined,
+        record,
+      );
+      try {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(fetchImpl.mock.calls.length).toBeLessThanOrEqual(16);
+        expect(record).not.toHaveBeenCalled();
+        listening = true;
+        await vi.advanceTimersByTimeAsync(500);
+        await expect(completion).resolves.toBeUndefined();
+        expect(record).toHaveBeenCalledWith(expect.objectContaining({ outcome: "ready" }));
+        expect(fetchImpl.mock.calls.at(-1)?.[0]).toBe("http://127.0.0.1:12345/startupz");
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        listening = true;
+        await vi.runAllTimersAsync();
+        await completion;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves the cancellation reason while a readiness backoff is pending", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const abort = new AbortController();
+    const reason = new Error("synthetic readiness cancellation");
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response("refusal", { status: 502 }));
+    const record = vi.fn<(diagnostic: GatewayReadinessDiagnostic) => void>();
+    const completion = testing
+      .waitForGatewayReady(
+        createGatewayProcessState(),
+        [],
+        [],
+        12345,
+        8_000,
+        fetchImpl,
+        abort.signal,
+        record,
+      )
+      .catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      abort.abort(reason);
+      expect(await completion).toBe(reason);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ outcome: "aborted" }));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      abort.abort(reason);
+      await vi.runAllTimersAsync();
+      await completion;
+      vi.useRealTimers();
+    }
+  });
+
   it("waits for startup admission after the gateway readiness probe reports ready", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          '{"ready":true,"agentDatabases":[{"code":"agent-database-inspection-pending"}]}',
+          { status: 200 },
+        ),
       )
       .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
       .mockResolvedValueOnce(new Response('{"ok":false,"status":"starting"}', { status: 503 }))
@@ -2202,14 +2284,14 @@ describe("openclaw test instance", () => {
         probe: "GET /readyz",
         settlementProbe: "GET /startupz",
         lastProbe: expect.objectContaining({
-          attempt: 3,
+          attempt: 4,
           status: 200,
           ready: true,
           endpoint: "/startupz",
           startupStatus: "started",
         }),
         lastFailedResponse: expect.objectContaining({
-          attempt: 2,
+          attempt: 3,
           status: 503,
           ready: true,
           endpoint: "/startupz",
@@ -2221,10 +2303,47 @@ describe("openclaw test instance", () => {
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
       "http://127.0.0.1:12345/readyz",
       "http://127.0.0.1:12345/readyz",
+      "http://127.0.0.1:12345/readyz",
       "http://127.0.0.1:12345/startupz",
       "http://127.0.0.1:12345/readyz",
       "http://127.0.0.1:12345/startupz",
     ]);
+  });
+
+  it("reports terminal agent admission refusal before the startup deadline", async () => {
+    const refusal = {
+      agentId: "main",
+      paths: ["/synthetic/agents/main/agent/openclaw-agent.sqlite"],
+      code: "agent-database-inspection-failed",
+      reason: "Legacy session store requires migration: /synthetic/agents/main/sessions",
+      repairHint: "Run openclaw doctor --fix, then restart.",
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ready: false, agentDatabases: [refusal] }), { status: 503 }),
+      );
+    const record = vi.fn<(diagnostic: GatewayReadinessDiagnostic) => void>();
+    const error = await testing
+      .waitForGatewayReady(
+        createGatewayProcessState(),
+        [],
+        [],
+        12345,
+        1_000,
+        fetchImpl,
+        undefined,
+        record,
+      )
+      .catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ name: "GatewayAgentAdmissionError", refusals: [refusal] });
+    expect(String(error)).toContain(refusal.reason);
+    expect(String(error)).toContain(refusal.repairHint);
+    expect(error).not.toHaveProperty("exitCode");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "agent-refused", attempts: 1 }),
+    );
   });
 
   it("bounds not-ready diagnostics without exposing response details", async () => {
@@ -2312,15 +2431,15 @@ describe("openclaw test instance", () => {
       .mockRejectedValueOnce(new Error(privateDetail));
     const record = vi.fn<(diagnostic: GatewayReadinessDiagnostic) => void>();
     const completion = testing
-      .waitForGatewayReady(processState, [], [], 12345, 39, fetchImpl, undefined, record)
+      .waitForGatewayReady(processState, [], [], 12345, 79, fetchImpl, undefined, record)
       .catch((failure: unknown) => failure);
     try {
-      await vi.advanceTimersByTimeAsync(39);
+      await vi.advanceTimersByTimeAsync(79);
       const failure = await completion;
       const receipt = readReadinessReceipt(failure);
       expect(receipt).toMatchObject({
         attempts: 4,
-        elapsedMs: 39,
+        elapsedMs: 79,
         lastProbe: { attempt: 4, phase: "headers", error: "timeout", elapsedMs: 9 },
         lastFailedResponse: {
           attempt: 2,

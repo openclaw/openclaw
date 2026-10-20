@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
-  readWorkerProjectSetupRecipe,
+  readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
@@ -24,7 +24,7 @@ describe("prepared workspace completion and verification", () => {
       const f = await fixture(
         recipe === "skipped" ? '#!/bin/sh\nprintf unexpected > "$HOME/setup-ran"\n' : undefined,
       );
-      const setupRecipe = await readWorkerProjectSetupRecipe(f.project);
+      const setupRecipe = (await readWorkerProjectEnvironmentRecipe(f.project)).identity;
       expect(Boolean(setupRecipe)).toBe(recipe === "skipped");
       const prepare = (project: typeof f.project, key: string) =>
         createWorkerProjectPreparation({
@@ -43,6 +43,7 @@ describe("prepared workspace completion and verification", () => {
       const operation = prepare(f.project, "a".repeat(64));
       expect(operation.getPreparedWorkspace()).toBeUndefined();
       const result = await operation.project.prepare(f);
+      expect(result.recipePreparation?.source).toBe(recipe === "skipped" ? "script" : "none");
       operation.close();
       const prepared = result.preparedWorkspace!;
       expect(result.captureRequired).toBe(true);

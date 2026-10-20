@@ -24,7 +24,7 @@ describe("telegram thread binding startup reconciliation", () => {
     });
     await manager.stop();
     if (storeReadFailed !== undefined) {
-      acpHost.read.mockReturnValue({
+      acpHost.read.mockResolvedValue({
         cfg: {},
         storePath: "/tmp/acp-store.json",
         sessionKey: target,
@@ -59,7 +59,7 @@ describe("telegram thread binding startup reconciliation", () => {
     });
     await manager.stop();
     const error = new IncognitoSessionEndedError();
-    acpHost.read.mockImplementation(() => {
+    acpHost.read.mockImplementation(async () => {
       throw error;
     });
 

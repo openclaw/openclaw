@@ -40,6 +40,17 @@ cross-agent access.
 Excerpts preserve transcript text, including credentials. Results are bounded by count, excerpt
 length, and total response size.
 
+Queries must contain text and cannot exceed 4,096 UTF-16 code units. A search
+returns at most 25 hits. The tool trims each excerpt to 300 UTF-16 code units
+plus an ellipsis when needed, within a 32 KiB result budget. Query words are
+literal text; punctuation does not become database query syntax.
+
+Each transcript search request allows up to 90 seconds, leaving dispatch and
+authorization headroom around the reader's 60-second budget, including worker admission.
+If it times out, retry `sessions_search` with a `sessionKey` to search one session
+or more specific query keywords. A timeout does not mean that no matching
+conversation exists.
+
 ## Control UI search
 
 The command palette and Threads page send their session filters to the Gateway, which
@@ -70,7 +81,7 @@ and the history is restored. Search does not restore archived history automatica
 
 ## Index lifecycle
 
-OpenClaw stores a full-text index next to the transcript rows in each agent's SQLite database.
+OpenClaw stores a full-text index with the transcript rows in each agent's database.
 New user and assistant messages are indexed in the same transaction that persists them, so the
 index never lags live conversations; tool results, reasoning blocks, and images are excluded.
 Only the transcript's active branch is searchable.
@@ -80,7 +91,12 @@ sessions whose active branch was rewound are reindexed by a background reconcili
 with the next search. A response with `indexing: true` can therefore be incomplete; retry after
 indexing finishes. Deleting a session removes its index entries in the same transaction.
 
-Search uses SQLite's Unicode word tokenizer with diacritic removal.
+SQLite search uses its Unicode word tokenizer with diacritic removal. PostgreSQL
+search uses the `simple` text configuration with `unaccent`, retaining literal
+word, phrase, and prefix matching. Its native ranking is engine-local, so scores
+and result order can differ from SQLite. See
+[PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
+requirements and supported modes.
 
 ## Session search vs. memory search
 

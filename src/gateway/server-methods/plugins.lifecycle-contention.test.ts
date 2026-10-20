@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import type { PluginLifecycleRuntimeApply } from "../../plugins/lifecycle.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
@@ -17,7 +17,7 @@ import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createGatewayActiveWorkTracker } from "../server-reload-active-work.js";
-import { nextGatewayReloadGeneration } from "../server-reload-generation.js";
+import { beginGatewayReloadLifecycle } from "../server-reload-generation.js";
 import { pluginMutationHandlers } from "./plugins-mutations.js";
 
 it.each(["direct", "nested"] as const)(
@@ -42,7 +42,9 @@ it.each(["direct", "nested"] as const)(
       };
       await state.writeConfig(config);
       const configBefore = await fs.readFile(state.configPath, "utf8");
-      const recordsBefore = readPersistedInstalledPluginIndexInstallRecords({ env: state.env });
+      const recordsBefore = await readPersistedInstalledPluginIndexInstallRecordsAsync({
+        env: state.env,
+      });
       const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (change) => {
         change.assertInvokerOwned?.();
         expect(change.config.plugins?.entries?.[pluginId]?.enabled).toBe(false);
@@ -86,7 +88,7 @@ it.each(["direct", "nested"] as const)(
       const logReload = { warn: vi.fn(), info: vi.fn() };
       const tracker = createGatewayActiveWorkTracker({
         params: { logReload },
-        myGeneration: nextGatewayReloadGeneration(),
+        reloadSignal: beginGatewayReloadLifecycle(),
       });
       const reload = withPluginLifecycleLease({ env: state.env }, () =>
         runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -106,15 +108,17 @@ it.each(["direct", "nested"] as const)(
           expect.objectContaining({
             code: "UNAVAILABLE",
             retryable: true,
+            retryAfterMs: 1_000,
+            details: { mutationAccepted: false },
             message: expect.stringContaining("retry"),
           }),
         );
         await request;
         expect(applyRuntime).not.toHaveBeenCalled();
         expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);
-        expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual(
-          recordsBefore,
-        );
+        expect(
+          await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+        ).toEqual(recordsBefore);
         await reload;
         expect(logReload.warn).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("deferring until 1 gateway request(s) complete"),

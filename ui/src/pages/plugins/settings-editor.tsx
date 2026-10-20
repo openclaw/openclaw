@@ -1,31 +1,34 @@
-import { For, Show, createMemo, createRenderEffect, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
-import { renderMapField } from "../../components/config-form.node.collection-map.ts";
+import { ConfigStructuredDraft } from "../../components/config-form-structured-draft.tsx";
+import { ConfigMapField } from "../../components/config-form.node.collection-map.tsx";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import {
   isSecretRefObject,
   type ConfigNodeRenderParams,
 } from "../../components/config-form.node.shared.ts";
-import { matchesNodeSearch, resolveConfigFieldMeta } from "../../components/config-form.search.ts";
+import { ConfigNode, renderNode } from "../../components/config-form.node.tsx";
+import {
+  matchesNodeSearch,
+  resolveConfigFieldMeta,
+  resolveConfigMapSearch,
+} from "../../components/config-form.search.ts";
 import {
   configFieldId,
   hintForPath,
   pathKey,
   schemaType,
 } from "../../components/config-form.shared.ts";
-import { renderNode } from "../../components/config-form.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { defineSolidBridge, LitContent } from "../../lit/solid-bridge.ts";
-import "../../components/web-awesome.ts";
-import type { JSX } from "../../types/solid-elements.d.ts";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
 import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
-import { nothing, renderPluginSettingsGroups } from "./settings-editor.ts";
 import "./settings-editor.css";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 
@@ -107,29 +110,6 @@ function PluginSettingsRow(props: FieldProps) {
     value: props.field.value === undefined ? props.field.effectiveValue : props.field.value,
     descriptionId: props.field.help ? descriptionId() : undefined,
   }));
-  let selectHandler: (event: CustomEvent<{ item: { value: string } }>) => void = () => {};
-  // Retired dropdowns may still deliver their queued selection; retain that field's callback.
-  createRenderEffect(
-    () => {
-      const field = props.field;
-      const onAskSetting = props.onAskSetting;
-      const staticValue = effective();
-      return (event: CustomEvent<{ item: { value: string } }>) => {
-        if (event.detail.item.value === "reset" && !field.disabled) {
-          field.onPatch(
-            field.path,
-            field.isRequired ? structuredClone(field.schema.default) : undefined,
-          );
-        }
-        if (event.detail.item.value === "ask") {
-          onAskSetting?.({ ...field, value: staticValue });
-        }
-      };
-    },
-    (handler) => {
-      selectHandler = handler;
-    },
-  );
   const credential = createMemo(() => props.resolveCredential?.(controlParams()));
   return (
     <div
@@ -143,7 +123,7 @@ function PluginSettingsRow(props: FieldProps) {
         if (
           !(target instanceof Element) ||
           target.closest(
-            "button,a,input,select,textarea,label,wa-switch,wa-checkbox,wa-dropdown,summary,[contenteditable]",
+            "button,a,input,select,textarea,label,summary,[contenteditable],.plugin-editor__menu",
           )
         ) {
           return;
@@ -152,32 +132,34 @@ function PluginSettingsRow(props: FieldProps) {
       }}
     >
       <div class="plugin-editor__menu">
-        <wa-dropdown
+        <Menu
+          id={configFieldId(props.field.path, "actions")}
           placement="bottom-start"
-          onWa-select={(event: CustomEvent<{ item: { value: string } }>) => selectHandler(event)}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("pluginsPage.editor.actions", { name: props.field.label })}
-          >
-            <Icon name="moreHorizontal" />
-          </button>
-          <wa-dropdown-item
-            value="reset"
-            prop:disabled={
-              props.field.disabled ||
-              props.field.value === undefined ||
-              (props.field.isRequired && props.field.schema.default === undefined)
+          label={t("pluginsPage.editor.actions", { name: props.field.label })}
+          triggerClass="btn btn--icon btn--ghost"
+          trigger={<Icon name="moreHorizontal" />}
+          items={[
+            {
+              id: "reset",
+              label: t("pluginsPage.editor.reset"),
+              disabled:
+                props.field.disabled ||
+                props.field.value === undefined ||
+                (props.field.isRequired && props.field.schema.default === undefined),
+            },
+            ...(props.onAskSetting ? [{ id: "ask", label: t("pluginsPage.editor.ask") }] : []),
+          ]}
+          onSelect={(item) => {
+            if (item.id === "reset" && !props.field.disabled) {
+              props.field.onPatch(
+                props.field.path,
+                props.field.isRequired ? structuredClone(props.field.schema.default) : undefined,
+              );
+            } else if (item.id === "ask") {
+              props.onAskSetting?.({ ...props.field, value: effective() });
             }
-          >
-            {t("pluginsPage.editor.reset")}
-          </wa-dropdown-item>
-          {props.onAskSetting ? (
-            <wa-dropdown-item value="ask">{t("pluginsPage.editor.ask")}</wa-dropdown-item>
-          ) : null}
-        </wa-dropdown>
+          }}
+        />
       </div>
       <div class="plugin-editor__copy">
         <span class="plugin-editor__title">{props.field.label}</span>
@@ -191,20 +173,18 @@ function PluginSettingsRow(props: FieldProps) {
             context={credential()!.context}
           />
         ) : (
-          <LitContent
-            render={() =>
-              renderNode({
-                ...controlParams(),
-                showLabel: false,
-                hints: {
-                  ...props.field.hints,
-                  [pathKey(props.field.path)]: {
-                    ...hintForPath(props.field.path, props.field.hints),
-                    label: props.field.label,
-                  },
+          <ConfigNode
+            params={{
+              ...controlParams(),
+              showLabel: false,
+              hints: {
+                ...props.field.hints,
+                [pathKey(props.field.path)]: {
+                  ...hintForPath(props.field.path, props.field.hints),
+                  label: props.field.label,
                 },
-              })
-            }
+              },
+            }}
           />
         )}
       </div>
@@ -236,10 +216,16 @@ function PluginSettingsFields(
   );
 }
 
-function EditorSection(props: { title: string; id?: string; children: JSX.Element }) {
+function EditorSection(props: {
+  title: string;
+  id?: string;
+  children: SolidJSX.Element;
+  ref?: (element: HTMLElement) => void;
+}) {
   return (
     <section
       class="plugin-editor__section"
+      ref={(element) => props.ref?.(element)}
       id={props.id}
       tabindex={props.id === undefined ? undefined : -1}
     >
@@ -255,7 +241,7 @@ type GroupsProps = Pick<PluginSettingsEditorProps, "onAskSetting" | "resolveCred
   query: string;
 };
 function PluginSettingsGroups(props: GroupsProps) {
-  let host: HTMLDivElement;
+  const sectionElements = new Map<string, HTMLElement>();
   const object = createMemo(() =>
     schemaType(props.params.schema) !== "object" ||
     props.params.schema.anyOf ||
@@ -308,11 +294,8 @@ function PluginSettingsGroups(props: GroupsProps) {
     if (!params) {
       return undefined;
     }
-    const content = renderMapField(
-      { ...params, searchCriteria: query() ? { text: query(), tags: [] } : undefined },
-      renderNode,
-    );
-    return content === nothing ? undefined : content;
+    const node = { ...params, searchCriteria: query() ? { text: query(), tags: [] } : undefined };
+    return resolveConfigMapSearch(node).visible ? node : undefined;
   });
   const sectionId = (id: string) => configFieldId([...props.params.path, id], "section");
   const links = createMemo(() => {
@@ -323,12 +306,7 @@ function PluginSettingsGroups(props: GroupsProps) {
     return result;
   });
   return (
-    <div
-      class="plugin-editor__layout"
-      ref={(element) => {
-        host = element;
-      }}
-    >
+    <div class="plugin-editor__layout">
       {groups().length ? (
         <nav class="plugin-editor__nav" aria-label={t("pluginsPage.editor.navigation")}>
           <For each={links()} keyed={(section) => section.id}>
@@ -337,9 +315,7 @@ function PluginSettingsGroups(props: GroupsProps) {
                 href={`#${sectionId(section().id)}`}
                 onClick={(event: MouseEvent) => {
                   event.preventDefault();
-                  const target = host.querySelector<HTMLElement>(
-                    `#${CSS.escape(sectionId(section().id))}`,
-                  );
+                  const target = sectionElements.get(section().id);
                   target?.scrollIntoView({ block: "start", behavior: resolveScrollBehavior() });
                   target?.focus({ preventScroll: true });
                 }}
@@ -354,7 +330,11 @@ function PluginSettingsGroups(props: GroupsProps) {
         <For each={sections()} keyed={(section) => section.id}>
           {(section) => (
             <Show when={section().fields.length}>
-              <EditorSection title={section().title} id={sectionId(section().id)}>
+              <EditorSection
+                title={section().title}
+                id={sectionId(section().id)}
+                ref={(element) => sectionElements.set(section().id, element)}
+              >
                 <PluginSettingsFields
                   fields={section().fields}
                   onAskSetting={props.onAskSetting}
@@ -366,13 +346,14 @@ function PluginSettingsGroups(props: GroupsProps) {
         </For>
         {additional() ? (
           <EditorSection title="">
-            <LitContent render={() => additional()} />
+            <ConfigMapField params={additional()!} renderNode={renderNode} />
           </EditorSection>
         ) : null}
         {props.permissions ? (
           <EditorSection
             title={t("pluginsPage.editor.permissions")}
             id={sectionId("__permissions")}
+            ref={(element) => sectionElements.set("__permissions", element)}
           >
             <PluginSettingsFields
               {...props.permissions!}
@@ -391,7 +372,7 @@ function PluginSettingsGroups(props: GroupsProps) {
   );
 }
 
-function PluginSettingsEditorContent(props: PluginSettingsEditorProps) {
+export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
   const pluginId = createMemo(() => props.model?.pluginId);
   const [query, setQuery] = createSignal(() => {
     pluginId();
@@ -431,7 +412,7 @@ function PluginSettingsEditorContent(props: PluginSettingsEditorProps) {
     return loading || fields.length ? { fields, loading } : undefined;
   });
   return (
-    <>
+    <openclaw-plugin-settings-editor>
       {props.model ? (
         <section class="plugin-editor">
           <header class="plugin-editor__header">
@@ -492,19 +473,9 @@ function PluginSettingsEditorContent(props: PluginSettingsEditorProps) {
           ) : null}
         </section>
       ) : null}
-    </>
+    </openclaw-plugin-settings-editor>
   );
 }
-
-defineSolidBridge<{ props?: GroupsProps }>(
-  "openclaw-plugin-settings-groups",
-  (bridge) => (
-    <Show when={Boolean(bridge.props)}>
-      <PluginSettingsGroups {...bridge.props!} />
-    </Show>
-  ),
-  { properties: { props: { default: undefined, attribute: false } } },
-);
 
 function PluginSettingsDraft(props: GroupsProps) {
   const draft = createMemo(() => {
@@ -518,26 +489,24 @@ function PluginSettingsDraft(props: GroupsProps) {
       sourceIdentity: props.params.value,
       initialValue,
       params: props.params,
-      renderNode: (params: ConfigNodeRenderParams) =>
-        renderPluginSettingsGroups({ ...groups, params }),
+      renderNode: (params: () => ConfigNodeRenderParams) => (
+        <openclaw-plugin-settings-groups>
+          <PluginSettingsGroups {...groups} params={params()} />
+        </openclaw-plugin-settings-groups>
+      ),
     };
   });
   return (
-    <Show when={Boolean(draft())} fallback={<PluginSettingsGroups {...props} />}>
-      <openclaw-config-form-structured-draft prop:props={draft()} />
+    <Show when={draft()} fallback={<PluginSettingsGroups {...props} />}>
+      {(value) => <ConfigStructuredDraft {...value()} />}
     </Show>
   );
 }
 
-export const PluginSettingsEditor = defineSolidBridge<PluginSettingsEditorProps>(
-  "openclaw-plugin-settings-editor",
-  PluginSettingsEditorContent,
-  {
-    properties: {
-      model: { default: undefined, attribute: false },
-      permissions: { default: undefined, attribute: false },
-      onAskSetting: { default: undefined, attribute: false },
-      resolveCredential: { default: undefined, attribute: false },
-    },
-  },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-plugin-settings-groups": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

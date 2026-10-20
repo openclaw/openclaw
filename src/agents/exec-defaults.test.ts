@@ -1,7 +1,5 @@
-// Verifies exec host, sandbox, and approval-default resolution for embedded agents.
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as execApprovals from "../infra/exec-approvals.js";
@@ -22,17 +20,21 @@ function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
+function resolve(params: Parameters<typeof resolveExecDefaults>[0]) {
+  return resolveExecDefaults({ sandboxAvailable: false, ...params });
+}
+const fullFloors = {
+  version: 1 as const,
+  defaults: { security: "full" as const, ask: "always" as const },
+  agents: {},
+};
+const emptyApprovals = { version: 1 as const, agents: {} };
+
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
-      version: 1,
-      agents: {},
-    });
-    vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue({
-      version: 1,
-      agents: {},
-    });
+    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue(emptyApprovals);
+    vi.spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync").mockResolvedValue(emptyApprovals);
   });
 
   it.each([
@@ -58,29 +60,14 @@ describe("resolveExecDefaults", () => {
         tools: { exec: { host } },
       };
       const owner = { cfg, agentId: "main", sandboxAvailable: true };
-
-      expect(resolveExecDefaults({ ...owner, sessionKey })).toMatchObject({
-        host: "auto",
-        effectiveHost: "sandbox",
-        canRequestNode: false,
-      });
-      expect(resolveExecDefaults({ ...owner, sessionEntry })).toMatchObject({
-        host: "auto",
-        effectiveHost: "sandbox",
-        canRequestNode: false,
-      });
+      const expected = { host: "auto", effectiveHost: "sandbox", canRequestNode: false };
+      expect(await resolveExecDefaultsAsync({ ...owner, sessionKey })).toMatchObject(expected);
+      expect(resolve({ ...owner, sessionEntry })).toMatchObject(expected);
       expect(
-        resolveExecDefaults({
-          ...owner,
-          sessionKey,
-          elevatedRequested: true,
-        }).effectiveHost,
+        (await resolveExecDefaultsAsync({ ...owner, sessionKey, elevatedRequested: true }))
+          .effectiveHost,
       ).toBe("sandbox");
-      expect(resolveNodeExecEligibility({ ...owner, sessionKey }).canExec).toBe(false);
-      expect(await resolveExecDefaultsAsync({ ...owner, sessionKey })).toMatchObject({
-        effectiveHost: "sandbox",
-        canRequestNode: false,
-      });
+      expect(resolveNodeExecEligibility({ ...owner, sessionEntry }).canExec).toBe(false);
       expect(await resolveNodeExecEligibilityAsync({ ...owner, sessionKey })).toEqual({
         canExec: false,
       });
@@ -102,56 +89,45 @@ describe("resolveExecDefaults", () => {
     ).toMatchObject({ effectiveHost: "gateway", security: "deny", ask: "always" });
   });
 
-  it.each([{ agentId: "isolated", effectiveHost: "sandbox", canExec: false }])(
-    "uses $agentId sandbox policy for global exec defaults",
-    ({ agentId, effectiveHost, canExec }) => {
-      const storeRoot = execStoreDirs.make();
-      const cfg: OpenClawConfig = {
-        session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
-        agents: {
-          ownership: "explicit",
-          entries: {
-            isolated: { sandbox: { mode: "all" } },
-            direct: { sandbox: { mode: "off" } },
-          },
+  it("uses isolated sandbox policy for global exec defaults", async () => {
+    const storeRoot = execStoreDirs.make();
+    const cfg: OpenClawConfig = {
+      session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          isolated: { sandbox: { mode: "all" } },
+          direct: { sandbox: { mode: "off" } },
         },
-      };
-      const params = { cfg, agentId, sessionKey: "global" };
+      },
+    };
+    const params = { cfg, agentId: "isolated", sessionKey: "global" };
 
-      expect(resolveExecDefaults(params)).toMatchObject({ effectiveHost, canRequestNode: canExec });
-      expect(resolveNodeExecEligibility(params)).toEqual({ canExec });
-    },
-  );
+    expect(await resolveExecDefaultsAsync(params)).toMatchObject({
+      effectiveHost: "sandbox",
+      canRequestNode: false,
+    });
+    expect(await resolveNodeExecEligibilityAsync(params)).toEqual({ canExec: false });
+  });
 
   it("ignores host approval defaults when auto resolves to sandbox", () => {
-    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
-      version: 1,
-      defaults: {
-        security: "full",
-        ask: "always",
-      },
-      agents: {},
-    });
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue(fullFloors);
 
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
+    const defaults = resolve({
+      cfg: withDefaultAgent({ tools: { exec: { host: "auto" } } }),
       sandboxAvailable: true,
     });
 
     // Sandbox mode is intentionally self-contained: gateway approval floors
     // must not leak into the local deny-by-default sandbox contract.
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("sandbox");
-    expect(defaults.canRequestNode).toBe(false);
-    expect(defaults.mode).toBe("deny");
-    expect(defaults.security).toBe("deny");
-    expect(defaults.ask).toBe("off");
+    expect(defaults).toMatchObject({
+      host: "auto",
+      effectiveHost: "sandbox",
+      canRequestNode: false,
+      mode: "deny",
+      security: "deny",
+      ask: "off",
+    });
     expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
   });
 
@@ -188,26 +164,16 @@ describe("resolveExecDefaults", () => {
   it("reports agent-scoped host approval floors", () => {
     vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
       version: 1,
-      agents: {
-        "agent-a": {
-          security: "full",
-          ask: "always",
-        },
-      },
+      agents: { "agent-a": { security: "full", ask: "always" } },
     });
 
     expect(
-      resolveExecDefaults({
+      resolve({
         cfg: {
-          tools: {
-            exec: {
-              mode: "full",
-            },
-          },
+          tools: { exec: { mode: "full" } },
           agents: { entries: { "agent-a": {} } },
         },
         agentId: "agent-a",
-        sandboxAvailable: false,
       }),
     ).toMatchObject({
       mode: "ask",
@@ -217,20 +183,12 @@ describe("resolveExecDefaults", () => {
   });
 
   it("keeps an explicit full session at full/off despite host approval floors", () => {
-    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
-      version: 1,
-      defaults: {
-        security: "full",
-        ask: "always",
-      },
-      agents: {},
-    });
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue(fullFloors);
 
     expect(
-      resolveExecDefaults({
+      resolve({
         cfg: withDefaultAgent({}),
-        sessionEntry: { permissionMode: "full" } as SessionEntry,
-        sandboxAvailable: false,
+        sessionEntry: { permissionMode: "full" },
       }),
     ).toMatchObject({
       mode: "full",
@@ -240,79 +198,41 @@ describe("resolveExecDefaults", () => {
   });
 
   it.each([
-    {
-      permissionMode: "guarded",
-      override: { ask: "always" },
-      security: "allowlist",
-      ask: "always",
-      mode: "ask",
-    },
-    {
-      permissionMode: "guarded",
-      override: { mode: "deny" },
-      security: "deny",
-      ask: "on-miss",
-      mode: "deny",
-    },
-    {
-      permissionMode: "guarded",
-      override: { mode: "full" },
-      security: "allowlist",
-      ask: "on-miss",
-      mode: "ask",
-    },
-    {
-      permissionMode: "workspace",
-      override: { mode: "auto" },
-      security: "allowlist",
-      ask: "on-miss",
-      mode: "auto",
-    },
-    {
-      permissionMode: "workspace",
-      override: { mode: "auto", security: "deny", ask: "always" },
-      security: "deny",
-      ask: "always",
-      mode: "deny",
-    },
-  ] as const)(
-    "only tightens $permissionMode with $override",
-    ({ permissionMode, override, ...expected }) => {
-      expect(
-        resolveExecDefaults({
-          sessionEntry: { permissionMode },
-          execOverrides: override,
-          sandboxAvailable: false,
-        }),
-      ).toMatchObject(expected);
-    },
-  );
+    ["guarded", { ask: "always" }, { security: "allowlist", ask: "always", mode: "ask" }],
+    ["guarded", { mode: "deny" }, { security: "deny", ask: "on-miss", mode: "deny" }],
+    ["guarded", { mode: "full" }, { security: "allowlist", ask: "on-miss", mode: "ask" }],
+    ["workspace", { mode: "auto" }, { security: "allowlist", ask: "on-miss", mode: "auto" }],
+    [
+      "workspace",
+      { mode: "auto", security: "deny", ask: "always" },
+      { security: "deny", ask: "always", mode: "deny" },
+    ],
+  ] as const)("only tightens %s with %j", (permissionMode, execOverrides, expected) => {
+    expect(resolve({ sessionEntry: { permissionMode }, execOverrides })).toMatchObject(expected);
+  });
 
   it.each([
-    {
-      override: { mode: "full", security: "allowlist" },
-      security: "deny",
-      ask: "always",
-      mode: "deny",
-    },
-    { override: { mode: "full", ask: "on-miss" }, security: "full", ask: "on-miss", mode: "full" },
-  ] as const)(
-    "bounds tightened full sessions with host floors for $override",
-    ({ override, ...expected }) => {
-      expect(
-        resolveExecDefaults({
-          sessionEntry: { permissionMode: "full" },
-          execOverrides: override,
-          execApprovals: { version: 1, defaults: { security: "deny", ask: "always" } },
-          sandboxAvailable: false,
-        }),
-      ).toMatchObject(expected);
-    },
-  );
+    [
+      { mode: "full", security: "allowlist" },
+      { security: "deny", ask: "always", mode: "deny" },
+    ],
+    [
+      { mode: "full", ask: "on-miss" },
+      { security: "full", ask: "on-miss", mode: "full" },
+    ],
+  ] as const)("bounds full sessions with host floors for %j", (execOverrides, expected) => {
+    expect(
+      resolve({
+        sessionEntry: { permissionMode: "full" },
+        execOverrides,
+        execApprovals: { version: 1, defaults: { security: "deny", ask: "always" } },
+      }),
+    ).toMatchObject(expected);
+  });
 
   it("uses the explicit agent owner for an unscoped session", () => {
     expect(
-      resolveExecDefaults({
+      resolve({
         cfg: {
           tools: { exec: { security: "full", ask: "off" } },
           agents: {
@@ -323,7 +243,6 @@ describe("resolveExecDefaults", () => {
           },
         },
         agentId: "ops",
-        sandboxAvailable: false,
       }),
     ).toMatchObject({
       security: "deny",
@@ -335,13 +254,7 @@ describe("resolveExecDefaults", () => {
     expect(
       resolveNodeExecEligibility({
         cfg: withDefaultAgent({
-          tools: {
-            exec: {
-              host: "node",
-              mode: "deny",
-              node: "build-mac",
-            },
-          },
+          tools: { exec: { host: "node", mode: "deny", node: "build-mac" } },
         }),
       }),
     ).toEqual({ canExec: false, node: "build-mac" });

@@ -7,7 +7,28 @@ import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/io.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
-const controls = vi.hoisted(() => ({ mode: "remote", drift: () => {}, preEnsureDrift: () => {} }));
+const controls = vi.hoisted(() => ({
+  mode: "remote",
+  drift: () => {},
+  preEnsureDrift: () => {},
+  runtime: {
+    log: vi.fn(),
+    error: (message: unknown) => {
+      throw new Error(String(message));
+    },
+    exit: (code: number) => {
+      throw new Error(`Unexpected exit ${code}`);
+    },
+  },
+}));
+
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...controls.runtime },
+  };
+});
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
@@ -101,15 +122,7 @@ vi.mock("./configure.gateway.js", () => ({
 import { runConfigureWizard } from "./configure.wizard.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: (message: unknown) => {
-    throw new Error(String(message));
-  },
-  exit: (code: number) => {
-    throw new Error(`Unexpected exit ${code}`);
-  },
-};
+const runtime = controls.runtime;
 
 afterEach(() => {
   controls.drift = () => {};
@@ -179,7 +192,7 @@ describe("setup config provenance", () => {
         );
       } else {
         controls.mode = flow.endsWith("remote") ? "remote" : "local";
-        await runConfigureWizard({ sections: ["gateway"] }, runtime);
+        await runConfigureWizard({ sections: ["gateway"] });
       }
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(persisted.gateway?.auth?.token).toBe("${SETUP_PROVENANCE_TOKEN}");

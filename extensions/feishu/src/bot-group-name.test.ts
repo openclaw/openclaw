@@ -13,7 +13,6 @@ vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
 function makeAccount(id = "test-account"): ResolvedFeishuAccount {
   return {
     accountId: id,
-    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",
@@ -54,37 +53,6 @@ describe("resolveGroupName", () => {
     mockGetChatInfo.mockResolvedValue({ name: "   " });
     const result = await resolveGroupName({ account, chatId: "oc_test3", log });
     expect(result).toBeUndefined();
-  });
-
-  it("does not cache group names when the expiry would exceed a valid Date", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    try {
-      mockGetChatInfo.mockResolvedValue({ name: "Boundary Group" });
-
-      const first = await resolveGroupName({ account, chatId: "oc_boundary", log });
-      const second = await resolveGroupName({ account, chatId: "oc_boundary", log });
-
-      expect(first).toBe("Boundary Group");
-      expect(second).toBe("Boundary Group");
-      expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("evicts cached group names when the current clock is invalid", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: "Cached Group" });
-    await resolveGroupName({ account, chatId: "oc_invalid_clock", log });
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      const result = await resolveGroupName({ account, chatId: "oc_invalid_clock", log });
-
-      expect(result).toBe("Cached Group");
-    } finally {
-      dateNow.mockRestore();
-    }
-    expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
   });
 
   it("caches negative result (API failure) and skips retry", async () => {

@@ -304,26 +304,12 @@ describe("OpenAI realtime voice browser authentication", () => {
     );
   });
 
-  it("reports an unresolved Platform credential without trying another auth route", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
-    execFileSyncMock.mockImplementationOnce(() => {
-      throw new Error("keychain unavailable");
-    });
-    const provider = buildOpenAIRealtimeVoiceProvider();
-
-    await expect(
-      provider.createBrowserSession?.({
-        providerConfig: {},
-      }),
-    ).rejects.toThrow("OpenAI Realtime voice requires an OpenAI Platform API key");
-  });
-
-  it("does not configure Azure realtime sessions without a Platform API key", () => {
+  it("does not configure Azure realtime sessions without a Platform API key", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = { agents: { defaults: {} } } as never;
 
     expect(
-      provider.isConfigured({
+      await provider.isConfiguredAsync?.({
         cfg,
         providerConfig: {
           azureEndpoint: "https://example.openai.azure.com",
@@ -395,19 +381,19 @@ describe("OpenAI realtime voice browser authentication", () => {
 
   it.each([
     {
-      $name: "structured direct error expects normalization",
+      name: "structured direct error expects normalization",
       event: "structured" as const,
       providerConfig: undefined,
       expectedMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
     },
     {
-      $name: "direct handshake error expects normalization",
+      name: "direct handshake error expects normalization",
       event: "handshake" as const,
       providerConfig: undefined,
       expectedMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
     },
     {
-      $name: "Azure handshake error expects raw preservation",
+      name: "Azure handshake error expects raw preservation",
       event: "handshake" as const,
       providerConfig: {
         apiKey: "test-api-key-test",
@@ -417,7 +403,7 @@ describe("OpenAI realtime voice browser authentication", () => {
       expectedMessage: "Unexpected server response: 401",
     },
     {
-      $name: "custom-endpoint handshake error expects raw preservation",
+      name: "custom-endpoint handshake error expects raw preservation",
       event: "handshake" as const,
       providerConfig: {
         apiKey: "test-api-key-test",

@@ -7,9 +7,8 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { interruptSessionControllerEffects } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -57,7 +56,6 @@ test.for(["keep", "delete"] as const)(
     const context = {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set(["title-listener"]),
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     };
     let key: string | undefined;
     try {
@@ -81,7 +79,7 @@ test.for(["keep", "delete"] as const)(
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       // Cloud dispatch uses this drain before provisioning; optional naming cannot hold it.
       expect(
-        await interruptSessionWorkAdmissions({
+        await interruptSessionControllerEffects({
           scope: storePath,
           identities: [key],
           timeoutMs: 100,
@@ -136,7 +134,7 @@ test.each(["adopted", "incognito"] as const)(
       client,
     );
     expect(result.ok, JSON.stringify(result.error)).toBe(true);
-    await settleWorkspaceRuns({ chatAbortControllers: new Map() }, storePath, key);
+    await settleWorkspaceRuns({}, storePath, key);
     expect(titleMocks.generate).not.toHaveBeenCalled();
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: result.payload!.key, storePath })
@@ -163,7 +161,6 @@ test("successful naming survives setup failure and is shared with discussion ope
   );
   const context = {
     broadcast: vi.fn(),
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     dedupe: new Map(),
   };
   dispatchInboundMessageMock.mockResolvedValue({
@@ -270,7 +267,6 @@ test.each(["generator error", "delayed title"])(
     const dispatchFinished = createDeferredCore();
     const preparationFailed = createDeferredCore<Error>();
     const context = {
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
       broadcast: vi.fn<GatewayRequestContext["broadcast"]>((event, payload) => {
         if (event === "chat" && isRecord(payload) && payload.state === "error") {
           preparationFailed.resolve(
@@ -290,7 +286,7 @@ test.each(["generator error", "delayed title"])(
       }
     };
     const delayed = failure === "delayed title";
-    titleMocks.generate.mockImplementationOnce(() => {
+    titleMocks.generate.mockImplementation(() => {
       titleStarted.resolve();
       return delayed ? title.promise : Promise.reject(new Error("boom"));
     });
@@ -314,12 +310,12 @@ test.each(["generator error", "delayed title"])(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.runStarted).toBe(true);
       await waitForPreparation(dispatchStarted.promise);
+      await waitForPreparation(titleStarted.promise);
       const branch = loadSessionEntry(target)?.worktree?.branch;
       expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
-      expect(titleMocks.generate).not.toHaveBeenCalled();
+      expect(titleMocks.generate).toHaveBeenCalledOnce();
       dispatchFinished.resolve();
       await settleWorkspaceRuns(context, storePath, key);
-      await titleStarted.promise;
       if (delayed) {
         expect(loadSessionEntry(target)?.displayName).toBeUndefined();
         title.resolve("Late investigation title");
@@ -334,7 +330,7 @@ test.each(["generator error", "delayed title"])(
         );
       }
       expect(loadSessionEntry(target)?.worktree?.branch).toBe(branch);
-      expect(titleMocks.generate).toHaveBeenCalledOnce();
+      expect(titleMocks.generate).toHaveBeenCalledTimes(delayed ? 1 : 2);
     } finally {
       title.resolve("Fixture cleanup");
       dispatchFinished.resolve();
@@ -351,6 +347,46 @@ test.each(["generator error", "delayed title"])(
     }
   },
 );
+
+test("creates a two-word worktree name before an initial turn can generate its title", async () => {
+  const root = tempDirs.make("openclaw-session-worktree-naming-");
+  const workspace = await initializeRepository(root, "workspace");
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const context = {
+    dedupe: new Map(),
+  };
+  titleMocks.generate.mockResolvedValue("Canvas video and device presence");
+  let key: string | undefined;
+  try {
+    const created = await directSessionReq<{ key: string }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        worktree: true,
+        titleSource: "Can you use the canvas feature to show a video on my screen?",
+      },
+      { ...controlUiClient, context },
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    key = created.payload!.key;
+    await settleWorkspaceRuns(context, storePath, key);
+    const branch = (await managedWorktrees.findLiveByOwner("session", key))?.branch;
+    expect(branch).toMatch(/^openclaw\/[a-z]+-[a-z]+$/);
+    const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(entry?.worktree?.branch).toBe(branch);
+  } finally {
+    await settleWorkspaceRuns(context, storePath, key, true);
+    const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
+    if (owned) {
+      await managedWorktrees.remove({
+        id: owned.id,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+  }
+});
 
 test("sessions.create rejects another plugin's session before naming or worktree preparation", async () => {
   const root = tempDirs.make("openclaw-session-protected-title-");

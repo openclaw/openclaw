@@ -1,11 +1,14 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { PostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -28,23 +31,38 @@ export type SessionSharingEntry = Pick<
   keyof ReturnType<typeof projectSessionSharingEntry>
 >;
 
-export function projectSessionSharingEntry(entry: InternalSessionEntry) {
+function selectSessionSharingEntry(entry: InternalSessionEntry) {
   return {
     sessionId: entry.sessionId,
     previousSessionId: entry.previousSessionId,
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
-    providerReview: entry.providerReview ? structuredClone(entry.providerReview) : undefined,
-    mainRestartRecovery: entry.mainRestartRecovery
-      ? structuredClone(entry.mainRestartRecovery)
-      : undefined,
+    providerReview: entry.providerReview,
+    mainRestartRecovery: entry.mainRestartRecovery,
     modelSelectionLocked: entry.modelSelectionLocked,
+    pluginOwnerId: entry.pluginOwnerId,
+    skillLibrarySelections: entry.skillLibrarySelections,
     pendingProjectGitUrl: entry.pendingProjectGitUrl,
-    pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
+    pendingWorktree: entry.pendingWorktree,
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
+    sandboxMode: entry.sandboxMode,
+    execHost: entry.execHost,
+    execCwd: entry.execCwd,
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    subagentRole: entry.subagentRole,
+    subagentControlScope: entry.subagentControlScope,
+    completionOwnerSessionKey: entry.completionOwnerSessionKey,
+    inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
+    inheritedToolAllow: entry.inheritedToolAllow ? [...entry.inheritedToolAllow] : undefined,
+    inheritedToolDeny: entry.inheritedToolDeny ? [...entry.inheritedToolDeny] : undefined,
     ...(entry.subagentRecovery
       ? {
           subagentRecovery: {
@@ -61,29 +79,33 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
     visibility: entry.visibility,
     incognito: entry.incognito,
-    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
-    owner: entry.owner
-      ? {
-          ...entry.owner,
-          actor: { ...entry.owner.actor },
-          assignedBy: entry.owner.assignedBy ? { ...entry.owner.assignedBy } : undefined,
-        }
-      : undefined,
+    createdActor: entry.createdActor,
+    owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
+    deviceFolder: entry.deviceFolder,
     permissionMode: entry.permissionMode,
-    toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
+    execNode: entry.execNode,
+    sessionRoot: entry.sessionRoot,
+    spawnedCwd: entry.spawnedCwd,
+    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+    toolOverrides: entry.toolOverrides,
   };
+}
+
+export function projectSessionSharingEntry(entry: InternalSessionEntry) {
+  return structuredClone(selectSessionSharingEntry(entry));
 }
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 
 export type SessionTranscriptInitializationPublication = {
   kind: "session-transcript-initialized";
-  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
+  conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   sessionKey: string;
   placeholder?: SessionEntryPlaceholder;
 };
@@ -104,12 +126,17 @@ export function sessionSharingEntriesEqual(
   if (!previous || !current) {
     return false;
   }
-  const { updatedAt: _previousUpdatedAt, ...before } = projectSessionSharingEntry(previous);
-  const { updatedAt: _currentUpdatedAt, ...after } = projectSessionSharingEntry(current);
+  const { updatedAt: _previousUpdatedAt, ...before } = selectSessionSharingEntry(previous);
+  const { updatedAt: _currentUpdatedAt, ...after } = selectSessionSharingEntry(current);
   return isDeepStrictEqual(before, after);
 }
 
 export type SessionEntryPublicationSource = {
+  /** The anchor routes receipts; null marks PostgreSQL capture without an admitted store. */
+  admission?: Pick<
+    PostgresPhysicalFacts,
+    "engine" | "namespace" | "storeId" | "admissionId"
+  > | null;
   identity: string | symbol;
   birthtime: string | undefined;
   incarnation: string;
@@ -136,8 +163,12 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
+  /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
+  transcriptInventoryUnchanged?: true;
+  maintenancePlans?: readonly SessionMaintenancePreservationPlan[];
   kind: "session-entry-replacements";
-  transcriptPublication?: readonly import("./session-transcript-authority.js").SessionTranscriptAuthorityReceipt[];
+  transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
@@ -178,7 +209,7 @@ export type CreationRecord = {
 export type PlaceholderReceipt = {
   kind: "placeholder";
   creation: CreationRecord | undefined;
-  databaseIdentity: DatabaseSync | string;
+  databaseIdentity: EngineConnection | string;
   sessionKey: string;
   placeholder: SessionEntryPlaceholder;
   committed: boolean;
@@ -223,19 +254,29 @@ export type PendingSessionEntryPublication = {
   superseded: Set<string>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Planned metadata under the writer lock; matching fields survive COMMIT or rollback. */
+  entryPostimages?: ReadonlyMap<string, SessionEntry>;
+  fullEntryPostimages?: ReadonlyMap<string, SessionEntry>;
+  /** An undefined value records a participant command with no projection change. */
+  participantProjections?: ReadonlyMap<
+    string,
+    Pick<InternalSessionEntry, "participants" | "participantCount"> | undefined
+  >;
   /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
   generationUnchanged: Set<string>;
   settled: boolean;
   completion: Promise<void>;
 };
 
-export function readSessionEntryCreationIdentity(creation: CreationRecord): DatabaseSync | string {
+export function readSessionEntryCreationIdentity(
+  creation: CreationRecord,
+): EngineConnection | string {
   return creation.source.kind === "native"
     ? creation.source.database.db
     : creation.source.databaseIdentity;
 }
 
-export function assertSessionEntryCreationCurrent(
+function assertSessionEntryCreationCurrent(
   creation: CreationRecord | undefined,
 ): asserts creation is CreationRecord {
   if (!creation?.active) {
@@ -263,12 +304,14 @@ export function assertSessionEntryCreationTarget(
   assertSessionEntryCreationCurrent(creation);
   const sourcePath =
     creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
+  const sourceIdentity =
+    creation.source.kind === "native"
+      ? findOpenClawAgentDatabaseIdentity(creation.source.database)?.identity
+      : creation.source.databaseIdentity;
   const matchesDatabaseIdentity =
-    creation.source.kind !== "native" &&
+    typeof sourceIdentity === "string" &&
     target.databaseIdentity ===
-      (creation.source.kind === "actor"
-        ? creation.source.databaseIdentity
-        : `file:${creation.source.databaseIdentity}`);
+      (creation.source.kind === "actor" ? sourceIdentity : `file:${sourceIdentity}`);
   const matchesTarget =
     target.databaseIdentity !== undefined
       ? matchesDatabaseIdentity

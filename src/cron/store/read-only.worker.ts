@@ -1,15 +1,16 @@
 import { createHash } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { inspectCronRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import {
   assertStateReadSchema,
   openOpenClawStateReadConnection,
 } from "../../state/openclaw-state-db-read-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { cronRunRecordStoreKey, cronRunRecordToRunLogEntry } from "../run-history-detail.js";
+import { cronRunRecordToRunLogEntry } from "../run-history-detail.js";
 import { serializeCronLoadError } from "./load-error.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
 import type {
@@ -17,7 +18,10 @@ import type {
   CronRunHistoryBinding,
   CronRunHistorySelector,
 } from "./read-only.types.js";
-import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
+import {
+  readCronRunHistoryCandidatesInDatabase,
+  readCronRunHistoryRecordsInDatabase,
+} from "./run-history-read.worker.js";
 import type { CronRunRecord } from "./run-history.types.js";
 
 function selectTranscriptBinding(
@@ -84,6 +88,14 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
         (typeof input.storeKey !== "string" ||
           !isRecord(input.history) ||
           (input.history.jobId !== undefined && typeof input.history.jobId !== "string") ||
+          (input.history.query !== undefined && typeof input.history.query !== "string") ||
+          (input.history.taskIds !== undefined &&
+            (!Array.isArray(input.history.taskIds) ||
+              input.history.taskIds.length > 200 ||
+              input.history.taskIds.some((id) => typeof id !== "string"))) ||
+          (input.history.view !== undefined &&
+            input.history.view !== "full" &&
+            input.history.view !== "summary") ||
           (input.history.transcript !== undefined &&
             (typeof input.history.jobId !== "string" ||
               !isRecord(input.history.transcript) ||
@@ -97,30 +109,50 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
       );
     }
     const { location, storeKey, stagingRoot } = input;
+    const jobNameById = input.history?.jobNameById;
+    if (jobNameById !== undefined && !isStringRecord(jobNameById)) {
+      throw new Error("Cron read-only worker requires string history job names");
+    }
     return await control.runNativeSection(() => {
       // Copying stays in a separate process; the parent owns every unpublished child artifact.
-      const connection = stagingRoot
-        ? openOpenClawStateReadConnection(
-            location,
-            runSqliteReadOnlyWorkerSync(location, stagingRoot),
-            undefined,
-            stagingRoot,
-          )
-        : undefined;
+      const connection = isStatePostgres()
+        ? openOpenClawStateReadConnection(location, location)
+        : stagingRoot
+          ? openOpenClawStateReadConnection(
+              location,
+              runSqliteReadOnlyWorkerSync(location, stagingRoot),
+              undefined,
+              stagingRoot,
+            )
+          : undefined;
       // The connection owner retains failed-close token custody without imposing a schema gate.
       const db = connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
       try {
-        if (isRecord(input.history)) {
+        if (isRecord(input.history) && typeof storeKey === "string") {
           // History consumes the canonical released table only after read admission.
           assertStateReadSchema(db, location);
-          const history = readCronRunRecordsInDatabase(
+          if (Array.isArray(input.history.taskIds)) {
+            return {
+              ok: true,
+              history: readCronRunHistoryRecordsInDatabase(
+                db,
+                storeKey,
+                input.history.taskIds,
+                input.history.view === "summary" ? "summary" : "full",
+              ),
+            } satisfies CronReadOnlyResult;
+          }
+          const candidates = readCronRunHistoryCandidatesInDatabase(
             db,
+            storeKey,
             typeof input.history.jobId === "string" ? input.history.jobId : undefined,
-          ).filter((row) => cronRunRecordStoreKey(row) === storeKey);
+            typeof input.history.query === "string" ? input.history.query : undefined,
+            jobNameById,
+          );
           if (isRecord(input.history.transcript) && typeof storeKey === "string") {
             return {
               ok: true,
-              binding: selectTranscriptBinding(history, storeKey, {
+              binding: selectTranscriptBinding(candidates.records, storeKey, {
                 runId:
                   typeof input.history.transcript.runId === "string"
                     ? input.history.transcript.runId
@@ -134,7 +166,7 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
           }
           return {
             ok: true,
-            history,
+            candidates,
           } satisfies CronReadOnlyResult;
         }
         return {

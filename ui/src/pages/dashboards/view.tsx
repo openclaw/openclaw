@@ -14,7 +14,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
-import { DashboardPreview } from "./dashboard-preview.ts";
+import { DashboardPreview } from "./dashboard-preview.tsx";
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;
@@ -59,7 +59,7 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
           author.label,
           row.lastMessagePreview,
           row.key,
-        ].some((value) => typeof value === "string" && value.toLocaleLowerCase().includes(query))
+        ].some((value) => value?.toLocaleLowerCase().includes(query))
       );
     })
     .toSorted((left, right) =>
@@ -92,7 +92,7 @@ function DashboardCard(props: {
         })
       : null,
   );
-  const author = createMemo(() => dashboardAuthor(props.row, props.data.fallbackAgentId));
+  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId);
   const title = createMemo(() => resolveSessionDisplayName(props.row.key, props.row));
   const Content = () => (
     <>

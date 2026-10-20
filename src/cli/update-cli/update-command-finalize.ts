@@ -4,7 +4,7 @@ import {
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
@@ -34,7 +34,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
@@ -48,6 +48,7 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   capturePreUpdateSourceConfig,
@@ -55,6 +56,7 @@ import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
+  readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
@@ -78,7 +80,6 @@ import {
 } from "./update-command-result.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 import {
   UpdateFinalizationLifecycle,
@@ -195,12 +196,13 @@ export async function updateFinalizeCommand(
                 error instanceof DoctorMaintenanceRefusalError &&
                 error.refusal.kind === "deferred"
               ) {
-                const nextAction = `Stop the Gateway through its service owner, stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
+                const nextAction = `Stop the Gateway through its service owner (\`${formatCliCommand("openclaw gateway stop --force")}\` for the managed service), stop other OpenClaw processes using this state, then rerun \`${formatCliCommand("openclaw update repair")}\`.`;
                 const warnings = normalizeUpdatePostInstallDoctorWarnings([
-                  `Doctor and plugin maintenance remain pending. ${nextAction} ${error.message}`,
+                  `Doctor and plugin maintenance remain pending. ${nextAction}`,
+                  error.message,
                 ]);
                 lifecycle.recordWarnings(warnings);
-                defaultRuntime.error(warnings[0]);
+                defaultRuntime.error(warnings.join("\n"));
                 if (opts.json) {
                   defaultRuntime.writeJson({
                     status: "warning",
@@ -217,6 +219,10 @@ export async function updateFinalizeCommand(
                   );
                 }
                 lifecycle.complete(0, nextAction);
+                // Keep the pending receipt; an older driver still owns its update's exit status.
+                if (recoveryRunIds !== undefined && lifecycle.ownsUpdateRun) {
+                  exitCode = 2;
+                }
                 return;
               }
               if (!lifecycle.completed) {
@@ -263,7 +269,7 @@ async function prepareUpdateFinalization(
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-  const configSnapshot = await readConfigFileSnapshot({
+  const configSnapshot = await readUpdateConfigFileSnapshot({
     skipPluginValidation: true,
     observe: false,
   });
@@ -294,7 +300,10 @@ async function prepareUpdateFinalization(
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     await withPluginLifecycleLease(phase, async () => {
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+      const snapshot = await readUpdateConfigFileSnapshot({
+        skipPluginValidation: true,
+        observe: false,
+      });
       return await persistRequestedUpdateChannel({
         configSnapshot: snapshot,
         requestedChannel,
@@ -322,13 +331,12 @@ async function updateFinalizeCommandInternal(
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
-    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
-      ...new Set([...doctorWarnings, ...warnings]),
-    ]);
+    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
     lifecycle.recordWarnings(doctorWarnings);
   };
 
   const doctorParams = {
+    opts: { fullIntegrityCheck: opts.fullIntegrityCheck },
     root,
     nodeRunner,
     runId: invokingRunId,
@@ -427,9 +435,19 @@ async function updateFinalizeCommandInternal(
           pluginUpdate: initialPluginUpdate,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
         });
-        const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
+        // Post-plugin convergence rereads the ledger and reports each still-pending
+        // migration as a plugin warning; that final report supersedes Doctor's.
+        const finallyReportedPluginIds = new Set(
+          (result.pluginUpdate.warnings ?? []).flatMap((warning) =>
+            warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
+          ),
+        );
+        doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
+          doctorWarnings,
+          finallyReportedPluginIds,
+        );
         phase.assertCurrent();
-        doctorWarnings = doctorWarnings.filter((warning) => !resolvedWarnings.has(warning));
+        lifecycle.recordWarnings(doctorWarnings);
         await persistValidatedDowngradeConfig(result.configSnapshot, phase.assertCurrent);
         return result;
       },

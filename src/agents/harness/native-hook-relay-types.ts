@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
+import type { PluginJsonValue as JsonValue } from "../../plugins/host-hook-json.js";
 import type {
   BeforeToolCallFailureDisposition,
   DeferredPluginToolApproval,
@@ -20,13 +21,7 @@ type NativeHookRelayApprovalContext = Pick<
   | "turnSourceTo"
 >;
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+export type { JsonValue };
 
 export const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
@@ -82,6 +77,9 @@ export type NativeHookRelayRegistration = {
   requester?: PluginHookToolRequesterContext;
   approvalContext?: NativeHookRelayApprovalContext;
   allowedEvents: readonly NativeHookRelayEvent[];
+  /** Keep host policy active for every native tool even without plugin hooks. */
+  requirePreToolUse?: boolean;
+  /** Wall-clock epoch expiry shared through the cross-process bridge record. */
   expiresAtMs: number;
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
@@ -130,6 +128,8 @@ export type RegisterNativeHookRelayParams = {
   allowedEvents?: readonly NativeHookRelayEvent[];
   /** Whether this relay should run OpenClaw loop detection from native PreToolUse hooks. */
   preToolUseLoopDetection?: boolean;
+  /** Never prune the all-tool PreToolUse policy relay. Requires runBeforeToolCall. */
+  requirePreToolUse?: boolean;
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
@@ -316,6 +316,8 @@ export type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
   policyReady: Promise<void>;
+  /** Process-local monotonic expiry used only by the in-process rearm timer. */
+  expiresAtMonotonicMs?: number;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   executionAdmission?: NativeHookRelayExecutionAdmission;

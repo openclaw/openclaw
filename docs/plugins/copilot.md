@@ -361,7 +361,7 @@ filtering, and catalog cleanup stay in the shared helper.
 
 For Copilot, `tools.toolSearch.mode: "directory"` uses structured `tools`
 semantics: discover with `tool_search` or `tool_describe`, then execute through
-`tool_call` with `id` and `args`. Hidden OpenClaw catalog names are not registered
+`dispatch_action` with `id` and `args`. Hidden OpenClaw catalog names are not registered
 as SDK tool handlers and cannot be called directly. The pinned Copilot SDK
 1.0.13 supports native deferral of registered tool declarations through
 `Tool.defer`; that is a separate SDK catalog, not a resolver for omitted

@@ -4,8 +4,8 @@ import path from "node:path";
 import { afterAll, vi } from "vitest";
 import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
@@ -21,6 +21,7 @@ import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -33,7 +34,6 @@ import {
 } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 const sandboxDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-suite-");
 
@@ -48,13 +48,21 @@ type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastThreadId?: string | number;
 };
 
-type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
+type HeartbeatReplyFn = typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
 export type HeartbeatReplySpy = ReturnType<typeof vi.fn<HeartbeatReplyFn>>;
 
 function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;
+}
+export function setHeartbeatSilentCompletion(options: InternalGetReplyOptions | undefined): void {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.replyCompletion = { expectation: "optional", outcome: "silent" };
+  options?.onDeliberateSilentTerminalReply?.();
 }
 
 /** Set the invocation's execution receipt without replacing its admission state. */

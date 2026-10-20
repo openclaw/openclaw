@@ -6,7 +6,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -26,6 +26,7 @@ import {
 } from "./attempt-steering.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
+import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
   createCodexNativeMcpAppResultDetailsPreparer,
@@ -43,9 +44,9 @@ import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.j
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -61,6 +62,7 @@ export function activateCodexAttemptTurn(
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
   { turn, upstreamUserText }: CodexStartedTurn,
+  onResponseObserved: CodexAppServerEventProjectorOptions["onResponseObserved"],
 ) {
   const {
     prompt,
@@ -94,7 +96,6 @@ export function activateCodexAttemptTurn(
     interruptTurn,
   } = turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
-  const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
   const { thread } = resourceState;
   const runtimeModelSelection =
@@ -171,6 +172,8 @@ export function activateCodexAttemptTurn(
     activeTurnId,
     {
       agentHookContext: hookContext,
+      onResponseObserved,
+      hasDeliveredFinalSourceReply: () => toolBridge.telemetry.finalSourceReplyDelivered === true,
       initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
@@ -181,19 +184,22 @@ export function activateCodexAttemptTurn(
           toolBridge.availableTools.some((tool) => tool.name === "message")),
       onAsyncDelivery: async (delivery) => {
         return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
-          params:
-            prepareReplyMedia && projectionParams.onBlockReply
-              ? {
-                  ...projectionParams,
-                  onBlockReply: async (payload, options) => {
-                    const prepared = await prepareReplyMedia({ kind: "payload", payload });
-                    if (prepared.kind !== "payload") {
-                      throw new Error("Reply media preparation returned the wrong result kind");
-                    }
+          params: projectionParams.onBlockReply
+            ? {
+                ...projectionParams,
+                onBlockReply: async (payload, options) => {
+                  const prepared = prepareReplyMedia
+                    ? await prepareReplyMedia({ kind: "payload", payload })
+                    : { kind: "payload" as const, payload };
+                  if (prepared.kind !== "payload") {
+                    throw new Error("Reply media preparation returned the wrong result kind");
+                  }
+                  if (!toolBridge.telemetry.finalSourceReplyDelivered) {
                     await projectionParams.onBlockReply?.(prepared.payload, options);
-                  },
-                }
-              : projectionParams,
+                  }
+                },
+              }
+            : projectionParams,
           cwd: effectiveCwd,
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
@@ -303,17 +309,17 @@ export function activateCodexAttemptTurn(
         if (!isJsonObject(turn.turn)) {
           throw new Error("Codex turn completion payload is not a JSON object");
         }
-        await enqueueNotification(
-          {
-            method: "turn/completed",
-            params: {
-              threadId: resourceState.thread.threadId,
-              turnId: activeTurnId,
-              turn: turn.turn,
-            },
+        await notifications.enqueueNotification({
+          method: "turn/completed",
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          completedTurn: turn.turn,
+          params: {
+            threadId: resourceState.thread.threadId,
+            turnId: activeTurnId,
+            turn: turn.turn,
           },
-          { threadId: resourceState.thread.threadId, turnId: activeTurnId },
-        );
+        });
       }
     } finally {
       state.activeLocalProjections -= 1;
@@ -353,8 +359,11 @@ export function activateCodexAttemptTurn(
     withCurrent: connection.withCurrent,
     withPreparedCurrent: connection.authority.withPreparedCurrent,
     prepareMessage: async (text, options, assertMessageCurrent) => {
+      // Model input carries the steer's inbound context like turn/start; the
+      // transcript message and image references stay the user text alone.
+      const inputText = prependCurrentInboundContext(text, options.currentInboundContext);
       const attachmentNote = await connection.prepareInputAttachments({
-        maxChars: Math.max(0, CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - text.length - 2),
+        maxChars: Math.max(0, CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - inputText.length - 2),
         turn: {
           media: options.media,
           userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
@@ -383,7 +392,7 @@ export function activateCodexAttemptTurn(
       });
       return {
         input: buildCodexUserInput(
-          attachmentNote ? `${text}\n\n${attachmentNote}` : text,
+          attachmentNote ? `${inputText}\n\n${attachmentNote}` : inputText,
           result.images,
         ),
         message: {
@@ -402,8 +411,8 @@ export function activateCodexAttemptTurn(
       };
     },
     beforeSubmit: async (items) => {
-      // Commit preceding answers and user custody before Codex can act on the
-      // steer. Its acknowledgment and user-message echo can both arrive later.
+      // User input owns transcript custody before dispatch. Internal guidance
+      // is recorded only once Codex accepts it, so a rejected steer cannot replay.
       const transcriptItems = items.filter(
         (item) =>
           item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
@@ -419,7 +428,7 @@ export function activateCodexAttemptTurn(
         await codexTranscriptMirrorRuntime.mirror({
           assertCurrent: composeSessionTranscriptWriteAssertion([
             connection.assertLegacyCurrent,
-            createNativeSessionBindingAuthority([], assertSteeringActive).assertLegacyCurrent,
+            createNativeSessionBindingScope(assertSteeringActive).assertLegacyCurrent,
           ]),
           agentId: sessionAgentId,
           sessionKey: contextSessionKey,
@@ -437,6 +446,9 @@ export function activateCodexAttemptTurn(
         assertSteeringActive();
       }
       for (const item of transcriptItems) {
+        if (item.isInboundUserMessage === false) {
+          continue;
+        }
         const recorder = item.userTurnTranscriptRecorder;
         if (!recorder) {
           continue;
@@ -454,11 +466,6 @@ export function activateCodexAttemptTurn(
     params.sessionKey ?? params.sessionId,
     assertSteeringActive,
   );
-  const injectionGuard = (assertCurrent?: () => void) => () => {
-    assertCurrent?.();
-    assertSteeringActive();
-    return true;
-  };
   // V1 retains backend-only authority; V2 requires a host assertion.
   const queueMessage = async (
     text: string,
@@ -467,7 +474,11 @@ export function activateCodexAttemptTurn(
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
     preparation?: CodexSteeringPreparation,
   ) => {
-    const canClaim = injectionGuard(assertCurrent);
+    const canClaim = () => {
+      assertCurrent?.();
+      assertSteeringActive();
+      return true;
+    };
     if (
       await claimPendingUserInputAnswer(
         text,
@@ -498,18 +509,36 @@ export function activateCodexAttemptTurn(
         });
       }
     }
+    let unconfirmed: CodexSteeringAcceptedUnconfirmedError | undefined;
     try {
       await activeSteeringQueue.queue(text, optionsLocal, canClaim, preparation);
     } catch (error) {
-      if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
+      if (!(error instanceof CodexSteeringAcceptedUnconfirmedError)) {
+        throw error;
+      }
+      unconfirmed = error;
+    }
+    const recorder =
+      optionsLocal?.isInboundUserMessage === false
+        ? optionsLocal.userTurnTranscriptRecorder
+        : undefined;
+    if (recorder) {
+      recorder.markSentToProvider?.();
+      try {
+        await recorder.persistApproved();
+        if (!recorder.hasPersisted()) {
+          throw new Error("Accepted Codex steering could not be persisted");
+        }
+      } catch (error) {
         return {
           transcriptCommit: "unconfirmed" as const,
           errorMessage: formatErrorMessage(error),
         };
       }
-      throw error;
     }
-    return undefined;
+    return unconfirmed
+      ? { transcriptCommit: "unconfirmed" as const, errorMessage: formatErrorMessage(unconfirmed) }
+      : undefined;
   };
   const messageInjection = {
     version: 2 as const,
@@ -531,8 +560,7 @@ export function activateCodexAttemptTurn(
     runId: params.runId,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    supportsCrossProfileSteering:
-      isCodexNativeDelegationDisabledForRun(params) || resourceState.nativeSpawnAdmissionInstalled,
+    supportsCrossProfileSteering: true,
     permissionChangeOwner: params.permissionChange?.owner,
     applyPermissionMode: async (
       mode: NonNullable<typeof params.permissionMode> | null,
@@ -576,12 +604,13 @@ export function activateCodexAttemptTurn(
     // Gateway-owned turns rely on that boundary before finalizing adoption.
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: params.model.input.includes("image"),
+    terminalReplyExpectation: params.terminalReplyExpectation,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
   };
-  const freezeRunTerminalOutcome = cancellation.freezeTerminalOutcome;
+  let activeRunAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
   // Return cleanup ownership before callbacks or backend publication can fail.
   const projectionReady = Promise.resolve().then(async () => {
     runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -635,8 +664,7 @@ export function activateCodexAttemptTurn(
             isSteeringAvailable(),
         );
       }
-      params.replyOperation?.attachBackend(handle);
-      setActiveEmbeddedRun(
+      activeRunAttachment = setActiveEmbeddedRun(
         params.sessionId,
         handle,
         params.sessionKey,
@@ -676,7 +704,10 @@ export function activateCodexAttemptTurn(
     streamState,
     prepareReplyMedia,
     handle,
-    freezeRunTerminalOutcome,
+    get activeRunAttachment() {
+      return activeRunAttachment;
+    },
+    freezeRunTerminalOutcome: cancellation.freezeTerminalOutcome,
     notifyUserMessagePersisted,
     abortListener,
     ready: projectionReady,

@@ -5,10 +5,11 @@ import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPackageDependencyName } from "../infra/package-json.js";
+import { statIfExists } from "../infra/path-existence.js";
 import {
   runInstallPolicy,
   type InstallPolicyFinding,
@@ -322,16 +323,8 @@ async function resolveInstalledPackageScanRoot(params: {
   trustedHostOpenClawRootRealPath: string | null;
 }): Promise<InstalledPackageScanRoot | undefined> {
   const packageDir = path.join(params.packageDir, "node_modules", params.dependencyName);
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stats = await fs.stat(packageDir);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-  if (!stats.isDirectory()) {
+  const stats = await statIfExists(packageDir);
+  if (!stats?.isDirectory()) {
     return undefined;
   }
 

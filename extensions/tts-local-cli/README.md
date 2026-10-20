@@ -41,5 +41,8 @@ Declare `voices` here only. `/voice set` stores its choice as
 `talk.providers.tts-local-cli.voiceId`, which Talk playback uses in place of
 the `voiceId` above; a `voices` list under `talk.providers` is ignored.
 
+Synthesis debug messages record the target and audio format/size, not spoken
+text. Your speech executable still receives the text as described above.
+
 See [local speech configuration](https://docs.openclaw.ai/tools/tts/configuration)
 for platform-specific examples and supported engines.

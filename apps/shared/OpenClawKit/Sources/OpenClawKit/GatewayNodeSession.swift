@@ -250,6 +250,11 @@ public actor GatewayNodeSession {
             admissionGeneration: expectedAdmissionGeneration)
     }
 
+    public func connectedDeviceId() async -> String? {
+        guard let channel else { return nil }
+        return await channel.connectedDeviceId()
+    }
+
     public func disconnect() async {
         let detached = self.detachChannel(resetConnectionHistory: true)
         if detached.channel != nil || !self.isExecutingLifecycleCallback() {
@@ -982,17 +987,9 @@ extension GatewayNodeSession {
             return
         }
         guard evt.event == "node.invoke.request" else { return }
-        self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
             let request: NodeInvokeRequestPayload = try self.decodeEventPayload(from: payload)
-            let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
-            self.logger.info(
-                """
-                node invoke request decoded id=\(request.id, privacy: .public) \
-                command=\(request.command, privacy: .public) \
-                timeoutMs=\(timeoutLabel, privacy: .public)
-                """)
             guard let onInvoke else { return }
             let route = GatewayNodeSessionRoute(
                 channelGeneration: channelGeneration,
@@ -1053,7 +1050,6 @@ extension GatewayNodeSession {
                 socketGeneration: socketGeneration)
             return
         }
-        self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
         let bridgeRequest = BridgeInvokeRequest(
             id: request.id,
             command: request.command,
@@ -1083,8 +1079,6 @@ extension GatewayNodeSession {
         guard self.isCurrentRoute(route),
               self.channel === channel
         else { return }
-        self.logger.info(
-            "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         await self.sendInvokeResult(
             request: request,
             response: response,
@@ -1448,8 +1442,6 @@ extension GatewayNodeSession {
         channel: GatewayChannelActor,
         socketGeneration: UInt64) async
     {
-        self.logger.info(
-            "node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
@@ -1462,10 +1454,12 @@ extension GatewayNodeSession {
             params["payload"] = payload
         }
         if let error = response.error {
-            params["error"] = AnyCodable([
-                "code": error.code.rawValue,
-                "message": error.message,
-            ])
+            var fields: [String: Any] = ["code": error.code.rawValue, "message": error.message]
+            // v2026.10.2 closes this object to code/message; opt in through the current hello.
+            if self.serverCapabilities?.contains(.nodePermissionErrors) == true, let details = error.details {
+                fields["details"] = ["capabilities": details.capabilities, "state": details.state.rawValue]
+            }
+            params["error"] = AnyCodable(fields)
         }
         do {
             try await channel.send(

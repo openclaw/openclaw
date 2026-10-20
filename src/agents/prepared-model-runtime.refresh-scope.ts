@@ -106,6 +106,7 @@ export function listConfiguredRefreshInputs(
       options.defaultWorkspaceDir,
       options.allowGatewaySubagentBinding,
       preservedWorkspaceByAgentDir,
+      options.pluginMetadataSnapshot,
     ).map(normalizePreparedModelRuntimeInput),
   );
 }

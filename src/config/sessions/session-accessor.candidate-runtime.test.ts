@@ -2,8 +2,10 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   readResolvedSessionEntryInWorker,
+  readResolvedSessionEntriesInWorker,
   resolveSessionEntryCandidateTargetForRuntime,
 } from "./session-accessor.entry.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
@@ -19,6 +21,14 @@ it("keeps an unbound incognito read in its process-local store", async () => {
       sessionId: "private",
       incognito: true,
     });
+    const requestedKey = ` ${scope.sessionKey} `;
+    const entries = await readResolvedSessionEntriesInWorker({
+      ...scope,
+      cfg: {},
+      sessionKeys: [requestedKey],
+    });
+    expect([...entries.keys()]).toEqual([requestedKey]);
+    expect(entries.get(requestedKey)?.entry?.sessionId).toBe("private");
   });
 });
 
@@ -32,6 +42,7 @@ it("keeps candidate order and observes a committed replacement through the worke
       cfg: {},
       candidateKeys: ["agent:main:missing", firstKey, secondKey],
     };
+    setRuntimeConfigSnapshot(candidate.cfg);
     await replaceSessionEntry(
       { ...scope, sessionKey: firstKey },
       { sessionId: "first", updatedAt: 1, label: "before" },

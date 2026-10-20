@@ -1,6 +1,6 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, untrack } from "solid-js";
+import { createMemo, For } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingEntry } from "./dreaming.ts";
 import { DreamingAction, formatCompactDateTime } from "./view-shared.tsx";
@@ -77,7 +77,7 @@ function AdvancedEntryList(params: {
         <div class="dreams-advanced__list">
           <For each={params.entries} keyed={(entry) => entry.key}>
             {(entry) => {
-              const badge = createMemo(() => params.badge?.(entry()));
+              const badge = () => params.badge?.(entry());
               return (
                 <article class="dreams-advanced__item" data-entry-key={entry().key}>
                   {badge() ? <span class="dreams-advanced__badge">{badge()}</span> : undefined}
@@ -102,13 +102,13 @@ function AdvancedEntryList(params: {
 }
 
 export function renderAdvancedSection(props: DreamingProps) {
-  const state = untrack(() => props.viewState);
+  const state = () => props.viewState;
   const groundedEntries = createMemo(() =>
     props.shortTermEntries.filter((entry) => entry.groundedCount > 0),
   );
   const waitingEntries = createMemo(() =>
     props.shortTermEntries.toSorted(
-      state.advancedWaitingSort === "signals"
+      state().advancedWaitingSort === "signals"
         ? compareWaitingEntryBySignals
         : compareWaitingEntryByRecency,
     ),
@@ -148,7 +148,10 @@ export function renderAdvancedSection(props: DreamingProps) {
       </div>
       {props.dreamDiaryActionMessage ? (
         <div
-          class={`callout ${props.dreamDiaryActionMessage.kind === "success" ? "success" : "danger"}`}
+          class={[
+            "callout",
+            props.dreamDiaryActionMessage.kind === "success" ? "success" : "danger",
+          ]}
           role="status"
         >
           <div class="row wrap items-center gap-2">
@@ -209,10 +212,14 @@ export function renderAdvancedSection(props: DreamingProps) {
                   const [sort, label] = entryValue;
                   return (
                     <button
-                      class={`dreams-advanced__sort-btn ${state.advancedWaitingSort === sort ? "dreams-advanced__sort-btn--active" : ""}`}
+                      class={[
+                        "dreams-advanced__sort-btn",
+                        state().advancedWaitingSort === sort && "dreams-advanced__sort-btn--active",
+                      ]}
                       onClick={() => {
-                        state.advancedWaitingSort = sort;
-                        props.onViewStateChange();
+                        props.onViewStateChange((draft) => {
+                          draft.advancedWaitingSort = sort;
+                        });
                       }}
                     >
                       {t(label)}

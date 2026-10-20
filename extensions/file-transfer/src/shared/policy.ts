@@ -5,11 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  asNullableRecord,
-  asOptionalObjectRecord,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
@@ -81,8 +79,8 @@ type FileTransferPolicyConfig = {
   pendingReapprovals?: unknown;
 };
 
-function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
-  return asNullableRecord(value) as FilePolicyConfig | null;
+function asFilePolicyConfig(value: unknown): FilePolicyConfig | undefined {
+  return asOptionalRecord(value) as FilePolicyConfig | undefined;
 }
 
 function readFileTransferConfigFromPluginConfig(
@@ -95,7 +93,7 @@ function readFileTransferConfigFromPluginConfig(
   return {
     policyVersion:
       typeof pluginRecord.policyVersion === "number" ? pluginRecord.policyVersion : undefined,
-    nodes: asFilePolicyConfig(pluginRecord.nodes) ?? undefined,
+    nodes: asFilePolicyConfig(pluginRecord.nodes),
     literalGrants: pluginRecord.literalGrants,
     pendingReapprovals: pluginRecord.pendingReapprovals,
   };
@@ -122,19 +120,13 @@ function readPendingReapprovals(config: FileTransferPolicyConfig): PendingReappr
   });
 }
 
-function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
-  const plugins = asOptionalObjectRecord(getRuntimeConfig().plugins);
-  const entries = asOptionalObjectRecord(plugins?.entries);
-  const entry = asOptionalObjectRecord(entries?.["file-transfer"]);
-  return asNullableRecord(entry?.config);
-}
-
 function readFileTransferConfig(
   pluginConfig?: Record<string, unknown>,
 ): FileTransferPolicyConfig | null {
   return (
-    readFileTransferConfigFromPluginConfig(readPluginConfigFromRuntimeConfig()) ??
-    readFileTransferConfigFromPluginConfig(pluginConfig)
+    readFileTransferConfigFromPluginConfig(
+      resolvePluginConfigObject(getRuntimeConfig(), "file-transfer"),
+    ) ?? readFileTransferConfigFromPluginConfig(pluginConfig)
   );
 }
 
@@ -228,9 +220,7 @@ function resolveNodePolicy(
   nodeId: string,
   nodeDisplayName?: string,
 ): { key: string; entry: NodeFilePolicyConfig } | null {
-  const candidates = [nodeId, nodeDisplayName].filter(
-    (k): k is string => typeof k === "string" && k.length > 0,
-  );
+  const candidates = [nodeId, nodeDisplayName].filter((k): k is string => Boolean(k));
   for (const key of candidates) {
     if (config[key]) {
       return { key, entry: config[key] };
@@ -280,7 +270,7 @@ function evaluateFilePolicyInternal(
       askable: false,
     };
   }
-  const config = pluginPolicy ? asFilePolicyConfig(pluginPolicy.nodes) : null;
+  const config = pluginPolicy?.nodes;
   if (!pluginPolicy || !config) {
     return {
       ok: false,
@@ -423,7 +413,7 @@ export function snapshotNodeFileReadPolicy(input: {
   pluginConfig?: Record<string, unknown>;
 }) {
   const policy = readFileTransferConfig(input.pluginConfig);
-  const nodes = policy && asFilePolicyConfig(policy.nodes);
+  const nodes = policy?.nodes;
   const resolved = nodes && resolveNodePolicy(nodes, input.nodeId, input.nodeDisplayName);
   if (!resolved) {
     throw new Error("Node file read policy is unavailable");

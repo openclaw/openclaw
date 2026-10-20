@@ -123,13 +123,9 @@ export function registerNodeLaunchAdapterNativeInferenceSuite() {
         await expect(launch).resolves.toEqual(completed);
         expect(invoke).toHaveBeenCalledOnce();
       } else {
-        await expect(launch).rejects.toMatchObject({
-          name: "NodeRunnerUpdateRequiredError",
-          code: "node_runner_update_required",
-          message: expect.stringMatching(
-            /requires an update.*openclaw update.*reconnect.*openclaw node restart/su,
-          ),
-        });
+        await expect(launch).rejects.toThrow(
+          /Worker-local inference is not configured.*models\.providers.*usable credential.*restart the node host/su,
+        );
         expect(invoke).not.toHaveBeenCalled();
       }
     },

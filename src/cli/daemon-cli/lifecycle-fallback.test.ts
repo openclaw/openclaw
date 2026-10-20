@@ -77,7 +77,8 @@ vi.mock("./lifecycle-safe-restart.js", () => ({
 vi.mock("./lifecycle-unmanaged.js", () => ({
   signalGatewayRestart: vi.fn(),
 }));
-vi.mock("./restart-health.js", () => ({
+vi.mock("./restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart-health.js")>()),
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   formatGatewayRestartFailure: vi.fn(),
@@ -86,9 +87,9 @@ vi.mock("./restart-health.js", () => ({
   terminateStaleGatewayPids: vi.fn(),
   waitForGatewayHealthyListener: vi.fn(),
   waitForGatewayHealthyRestart: vi.fn(),
+  waitForGatewayHttpReadiness: vi.fn(),
 }));
 vi.mock("./shared.js", () => ({ renderGatewayServiceStartHints: vi.fn(() => []) }));
-vi.mock("./start-health.js", () => ({ verifyGatewayStartReadiness: vi.fn() }));
 vi.mock("./start-repair.js", () => ({ repairLoadedGatewayServiceForStart: vi.fn() }));
 vi.mock("../terminal-interactivity.js", () => ({
   isTerminalInteractive: vi.fn(() => true),

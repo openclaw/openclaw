@@ -284,9 +284,9 @@ switching the default, assign every staff member an explicit role with
 then asks the agent to call `visitor_invite` with a GitHub login or email; the
 guest signs in at the normal Team URL.
 
-Guests can create sandboxed sessions on the listed agents and publish draft
-pull requests from their own sessions through the shared GitHub account. They
-cannot merge through OpenClaw. Before inviting anyone, review the paths a
+Guests can create sandboxed sessions on the listed agents and publish open or
+explicitly requested draft pull requests from their own sessions through the
+shared GitHub account. They cannot merge through OpenClaw. Before inviting anyone, review the paths a
 required sandbox does not contain, listed under
 [Named operator roles](/gateway/operator-scopes#named-operator-roles), and
 [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
@@ -392,6 +392,17 @@ WebSocket, and transfer request. Prefer the Access service-token setup in
 A browser working while `openclaw connect` receives HTTP 302 means the machine
 request reached Access, not that node pairing succeeded. Keep machine credentials
 out of browser links and do not bypass Access for the whole Gateway.
+
+Trusted relay plugins can use [principal-bound remote ingress](/plugins/sdk-gateway-ingress)
+for a remote Control UI and MCP calls; [MCP Relay](/plugins/mcp-relay#team-gateways)
+uses it to bring a Team Gateway into ChatGPT and Codex. A Team grant belongs to the verified person
+who approves it in this Gateway's Control UI, never the shared owner or the
+loopback password. The plugin's consent flow should default to **Read + write**
+and offer **Full** within that person's current role. Full gives administrators
+admin access and does not elevate restricted roles. Both UI and RPC must share
+the same live grant; the plugin and relay own expiry and revocation. Ingress
+reconnects are tokenless and issue no reusable device token. This SDK capability
+does not itself install or configure a relay service.
 
 ## 6. Give widgets a separate sandbox origin
 

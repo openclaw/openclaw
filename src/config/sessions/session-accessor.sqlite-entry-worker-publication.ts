@@ -6,7 +6,12 @@ import {
 } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  retainConversationWorkerPublication,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
+import {
   pendingSessionEntryPublications,
+  markSessionSharingAuthorityUnknown,
   prepareSessionEntryPublicationFacts,
   preparedSharingReads,
   publishRetainedSessionEntryChange,
@@ -26,7 +31,10 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { isSessionEntryReplacementReceiptUsable } from "./session-accessor.sqlite-entry-receipt.js";
-import { publishSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
+import {
+  captureSessionEntryMaintenanceAgeChange,
+  publishSessionEntryMaintenanceAgeChanges,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import {
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
@@ -34,13 +42,11 @@ import {
   recordAcquiringSessionEntry,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
-import {
-  retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
-} from "./session-transcript-authority.js";
+import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** A confirmed worker result invalidates row facts without opening a parent connection. */
+/** Publish confirmed removals or invalidate incomplete row facts without a parent connection. */
 export function publishSessionEntryWorkerInvalidations(
   params: {
     agentId: string;
@@ -54,19 +60,20 @@ export function publishSessionEntryWorkerInvalidations(
   const keys = [...new Set(changedKeys)];
   const changes: SessionRowChange[] = [];
   for (const sessionKey of keys) {
+    const removed = params.removedSessionKeys?.has(sessionKey) === true;
     // Confirmed absence revokes a generation; other incomplete postimages remain unavailable.
     publishRetainedSessionEntryChange(
       params.databaseIdentity,
       sessionKey,
       undefined,
       undefined,
-      params.removedSessionKeys?.has(sessionKey) === true,
+      removed,
     );
     const change: SessionRowChange = {
       agentId: params.agentId,
       storePath: params.storePath,
       sessionKey,
-      factsInvalidated: true,
+      ...(removed ? { facts: { kind: "removed" as const } } : { factsInvalidated: true }),
     };
     bindPreparedSessionEntryPublication(change, {
       kind: "marker",
@@ -81,19 +88,27 @@ export function publishSessionEntryWorkerInvalidations(
   sessionChanges.emitBatch(changes, undefined, beforePublicNotifications);
 }
 
-/** A superseded receipt is discarded wholesale; the next read refreshes its facts. */
-function retireSessionEntryMembership(
+/** Later metadata commits cannot certify membership or a generation changed by an older write. */
+function retireSupersededSessionFacts(
   params: { agentId: string; storePath: string; databaseIdentity: string },
-  keys: readonly string[],
+  owner: PendingSessionEntryPublication,
+  generationUnchanged: ReadonlySet<string>,
+  supersededKeys: Iterable<string> = owner.superseded,
 ): SessionRowChange[] {
-  return [...new Set(keys)].map((sessionKey) => {
+  return [...supersededKeys].flatMap((sessionKey) => {
+    const membershipChanged = owner.membershipInvalidated.has(sessionKey);
+    const generationChanged = !generationUnchanged.has(sessionKey);
     for (const read of preparedSharingReads.get(`file:${params.databaseIdentity}\0${sessionKey}`) ??
       []) {
-      read.facts = undefined;
-      recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
-      publishRetainedSessionEntryPredicate(read, undefined, false);
-      publishRetainedSessionGeneration(read, undefined, false);
+      if (membershipChanged) {
+        read.facts = undefined;
+        recordAcquiringSessionEntry(read.acquisition, undefined, undefined);
+      }
+      if (generationChanged) {
+        publishRetainedSessionGeneration(read, undefined, false);
+      }
     }
+    // Stable policy facts do not make the superseded row's projection current.
     const change: SessionRowChange = {
       agentId: params.agentId,
       storePath: params.storePath,
@@ -106,7 +121,7 @@ function retireSessionEntryMembership(
       sharingChange: "unchanged",
       databaseIdentity: params.databaseIdentity,
     });
-    return change;
+    return [change];
   });
 }
 
@@ -118,6 +133,10 @@ export function retainSessionEntryWorkerPublication(params: {
 }) {
   const creation = preparedSharingChanges.current.getStore();
   const transcript = retainSessionTranscriptWorkerPublication(params);
+  const conversation = retainConversationWorkerPublication(
+    params.databaseIdentity,
+    params.storePath,
+  );
   const completion = createDeferredCore();
   const owner: PendingSessionEntryPublication = {
     superseded: new Set(),
@@ -130,6 +149,7 @@ export function retainSessionEntryWorkerPublication(params: {
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
+  let sharingAuthorityChanged = true;
   const publication = {
     begin(
       sessionKeys: readonly string[],
@@ -137,15 +157,21 @@ export function retainSessionEntryWorkerPublication(params: {
       sharingUnchangedKeys: readonly string[] = [],
       generationUnchangedKeys: readonly string[] = [],
       transcriptPublication?: readonly SessionTranscriptAuthorityReceipt[],
+      entryPostimages?: ReadonlyMap<string, SessionEntry>,
+      conversationReceipts?: readonly ConversationPublication[],
+      fullEntryPostimages?: ReadonlyMap<string, SessionEntry>,
     ) {
       if (pending) {
         return;
       }
       keys = [...new Set(sessionKeys)];
       transcript.begin(transcriptPublication);
+      conversation.begin(conversationReceipts ?? []);
       owner.membershipInvalidated = new Set(membershipInvalidatedKeys);
       owner.sharingUnchanged = new Set(sharingUnchangedKeys);
       owner.generationUnchanged = new Set(generationUnchangedKeys);
+      owner.entryPostimages = entryPostimages;
+      owner.fullEntryPostimages = fullEntryPostimages;
       pending = true;
       for (const sessionKey of keys) {
         const key = `${identityKey}\0${sessionKey}`;
@@ -159,15 +185,34 @@ export function retainSessionEntryWorkerPublication(params: {
       sessionKeys: readonly string[],
       memberships: ReadonlyMap<string, string> = new Map(),
       generationUnchangedKeys: readonly string[] = sessionKeys,
+      participantProjections?: PendingSessionEntryPublication["participantProjections"],
+      entryPostimages?: ReadonlyMap<string, SessionEntry>,
+      authorityChanged = true,
+      fullEntryPostimages?: ReadonlyMap<string, SessionEntry>,
     ): void {
       if (pending) {
         return;
       }
-      publication.begin(sessionKeys, [...memberships.keys()], [], generationUnchangedKeys);
+      owner.participantProjections = participantProjections;
+      sharingAuthorityChanged = authorityChanged;
+      publication.begin(
+        sessionKeys,
+        [...memberships.keys()],
+        [...(participantProjections?.keys() ?? [])],
+        generationUnchangedKeys,
+        undefined,
+        entryPostimages,
+        undefined,
+        fullEntryPostimages,
+      );
     },
     settleChanges<T>(
       changes: readonly SessionRowChange[],
-      install: (currentKeys: ReadonlySet<string>, invalidations: readonly SessionRowChange[]) => T,
+      install: (
+        currentKeys: ReadonlySet<string>,
+        invalidations: readonly SessionRowChange[],
+        release: () => void,
+      ) => T,
     ): T {
       const current = new Set(
         changes.flatMap((change) =>
@@ -176,9 +221,15 @@ export function retainSessionEntryWorkerPublication(params: {
             : [],
         ),
       );
-      const invalidations = retireSessionEntryMembership(params, [...owner.superseded]);
-      publication.settle(undefined, false);
-      return install(current, invalidations);
+      const invalidations = retireSupersededSessionFacts(params, owner, owner.generationUnchanged);
+      return install(current, invalidations, () => {
+        // Installing this receipt uses the native publisher, which also marks its own
+        // pending owner superseded. Those postimages are already authoritative.
+        for (const sessionKey of current) {
+          owner.superseded.delete(sessionKey);
+        }
+        publication.settle(undefined, false);
+      });
     },
     /** Metadata workers replay the same entry delta that the native producer committed. */
     settleMetadata(
@@ -201,13 +252,20 @@ export function retainSessionEntryWorkerPublication(params: {
         scope: "session-entry",
         facts: value.facts,
       }));
-      publication.settleChanges(changes, (currentKeys, invalidations) => {
+      publication.settleChanges(changes, (currentKeys, invalidations, release) => {
         const selected: SessionRowChange[] = [];
         for (const [index, record] of records.entries()) {
           if (record.receipt.source.identity !== params.databaseIdentity) {
             continue;
           }
           if (!currentKeys.has(record.sessionKey)) {
+            for (const read of preparedSharingReads.get(`${identityKey}\0${record.sessionKey}`) ??
+              []) {
+              publishRetainedSessionEntryPredicate(read, record.value.entry, true, {
+                preserveMatchingEntry: true,
+                fullEntry: record.value.fullEntry,
+              });
+            }
             continue;
           }
           const entry = record.value.entry;
@@ -219,6 +277,7 @@ export function retainSessionEntryWorkerPublication(params: {
               record.sessionKey,
               facts,
               entry,
+              record.value.fullEntry,
             );
           } else {
             publishRetainedSessionEntryChange(
@@ -230,6 +289,7 @@ export function retainSessionEntryWorkerPublication(params: {
                 : undefined,
               true,
               entry,
+              record.value.fullEntry,
             );
           }
           const change = { ...changes[index]!, facts };
@@ -252,6 +312,15 @@ export function retainSessionEntryWorkerPublication(params: {
         const identityRecords = records.filter(
           ({ receipt, sessionKey }) =>
             receipt.source.identity === params.databaseIdentity && currentKeys.has(sessionKey),
+        );
+        release();
+        publishSessionEntryMaintenanceAgeChanges(
+          params.databaseIdentity,
+          identityRecords.flatMap(({ sessionKey, value }) =>
+            value.previous
+              ? []
+              : [captureSessionEntryMaintenanceAgeChange({ sessionKey, entry: value.entry })],
+          ),
         );
         sessionChanges.emitBatch(
           [...selected, ...invalidations, ...transcriptChanges],
@@ -282,6 +351,7 @@ export function retainSessionEntryWorkerPublication(params: {
       transcriptChanges: readonly SessionRowChange[] = [],
     ) {
       if (!pending) {
+        conversation.settle(receipt?.conversationPublication, outcomeUnknown);
         sessionChanges.emitBatch([
           ...transcriptChanges,
           ...transcript.settle(Boolean(receipt), outcomeUnknown, receipt?.transcriptPublication),
@@ -296,6 +366,15 @@ export function retainSessionEntryWorkerPublication(params: {
       ) {
         replacement = undefined;
         unknown = true;
+      } else if (replacement) {
+        // Lost completion delivery does not erase this owner's acknowledged COMMIT facts.
+        unknown = false;
+      }
+      conversation.settle(unknown ? undefined : receipt?.conversationPublication, unknown);
+      if (unknown && sharingAuthorityChanged) {
+        for (const sessionKey of keys) {
+          markSessionSharingAuthorityUnknown(params.databaseIdentity, sessionKey);
+        }
       }
       const committedTranscriptChanges = [
         ...transcriptChanges,
@@ -305,6 +384,22 @@ export function retainSessionEntryWorkerPublication(params: {
         receipt?.kind === "session-transcript-initialized" ? receipt : undefined;
       const current = (sessionKey: string) => !owner.superseded.has(sessionKey);
       const known = !unknown && replacement !== undefined;
+      // Member-only successors cannot certify policy; matching old facts must retain newer metadata.
+      if (known || unknown) {
+        for (const sessionKey of owner.superseded) {
+          for (const read of preparedSharingReads.get(`${identityKey}\0${sessionKey}`) ?? []) {
+            publishRetainedSessionEntryPredicate(
+              read,
+              replacement?.current.get(sessionKey),
+              known,
+              {
+                preserveMatchingEntry: true,
+                fullEntry: replacement?.fullEntries?.get(sessionKey),
+              },
+            );
+          }
+        }
+      }
       // A later native metadata write cannot restore membership omitted by an alias move.
       const membershipInvalidated = new Set(
         replacement
@@ -322,13 +417,20 @@ export function retainSessionEntryWorkerPublication(params: {
           ...membershipInvalidated,
         ]),
       ];
-      const supersededMembership = [...owner.superseded].filter((key) => !changed.includes(key));
-      if (changed.length || supersededMembership.length) {
+      const generationUnchanged = new Set(
+        replacement?.generationUnchangedKeys ?? owner.generationUnchanged,
+      );
+      const superseded = retireSupersededSessionFacts(
+        params,
+        owner,
+        generationUnchanged,
+        [...owner.superseded].filter((sessionKey) => !changed.includes(sessionKey)),
+      );
+      if (changed.length || superseded.length) {
         invalidateSessionEntryCaches(params.databaseIdentity);
       }
       const changes: SessionRowChange[] = [];
       const sharingUnchanged = new Set(replacement?.sharingUnchangedKeys);
-      const generationUnchanged = new Set(replacement?.generationUnchangedKeys);
       const { prepared, currentMetadata, readCurrent } = prepareSessionEntryPublicationFacts({
         replacement,
         owner,
@@ -357,6 +459,7 @@ export function retainSessionEntryWorkerPublication(params: {
               read,
               entry,
               known && !replacement?.unavailableParticipantKeys?.includes(sessionKey),
+              { fullEntry: replacement?.fullEntries?.get(sessionKey) },
             );
           }
           recordAcquiringSessionEntry(
@@ -391,7 +494,12 @@ export function retainSessionEntryWorkerPublication(params: {
             return undefined;
           }
           if (replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)) {
-            return { kind: "removed" };
+            return {
+              kind: "removed",
+              ...(replacement.transcriptInventoryUnchanged
+                ? { transcriptInventoryUnchanged: true }
+                : {}),
+            };
           }
           const currentEntry = readCurrent(sessionKey);
           return currentEntry?.projection
@@ -471,7 +579,7 @@ export function retainSessionEntryWorkerPublication(params: {
         }
         changes.push(change);
       }
-      changes.push(...retireSessionEntryMembership(params, supersededMembership));
+      changes.push(...superseded);
       // Unknown successors also retire older facts; a late receipt cannot resolve their outcome.
       for (const sessionKey of changed) {
         recordCommittedSessionEntryPublication(params.databaseIdentity, sessionKey, owner);

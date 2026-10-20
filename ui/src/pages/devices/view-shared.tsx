@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { resolveMacFormFactor } from "../../lib/mac-form-factor.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -44,14 +45,13 @@ export function resolveConfigAgents(config: Record<string, unknown> | null): Con
 }
 
 export function resolveNodeTargets(
-  nodes: Array<Record<string, unknown>>,
+  nodes: readonly NodeListNode[],
   requiredCommands: string[],
 ): NodeTargetOption[] {
   const list: NodeTargetOption[] = [];
 
   for (const node of nodes) {
-    const commands = Array.isArray(node.commands) ? node.commands : [];
-    const advertised = new Set(commands.map(String));
+    const advertised = new Set(node.commands ?? []);
     const supports = requiredCommands.every((command) => advertised.has(command));
     if (!supports) {
       continue;
@@ -152,7 +152,7 @@ export function deviceIcon(source: DeviceIconSource): JSX.Element {
   }
 }
 
-/* Connectivity state lives in the row's renderSettingsStatus dot + text, so
+/* Connectivity state lives in the row's SettingsStatus dot + text, so
    the tile stays a purely decorative form-factor glyph. */
 export function DeviceTile(props: { icon: JSX.Element }) {
   return (

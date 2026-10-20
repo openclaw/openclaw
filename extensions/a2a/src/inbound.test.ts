@@ -1,277 +1,255 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { describe, expect, it, vi } from "vitest";
+import {
+  createPluginRuntimeMock,
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveA2aChannelAccount } from "./accounts.js";
+import { a2aChannelPlugin } from "./channel.js";
 import { dispatchA2aInbound } from "./inbound.js";
 import { A2aTaskStore } from "./task-store.js";
-import type { ResolvedA2aChannelAccount } from "./types.js";
+
+type InboundParams = Parameters<typeof dispatchA2aInbound>[0];
+type InboundTurn = Parameters<InboundParams["channelRuntime"]["inbound"]["dispatch"]>[0];
+function dispatched(turn: InboundTurn, queuedFinal = false, deferred = false) {
+  return {
+    admission: { kind: "dispatch" as const },
+    dispatched: true,
+    ctxPayload: turn.ctxPayload,
+    routeSessionKey: turn.route.sessionKey,
+    dispatchResult: {
+      ...createA2aDispatchResult(queuedFinal),
+      ...(deferred ? { deferredToActiveRun: "followup" as const } : {}),
+    },
+  };
+}
 
 function createA2aDispatchResult(queuedFinal = true) {
   return { queuedFinal, counts: { tool: 0, block: 0, final: Number(queuedFinal) } };
 }
 
+const stores: A2aTaskStore[] = [];
+afterEach(() => {
+  for (const store of stores.splice(0)) {
+    store.stop();
+  }
+  setActivePluginRegistry(createTestRegistry());
+});
+
+const registerChannel = () =>
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "a2a", plugin: a2aChannelPlugin, source: "test" }]),
+  );
+
 function createA2aInboundFixture(peerName = "hermes") {
   const runtime = createPluginRuntimeMock();
   const store = new A2aTaskStore();
+  stores.push(store);
   const task = store.create("ctx-inbound", peerName);
   store.start(task.id);
-  const account: ResolvedA2aChannelAccount = {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    config: { peers: { hermes: { token: "test-token" } } },
-    unresolvedPeers: [],
-    unresolvedOutboundPeers: [],
+  const account = resolveA2aChannelAccount({
+    cfg: { channels: { a2a: { peers: { hermes: { token: "test-token" } } } } },
+  });
+  const params = {
+    account,
+    config: {},
+    channelRuntime: runtime.channel,
+    buildContext: runtime.channel.inbound.buildContext,
+    store,
+    taskId: task.id,
+    contextId: task.contextId,
+    messageId: "incoming-message",
+    peerName,
+    text: "hello from an external agent",
   };
   return {
-    runtime,
     store,
     task,
-    params: {
-      account,
-      config: {},
-      channelRuntime: runtime.channel,
-      buildContext: runtime.channel.inbound.buildContext,
-      store,
-      taskId: task.id,
-      contextId: task.contextId,
-      messageId: "incoming-message",
-      peerName,
-      text: "hello from an external agent",
-    },
+    params,
+    dispatch: vi.mocked(runtime.channel.inbound.dispatch),
+    reply: vi.mocked(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher),
+    run: (overrides: Partial<InboundParams> = {}) =>
+      dispatchA2aInbound({ ...params, ...overrides }),
   };
 }
 
+let fixture: ReturnType<typeof createA2aInboundFixture>;
+beforeEach(() => {
+  fixture = createA2aInboundFixture();
+});
+
 describe("A2A channel inbound dispatch", () => {
   it("rejects peer slash commands before dispatch even with a command allowlist", async () => {
-    const fixture = createA2aInboundFixture();
-    try {
-      await dispatchA2aInbound({
-        ...fixture.params,
-        text: "  / custom-command",
-        config: { commands: { allowFrom: { "*": ["*"] } } },
-      });
+    await fixture.run({
+      text: "  / custom-command",
+      config: { commands: { allowFrom: { "*": ["*"] } } },
+    });
 
-      expect(fixture.store.get(fixture.task.id)?.status).toMatchObject({
-        state: "TASK_STATE_REJECTED",
-        message: { parts: [{ text: expect.stringContaining("only users") }] },
-      });
-      expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
-    } finally {
-      fixture.store.stop();
-    }
+    expect(fixture.task.status).toMatchObject({
+      state: "TASK_STATE_REJECTED",
+      message: { parts: [{ text: expect.stringContaining("only users") }] },
+    });
+    expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
   it("ignores non-final replies and supplemental notices before completing with the answer", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
-      expect(turn.ctxPayload).toMatchObject({
+    registerChannel();
+    fixture.reply.mockImplementation(async (turn) => {
+      expect(turn.ctx).toMatchObject({
         BodyForAgent: fixture.params.text,
         CommandAuthorized: false,
         CommandInterpretationSuppressed: true,
       });
-      await turn.delivery.deliver({ text: "preview" }, { kind: "block" });
-      await turn.delivery.deliver(
-        { text: "fallback notice", isFallbackNotice: true },
-        { kind: "final" },
+      const dispatcher = createReplyDispatcher(turn.dispatcherOptions);
+      dispatcher.sendBlockReply({ text: "preview" });
+      dispatcher.sendFinalReply({ text: "fallback notice", isFallbackNotice: true });
+      dispatcher.sendFinalReply({ text: "thinking level clamped", isStatusNotice: true });
+      dispatcher.sendFinalReply(
+        setReplyPayloadMetadata({ text: "Gateway restarting" }, { hostNotice: true }),
       );
-      expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_WORKING");
-      await turn.delivery.deliver({ text: "agent answer" }, { kind: "final" });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.route.sessionKey,
-        dispatchResult: createA2aDispatchResult(),
-      };
+      await dispatcher.waitForIdle();
+      expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
+      dispatcher.sendFinalReply({ text: "agent answer" });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
     });
 
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)).toEqual(
-      expect.objectContaining({
-        contextId: "ctx-inbound",
-        status: expect.objectContaining({ state: "TASK_STATE_COMPLETED" }),
-        artifacts: [expect.objectContaining({ parts: [{ text: "agent answer" }] })],
-      }),
-    );
-    fixture.store.stop();
+    await fixture.run();
+    expect(fixture.task).toMatchObject({
+      contextId: "ctx-inbound",
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "agent answer" }] }],
+    });
   });
 
-  it("records dispatch failures on their task", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(
-      new Error("provider unavailable"),
-    );
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status).toEqual(
-      expect.objectContaining({
+  it.each([false, true])(
+    "records a prompt-free task failure without sending an error message (queued: %s)",
+    async (queued) => {
+      registerChannel();
+      fixture.reply.mockImplementation(async (turn) => {
+        if (queued) {
+          return { ...createA2aDispatchResult(false), deferredToActiveRun: "followup" };
+        }
+        turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+        const dispatcher = createReplyDispatcher(turn.dispatcherOptions);
+        dispatcher.sendFinalReply({ text: "private prompt in provider error", isError: true });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+        return createA2aDispatchResult(false);
+      });
+      await fixture.run();
+      if (queued) {
+        expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
+        const turn = fixture.dispatch.mock.calls[0]![0];
+        turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+      }
+      expect(fixture.task.status).toMatchObject({
         state: "TASK_STATE_FAILED",
-        message: expect.objectContaining({ parts: [{ text: "provider unavailable" }] }),
-      }),
-    );
-    fixture.store.stop();
+        message: { parts: [{ text: "Agent run failed" }] },
+      });
+      expect(fixture.task.artifacts).toEqual([]);
+    },
+  );
+
+  it("matches interleaved same-context replies to their originating tasks", async () => {
+    const second = fixture.store.create(fixture.task.contextId, "hermes");
+    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
+    await fixture.run();
+    await fixture.run({ taskId: second.id, messageId: "second" });
+    const turns = fixture.dispatch.mock.calls.map(([turn]) => turn);
+    await turns[1]!.delivery.deliver({ text: "second reply" }, { kind: "final" });
+    await turns[0]!.delivery.deliver({ text: "first reply" }, { kind: "final" });
+    expect(fixture.task.artifacts[0]?.parts).toEqual([{ text: "first reply" }]);
+    expect(second.artifacts[0]?.parts).toEqual([{ text: "second reply" }]);
+  });
+
+  it("propagates dispatch failures to the HTTP task owner", async () => {
+    const failure = new Error("provider unavailable");
+    fixture.dispatch.mockRejectedValue(failure);
+    await expect(fixture.run()).rejects.toBe(failure);
   });
 
   it("isolates route sessions and replies when distinct peers reuse one context ID", async () => {
-    const fixture = createA2aInboundFixture();
     fixture.params.account.config.peers = {
       hermes: { token: "first-token" },
       crew: { token: "second-token" },
     };
     const crewTask = fixture.store.create(fixture.task.contextId, "crew");
     fixture.store.start(crewTask.id);
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
+    fixture.dispatch.mockImplementation(async (turn) => {
       await turn.delivery.deliver({ text: String(turn.ctxPayload.From) }, { kind: "final" });
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.route.sessionKey,
-        dispatchResult: createA2aDispatchResult(),
-      };
+      return dispatched(turn, true);
     });
     const config = { session: { dmScope: "per-channel-peer" as const } };
 
     await Promise.all([
-      dispatchA2aInbound({ ...fixture.params, config }),
-      dispatchA2aInbound({
-        ...fixture.params,
-        config,
-        taskId: crewTask.id,
-        messageId: "crew-message",
-        peerName: "crew",
-      }),
+      fixture.run({ config }),
+      fixture.run({ config, taskId: crewTask.id, messageId: "crew-message", peerName: "crew" }),
     ]);
 
-    const dispatches = vi.mocked(fixture.runtime.channel.inbound.dispatch).mock.calls;
+    const dispatches = fixture.dispatch.mock.calls;
     expect(dispatches[0]?.[0].route.sessionKey).not.toBe(dispatches[1]?.[0].route.sessionKey);
-    expect(fixture.store.get(fixture.task.id)?.artifacts[0]?.parts[0]).toEqual({
-      text: "a2a:hermes",
-    });
+    expect(fixture.task.artifacts[0]?.parts[0]).toEqual({ text: "a2a:hermes" });
     expect(fixture.store.get(crewTask.id)?.artifacts[0]?.parts[0]).toEqual({ text: "a2a:crew" });
-    fixture.store.stop();
   });
 
   it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {
-    const fixture = createA2aInboundFixture();
     const exactTask = fixture.store.create("ctx-exact", "hermes");
     fixture.store.start(exactTask.id);
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.route.sessionKey,
-      dispatchResult: createA2aDispatchResult(false),
-    }));
+    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn));
+    const bindings = [
+      ["a2a_context", "hermes:ctx-exact"],
+      ["a2a_restricted", "hermes"],
+      ["main", undefined],
+    ] as const;
     const config = {
-      agents: {
-        entries: {
-          main: {},
-          a2a_restricted: {},
-          a2a_context: {},
+      agents: { entries: { main: {}, a2a_restricted: {}, a2a_context: {} } },
+      bindings: bindings.map(([agentId, peerId]) => ({
+        type: "route" as const,
+        agentId,
+        match: {
+          channel: "a2a",
+          accountId: "default",
+          ...(peerId ? { peer: { kind: "direct" as const, id: peerId } } : {}),
         },
-      },
-      bindings: [
-        {
-          type: "route" as const,
-          agentId: "a2a_context",
-          match: {
-            channel: "a2a",
-            accountId: "default",
-            peer: { kind: "direct" as const, id: "hermes:ctx-exact" },
-          },
-        },
-        {
-          type: "route" as const,
-          agentId: "a2a_restricted",
-          match: {
-            channel: "a2a",
-            accountId: "default",
-            peer: { kind: "direct" as const, id: "hermes" },
-          },
-        },
-        {
-          type: "route" as const,
-          agentId: "main",
-          match: { channel: "a2a", accountId: "default" },
-        },
-      ],
+      })),
     };
 
-    try {
-      await dispatchA2aInbound({ ...fixture.params, config });
-      await dispatchA2aInbound({
-        ...fixture.params,
-        config,
-        taskId: exactTask.id,
-        contextId: exactTask.contextId,
-        messageId: "exact-message",
-      });
+    await fixture.run({ config });
+    await fixture.run({
+      config,
+      taskId: exactTask.id,
+      contextId: exactTask.contextId,
+      messageId: "exact-message",
+    });
 
-      const dispatches = vi.mocked(fixture.runtime.channel.inbound.dispatch).mock.calls;
-      expect(dispatches.map(([turn]) => turn.route.agentId)).toEqual([
-        "a2a_restricted",
-        "a2a_context",
-      ]);
-      expect(dispatches.map(([turn]) => turn.route.sessionKey)).toEqual([
-        "agent:a2a_restricted:a2a:default:direct:hermes:ctx-inbound",
-        "agent:a2a_context:a2a:default:direct:hermes:ctx-exact",
-      ]);
-    } finally {
-      fixture.store.stop();
-    }
+    const dispatches = fixture.dispatch.mock.calls;
+    expect(dispatches.map(([{ route }]) => [route.agentId, route.sessionKey])).toEqual([
+      ["a2a_restricted", "agent:a2a_restricted:a2a:default:direct:hermes:ctx-inbound"],
+      ["a2a_context", "agent:a2a_context:a2a:default:direct:hermes:ctx-exact"],
+    ]);
+    expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
+    expect(fixture.task.artifacts).toEqual([]);
   });
 
   it("rejects a sender missing from the configured peer allowlist before dispatch", async () => {
-    const fixture = createA2aInboundFixture("unknown-peer");
+    fixture = createA2aInboundFixture("unknown-peer");
 
-    await dispatchA2aInbound(fixture.params);
+    await fixture.run();
 
-    expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_REJECTED");
-    expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
-    fixture.store.stop();
+    expect(fixture.task.status.state).toBe("TASK_STATE_REJECTED");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects turns that the runtime declines instead of leaving tasks working forever", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockResolvedValue({
-      admission: { kind: "drop", reason: "policy-blocked" },
-      dispatched: false,
-    });
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_REJECTED");
-    fixture.store.stop();
-  });
-
-  it("fails turns accepted for dispatch when the runtime does not actually run them", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockResolvedValue({
-      admission: { kind: "dispatch" },
-      dispatched: false,
-    });
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_FAILED");
-    fixture.store.stop();
-  });
-
-  it("rejects observe-only runtime admissions because they cannot produce a reply", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
-      admission: { kind: "observeOnly", reason: "policy-observe-only" },
-      dispatched: true,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.route.sessionKey,
-      dispatchResult: createA2aDispatchResult(false),
-    }));
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_REJECTED");
-    fixture.store.stop();
+  it.each([
+    ["declines", { kind: "drop" as const, reason: "policy-blocked" }, "TASK_STATE_REJECTED"],
+    ["accepts without running", { kind: "dispatch" as const }, "TASK_STATE_FAILED"],
+  ])("settles tasks the runtime %s", async (_label, admission, state) => {
+    fixture.dispatch.mockResolvedValue({ admission, dispatched: false });
+    await fixture.run();
+    expect(fixture.task.status.state).toBe(state);
   });
 });

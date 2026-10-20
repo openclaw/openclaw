@@ -22,7 +22,7 @@ edits are rejected. Historical root-only receipts retain
 and the verifier independently rechecks the GitHub commit comparison, immutable
 parent artifact, child runs, and dispatch logs. Any other target change requires
 a fresh Code SHA validation. Pass `reuse_evidence=false` to force a fresh full
-run. Evidence reuse runs only from `main` or a canonical SHA-pinned
+run. Evidence reuse runs only from `main` or a standard SHA-pinned
 `release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
 other workflow refs run the selected lanes fresh.
 
@@ -44,7 +44,7 @@ Other-target and other-tooling runs do not consume the five-validation budget. T
 non-empty dispatch inputs/defaults, and candidate descriptor bytes must match;
 empty-string inputs equal absent inputs because GitHub omits them from
 `github.event.inputs`. The child's Tooling SHA must equal the current parent's
-Tooling SHA and remain a main ancestor. Missing or different tooling fails closed;
+Tooling SHA and remain a main ancestor. Missing or different tooling blocks dispatch;
 there is no inert-path exception. Dispatch logs explain each evaluated rejection,
 identify reused children, and summarize skipped runs and fresh dispatches. Plan
 sealing, collectors, and final verification repeat the tooling and receipt checks.
@@ -128,7 +128,7 @@ bare Docker layer uses a content-addressed GHCR cache; candidate-specific images
 remain immutable GitHub artifacts. Focused runs with an explicit published
 package spec keep the existing package path instead.
 
-Preparation also emits a canonical request digest and a seven-day
+Preparation also emits a digest of the normalized request and a seven-day
 `full-release-candidate-v2-<request-sha256>` evidence artifact. Its bounded
 manifest binds the exact target and Tooling SHAs, release and soak policy,
 effective survivor baselines and scenarios, preparation-plan digest, sorted
@@ -136,7 +136,7 @@ plugin package set, producer and publisher workflow/job/run identities, and
 package, registry, and image artifact identities and expiry timestamps. The
 execution plan seals that evidence. Before preparing a candidate, the umbrella may reuse
 the newest artifact with at least fourteen hours of remaining lifetime for the
-same canonical request and exact prepared npm tarball digest only after it revalidates the exact workflow run,
+same normalized request and exact prepared npm tarball digest only after it revalidates the exact workflow run,
 publisher job identity, archive digest, manifest, producer attempt and job, and
 live metadata for every package, registry, and image artifact.
 A proven absence creates a fresh candidate. Bounded lookup uncertainty and
@@ -192,7 +192,7 @@ selector require the matching normalized performance-child proof whenever that
 child is selected. `npm-beta-v1` records performance as deferred instead of
 dispatching a child whose result would still require terminal evidence.
 
-The verifier uploads the canonical manifest as
+The verifier uploads the release manifest as
 `full-release-validation-<run-id>-<run-attempt>`. Evidence tooling validates
 its artifact ID, digest, producer run, and attempt before downloading that exact
 artifact ID. It caps the downloaded ZIP, verifies its bytes against the REST

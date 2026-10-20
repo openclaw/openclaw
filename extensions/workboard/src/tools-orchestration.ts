@@ -261,7 +261,7 @@ export function createWorkboardOrchestrationTools(params: {
       name: "workboard_promote",
       label: "Workboard Promote",
       description:
-        "Promote a dependency-ready card into ready, optionally forcing past holds for operator recovery.",
+        "Promote a todo card into ready, optionally forcing past dependency or schedule holds. Unblock blocked cards first.",
       parameters: strictObject({
         id: cardIdField(),
         token: ScopedClaimTokenField,

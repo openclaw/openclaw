@@ -1,6 +1,7 @@
 import "../infra/sealed-runtime-bootstrap.js";
 import { registerSealedRuntimeProcessEntrypoint } from "../infra/runtime-process-url.js";
 import {
+  WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH,
   WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH,
   WORKER_BUNDLE_FILE_TOOL_READ_PATH,
   WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
@@ -10,11 +11,13 @@ import {
 } from "../shared/worker-bundle-hash.js";
 
 for (const [name, file] of [
+  ["clientCredentials", WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH],
   ["codeModeNode", "code-mode-node.worker.mjs"],
   ["stateRead", "openclaw-state-read.worker.mjs"],
   ["workerNativeLifecycle", "worker-native-lifecycle.worker.mjs"],
   ["fileToolPlanning", WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH],
   ["fileToolRead", WORKER_BUNDLE_FILE_TOOL_READ_PATH],
+  ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker.mjs"],
   ["githubExec", WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH],
   ["imageProcessor", WORKER_BUNDLE_IMAGE_PROCESSOR_PATH],
   ["serviceChildRelay", "service-child-relay.mjs"],

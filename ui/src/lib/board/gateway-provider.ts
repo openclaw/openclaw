@@ -67,7 +67,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.snapshot$ = this.snapshotSignal;
     this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -110,7 +110,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.snapshotLoaded = false;
     this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -234,7 +234,7 @@ export class GatewayBoardProvider implements BoardProvider {
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
     if (this.disposed || !this.connected) {
-      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+      return { status: "stale" };
     }
     const widget = this.snapshotSignal.value.widgets.find(
       (candidate) =>
@@ -243,7 +243,7 @@ export class GatewayBoardProvider implements BoardProvider {
         candidate.contentKind === "mcp-app",
     );
     if (!widget) {
-      return { status: "stale", error: "Dashboard MCP App widget unavailable" };
+      return { status: "stale" };
     }
     const client = this.client;
     const clientGeneration = this.clientGeneration;
@@ -264,12 +264,13 @@ export class GatewayBoardProvider implements BoardProvider {
       client !== this.client ||
       clientGeneration !== this.clientGeneration
     ) {
-      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+      return { status: "stale" };
     }
     return result;
   }
 
-  private subscribe(client: BoardGatewayClient): void {
+  private attachGatewayEvents(client: BoardGatewayClient): void {
+    // Gateway event subscriptions return teardown; this is not a native DOM listener.
     this.unsubscribe = client.addEventListener((event) => {
       if (this.disposed || client !== this.client) {
         return;
@@ -404,8 +405,8 @@ export class GatewayBoardProvider implements BoardProvider {
         }
         if (
           error instanceof GatewayProtocolRequestError &&
-          error.gatewayCode === "UNAVAILABLE" &&
-          !error.retryable
+          (error.gatewayCode === "FORBIDDEN" ||
+            (error.gatewayCode === "UNAVAILABLE" && !error.retryable))
         ) {
           // A definitive rejection consumes this refresh. Only a newer event,
           // connection generation, or explicit refresh can request another one.

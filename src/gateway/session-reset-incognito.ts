@@ -1,14 +1,10 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import {
-  captureIncognitoSessionOperation,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
 import { unavailableSessionRequest } from "./session-request-error.js";
 
 /** The caller retains the reset lifecycle fence through deletion and its notifications. */
@@ -25,19 +21,16 @@ type IncognitoResetParams = {
 export async function deleteIncognitoSessionForReset(
   params: IncognitoResetParams,
 ): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
-  if (getSessionActorStorageBinding({ ...params, sessionKey: params.target.canonicalKey })) {
-    return deleteIncognitoSessionForResetInScope(params);
-  }
-  const binding = captureIncognitoSessionOperation({
-    ...params,
-    sessionKey: params.target.canonicalKey,
-  });
-  const run = () => deleteIncognitoSessionForResetInScope(params);
-  return binding
-    ? binding.actor.sessions.withSharedState(() =>
-        withIncognitoSessionBinding({ ...binding, admissionSignal: undefined }, run),
-      )
-    : run();
+  const assertCurrent = params.commitGuard;
+  const deleted = await withSessionActorStorage(
+    { ...params, sessionKey: params.target.canonicalKey },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    () => deleteIncognitoSessionForResetInScope(params),
+  );
+  return deleted ?? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
 }
 
 async function deleteIncognitoSessionForResetInScope(
@@ -55,7 +48,7 @@ async function deleteIncognitoSessionForResetInScope(
       try {
         await withTimeout(
           terminalDrain.drained,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
           "agent terminal lifecycle drain",
         );
       } catch {
@@ -65,19 +58,13 @@ async function deleteIncognitoSessionForResetInScope(
       }
     }
     await params.beforeDelete();
-    const memory = getSessionActorStorageBinding({
-      ...params,
-      sessionKey: params.target.canonicalKey,
-    });
     const deleted = await deleteSessionEntryLifecycle({
       commitGuard: params.commitGuard,
       agentId: params.agentId,
       archiveTranscript: false,
       deleteDeliveryArtifacts: true,
       deleteTranscriptWithoutArchive: true,
-      expectedEntry: memory ? undefined : params.entry,
       expectedSessionId: params.entry.sessionId,
-      expectedUpdatedAt: memory ? undefined : params.entry.updatedAt,
       storePath: params.storePath,
       target: params.target,
     });

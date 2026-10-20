@@ -22,7 +22,6 @@ import type { FaceTimeConfig } from "./config.js";
 import { createFaceTimeConsultController } from "./talk-consult-controller.js";
 import {
   agentIdFromSessionKey,
-  assertAuthenticatedSenderConsultSupport,
   buildRealtimeInstructions,
   FACETIME_END_CALL_TOOL,
   INPUT_AUDIO_STATUS_INTERVAL_MS,
@@ -34,7 +33,6 @@ import {
 import { createFaceTimeInitialGreeting } from "./talk-initial-greeting.js";
 
 export type FaceTimeTalkDriver = {
-  readonly callUUID: string;
   readonly recentTalkEvents: readonly TalkEvent[];
   readyForAudio(): Promise<void>;
   processOutputSuppressed(): boolean;
@@ -60,9 +58,6 @@ export async function startFaceTimeTalkDriver(params: {
   if (params.signal?.aborted) {
     throw new Error("FaceTime talk startup aborted");
   }
-  // Fail closed before the call is answered; older hosts silently ignore the
-  // owner fields and would otherwise create a privilege-downgrade footgun.
-  assertAuthenticatedSenderConsultSupport();
   const consultAgentId = agentIdFromSessionKey(
     params.config.realtime.sessionKey,
     params.fullConfig,
@@ -631,7 +626,6 @@ export async function startFaceTimeTalkDriver(params: {
     throw error;
   }
   return {
-    callUUID: params.callUUID,
     get recentTalkEvents() {
       return talk.recentEvents;
     },

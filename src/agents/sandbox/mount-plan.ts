@@ -286,3 +286,71 @@ export async function sandboxMountPlanMatchesContainer(params: {
     })
   );
 }
+
+/** Read saved workspace bytes only when the existing runtime exposes that same bind. */
+export async function sandboxContainerShowsWorkspacePaths(params: {
+  engine: SandboxContainerEngine;
+  containerName: string;
+  workspaceDir: string;
+  containerRoot: string;
+  targets: readonly string[];
+  assertCurrent: () => void;
+}): Promise<boolean> {
+  params.assertCurrent();
+  const identity = await execContainer(
+    params.engine,
+    ["inspect", "-f", "{{.Id}} {{.State.Running}} {{.State.Paused}}", params.containerName],
+    { signal: AbortSignal.timeout(5_000) },
+  );
+  params.assertCurrent();
+  const [id, running, paused] = identity.stdout.trim().split(/\s+/u);
+  if (
+    !id ||
+    !/^[a-f0-9]{64}$/u.test(id) ||
+    !["true", "false"].includes(running ?? "") ||
+    paused !== "false"
+  ) {
+    return false;
+  }
+  const selected = { ...params, containerName: id };
+  const namespace = await resolveDockerSourceNamespace(params.engine);
+  params.assertCurrent();
+  const planned = namespace
+    ? translateSandboxMountSources({
+        source: params.workspaceDir,
+        containerPath: params.containerRoot,
+        allowedRoots: [params.workspaceDir],
+        mounts: namespace,
+        readOnly: true,
+        shadowedTargets: [],
+      })
+    : [
+        {
+          hostPath: params.workspaceDir,
+          containerPath: normalizeMountContainerPath(params.containerRoot),
+        },
+      ];
+  const actual = await inspectSandboxMounts(selected);
+  params.assertCurrent();
+  // Stopped containers retain inspectable bind/volume metadata. Runtime-only
+  // mounts no longer exist; a running namespace additionally needs mountinfo.
+  const masks = running === "true" ? await resolveSandboxContainerOnlyMounts(selected) : [];
+  params.assertCurrent();
+  return params.targets.every((input) => {
+    const target = normalizeMountContainerPath(input);
+    const covering = actual
+      .filter((mount) => isPathInsideContainerRoot(mount.destination, target))
+      .toSorted((a, b) => b.destination.length - a.destination.length)[0];
+    const expected = planned.find((mount) => mount.containerPath === covering?.destination);
+    return (
+      covering?.type === "bind" &&
+      expected !== undefined &&
+      getSandboxHostPathPolicyKey(covering.source) ===
+        getSandboxHostPathPolicyKey(expected.hostPath) &&
+      !masks.some(
+        (mask) =>
+          isPathInsideContainerRoot(mask, target) && mask.length >= covering.destination.length,
+      )
+    );
+  });
+}

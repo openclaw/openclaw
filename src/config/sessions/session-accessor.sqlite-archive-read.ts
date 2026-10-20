@@ -6,6 +6,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
@@ -13,9 +14,14 @@ import {
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import {
+  isAssistantResultEventForRun,
   isVisibleAssistantResultEventForRun,
   isVisibleTranscriptRecord,
 } from "../../sessions/transcript-visible-record.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../../shared/chat-message-content.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -55,7 +61,8 @@ export function listTranscriptArchivesFromDatabase(
   if (!tableExists(db, "session_transcript_archives")) {
     return [];
   }
-  let query = getNodeSqliteKysely<ArchiveDatabase>(db)
+  const selected = sqliteStringSet(selectors);
+  const query = getNodeSqliteKysely<ArchiveDatabase>(db)
     .selectFrom("session_transcript_archives")
     .select([
       "archive_name as archiveName",
@@ -64,15 +71,17 @@ export function listTranscriptArchivesFromDatabase(
       "created_at as createdAt",
     ])
     .orderBy("created_at")
-    .orderBy("session_id");
-  query = query.where((expression) =>
-    expression.or([
-      ...(selectors.length > 0
-        ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
-        : []),
-      ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
-    ]),
-  );
+    .orderBy("session_id")
+    .where((expression) =>
+      expression.or([
+        ...(selectors.length > 0
+          ? [expression("session_id", "in", selected), expression("session_key", "in", selected)]
+          : []),
+        ...(archiveNames.length > 0
+          ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
+          : []),
+      ]),
+    );
   const rows = executeSqliteQuerySync(db, query).rows;
   return rows
     .map((row) =>
@@ -81,7 +90,7 @@ export function listTranscriptArchivesFromDatabase(
     .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId);
 }
 
-export function hasTranscriptArchiveInDatabase(
+function hasTranscriptArchiveInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "agentId">,
   target: Pick<TranscriptArchiveReadPlan, "logicalAgentId" | "sessionId" | "sessionKey">,
 ): boolean {
@@ -175,17 +184,30 @@ export async function readTranscriptArchiveFinalInWorker(
       if (hashSessionArchiveBytes(row.archive_blob) !== row.archive_sha256) {
         throw new Error("Archived transcript bytes do not match their registered hash.");
       }
+      let hasTerminalResult = false;
       await scanArchivedTranscript(
         row.archive_blob,
         row.encoding === "zstd",
         archive.sessionId,
         (event) => {
+          if (!isAssistantResultEventForRun(event, plan.runId)) {
+            return;
+          }
+          hasTerminalResult = true;
           if (isVisibleAssistantResultEventForRun(event, plan.runId)) {
             result.event = event;
+          } else if (isRecord(event) && isSilentAssistantTranscriptMessage(event.message)) {
+            const previousMessage = isRecord(result.event) ? result.event.message : undefined;
+            if (
+              !(isRecord(previousMessage) && previousMessage.display === true) &&
+              !readTerminalSourceReplyDeliveryMirror(previousMessage)
+            ) {
+              result.event = undefined;
+            }
           }
         },
       );
-      if (result.event !== undefined) {
+      if (hasTerminalResult) {
         break;
       }
     }

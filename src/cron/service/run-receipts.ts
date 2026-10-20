@@ -1,3 +1,4 @@
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   markCronJobActive,
@@ -7,6 +8,7 @@ import {
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
 import type { CronRunReceiptHandle, CronRunReceiptStatus } from "../store/run-receipt.types.js";
 import type { CronAgentScope } from "../types-shared.js";
@@ -38,7 +40,7 @@ export function markServiceCronJobActive(
     context.admission.assertCurrent();
     if (
       resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
-      state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
+      state.deps.isAgentAvailable?.(runReceipt.agentId, {
         deletionBlocked: false,
       }) === false
     ) {
@@ -53,8 +55,12 @@ export function markServiceCronJobActive(
       return false;
     }
   };
+  const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const marker = markCronJobActive(job.id, {
     agentId: runReceipt.agentId,
+    sessionKey: sessionKey
+      ? toAgentStoreSessionKey({ agentId: runReceipt.agentId, requestKey: sessionKey })
+      : undefined,
     stateIdentityKey: context.admission.identity.key,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
     isMessageActionAuthorityCurrent: resolveCronJobMessageToolAuthorityInputs(job)

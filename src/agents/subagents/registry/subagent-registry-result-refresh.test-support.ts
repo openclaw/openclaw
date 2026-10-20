@@ -59,6 +59,10 @@ export function registerSubagentResultRefreshCases(params: {
             endedAt: Date.now(),
             outcome: { status: "ok" as const },
           },
+          completion: {
+            required: true,
+            terminalReply: { disposition: "visible" as const, text: "replacement final reply" },
+          },
         };
         return { value: undefined, postimages: new Map([[entry.runId, next]]) };
       });

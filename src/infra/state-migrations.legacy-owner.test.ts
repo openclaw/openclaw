@@ -96,7 +96,7 @@ describe("legacy owner advisories", () => {
       const refused =
         requiredFailure || (standalone && (selection === "none" || selection === "main"));
       const root = fs.realpathSync(tempDirs.make("openclaw-legacy-owner-"));
-      const stateDir = path.join(root, "state");
+      const stateDir = path.join(root, standalone ? ".openclaw" : "state");
       fs.mkdirSync(stateDir);
       const configPath = path.join(root, "openclaw.json");
       const cfg: OpenClawConfig = {
@@ -114,6 +114,7 @@ describe("legacy owner advisories", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_HOME: root,
+        OPENCLAW_PROFILE: undefined,
         OPENCLAW_AGENT_DIR: selection === "override" ? targetDir : undefined,
         PI_CODING_AGENT_DIR: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -185,13 +186,7 @@ describe("legacy owner advisories", () => {
           snapshot,
           env,
         });
-        expect(plan.warnings).toEqual(
-          expect.arrayContaining(
-            standalone
-              ? [expect.stringContaining("outside the copied state snapshot")]
-              : receipt.warnings,
-          ),
-        );
+        expect(plan.warnings).toEqual(expect.arrayContaining(receipt.warnings));
         expect(
           plan.steps.find((step) => step.id === "migration-detection")?.refusal,
         ).toBeUndefined();

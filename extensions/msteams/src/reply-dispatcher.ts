@@ -19,7 +19,6 @@ import {
   type OpenClawConfig,
   type MSTeamsReplyStyle,
   type ReplyPayload,
-  type RuntimeEnv,
 } from "../runtime-api.js";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
@@ -32,16 +31,13 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import {
-  buildConversationReference,
   type MSTeamsRenderedMessage,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 
@@ -50,7 +46,6 @@ export function createMSTeamsReplyDispatcher(params: {
   agentId: string;
   sessionKey: string;
   accountId?: string;
-  runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   app: MSTeamsApp;
   conversationRef: StoredConversationReference;
@@ -73,37 +68,17 @@ export function createMSTeamsReplyDispatcher(params: {
   );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
-  // Bot Framework turn proxies expire after ~30s idle; keep them alive through tool calls.
   const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 
   // Teams tool chains can exceed the shared typing callback's 60s default (#59731).
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
   const sendTypingIndicator = async () => {
-    // Stream previews and Stop suppress typing; between segments, typing keeps
-    // the Bot Framework turn context alive for later tool replies.
+    // Stream previews and Stop suppress typing.
     if (!isTypingSupported || streamController.isStreamActive() || streamController.wasCanceled()) {
       return;
     }
-    await withRevokedProxyFallback({
-      run: async () => {
-        await params.context.sendActivity({ type: "typing" });
-      },
-      onRevoked: async () => {
-        await sendMSTeamsActivityWithReference(
-          params.app,
-          buildConversationReference(params.conversationRef),
-          { type: "typing" },
-          {
-            accountId: params.accountId,
-            serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
-          },
-        );
-      },
-      onRevokedLog: () => {
-        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-      },
-    });
+    await params.context.sendActivity({ type: "typing" });
   };
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -408,9 +383,6 @@ export function createMSTeamsReplyDispatcher(params: {
       const errMsg = formatUnknownError(err);
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
-      params.runtime.error?.(
-        `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
-      );
       params.log.error("reply failed", {
         kind: info.kind,
         error: errMsg,

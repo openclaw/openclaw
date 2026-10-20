@@ -42,6 +42,16 @@ describe("google meet config", () => {
     );
   });
 
+  it.each([
+    [{}, "pcm16-24khz"],
+    [{ audioInputCommand: ["capture"] }, "g711-ulaw-8khz"],
+    [{ audioInputCommand: [] }, "pcm16-24khz"],
+    [{ audioInputCommand: ["capture"], audioFormat: "pcm" }, "pcm16-24khz"],
+    [{ audioFormat: "mu-law" }, "g711-ulaw-8khz"],
+  ])("preserves Google audio format defaults and aliases: %j", (chrome, expected) => {
+    expect(resolveGoogleMeetConfig({ chrome }).chrome.audioFormat).toBe(expected);
+  });
+
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
     const config = resolveGoogleMeetConfigFromTestEnv({
       OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",

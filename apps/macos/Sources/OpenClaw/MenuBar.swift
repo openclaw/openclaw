@@ -101,13 +101,13 @@ struct OpenClawApp: App {
                 Button("New Gateway Window…") {
                     AppNavigationActions.newGatewayWindow()
                 }
-                .keyboardShortcut("n", modifiers: .command)
+                .keyboardShortcut("n", modifiers: [.command, .shift])
 
                 if !self.state.nativeExperienceEnabled {
                     Button("New Thread") {
                         DashboardManager.shared.dispatchNativeCommand(.newSession)
                     }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .keyboardShortcut("n", modifiers: .command)
                 }
             }
             CommandGroup(replacing: .appSettings) {
@@ -127,6 +127,13 @@ struct OpenClawApp: App {
             }
             SidebarCommands()
             CommandMenu("Navigate") {
+                Button(String(localized: "Reload")) {
+                    DashboardManager.shared.reloadDashboard()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+
+                Divider()
+
                 if self.state.nativeExperienceEnabled {
                     Button("Command Palette…") {
                         WebChatManager.shared.showCommandPalette()
@@ -177,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationDeadlineTask: Task<Void, Never>?
     private var terminationCleanupFinished = false
     private var profileInstanceLock: AppInstanceLock?
-    private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
+    private let credentialLogger = Logger(subsystem: "ai.openclaw", category: "credentials")
     private static func cleanUpProcesses() async {
         let execHostCleanup = ExecApprovalsPromptServer.shared.stop()
         let macControlCleanup = MacControlServer.shared.stop()
@@ -194,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = await (tunnelCleanup, gatewayCleanup, profileCleanup)
         await execHostCleanup?.value
         await macControlCleanup?.value
+        DeviceCredentialAccess.close()
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
@@ -250,7 +258,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func processExitCode(for ownership: AppInstanceLockAcquisition) -> Int32? {
-        if case .busy = ownership { return 0 }
+        if case .busy = ownership {
+            return 0
+        }
         return nil
     }
 
@@ -309,6 +319,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        do {
+            let root = DeviceIdentityStore.stateDirectoryURL
+            let executionRoot = OpenClawPaths.stateDirURL
+            try DeviceCredentialAccess.prepareAppRoots(identityRoot: root, executionRoot: executionRoot)
+        } catch {
+            DeviceCredentialAccess.close()
+            self.showCredentialStartupFailure()
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard await MacControlServer.shared.startAndWait() else {
+                DeviceCredentialAccess.close()
+                self?.showCredentialStartupFailure()
+                return
+            }
+            self?.finishLaunchingWithCredentials(launchPlan: launchPlan)
+        }
+    }
+
+    private func showCredentialStartupFailure() {
+        let message = "Quit OpenClaw, run openclaw doctor --fix with the matching CLI, then reopen OpenClaw. " +
+            "If you restored a backup, restore its matching client credentials too."
+        self.credentialLogger
+            .error("Client credentials unavailable. Run openclaw doctor --fix before reopening the app.")
+        if AppLaunchRuntimePlan.current.allowsActivation {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw client credentials need recovery"
+            alert.informativeText = message
+            AppActivation.shared.presentAlert(alert)
+        } else {
+            fputs("OpenClaw client credentials need recovery. \(message)\n", stderr)
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func finishLaunchingWithCredentials(launchPlan: AppLaunchRuntimePlan) {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
@@ -321,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if launchPlan.allowsInteractiveServices {
             BundledRuntime.refreshOwnedMacCLILink(
                 allowsPersistentIntegration: ApplicationRelocator.currentBundleAllowsPersistentIntegration())
-            let controller = StatusMenuController(state: state, updater: self.updaterController)
+            let controller = StatusMenuController(state: state, updater: updaterController)
             controller.start()
             self.statusMenuController = controller
         }
@@ -348,7 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Attachment must settle before deciding whether this app needs to install a CLI.
             if !PostUpdateController.shared.startIfNeeded() {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded()
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -360,7 +407,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NodePairingApprovalPrompter.shared.start()
             DevicePairingApprovalPrompter.shared.start()
             ExecApprovalsPromptServer.shared.start()
-            MacControlServer.shared.start()
             ExecApprovalsGatewayPrompter.shared.start()
             CookieSyncManager.shared.start(state: state)
             VoiceWakeGlobalSettingsSync.shared.start()
@@ -389,11 +435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
-            self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             AppNavigationActions.openChat()
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
-            self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             AppNavigationActions.openDashboard(userGesture: false)
         }
     }
@@ -464,6 +508,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
+        if await OnboardingController.shared.startFirstRunIfFresh() {
+            return
+        }
         let connectionMode = AppStateStore.shared.connectionMode
         let onboardingSeen = AppStateStore.shared.onboardingSeen
         if connectionMode != .unconfigured, onboardingSeen {

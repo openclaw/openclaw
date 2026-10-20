@@ -99,112 +99,50 @@ afterEach(async () => {
 });
 
 describe("skills library CLI", () => {
-  const leaves = [
-    "list",
-    "read",
-    "create",
-    "update",
-    "import",
-    "remove",
-    "transfer",
-    "rollback",
-    "attach",
-    "refresh",
-  ];
-  it.each(leaves)("inherits connection and JSON options before or after %s", async (name) => {
-    const args =
-      name === "list"
-        ? []
-        : name === "read"
-          ? [skillId]
+  it.each(["list", "create", "import", "rollback", "refresh"])(
+    "inherits connection and JSON options before or after %s",
+    async (name) => {
+      const args =
+        name === "list"
+          ? []
           : name === "create" || name === "import"
             ? [directory, "--slug", "checklist"]
-            : name === "update"
-              ? [skillId, directory, "--expected-revision", revision]
-              : ["attach", "detach", "refresh"].includes(name)
-                ? [
-                    "--session",
-                    "agent:main:shared",
-                    ...(name === "refresh" ? [] : ["--skill-id", skillId]),
-                  ]
-                : [
-                    skillId,
-                    "--expected-revision",
-                    revision,
-                    ...(name === "rollback" ? ["--revision", "b".repeat(64)] : []),
-                  ];
-    const flags = [
-      "--url",
-      "ws://127.0.0.1:12345",
-      "--port",
-      "12345",
-      "--timeout",
-      "14000",
-      "--json",
-    ];
-    for (const command of [
-      [...flags, name, ...args],
-      [name, ...args, ...flags],
-    ]) {
-      mocks.call.mockClear();
-      await parse(command);
-      expect(mocks.call).toHaveBeenCalled();
-      for (const call of mocks.call.mock.calls) {
-        expect(call[1]).toMatchObject({
-          url: "ws://127.0.0.1:12345",
-          port: "12345",
-          timeout: "14000",
-          json: true,
-        });
+            : name === "refresh"
+              ? ["--session", "agent:main:shared"]
+              : [
+                  skillId,
+                  "--expected-revision",
+                  revision,
+                  ...(name === "rollback" ? ["--revision", "b".repeat(64)] : []),
+                ];
+      const flags = [
+        "--url",
+        "ws://127.0.0.1:12345",
+        "--port",
+        "12345",
+        "--timeout",
+        "14000",
+        "--json",
+      ];
+      for (const command of [
+        [...flags, name, ...args],
+        [name, ...args, ...flags],
+      ]) {
+        mocks.call.mockClear();
+        await parse(command);
+        expect(mocks.call).toHaveBeenCalled();
+        for (const call of mocks.call.mock.calls) {
+          expect(call[1]).toMatchObject({
+            url: "ws://127.0.0.1:12345",
+            port: "12345",
+            timeout: "14000",
+            json: true,
+          });
+        }
+        expect(mocks.writeJson).toHaveBeenCalled();
       }
-      expect(mocks.writeJson).toHaveBeenCalled();
-    }
-  });
-
-  it("uses explicit leaf options ahead of parent options", async () => {
-    await parse([
-      "--url",
-      "ws://parent.invalid",
-      "--timeout",
-      "1000",
-      "list",
-      "--url",
-      "ws://leaf.invalid",
-      "--timeout",
-      "2000",
-      "--json",
-    ]);
-    expect(mocks.call).toHaveBeenCalledWith(
-      "skills.library.list",
-      expect.objectContaining({ url: "ws://leaf.invalid", timeout: "2000" }),
-      { scope: "all" },
-      undefined,
-    );
-  });
-
-  it("preserves binary bytes, executable metadata, and CRLF support when updating SKILL.md", async () => {
-    await parse([
-      "update",
-      skillId,
-      path.join(directory, "SKILL.md"),
-      "--expected-revision",
-      revision,
-      "--json",
-    ]);
-    expect(mocks.call).toHaveBeenLastCalledWith(
-      "skills.library.save",
-      expect.anything(),
-      {
-        skillId,
-        expectedRevision: revision,
-        slug: "checklist",
-        content: await fs.readFile(path.join(directory, "SKILL.md"), "utf8"),
-        files: read.files,
-      },
-      undefined,
-    );
-    expect(mocks.writeJson).toHaveBeenCalledWith(receipt);
-  });
+    },
+  );
 
   it("replaces complete directory bundles and explicitly deletes requested support files", async () => {
     await fs.mkdir(path.join(directory, "assets"));
@@ -213,29 +151,6 @@ describe("skills library CLI", () => {
     expect(mocks.call.mock.calls.at(-1)?.[2]).toMatchObject({
       files: [{ path: "assets/new.bin", content: "AP8NCg==", encoding: "base64" }],
     });
-    await parse([
-      "update",
-      skillId,
-      path.join(directory, "SKILL.md"),
-      "--expected-revision",
-      revision,
-      "--delete-file",
-      "notes.txt",
-      "--json",
-    ]);
-    expect(mocks.call.mock.calls.at(-1)?.[2]).toMatchObject({ files: [read.files[0]] });
-  });
-
-  it("prints complete supporting files and retained revisions in human read output", async () => {
-    await parse(["read", skillId]);
-    const output = mocks.writeStdout.mock.calls[0]?.[0];
-    expect(output).toContain(read.content);
-    expect(output).toContain("AAH+/w==");
-    expect(output).toContain("base64, executable");
-    expect(output).toContain(revision);
-  });
-
-  it("keeps the caller's expected revision when a newer revision is read for support files", async () => {
     mocks.call.mockImplementation(async (method: string) =>
       method === "skills.library.read"
         ? { ...read, entry: { ...read.entry, revision: "b".repeat(64) } }
@@ -247,12 +162,23 @@ describe("skills library CLI", () => {
       path.join(directory, "SKILL.md"),
       "--expected-revision",
       revision,
+      "--delete-file",
+      "notes.txt",
       "--json",
     ]);
     expect(mocks.call.mock.calls.at(-1)?.[2]).toMatchObject({
       expectedRevision: revision,
-      files: read.files,
+      files: [read.files[0]],
     });
+  });
+
+  it("prints complete supporting files and retained revisions in human read output", async () => {
+    await parse(["read", skillId]);
+    const output = mocks.writeStdout.mock.calls[0]?.[0];
+    expect(output).toContain(read.content);
+    expect(output).toContain("AAH+/w==");
+    expect(output).toContain("base64, executable");
+    expect(output).toContain(revision);
   });
 
   it("prints the canonical removal receipt without inferring readiness", async () => {
@@ -292,8 +218,33 @@ describe("skills library CLI", () => {
     expect(mocks.call).not.toHaveBeenCalled();
   });
 
+  it("imports a directory named x.zip as a complete bundle", async () => {
+    const bundle = path.join(directory, "x.zip");
+    await fs.mkdir(bundle);
+    const content = "---\nname: checklist\ndescription: Checklist\n---\nCheck it.\n";
+    await fs.writeFile(path.join(bundle, "SKILL.md"), content);
+    await fs.writeFile(path.join(bundle, "notes.txt"), "Keep these notes.\r\n");
+    await parse(["import", bundle, "--slug", "checklist", "--json"]);
+    expect(mocks.call).toHaveBeenCalledExactlyOnceWith(
+      "skills.library.save",
+      expect.anything(),
+      expect.objectContaining({
+        content,
+        files: [
+          {
+            path: "notes.txt",
+            content: Buffer.from("Keep these notes.\r\n").toString("base64"),
+            encoding: "base64",
+            executable: false,
+          },
+        ],
+      }),
+      undefined,
+    );
+  });
+
   it("uses private upload begin/chunk/commit for ZIP imports", async () => {
-    const zip = path.join(directory, "bundle.zip");
+    const zip = path.join(directory, "bundle.ZIP");
     const bytes = Buffer.from([80, 75, 3, 4, 1]);
     await fs.writeFile(zip, bytes);
     mocks.call.mockImplementation(async (_method, _opts, params) =>

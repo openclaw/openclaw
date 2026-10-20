@@ -1,28 +1,41 @@
-import { expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(clearRuntimeConfigSnapshot);
 
 it.each(["active", "failed"] as const)(
-  "a %s reclaim whose canonical cancellation rejects still retires old pending work",
+  "a %s reclaim whose canonical cancellation rejects preserves its mutation-owned effect",
   async (state) => {
-    const scope = `/fixture/cancel-failure-${state}.sqlite`;
+    setRuntimeConfigSnapshot({});
+    const scope = path.join(tempDirs.make(`cancel-failure-${state}-`), "sessions.sqlite");
     const sessionKey = "agent:main:cancel-failure";
     const sessionId = "cancel-failure-session";
     const entry = {
       sessionId,
       updatedAt: 1,
-      worktree: { id: "cancel-failure-worktree" },
+      worktree: {
+        id: "cancel-failure-worktree",
+        branch: "cancel-failure",
+        repoRoot: "/fixture/workspace",
+      },
     };
-    const target = {
-      storePath: scope,
-      canonicalKey: sessionKey,
-      storeKeys: [sessionKey],
-      agentId: "main",
-      store: { [sessionKey]: entry },
-    };
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: scope }, entry);
     const cancellationFailure = new Error("canonical terminal drain rejected");
     const cancel = vi.fn(async () => {
       throw cancellationFailure;
@@ -33,27 +46,31 @@ it.each(["active", "failed"] as const)(
         getAsync: async () => ({ state, sessionId }) as never,
         waitForTurnClaimRelease: vi.fn(),
       },
-      loadSessionRuntime: async () =>
-        ({
-          managedWorktrees: {
-            findLiveByOwner: async () => ({
-              id: "cancel-failure-worktree",
-              ownerId: sessionKey,
-              path: "/fixture/workspace",
-            }),
-          },
-          resolveGatewaySessionStoreTargetWithStore: () => target,
-          resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-        }) as never,
+      loadSessionRuntime: async () => ({
+        managedWorktrees: {
+          findLiveByOwner: async () => ({
+            id: "cancel-failure-worktree",
+            ownerId: sessionKey,
+            path: "/fixture/workspace",
+          }),
+        },
+        resolveGatewaySessionStoreTargetInWorker: (params) =>
+          resolveGatewaySessionStoreTargetInWorker({
+            ...params,
+            cfg: { ...params.cfg, session: { ...params.cfg.session, store: scope } },
+          }),
+        resolveCanonicalSessionEntryFromStoreKeys,
+      }),
       cancelSessionWork: cancel,
       revokeSessionAuthority: vi.fn(),
     });
     const interrupted = vi.fn();
     const validated = vi.fn();
     const acquiredInterrupted = vi.fn();
-    const acquired = await beginSessionWorkAdmission({
+    const acquired = await beginSessionEffect({
       scope,
       identities: [sessionKey, sessionId],
+      agentId: "main",
       assertAllowed: () => {},
       onInterrupt: acquiredInterrupted,
     });
@@ -61,17 +78,20 @@ it.each(["active", "failed"] as const)(
     const reclaim = vi.fn();
     let pending!: Promise<{ admitted: boolean; error?: unknown }>;
     try {
-      await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+      await runSessionMutation({
         scope,
         identities: [sessionKey, sessionId],
+        agentId: "main",
         run: async () => {
-          pending = beginSessionWorkAdmission({
+          pending = beginSessionEffect({
             scope,
             identities: [sessionKey, sessionId],
+            agentId: "main",
             assertAllowed: validated,
             onInterrupt: interrupted,
           }).then(
             (lease) => {
+              expect(lease.isActive()).toBe(true);
               lease.release();
               return { admitted: true };
             },
@@ -88,14 +108,17 @@ it.each(["active", "failed"] as const)(
       expect(cancel).toHaveBeenCalledOnce();
       expect(begin).not.toHaveBeenCalled();
       expect(reclaim).not.toHaveBeenCalled();
-      // Failed Stop never begins teardown; acquired runs retain canonical abort ordering.
+      // Failed Stop never begins teardown; work admitted by the surrounding mutation
+      // remains subordinate to that mutation instead of becoming a competing owner.
       expect(acquiredInterrupted).not.toHaveBeenCalled();
-      expect(await pending).toEqual({ admitted: false, error: expect.any(Error) });
-      expect(interrupted).toHaveBeenCalledOnce();
-      expect(validated).not.toHaveBeenCalled();
-      const fresh = await beginSessionWorkAdmission({
+      expect(acquired.isActive()).toBe(true);
+      expect(await pending).toEqual({ admitted: true });
+      expect(interrupted).not.toHaveBeenCalled();
+      expect(validated).toHaveBeenCalledOnce();
+      const fresh = await beginSessionEffect({
         scope,
         identities: [sessionKey, sessionId],
+        agentId: "main",
         assertAllowed: () => {},
       });
       fresh.release();

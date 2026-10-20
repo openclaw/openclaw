@@ -1,8 +1,10 @@
-import { renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import fs, { renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   readDatabasePathIdentity,
   readDatabasePathIdentitySync,
@@ -29,7 +31,7 @@ it("shares prospective and existing file identities between sync capture and asy
   expect(existing.canonicalPath).toBe(prospective.canonicalPath);
   expect(await readDatabasePathIdentity(pathname)).toEqual(existing);
   const birthtime =
-    process.platform === "linux"
+    process.platform === "linux" || process.platform === "android"
       ? "0"
       : statSync(pathname, { bigint: true }).birthtimeNs.toString();
   expect(existing.birthtime).toBe(birthtime);
@@ -45,6 +47,56 @@ it("shares prospective and existing file identities between sync capture and asy
     /identity changed/,
   );
 });
+
+it.each(["linux", "android"] as const)(
+  "keeps the %s database identity when Node reports ctime as birthtime",
+  async (platform) => {
+    const pathname = path.join(dirs.make("openclaw-worker-identity-ctime-"), "state.sqlite");
+    writeFileSync(pathname, "");
+    const databasePaths = new Set([pathname, fs.realpathSync.native(pathname)]);
+    const stat = fs.statSync;
+    let ctimeAdvanceNs = 0n;
+    const platformSpy = mockProcessPlatform(platform);
+    // libuv fills birthtime from ctime when statx is unavailable, as on Termux.
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      const result = stat(...args);
+      if (
+        result &&
+        typeof args[0] === "string" &&
+        databasePaths.has(args[0]) &&
+        "ctimeNs" in result
+      ) {
+        const ctimeNs = result.ctimeNs + ctimeAdvanceNs;
+        Object.defineProperties(result, {
+          ctimeNs: { value: ctimeNs },
+          birthtimeNs: { value: ctimeNs },
+        });
+      }
+      return result;
+    });
+    try {
+      syncBuiltinESMExports();
+      // The birthtime policy is fixed when the module loads.
+      vi.resetModules();
+      const identity = await import("./sqlite-worker-identity.js");
+      const existing = identity.readDatabasePathIdentitySync(pathname);
+      writeFileSync(pathname, "committed");
+      ctimeAdvanceNs += 1n;
+      expect(() => identity.assertDatabasePathIdentity(pathname, existing)).not.toThrow();
+      const replacement = path.join(path.dirname(pathname), "replacement.sqlite");
+      writeFileSync(replacement, "replacement");
+      renameSync(replacement, pathname);
+      expect(() => identity.assertDatabasePathIdentity(pathname, existing)).toThrow(
+        /identity changed/,
+      );
+    } finally {
+      statSpy.mockRestore();
+      platformSpy.mockRestore();
+      syncBuiltinESMExports();
+      vi.resetModules();
+    }
+  },
+);
 
 it.each(["before", "after"] as const)(
   "refuses a database removed %s canonical path resolution during admission",

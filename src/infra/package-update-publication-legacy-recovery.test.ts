@@ -4,18 +4,19 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   openPackageActivationJournal,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { capturePackageActivationRuntime } from "./package-update-activation-paths.js";
 import { prepareRemountedPublication } from "./package-update-activation-remount.test-support.js";
 import {
   assertNoPendingPackageActivation,
   runPackageActivationRecovery,
   settlePendingPackageActivation,
-  settleRemountedPackageActivation,
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
@@ -44,7 +45,12 @@ it.skipIf(process.platform === "win32").each([
 ] as const)(
   "settles the legacy $phase record through $action after link-count drift",
   async ({ phase, action }) => {
-    const f = await fixtures.prepare();
+    // The frozen legacy helper hash predates Bun's per-install SQLite library header.
+    const f = await fixtures.prepare(
+      undefined,
+      undefined,
+      capturePackageActivationRuntime("node", resolveTestNodeExecPath()),
+    );
     const journal = openPackageActivationJournal(f.anchor);
     const helper = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
@@ -127,13 +133,17 @@ it.skipIf(process.platform === "win32").each([false, true])(
     if (modified) {
       fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed");
       const before = fs.readFileSync(f.journalPath);
-      await expect(settleRemountedPackageActivation(f.anchor, f.operationId)).rejects.toThrow(
-        "full candidate fingerprint changed",
-      );
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: f.operationId,
+        }),
+      ).rejects.toThrow("full candidate fingerprint changed");
       expect(fs.readFileSync(f.journalPath)).toEqual(before);
     } else {
       await expect(
-        settleRemountedPackageActivation(f.anchor, f.operationId),
+        settlePendingPackageActivation(f.packageRoot, undefined, undefined, {
+          operationId: f.operationId,
+        }),
       ).resolves.toMatchObject({ reason: "publication-settled-external-change" });
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     }

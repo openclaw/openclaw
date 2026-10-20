@@ -36,7 +36,7 @@ export function shouldIncludeHook(params: {
 }): boolean {
   const { entry, config, eligibility } = params;
   const hookConfig = resolveHookConfig(config, entry.metadata?.hookKey ?? entry.hook.name);
-  if (!resolveHookEnableState({ entry, config, hookConfig }).enabled) {
+  if (!resolveHookEnableState({ entry, hookConfig }).enabled) {
     return false;
   }
 

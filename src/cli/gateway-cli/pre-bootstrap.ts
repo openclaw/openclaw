@@ -7,10 +7,8 @@ import {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
-import type { ConfigSnapshotReadOptions } from "../../config/io.js";
 import { describeConfigSnapshotInputChange } from "../../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
-import type { DeferredPluginMigration } from "../../infra/deferred-plugin-migrations.js";
 import {
   clearFsSafeEnvFallback,
   fsSafeEnvInput,
@@ -19,6 +17,7 @@ import {
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { formatCliCommand } from "../command-format.js";
+import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import type { GatewayRunOpts } from "./run-options.js";
@@ -46,7 +45,6 @@ let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrap:
   | (Pick<GatewayRunOpts, "allowUnconfigured" | "dev"> & {
       snapshot: ConfigFileSnapshot;
-      acceptedPluginMigrations?: readonly DeferredPluginMigration[];
     })
   | undefined;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
@@ -196,25 +194,31 @@ function restoreAppliedGatewayRunConfigEnvironment(preserveSelection = true): vo
 async function readGuardedGatewayRunConfig(
   params: GatewayRunGuardParams,
 ): Promise<ConfigFileSnapshot | null> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const { createConfigIO } = await import("../../config/io.factory.js");
+  const { createConfigIO } = await measureGatewayBootstrapStep(
+    "cli.environment.config-import",
+    () => import("../../config/io.factory.js"),
+  );
   return await withArtifactPreservingStateReads(async () => {
-    const current = await readConfigFileSnapshot({
-      isolateEnv: true,
+    const current = await createConfigIO({
+      env: cloneEnvWithPlatformSemantics(process.env),
       observe: false,
       pluginValidation: "core-only",
-    });
+      measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+    }).readConfigFileSnapshot();
     const guard = (snapshot: ConfigFileSnapshot) =>
       enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
     if (!guard(current)) {
       return null;
     }
-    const recovery = await createConfigIO({
-      configPath: current.path,
-      env: cloneEnvWithPlatformSemantics(process.env),
-      observe: false,
-      pluginValidation: "core-only",
-    }).prepareConfigRecovery(current);
+    const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
+      createConfigIO({
+        configPath: current.path,
+        env: cloneEnvWithPlatformSemantics(process.env),
+        observe: false,
+        pluginValidation: "core-only",
+        measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+      }).prepareConfigRecovery(current),
+    );
     return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
   });
 }
@@ -257,14 +261,16 @@ async function guardGatewayRunSelectedConfig(
     { normalizeStateDirEnv },
     { collectEnvSecretRefIds },
     { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
-  ] = await Promise.all([
-    createTrustedGatewayEnvLoader(),
-    import("../../config/config-env-vars.js"),
-    import("../../infra/env.js"),
-    import("../../config/paths.js"),
-    import("../../config/resolution-facts.js"),
-    import("../../daemon/service-managed-env.js"),
-  ]);
+  ] = await measureGatewayBootstrapStep("cli.environment.imports", () =>
+    Promise.all([
+      createTrustedGatewayEnvLoader(),
+      import("../../config/config-env-vars.js"),
+      import("../../infra/env.js"),
+      import("../../config/paths.js"),
+      import("../../config/resolution-facts.js"),
+      import("../../daemon/service-managed-env.js"),
+    ]),
+  );
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
   if (params.environmentSelection) {
     restoreAppliedGatewayRunConfigEnvironment();
@@ -291,7 +297,9 @@ async function guardGatewayRunSelectedConfig(
   for (;;) {
     const envBeforeTrustedApply = { ...fsSafeEnvInput(process.env) };
     const trustedSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
+    const dotenvStartedAt = performance.now();
     const trustedEnvLoad = applyTrustedGatewayEnv(invocationDestructiveOverride);
+    recordGatewayBootstrapStep("cli.environment.dotenv", dotenvStartedAt, performance.now());
     if (resolveGatewayConfigSelectionSignature(process.env) !== trustedSelectionSignature) {
       const stateEnvSelectedTarget = trustedEnvLoad.stateEnvAppliedKeys.some((key) =>
         GATEWAY_CONFIG_SELECTION_ENV_KEYS.has(key.toUpperCase()),
@@ -407,35 +415,6 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
     return await rejectDrift();
   }
   return true;
-}
-
-/**
- * Config readiness accepted the startup preflight's admitted shared-state generation. The final
- * reread already reuses that generation's plugin metadata; its migration rows belong with it.
- * No Gateway owns state yet, so a later pre-ownership read would be no fresher in kind.
- */
-export function acceptGatewayRunPreflightMigrations(
-  pending: readonly DeferredPluginMigration[],
-): void {
-  if (preparedGatewayRunBootstrap) {
-    preparedGatewayRunBootstrap = {
-      ...preparedGatewayRunBootstrap,
-      acceptedPluginMigrations: pending,
-    };
-  }
-}
-
-/** One start attempt consumes the accepted facts; a retry after in-process repair reads rows. */
-export function takeAcceptedGatewayRunMigrations(): Pick<
-  ConfigSnapshotReadOptions,
-  "deferredPluginMigrations"
-> {
-  if (!preparedGatewayRunBootstrap?.acceptedPluginMigrations) {
-    return {};
-  }
-  const { acceptedPluginMigrations, ...prepared } = preparedGatewayRunBootstrap;
-  preparedGatewayRunBootstrap = prepared;
-  return { deferredPluginMigrations: acceptedPluginMigrations };
 }
 
 export async function applyFinalGatewayRunConfigEnv(params: {
@@ -556,7 +535,6 @@ async function createTrustedGatewayEnvLoader() {
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
       overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
       stateEnvPath,
       ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
         ? {}

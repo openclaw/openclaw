@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import {
+  configureMerge,
+  expectCapturedFiles,
+  expectExit,
+  expectRetained,
+  pendingGates,
+  readLocal,
+  writeLocal,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import {
   policyTimeoutCapture,
@@ -13,14 +22,12 @@ function qualifiedAutoRefusal(
   f: ReturnType<typeof fixture>,
   version: "0.6.10" | "policy-timeout" = "0.6.10",
 ) {
-  f.save({
-    ...f.state(),
+  configureMerge(f, {
     mode: "octopool-refusal",
     refusalCapture: version === "policy-timeout" ? policyTimeoutCapture : f.state().refusalCapture,
-    pr: { ...f.state().pr, mergeStateStatus: "BEHIND" },
+    pr: { mergeStateStatus: "BEHIND" },
   });
-  const refused = f.run(true);
-  expect(refused.status, refused.output).toBe(1);
+  expectExit(f.run(true), 1);
   expect(f.state().mutations).toBe(0);
   const outcome = f.git(["rev-parse", outcomeRef]);
   const [capture, contents] = f.captures()[0]!;
@@ -38,24 +45,14 @@ function qualifiedAutoRefusal(
           version,
           sourceRevision: "00c442d8084ad26eb5a5003f7372170e75a20c8a",
           parserSha256: "f6ff8cd7e59503f71f94fefd561b671193df11b3aac9ba0986a0dc3ba91ca32b",
-          args: [
-            "pr",
-            "merge",
-            "123",
-            "--repo",
-            "https://github.com/fixture/repo",
-            "--squash",
-            "--auto",
-            "--match-head-commit",
-            f.head,
-            "--body-file",
-            ".local/merge-body.fixture",
-          ],
+          args: `pr merge 123 --repo https://github.com/fixture/repo --squash --auto --match-head-commit ${f.head} --body-file .local/merge-body.fixture`.split(
+            " ",
+          ),
         }),
   };
   writeFileSync(join(directory, "qualification.json"), JSON.stringify(qualification));
   f.recover();
-  f.save({ ...f.state(), mode: "success", pr: { ...f.state().pr, mergeStateStatus: "CLEAN" } });
+  configureMerge(f, { mode: "success", pr: { mergeStateStatus: "CLEAN" } });
   return {
     outcome,
     capture,
@@ -76,13 +73,9 @@ describePosix("qualified pre-dispatch merge recovery", () => {
       const proof = qualifiedAutoRefusal(f, version);
       const replacement = replaceHead ? f.replacePreparedHead() : "";
       const preparedHead = replacement || f.head;
-      writeFileSync(
-        join(f.worktree, ".local/gates.env"),
-        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${preparedHead}\n`,
-      );
-      f.save({ ...f.state(), requiredCheckName: "openclaw/ci-gate" });
-      const run = proof.runRecovery(replacement);
-      expect(run.status, run.output).toBe(0);
+      pendingGates(f, preparedHead);
+      configureMerge(f, { requiredCheckName: "openclaw/ci-gate" });
+      expectExit(proof.runRecovery(replacement));
       expect(f.state().mutations).toBe(1);
       expect(f.record()).toMatchObject({
         phase: "complete",
@@ -101,13 +94,14 @@ describePosix("qualified pre-dispatch merge recovery", () => {
       expect(f.git(["rev-parse", `${outcomeRef}:pre-dispatch-refusal/${proof.capture}`])).toBe(
         proof.qualification.capture,
       );
-      expect(f.git(["rev-parse", `${outcomeRef}:pre-dispatch-refusal/qualification.json`])).toBe(
-        f.git(["hash-object", "--stdin"], JSON.stringify(proof.qualification)),
+      expectCapturedFiles(
+        f,
+        [["pre-dispatch-refusal/qualification.json", JSON.stringify(proof.qualification)]],
+        outcomeRef,
       );
       expect(f.run().status).toBe(0);
       expect(f.state().mutations).toBe(1);
-      const replay = proof.runRecovery(replacement);
-      expect(replay.status, replay.output).toBe(1);
+      expectExit(proof.runRecovery(replacement), 1);
       expect(f.state().mutations).toBe(1);
     },
   );
@@ -125,15 +119,11 @@ describePosix("qualified pre-dispatch merge recovery", () => {
     let changedReview = "";
     let movedHead = "";
     if (fault === "stale-prep-context" || fault === "stale-gate-head") {
-      const file = join(
-        f.worktree,
-        ".local",
-        fault === "stale-prep-context" ? "prep-context.env" : "gates.env",
-      );
-      writeFileSync(file, readFileSync(file, "utf8").replace(f.head, f.base));
+      const file = fault === "stale-prep-context" ? "prep-context.env" : "gates.env";
+      writeLocal(f, file, readLocal(f, file).replace(f.head, f.base));
     }
     if (fault === "review-during-checks") {
-      const review = JSON.parse(readFileSync(join(f.worktree, ".local/review.json"), "utf8"));
+      const review = JSON.parse(readLocal(f, "review.json"));
       changedReview = `${JSON.stringify({ ...review, recommendation: "NEEDS WORK" })}\n`;
       next.duringChecks = { artifact: "review.json", artifactContents: changedReview };
     }
@@ -148,12 +138,11 @@ describePosix("qualified pre-dispatch merge recovery", () => {
     f.save(next);
     const run = proof.runRecovery();
     expect(run.error, run.output).toBeUndefined();
-    expect(run.status, run.output).toBe(1);
+    expectExit(run, 1);
     expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
-    expect(f.git(["rev-parse", outcomeRef])).toBe(proof.outcome);
-    expect(f.captures()).toEqual(captures);
+    expectRetained(f, proof.outcome, captures);
     if (changedReview) {
-      expect(readFileSync(join(f.worktree, ".local/review.json"), "utf8")).toBe(changedReview);
+      expect(readLocal(f, "review.json")).toBe(changedReview);
     }
     if (movedHead) {
       expect(f.git(["rev-parse", "refs/heads/pr-123-prep"])).toBe(movedHead);
@@ -165,28 +154,19 @@ describePosix("qualified pre-dispatch merge recovery", () => {
     const f = fixture();
     const proof = qualifiedAutoRefusal(f, "policy-timeout");
     const replacement = f.replacePreparedHead();
-    writeFileSync(
-      join(f.worktree, ".local/gates.env"),
-      `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${replacement}\n`,
-    );
+    pendingGates(f, replacement);
     const ready = f.state();
-    for (const fault of ["pending", "failed", "existing-auto", "behind"]) {
-      const next = { ...ready, pr: { ...ready.pr }, requiredCheckName: "openclaw/ci-gate" };
-      if (fault === "pending") {
-        next.gates = "pending";
-      }
-      if (fault === "failed") {
-        next.gates = "fail";
-      }
-      if (fault === "existing-auto") {
-        next.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-      }
-      if (fault === "behind") {
-        next.pr.mergeStateStatus = "BEHIND";
-      }
-      f.save(next);
+    const faults: Array<Parameters<typeof configureMerge>[1]> = [
+      { gates: "pending" },
+      { gates: "fail" },
+      { pr: { autoMergeRequest: { mergeMethod: "SQUASH" } } },
+      { pr: { mergeStateStatus: "BEHIND" } },
+    ];
+    for (const fault of faults) {
+      f.save(ready);
+      configureMerge(f, { requiredCheckName: "openclaw/ci-gate", ...fault });
       const run = proof.runRecovery(replacement);
-      expect(run.status, `${fault}: ${run.output}`).toBe(1);
+      expect(run.status, `${JSON.stringify(fault)}: ${run.output}`).toBe(1);
       expect(f.state().mutations).toBe(0);
       expect(f.git(["rev-parse", outcomeRef])).toBe(proof.outcome);
       expect(existsSync(f.worktree)).toBe(true);

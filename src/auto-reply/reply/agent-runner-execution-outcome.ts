@@ -6,6 +6,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
+import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 import { getReplySystemEventContext } from "./system-event-session-key.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
@@ -33,7 +35,13 @@ async function recordAgentTurnExecutionOutcome(
     }
   }
   const executionStatus = resolveAgentTurnExecutionStatus(result?.outcome);
-  if (executionStatus !== "cancelled") {
+  if (
+    executionStatus !== "cancelled" &&
+    !(
+      result?.outcome.kind === "rejected" &&
+      resolveReplyOperationRunState(params.opts)?.replyCompletion?.outcome === "pending"
+    )
+  ) {
     params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
   }
   const sourceReplyDeliveryMode =
@@ -68,8 +76,9 @@ async function recordAgentTurnExecutionOutcome(
     storePath: params.storePath,
   };
   try {
-    await recordMessageToolRunOutcome(values);
-    messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
+    if (await recordMessageToolRunOutcome(values)) {
+      messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
+    }
   } catch (error) {
     messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {
       ...values,
@@ -99,6 +108,7 @@ export async function runAgentTurnWithOutcome(
   runId: string,
   run: () => Promise<AgentTurnExecutionResult>,
 ): Promise<AgentTurnExecutionResult> {
+  bindGoalContinuationExecution(runId, params.sessionKey ?? params.followupRun.run.sessionKey);
   const eventExecution = params.followupRun.run.internalEventExecution;
   let terminalRecorded = false;
   try {

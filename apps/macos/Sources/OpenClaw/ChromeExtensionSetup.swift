@@ -18,6 +18,7 @@ final class ChromeExtensionSetup {
         ChromeExtensionSetupAction, @escaping @MainActor () -> Bool) async throws -> Result
     private var observer: NSObjectProtocol?
     private var notificationCenter: NotificationCenter?
+    private var hasRequestedSetup = false
     private var manualReplies: [UUID: CheckedContinuation<Result, Error>] = [:]
     private var manualTasks: [UUID: Task<Result, Error>] = [:]
 
@@ -128,7 +129,7 @@ final class ChromeExtensionSetup {
         center: NotificationCenter = .default)
     {
         // Chrome's per-user manifest is shared across app profiles. Only the default
-        // app may claim it automatically; named profiles retain explicit CLI/manual setup.
+        // app maintains an explicitly requested setup; named profiles remain manual.
         guard !plan.isElevationHost, !profile.isActive, self.observer == nil else { return }
         self.notificationCenter = center
         self.observer = center.addObserver(forName: .openclawCLIInstalled, object: nil, queue: .main) { [weak self] _ in
@@ -162,6 +163,7 @@ final class ChromeExtensionSetup {
     }
 
     private func requestAutomaticSetup() {
+        guard self.hasRequestedSetup else { return }
         self.requests.enqueue {
             do {
                 let result = try await self.performAction(.install) { self.observer != nil }
@@ -192,6 +194,8 @@ final class ChromeExtensionSetup {
                         self.manualReplies.removeValue(forKey: id)?.resume(throwing: SetupError.retired)
                         return
                     }
+                    // Admitted setup belongs to the app session even if its document retires during the command.
+                    if action == .install { self.hasRequestedSetup = true }
                     let task = Task { try await self.performAction(action, isCurrent) }
                     self.manualTasks[id] = task
                     let result = await task.result

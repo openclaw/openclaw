@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import {
-  loadExactSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
@@ -16,6 +16,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -93,6 +94,31 @@ export async function publishHeartbeatSessionReply(params: {
       }
     };
     assertCurrent();
+    const assertCurrentEntry = async (entryId: string) => {
+      assertCurrent();
+      await readSessionTranscriptAnchorsAsync(
+        scope,
+        {
+          entryIds: [entryId],
+          activePathEntryId: entryId,
+          contextAuthority: true,
+        },
+        params.signal,
+        (facts) => {
+          assertCurrent();
+          const entry = facts.contextAuthority?.entry;
+          if (
+            !entry ||
+            entry.sessionId !== scope.sessionId ||
+            entry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision ||
+            entry.activeWriterRunId !== writerRunId ||
+            !["exact", "ancestor"].includes(facts.activePathRelation ?? "")
+          ) {
+            throw new Error("heartbeat publication no longer owns the active transcript");
+          }
+        },
+      );
+    };
     const mirror = metadata?.sourceReplyTranscriptMirror?.transcriptOwner
       ? metadata.sourceReplyTranscriptMirror
       : undefined;
@@ -133,7 +159,10 @@ export async function publishHeartbeatSessionReply(params: {
     }
     const priorMessage = prior && readTranscriptEventMessage(prior.event);
     const priorId = prior && readTranscriptEventId(prior.event);
-    const answer = parseReplyDirectives(resolveRawAssistantAnswerText(priorMessage));
+    const rawAnswer = resolveRawAssistantAnswerText(priorMessage);
+    const answer = parseReplyDirectives(
+      owned && !mirror ? prepareAgentRunTerminalReply({ rawText: rawAnswer }).text : rawAnswer,
+    );
     const originalMedia = mirror?.mediaUrls ?? metadata?.assistantTranscriptMediaUrls ?? mediaUrls;
     const storedMedia = asOptionalRecord(priorMessage?.openclawDelivery)?.mediaUrls;
     const displayMedia = readAssistantDisplayContent(priorMessage).filter((block) =>
@@ -141,9 +170,7 @@ export async function publishHeartbeatSessionReply(params: {
     );
     // Managed mirrors retain source identities separately from their display URLs.
     const receiptMedia =
-      displayMedia.length > 0 &&
-      Array.isArray(storedMedia) &&
-      storedMedia.every((source): source is string => typeof source === "string")
+      displayMedia.length > 0 && isStringArray(storedMedia)
         ? storedMedia
         : (answer.mediaUrls ?? []);
     // Runtime payloads carry original references even after delivery URLs change.
@@ -254,10 +281,11 @@ export async function publishHeartbeatSessionReply(params: {
         const completion = attachMedia({
           messageId: receipt.messageId,
           blocks: readAssistantDisplayContent(receipt.message),
-        }).then((attached) => {
+        }).then(async (attached) => {
           if (!attached) {
             throw new Error("heartbeat source receipt media custody is unavailable");
           }
+          await assertCurrentEntry(receipt.messageId);
           return publish();
         });
         acceptedPublication = completion.catch((error: unknown) => ({
@@ -291,13 +319,13 @@ export async function publishHeartbeatSessionReply(params: {
 
 const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
 
-export function prepareHeartbeatTargetAwareness(params: {
+export async function prepareHeartbeatTargetAwareness(params: {
   agentId: string;
   storePath: string;
   runSessionKey: string;
   targetSessionKey?: string;
   startedAt: number;
-}): ((payload: NormalizedOutboundPayload) => void) | undefined {
+}): Promise<((payload: NormalizedOutboundPayload) => void) | undefined> {
   const sessionKey = params.targetSessionKey?.trim();
   if (!sessionKey || sessionKey === params.runSessionKey) {
     return undefined;
@@ -307,24 +335,14 @@ export function prepareHeartbeatTargetAwareness(params: {
       return undefined;
     }
     const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
-    const entry = loadExactSessionEntryReadOnly(scope)?.entry;
+    const entry = await readSessionEntryReadOnlyInWorker(scope);
     if (!entry?.sessionId) {
       return undefined;
     }
-    const expectedSessionId = entry.sessionId;
-    const expectedLifecycleRevision = entry.lifecycleRevision;
     const idempotencyKey = `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`;
     return (payload) => {
       try {
-        // Recheck the exact pre-send lifecycle before publishing awareness. Resets
-        // can preserve sessionId while rotating lifecycleRevision.
-        const latest = loadExactSessionEntryReadOnly(scope)?.entry;
-        if (
-          latest?.sessionId !== expectedSessionId ||
-          latest.lifecycleRevision !== expectedLifecycleRevision
-        ) {
-          return;
-        }
+        // Awareness is best-effort bookkeeping; a concurrent reset can inherit this notice.
         const deliveredText = resolveMirroredTranscriptText({
           text: payload.hookContent ?? resolveOutboundPayloadMirrorText(payload),
           mediaUrls: payload.mediaUrls,

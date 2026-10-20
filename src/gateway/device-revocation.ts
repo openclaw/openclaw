@@ -8,6 +8,7 @@ type SourceDependencies = Readonly<{
   authPolicyGeneration?: string;
   sharedGenerationOwner?: object;
   sharedGeneration?: string;
+  authorityOwner?: object;
 }>;
 
 type SourceIdentity = {
@@ -57,6 +58,7 @@ function retainSourceIdentity({ client, ...dependencies }: SourceDependencies) {
       entry.dependencies.context === dependencies.context &&
       entry.dependencies.authPolicyGeneration === dependencies.authPolicyGeneration &&
       entry.dependencies.sharedGenerationOwner === dependencies.sharedGenerationOwner &&
+      entry.dependencies.authorityOwner === dependencies.authorityOwner &&
       entry.dependencies.sharedGeneration === dependencies.sharedGeneration,
   );
   if (!source) {

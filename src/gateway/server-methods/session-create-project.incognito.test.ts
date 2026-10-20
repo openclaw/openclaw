@@ -11,18 +11,22 @@ import {
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareSessionWorkspaceForRun } from "./session-create-project.js";
 
 const authority = { assertCurrent() {} };
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-let actor: Awaited<ReturnType<typeof openIncognitoTestActor>>;
+let storePath: string;
 let workspace: string;
 let cfg: OpenClawConfig;
 const ownedKeys = new Set<string>();
@@ -32,7 +36,7 @@ beforeAll(async () => {
   workspace = await initializeManagedWorktreeTestRepository(state.root);
   cfg = { agents: { entries: { main: { workspace } } } };
   setRuntimeConfigSnapshot(cfg);
-  actor = await openIncognitoTestActor(state.env, authority);
+  storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -46,7 +50,7 @@ afterEach(async () => {
   ownedKeys.clear();
 });
 afterAll(async () => {
-  await actor?.close();
+  memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
   clearRuntimeConfigSnapshot();
   await state?.cleanup();
 });
@@ -60,35 +64,31 @@ async function createPendingSession(name: string) {
     pendingWorktree: { workspace, name, baseRef: "main", titleSource: name },
   };
   ownedKeys.add(sessionKey);
-  await actor.sessions.create(authority, { sessionKey, entry });
+  await replaceSessionEntry({ sessionKey, storePath }, entry);
   return { sessionKey, entry };
 }
 
 function prepare(sessionKey: string, entry: InternalSessionEntry) {
-  return withIncognitoSessionActor(actor, () =>
-    prepareSessionWorkspaceForRun({
-      entry,
-      cfg,
-      agentId: "main",
-      runId: `run-${entry.sessionId}`,
-      sessionKey,
-      storePath: actor.path,
-      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-      signal: new AbortController().signal,
-      assertCurrent: () => authority.assertCurrent(),
-      runSetupScript: false,
-    }),
-  );
+  return prepareSessionWorkspaceForRun({
+    entry,
+    cfg,
+    agentId: "main",
+    runId: `run-${entry.sessionId}`,
+    sessionKey,
+    storePath,
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    signal: new AbortController().signal,
+    assertCurrent: () => authority.assertCurrent(),
+    runSetupScript: false,
+  });
 }
 
-it("materializes and commits a bound first-turn worktree without host session SQL", async () => {
+it("materializes and commits an unbound first-turn worktree without host session SQL", async () => {
   const { sessionKey, entry } = await createPendingSession("first-turn");
   const sql = observeHostDataSql();
   try {
     await prepare(sessionKey, entry);
-    const saved: InternalSessionEntry | undefined = (
-      await actor.sessions.read(authority, { sessionKey })
-    ).entry;
+    const saved = loadSessionEntry({ sessionKey, storePath });
     assert(saved?.worktree);
     const record = await new ManagedWorktreeService({ env: state.env }).findLiveByOwner(
       "session",
@@ -136,12 +136,10 @@ it.each(["lifecycle", "intent"] as const)(
     );
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "repository was not resolved");
-      await withIncognitoSessionActor(actor, () =>
-        patchSessionEntryCore({ sessionKey, storePath: actor.path }, () =>
-          change === "lifecycle"
-            ? { lifecycleRevision: "replacement" }
-            : { pendingWorktree: { ...pendingWorktree, name: "replacement" } },
-        ),
+      await patchSessionEntryCore({ sessionKey, storePath }, () =>
+        change === "lifecycle"
+          ? { lifecycleRevision: "replacement" }
+          : { pendingWorktree: { ...pendingWorktree, name: "replacement" } },
       );
     } finally {
       resume.resolve();
@@ -150,9 +148,7 @@ it.each(["lifecycle", "intent"] as const)(
     expect(await settled).toMatchObject({
       error: expect.objectContaining({ message: expect.stringMatching(/changed|current/i) }),
     });
-    const saved: InternalSessionEntry | undefined = (
-      await actor.sessions.read(authority, { sessionKey })
-    ).entry;
+    const saved = loadSessionEntry({ sessionKey, storePath });
     expect(saved?.worktree).toBeUndefined();
     expect(saved?.pendingWorktree?.name).toBe(
       change === "intent" ? "replacement" : `changed-${change}`,

@@ -39,10 +39,7 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
   --sidebar-issues-background: transparent;
 
   top: calc((var(--openclaw-native-titlebar-height, 50px) - var(--shell-chrome-control-size)) / 2);
-  left: calc(
-    var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
-      var(--shell-chrome-controls-gap)
-  );
+  left: calc(var(--shell-chrome-controls-left) + var(--shell-controls-width) + 8px);
 }
 
 /* A stale-client refresh card shares the collapsed overlay strip's row; drop it
@@ -56,5 +53,4 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
   .sidebar-issues-button {
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }

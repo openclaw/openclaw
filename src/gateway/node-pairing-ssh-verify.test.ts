@@ -1,6 +1,6 @@
 // SSH-verified node pairing policy and verifier tests (probe injected).
 import crypto from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -42,115 +42,81 @@ function makeEligibility(
 }
 
 function makePlan(host = "192.168.1.20"): NonNullable<ReturnType<typeof planNodePairingSshVerify>> {
-  return {
-    policy: { user: "tester", timeoutMs: 1_000 },
-    host,
-  };
+  return { policy: { user: "tester", timeoutMs: 1_000 }, host };
 }
 
 function probeReturning(result: NodeIdentityProbeResult) {
-  const calls: NodeIdentityProbeParams[] = [];
-  const probe = async (params: NodeIdentityProbeParams) => {
-    calls.push(params);
-    return result;
-  };
-  return { probe, calls };
+  return vi.fn(async (_params: NodeIdentityProbeParams) => result);
+}
+
+function startProbe(
+  identity: ReturnType<typeof makeIdentity>,
+  probe: NonNullable<Parameters<typeof startNodePairingSshVerify>[0]["probe"]>,
+  plan = makePlan(),
+) {
+  return startNodePairingSshVerify({
+    plan,
+    probe,
+    expectedDeviceId: identity.deviceId,
+    expectedPublicKey: identity.publicKey,
+  });
+}
+
+function planFor(
+  overrides: Partial<FreshNodePairingEligibilityParams> = {},
+  config?: Parameters<typeof planNodePairingSshVerify>[0]["config"],
+) {
+  return planNodePairingSshVerify({ config, eligibility: makeEligibility(overrides) });
 }
 
 describe("planNodePairingSshVerify", () => {
   test("plans a probe for an eligible private-network node pairing", () => {
-    const plan = planNodePairingSshVerify({
-      config: undefined,
-      eligibility: makeEligibility(),
-    });
+    const plan = planFor();
     expect(plan?.host).toBe("192.168.1.20");
     expect(plan?.policy.user.length).toBeGreaterThan(0);
     expect(plan?.policy.timeoutMs).toBe(7_000);
   });
 
   test("strips the IPv4-mapped IPv6 prefix from the probe target", () => {
-    const plan = planNodePairingSshVerify({
-      config: undefined,
-      eligibility: makeEligibility({ reportedClientIp: "::ffff:192.168.1.21" }),
-    });
+    const plan = planFor({ reportedClientIp: "::ffff:192.168.1.21" });
     expect(plan?.host).toBe("192.168.1.21");
   });
 
   test.each([
-    ["disabled config", { config: false as const, eligibility: makeEligibility() }],
-    [
-      "existing paired device",
-      { config: undefined, eligibility: makeEligibility({ existingPairedDevice: true }) },
-    ],
-    ["operator role", { config: undefined, eligibility: makeEligibility({ role: "operator" }) }],
-    [
-      "upgrade reason",
-      { config: undefined, eligibility: makeEligibility({ reason: "scope-upgrade" }) },
-    ],
-    [
-      "requested scopes",
-      { config: undefined, eligibility: makeEligibility({ scopes: ["operator.read"] }) },
-    ],
-    [
-      "browser origin",
-      { config: undefined, eligibility: makeEligibility({ hasBrowserOriginHeader: true }) },
-    ],
-    [
-      "spoofable loopback proxy source",
-      {
-        config: undefined,
-        eligibility: makeEligibility({ reportedClientIpSource: "loopback-trusted-proxy" }),
-      },
-    ],
-    [
-      "public source address",
-      { config: undefined, eligibility: makeEligibility({ reportedClientIp: "203.0.113.9" }) },
-    ],
-    [
-      "local-use NAT64 source address",
-      {
-        config: undefined,
-        eligibility: makeEligibility({ reportedClientIp: "64:ff9b:1::8.8.8.8" }),
-      },
-    ],
-    [
-      "loopback source address",
-      { config: undefined, eligibility: makeEligibility({ reportedClientIp: "127.0.0.1" }) },
-    ],
-    [
-      "zone-scoped IPv6 literal",
-      { config: undefined, eligibility: makeEligibility({ reportedClientIp: "fe80::1%en0" }) },
-    ],
-  ])("returns null for %s", (_label, params) => {
-    expect(planNodePairingSshVerify(params)).toBeNull();
-  });
+    ["disabled config", {}, false],
+    ["existing paired device", { existingPairedDevice: true }],
+    ["operator role", { role: "operator" }],
+    ["upgrade reason", { reason: "scope-upgrade" }],
+    ["requested scopes", { scopes: ["operator.read"] }],
+    ["browser origin", { hasBrowserOriginHeader: true }],
+    ["spoofable loopback proxy source", { reportedClientIpSource: "loopback-trusted-proxy" }],
+    ["public source address", { reportedClientIp: "203.0.113.9" }],
+    ["local-use NAT64 source address", { reportedClientIp: "64:ff9b:1::8.8.8.8" }],
+    ["loopback source address", { reportedClientIp: "127.0.0.1" }],
+    ["zone-scoped IPv6 literal", { reportedClientIp: "fe80::1%en0" }],
+  ] satisfies Array<[string, Partial<FreshNodePairingEligibilityParams>, false?]>)(
+    "returns null for %s",
+    (_label, overrides, config?: false) => {
+      expect(planFor(overrides, config)).toBeNull();
+    },
+  );
 
   test("custom cidrs replace the default private-range probe scope", () => {
     const config = { cidrs: ["10.1.0.0/16"] };
-    expect(
-      planNodePairingSshVerify({
-        config,
-        eligibility: makeEligibility({ reportedClientIp: "192.168.1.20" }),
-      }),
-    ).toBeNull();
-    expect(
-      planNodePairingSshVerify({
-        config,
-        eligibility: makeEligibility({ reportedClientIp: "10.1.2.3" }),
-      })?.host,
-    ).toBe("10.1.2.3");
+    expect(planFor({ reportedClientIp: "192.168.1.20" }, config)).toBeNull();
+    expect(planFor({ reportedClientIp: "10.1.2.3" }, config)?.host).toBe("10.1.2.3");
   });
 
   test("passes user, identity, timeout, and normalized cidrs into the probe policy", () => {
-    const plan = planNodePairingSshVerify({
-      config: {
+    const plan = planFor(
+      { reportedClientIp: "10.1.2.3" },
+      {
         user: "peter",
         identity: "/keys/probe",
         timeoutMs: 1_234,
         cidrs: ["10.0.0.0/8", "  "],
       },
-      eligibility: makeEligibility({ reportedClientIp: "10.1.2.3" }),
-    });
+    );
 
     expect(plan?.policy).toEqual({
       user: "peter",
@@ -172,12 +138,7 @@ describe("startNodePairingSshVerify", () => {
     const identity = makeIdentity();
     const oldProbe = createDeferred<NodeIdentityProbeResult>();
     const oldPlan = makePlan();
-    const original = startNodePairingSshVerify({
-      plan: oldPlan,
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe: () => oldProbe.promise,
-    });
+    const original = startProbe(identity, () => oldProbe.promise, oldPlan);
     const failure = { status: "ok", stdout: "not a node identity" } as const;
     try {
       expect(original !== null).toBe(true);
@@ -185,19 +146,17 @@ describe("startNodePairingSshVerify", () => {
         oldProbe.resolve(failure);
         await original?.done;
       }
-      const { probe, calls } = probeReturning({
+      const probe = probeReturning({
         status: "ok",
         stdout: JSON.stringify({ deviceId: identity.deviceId, publicKey: identity.publicKey }),
       });
-      const replacement = startNodePairingSshVerify({
-        plan: { ...oldPlan, policy: { ...oldPlan.policy, ...policy } },
-        expectedDeviceId: identity.deviceId,
-        expectedPublicKey: identity.publicKey,
-        probe,
+      const replacement = startProbe(identity, probe, {
+        ...oldPlan,
+        policy: { ...oldPlan.policy, ...policy },
       });
       expect(replacement?.alreadyInFlight).toBe(false);
       await expect(replacement?.done).resolves.toMatchObject({ ok: true });
-      expect(calls).toHaveLength(1);
+      expect(probe).toHaveBeenCalledTimes(1);
     } finally {
       oldProbe.resolve(failure);
       await original?.done;
@@ -206,108 +165,68 @@ describe("startNodePairingSshVerify", () => {
 
   test("approves when the remote identity matches, tolerating login-shell noise", async () => {
     const identity = makeIdentity();
-    const { probe, calls } = probeReturning({
+    const probe = probeReturning({
       status: "ok",
       stdout: `Welcome to devbox\n{"deviceId":"${identity.deviceId}","publicKey":"${identity.publicKey}"}\n`,
     });
-    const started = startNodePairingSshVerify({
-      plan: makePlan(),
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe,
-    });
+    const started = startProbe(identity, probe);
     expect(started).not.toBeNull();
     await expect(started?.done).resolves.toEqual({
       ok: true,
       user: "tester",
       host: "192.168.1.20",
     });
-    expect(calls).toEqual([
-      { user: "tester", host: "192.168.1.20", identity: undefined, timeoutMs: 1_000 },
+    expect(probe.mock.calls).toEqual([
+      [{ user: "tester", host: "192.168.1.20", identity: undefined, timeoutMs: 1_000 }],
     ]);
   });
 
   test("rejects a remote identity with a different key and cools the target down", async () => {
     const expected = makeIdentity();
     const other = makeIdentity();
-    const { probe } = probeReturning({
+    const probe = probeReturning({
       status: "ok",
       stdout: `{"deviceId":"${expected.deviceId}","publicKey":"${other.publicKey}"}\n`,
     });
-    const started = startNodePairingSshVerify({
-      plan: makePlan(),
-      expectedDeviceId: expected.deviceId,
-      expectedPublicKey: expected.publicKey,
-      probe,
-    });
+    const started = startProbe(expected, probe);
     await expect(started?.done).resolves.toEqual({ ok: false, reason: "identity-mismatch" });
-    expect(
-      startNodePairingSshVerify({
-        plan: makePlan(),
-        expectedDeviceId: expected.deviceId,
-        expectedPublicKey: expected.publicKey,
-        probe,
-      }),
-    ).toBeNull();
+    expect(startProbe(expected, probe)).toBeNull();
   });
 
   test("rejects a matching key under a different device id", async () => {
     const identity = makeIdentity();
-    const { probe } = probeReturning({
+    const probe = probeReturning({
       status: "ok",
       stdout: `{"deviceId":"someone-else","publicKey":"${identity.publicKey}"}\n`,
     });
-    const started = startNodePairingSshVerify({
-      plan: makePlan(),
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe,
-    });
+    const started = startProbe(identity, probe);
     await expect(started?.done).resolves.toEqual({ ok: false, reason: "identity-mismatch" });
   });
 
   test("reports probe failures and unreadable identities distinctly", async () => {
     const identity = makeIdentity();
-    const failed = startNodePairingSshVerify({
-      plan: makePlan("192.168.1.30"),
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe: probeReturning({ status: "failed", code: 255, stderr: "denied" }).probe,
-    });
+    const failed = startProbe(
+      identity,
+      probeReturning({ status: "failed", code: 255, stderr: "denied" }),
+      makePlan("192.168.1.30"),
+    );
     await expect(failed?.done).resolves.toEqual({ ok: false, reason: "probe-failed" });
 
-    const unreadable = startNodePairingSshVerify({
-      plan: makePlan("192.168.1.31"),
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe: probeReturning({ status: "ok", stdout: "no json here\n" }).probe,
-    });
+    const unreadable = startProbe(
+      identity,
+      probeReturning({ status: "ok", stdout: "no json here\n" }),
+      makePlan("192.168.1.31"),
+    );
     await expect(unreadable?.done).resolves.toEqual({ ok: false, reason: "identity-unreadable" });
   });
 
   test("shares an in-flight probe with reconnects instead of starting another", async () => {
     const identity = makeIdentity();
-    let probeRuns = 0;
     const { promise: gate, resolve: release } = createDeferred<NodeIdentityProbeResult>();
-    const probe = () => {
-      probeRuns += 1;
-      return gate;
-    };
-    const started = startNodePairingSshVerify({
-      plan: makePlan(),
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe,
-    });
+    const probe = vi.fn(() => gate);
+    const started = startProbe(identity, probe);
     expect(started).toMatchObject({ alreadyInFlight: false });
-    const retry = startNodePairingSshVerify({
-      plan: makePlan(),
-      expectedDeviceId: identity.deviceId,
-      expectedPublicKey: identity.publicKey,
-      probe,
-    });
-    // The retry must observe the running probe (so the client keeps retrying)
-    // without spawning a second one.
+    const retry = startProbe(identity, probe);
     expect(retry).toMatchObject({ alreadyInFlight: true });
     expect(retry?.done).toBe(started?.done);
     release({
@@ -315,6 +234,6 @@ describe("startNodePairingSshVerify", () => {
       stdout: `{"deviceId":"${identity.deviceId}","publicKey":"${identity.publicKey}"}\n`,
     });
     await expect(started?.done).resolves.toMatchObject({ ok: true });
-    expect(probeRuns).toBe(1);
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 });

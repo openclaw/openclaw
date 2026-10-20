@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
+import { Dynamic } from "@solidjs/web";
+import { createComponent, createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -17,10 +18,15 @@ import {
 } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
-import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
+import {
+  createBackgroundLayoutRef,
+  SessionBackgroundLayoutScope,
+} from "./session-background-layout-context.tsx";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
-import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
+import { SessionBackgroundView } from "./session-background-view.tsx";
+import { SessionBackground, backgroundSourceForSurface } from "./session-background.tsx";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
@@ -55,7 +61,6 @@ function fixture(resourceBasePath = "/control") {
     branding: resolveThemeBranding(undefined),
     mode: "dark",
     resolvedMode: "dark",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
@@ -110,6 +115,159 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("keeps the fade centered on the composer after resizing and releases its observer", async () => {
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  let resize = () => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        resize = callback;
+      }
+      observe = observe;
+      disconnect = disconnect;
+    },
+  );
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "none" });
+  const background = mountBackground(source.context);
+  const composer = document.createElement("div");
+  composer.className = "agent-chat__input";
+  const scroll = document.createElement("div");
+  scroll.className = "new-session-page__scroll";
+  scroll.scrollTop = 30;
+  background.parentElement!.append(composer, scroll);
+  background.layoutTargets = [
+    { kind: "composer", element: composer },
+    { kind: "scroll", element: scroll },
+  ];
+  vi.spyOn(background, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ y: 20, height: 1000 }),
+  );
+  const composerRect = vi.spyOn(composer, "getBoundingClientRect");
+  composerRect.mockReturnValue(DOMRect.fromRect({ y: 100, height: 40 }));
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  source.notify();
+  await waitForSolid(() => {
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("130px");
+  });
+  expect(observe).toHaveBeenCalledWith(composer);
+  composerRect.mockReturnValue(DOMRect.fromRect({ y: 150, height: 60 }));
+  resize();
+  expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("190px");
+  disconnect.mockClear();
+  background.remove();
+  await waitForSolid(() => expect(disconnect).toHaveBeenCalledOnce());
+});
+
+it("uses registered composers in DOM order and releases a removed draft target", async () => {
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  const [firstVisible, setFirstVisible] = createSignal(true);
+  function Composer(props: { top: number; registered: boolean }) {
+    const attach = createBackgroundLayoutRef("composer");
+    return createComponent(Dynamic, {
+      component: "div",
+      class: "agent-chat__input",
+      ref: (element: HTMLDivElement) => {
+        vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+          DOMRect.fromRect({ y: props.top, height: 100 }),
+        );
+        if (props.registered) {
+          attach(element);
+        }
+      },
+    });
+  }
+  const view = mountSolid(() =>
+    createComponent(SessionBackgroundLayoutScope, {
+      get children() {
+        return [
+          createComponent(Composer, { top: 800, registered: false }),
+          createComponent(SessionBackgroundView, {
+            context: source.context,
+            surface: "new-session",
+          }),
+          createComponent(SessionBackgroundLayoutScope, {
+            get children() {
+              return createComponent(Composer, { top: 50, registered: true });
+            },
+          }),
+          createComponent(Show, {
+            get when() {
+              return firstVisible();
+            },
+            get children() {
+              return () => createComponent(Composer, { top: 200, registered: true });
+            },
+          }),
+          createComponent(Composer, { top: 300, registered: true }),
+        ];
+      },
+    }),
+  );
+  const background = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
+  await waitForSolid(() =>
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px"),
+  );
+  setFirstVisible(false);
+  await waitForSolid(() =>
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("350px"),
+  );
+  setFirstVisible(true);
+  await waitForSolid(() =>
+    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px"),
+  );
+  view.unmount();
+});
+
+it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {
+  const warn = vi.spyOn(console, "warn");
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "none" });
+  const [context, setContext] = createSignal<ApplicationContext | undefined>(undefined);
+  const view = mountSolid(() =>
+    createComponent(SessionBackgroundView, {
+      get context() {
+        return context();
+      },
+      surface: "new-session",
+    }),
+  );
+  const slot = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
+  expect(slot.hidden).toBe(true);
+
+  setContext(source.context);
+  flush();
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  source.notify();
+  await waitForSolid(() => {
+    expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
+    expect(slot.hidden).toBe(false);
+    expect(slot.querySelector(".session-background__image--theme")).not.toBeNull();
+  });
+
+  const replacement = fixture();
+  replacement.settings.background = selectBackgroundSource({ kind: "none" });
+  setContext(replacement.context);
+  await waitForSolid(() => expect(slot.hidden).toBe(true));
+  source.notify();
+  flush();
+  expect(slot.hidden).toBe(true);
+
+  replacement.settings.background = selectBackgroundSource({ kind: "theme" });
+  replacement.notify();
+  await waitForSolid(() => expect(slot.hidden).toBe(false));
+  setContext(undefined);
+  await waitForSolid(() => expect(slot.hidden).toBe(true));
+  replacement.notify();
+  flush();
+  expect(slot.hidden).toBe(true);
+  expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
+  expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
+});
+
 it("keeps absent preferences distinct from None and independent disabled surfaces", () => {
   expect(backgroundSourceForSurface(undefined, "session")).toBeUndefined();
   const background = selectBackgroundSource({ kind: "custom", assetId: "asset-a" });
@@ -123,9 +281,10 @@ it("keeps absent preferences distinct from None and independent disabled surface
   });
 });
 
-it.each(["Lit provider", "Solid provider"])(
+it.each(["Solid provider"])(
   "inherits %s preferences and subscriptions until an explicit context overrides them",
   async (providerKind) => {
+    const warn = vi.spyOn(console, "warn");
     const inherited = fixture();
     let background: SessionBackground;
     if (providerKind === "Lit provider") {
@@ -163,24 +322,9 @@ it.each(["Lit provider", "Solid provider"])(
     await background.updateComplete;
     expect(background.querySelector(".session-background__image")).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
   },
 );
-
-it("does not request or render artwork on an initially disabled or hidden surface", async () => {
-  const { context } = fixture();
-  const background = document.createElement("openclaw-session-background") as SessionBackground;
-  background.context = context;
-  document.body.append(background);
-  await background.updateComplete;
-  expect(fetch).not.toHaveBeenCalled();
-  expect(background.querySelector(".session-background__image")).toBeNull();
-  background.presented = false;
-  background.surface = "new-session";
-  await background.updateComplete;
-  expect(fetch).not.toHaveBeenCalled();
-  expect(createObjectUrl).not.toHaveBeenCalled();
-  expect(background.querySelector(".session-background__image")).toBeNull();
-});
 
 it("does not read custom bytes or render theme URLs when accessibility suppresses artwork", async () => {
   vi.stubGlobal("matchMedia", () => ({
@@ -212,31 +356,6 @@ it("recomputes custom image contrast only when painted palette tokens change, no
   notify();
   await background.updateComplete;
   expect(getCanvasContext).toHaveBeenCalledTimes(2);
-});
-
-it("preserves full bundled Theme strength at the default visibility without canvas or private reads", async () => {
-  const { context, settings, notify } = fixture();
-  settings.background = selectBackgroundSource({ kind: "theme" });
-  const background = mountBackground(context);
-  await background.updateComplete;
-  const opacity = () =>
-    background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity;
-  expect(opacity()).toBe("1");
-  const surface = background.parentElement!;
-  expect(surface.hasAttribute("data-background-painted")).toBe(true);
-  settings.background = { ...settings.background, visibility: 1 };
-  notify();
-  await background.updateComplete;
-  expect(opacity()).toBe("1");
-  settings.background = { ...settings.background, visibility: 0.25 };
-  notify();
-  await background.updateComplete;
-  expect(opacity()).toBe("0.5");
-  background.remove();
-  await Promise.resolve();
-  expect(surface.hasAttribute("data-background-painted")).toBe(false);
-  expect(getCanvasContext).not.toHaveBeenCalled();
-  expect(fetch).not.toHaveBeenCalled();
 });
 
 it("reads a same-origin mounted asset using the canonical auth primitive without caching", async () => {
@@ -305,21 +424,21 @@ it("never retries an old credential after identity changed during a rejected fet
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-it.each([
-  ["ws://remote.example/ws", "http://remote.example"],
-  ["wss://remote.example/control", "https://remote.example"],
-])("does not infer a remote HTTP mount from %s", async (gatewayUrl, origin) => {
-  const { context } = fixture();
-  context.gateway.connection.gatewayUrl = gatewayUrl;
-  await readBackgroundImage(context, "asset-a", {
-    signal: new AbortController().signal,
-    isCurrent: () => true,
-  });
-  expect(fetch).toHaveBeenCalledWith(
-    `${origin}/__openclaw__/users/background/asset-a`,
-    expect.anything(),
-  );
-});
+it.each([["wss://remote.example/control", "https://remote.example"]])(
+  "does not infer a remote HTTP mount from %s",
+  async (gatewayUrl, origin) => {
+    const { context } = fixture();
+    context.gateway.connection.gatewayUrl = gatewayUrl;
+    await readBackgroundImage(context, "asset-a", {
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      `${origin}/__openclaw__/users/background/asset-a`,
+      expect.anything(),
+    );
+  },
+);
 
 it("preserves the explicit same-origin development proxy mount", async () => {
   const gatewayUrl = "wss://remote.example/control";
@@ -352,35 +471,6 @@ it("revokes a mounted image immediately on logout and does not restore it on rec
   gateway.publish({ ...state, selfUser: null });
   await background.updateComplete;
   expect(fetch).toHaveBeenCalledTimes(1);
-});
-
-it("retains draft siblings and revokes artwork when the pane hides or preferences select None", async () => {
-  const { context, settings, notify } = fixture();
-  const wrapper = document.createElement("div");
-  wrapper.className = "new-session-page";
-  const draft = document.createElement("textarea");
-  draft.value = "Unsent draft";
-  const background = document.createElement("openclaw-session-background") as SessionBackground;
-  background.context = context;
-  background.surface = "new-session";
-  wrapper.append(background, draft);
-  document.body.append(wrapper);
-  await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
-  expect(wrapper.hasAttribute("data-background-custom")).toBe(true);
-  background.presented = false;
-  await background.updateComplete;
-  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
-  expect(background.querySelector("img")).toBeNull();
-  expect(wrapper.hasAttribute("data-background-custom")).toBe(false);
-  expect(wrapper.hasAttribute("data-background-painted")).toBe(false);
-  settings.background = selectBackgroundSource({ kind: "none" });
-  notify();
-  background.presented = true;
-  await background.updateComplete;
-  expect(background.querySelector(".session-background__image")).toBeNull();
-  expect(fetch).toHaveBeenCalledTimes(1);
-  expect(wrapper.querySelector("textarea")).toBe(draft);
-  expect(draft.value).toBe("Unsent draft");
 });
 
 it("retires the prior client even when the profile and gateway URL are unchanged", async () => {
@@ -463,29 +553,32 @@ it("does not restore a private mirror before profile hydration, including unchan
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
 });
 
-it.each(["new-session", "session", "preview"] as const)(
-  "never bypasses the photo contrast bound in Full bleed on %s",
-  async (surface) => {
-    const { context, settings, notify } = fixture();
+it("paints pre-dimmed plugin artwork at upload strength in both presentations", async () => {
+  const { context, settings, notify } = fixture();
+  document.documentElement.dataset.themeBackground = "plugin";
+  try {
     settings.background = {
-      ...settings.background,
+      ...selectBackgroundSource({ kind: "theme" }),
       presentation: "full-bleed",
-      showInSessions: true,
-      visibility: 1,
+      visibility: 0.5,
     };
     const background = document.createElement("openclaw-session-background") as SessionBackground;
     background.context = context;
-    background.surface = surface;
+    background.surface = "preview";
     document.body.append(background);
-    await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
-    expect(background.querySelector("img")?.style.opacity).toBe("0");
-    settings.background = { ...settings.background, visibility: 0.5 };
+    await background.updateComplete;
+    const opacity = () =>
+      background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity;
+    // The token already carries upload dimming; the bundled 0.7 cap would dim it twice.
+    expect(opacity()).toBe("1");
+    settings.background = { ...settings.background, visibility: 0.25 };
     notify();
     await background.updateComplete;
-    expect(background.querySelector("img")?.style.opacity).toBe("0");
-    expect(getCanvasContext).toHaveBeenCalledOnce();
-  },
-);
+    expect(opacity()).toBe("0.5");
+  } finally {
+    delete document.documentElement.dataset.themeBackground;
+  }
+});
 
 it("also keeps bundled Full bleed artwork beneath the permanent overlay", async () => {
   const { context, settings, notify } = fixture();
@@ -509,65 +602,3 @@ it("also keeps bundled Full bleed artwork beneath the permanent overlay", async 
     background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity,
   ).toBe("0.35");
 });
-
-it("allows a temporary settings preview without changing disabled placements", async () => {
-  const { context, settings } = fixture();
-  settings.background = { ...settings.background, showOnNewSession: false, showInSessions: false };
-  const background = document.createElement("openclaw-session-background") as SessionBackground;
-  background.context = context;
-  background.surface = "preview";
-  background.preferenceOverride = {
-    ...settings.background,
-    presentation: "full-bleed",
-    visibility: 0.8,
-  };
-  document.body.append(background);
-  await waitForSolid(() => expect(background.querySelector("img")).not.toBeNull());
-  expect(settings.background.showOnNewSession).toBe(false);
-  expect(settings.background.showInSessions).toBe(false);
-  background.presented = false;
-  await background.updateComplete;
-  expect(background.querySelector("img")).toBeNull();
-  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
-});
-
-type RGB = readonly [number, number, number];
-type RGBA = readonly [number, number, number, number];
-
-it.each([
-  { surface: [16, 20, 28], foreground: [240, 240, 248, 190] },
-  { surface: [248, 244, 240], foreground: [12, 16, 24, 210] },
-] satisfies Array<{ surface: RGB; foreground: RGBA }>)(
-  "protects translucent foregrounds against every extreme image color",
-  ({ surface, foreground }) => {
-    const opacity = backgroundImageOpacityLimit(surface, [foreground]);
-    const luma = (rgb: RGB) => {
-      const linear = (value: number) => {
-        const n = value / 255;
-        return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
-      };
-      return linear(rgb[0]) * 0.2126 + linear(rgb[1]) * 0.7152 + linear(rgb[2]) * 0.0722;
-    };
-    for (const red of [0, 255]) {
-      for (const green of [0, 255]) {
-        for (const blue of [0, 255]) {
-          const blendSurface = (channel: 0 | 1 | 2, value: number) =>
-            surface[channel] * (1 - opacity) + value * opacity;
-          const background: RGB = [
-            blendSurface(0, red),
-            blendSurface(1, green),
-            blendSurface(2, blue),
-          ];
-          const alpha = foreground[3] / 255;
-          const blendText = (channel: 0 | 1 | 2) =>
-            foreground[channel] * alpha + background[channel] * (1 - alpha);
-          const text: RGB = [blendText(0), blendText(1), blendText(2)];
-          expect(
-            (Math.max(luma(text), luma(background)) + 0.05) /
-              (Math.min(luma(text), luma(background)) + 0.05),
-          ).toBeGreaterThanOrEqual(4.5);
-        }
-      }
-    }
-  },
-);

@@ -12,6 +12,12 @@ import path from "node:path";
 import { Readable, type Duplex, type Writable } from "node:stream";
 import { createSecureContext, createServer as createTlsServer, rootCertificates } from "node:tls";
 import { URL } from "node:url";
+import {
+  createNodeProxyAgent,
+  resolveEnvNodeProxyUrlForTarget,
+} from "../../infra/net/node-proxy-agent.js";
+import { resolveActiveManagedProxyTlsOptions } from "../../infra/net/proxy/active-managed-proxy-tls.js";
+import { loadProxyline } from "../../infra/net/proxyline-runtime.js";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
   containsSecretSentinel,
@@ -24,6 +30,7 @@ import {
   type SecretEgressCertificateStatus,
   type SecretEgressTlsContext,
 } from "./certificates.js";
+import { createSecretEgressProxyEnvironment } from "./environment.js";
 import {
   createSecretEgressBodyBudget,
   forwardSecretEgressRequest,
@@ -79,6 +86,7 @@ type RegisteredProcess = {
   resources: Set<Readable | Writable>;
   tlsServers: Map<string, SecretEgressTlsContext>;
   upstreamTlsAgent: HttpsAgent;
+  upstreamHttpAgent: HttpsAgent | undefined;
 };
 
 function parseConnectTarget(rawTarget: string | undefined): ConnectTarget {
@@ -180,6 +188,35 @@ function substituteRequest(params: {
     return swapped;
   };
   const target = new URL(swap(params.target.toString(), true));
+  const swapHeader = (name: string, value: string) => {
+    if (name !== "authorization" || !/^Basic(?:\s|$)/iu.test(value)) {
+      return swap(value);
+    }
+    const basic = /^(Basic)\s+([A-Za-z0-9+/]+={0,2})$/iu.exec(value);
+    if (!basic?.[2]) {
+      if (containsSecretSentinel(value)) {
+        throw new SecretEgressSubstitutionError("unresolved-sentinel");
+      }
+      return value;
+    }
+    const bytes = Buffer.from(basic[2], "base64");
+    const credentials = bytes.toString("utf8");
+    if (!containsSecretSentinel(credentials)) {
+      return value;
+    }
+    // Buffer's decoder is permissive. Accept only canonical UTF-8 credentials.
+    const canonical = bytes.toString("base64");
+    if (
+      (basic[2].includes("=") ? canonical : canonical.replace(/=+$/u, "")) !== basic[2] ||
+      !Buffer.from(credentials, "utf8").equals(bytes) ||
+      !credentials.includes(":") ||
+      // oxlint-disable-next-line no-control-regex -- Basic credentials prohibit C0 controls and DEL.
+      /[\u0000-\u001f\u007f]/u.test(credentials)
+    ) {
+      throw new SecretEgressSubstitutionError("unresolved-sentinel");
+    }
+    return `${basic[1]} ${Buffer.from(swap(credentials), "utf8").toString("base64")}`;
+  };
   const output: IncomingHttpHeaders = {};
   for (const [name, rawValue] of Object.entries(params.headers)) {
     const lowerName = name.toLowerCase();
@@ -187,9 +224,9 @@ function substituteRequest(params: {
       continue;
     }
     if (Array.isArray(rawValue)) {
-      output[name] = rawValue.map((value) => swap(value));
+      output[name] = rawValue.map((value) => swapHeader(lowerName, value));
     } else if (rawValue !== undefined) {
-      output[name] = swap(rawValue);
+      output[name] = swapHeader(lowerName, rawValue);
     }
   }
   output.host = target.host;
@@ -210,9 +247,14 @@ export async function startSecretEgressProxyServer(params: {
   fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
   // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
   // leaf renewal does not change it. Share only parsed CAs across process grants.
-  const upstreamSecureContext = createSecureContext({
-    ca: [...rootCertificates, caPem],
-  });
+  const upstreamTlsOptions = {
+    secureContext: createSecureContext({ ca: [...rootCertificates, caPem] }),
+    keepAlive: true,
+    maxSockets: 64,
+    maxTotalSockets: 64,
+    maxFreeSockets: 4,
+    timeout: 30_000,
+  };
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
   const allowedHosts =
     params.allowedHosts === undefined
@@ -256,6 +298,7 @@ export async function startSecretEgressProxyServer(params: {
     registrations.delete(registered);
     registered.sentinelBindings.clear();
     registered.upstreamTlsAgent.destroy();
+    registered.upstreamHttpAgent?.destroy();
     for (const resource of registered.resources) {
       resource.destroy();
     }
@@ -394,6 +437,7 @@ export async function startSecretEgressProxyServer(params: {
         });
       },
       upstreamTlsAgent: forward.registered.upstreamTlsAgent,
+      upstreamHttpAgent: forward.registered.upstreamHttpAgent,
       isActive: forward.registered.isActive,
       ownResource: (resource) => ownResource(forward.registered, resource),
       releaseResponse: () => {
@@ -508,10 +552,29 @@ export async function startSecretEgressProxyServer(params: {
         return;
       }
       ownResource(authorization, clientSocket);
+      if (!authorization.isActive() || clientSocket.destroyed) {
+        return;
+      }
       if (bypassHosts.has(target.hostname)) {
-        const upstream = ownResource(
-          authorization,
-          net.connect(target.port, target.hostname, () => {
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        clientSocket.once("close", abort);
+        try {
+          const host = net.isIPv6(target.hostname) ? `[${target.hostname}]` : target.hostname;
+          const proxyUrl = resolveEnvNodeProxyUrlForTarget(`https://${host}:${target.port}`);
+          const upstream = ownResource(
+            authorization,
+            proxyUrl
+              ? await loadProxyline().openProxyConnectTunnel({
+                  proxyUrl,
+                  proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href }),
+                  targetHost: target.hostname,
+                  targetPort: target.port,
+                  signal: controller.signal,
+                })
+              : net.connect(target.port, target.hostname),
+          );
+          const connected = () => {
             if (!authorization.isActive() || clientSocket.destroyed) {
               upstream.destroy();
               return;
@@ -522,11 +585,23 @@ export async function startSecretEgressProxyServer(params: {
             }
             clientSocket.pipe(upstream).pipe(clientSocket);
             auditUnsubstitutedRequest(target.hostname, "bypass", "forwarded");
-          }),
-        );
-        clientSocket.once("close", () => upstream.destroy());
-        upstream.once("close", () => clientSocket.destroy());
-        upstream.once("error", () => clientSocket.destroy());
+          };
+          clientSocket.once("close", () => upstream.destroy());
+          upstream.once("close", () => clientSocket.destroy());
+          upstream.once("error", () => clientSocket.destroy());
+          if (proxyUrl) {
+            connected();
+          } else {
+            upstream.once("connect", connected);
+          }
+        } catch {
+          if (authorization.isActive() && !clientSocket.destroyed) {
+            auditUnsubstitutedRequest(target.hostname, "upstream-error");
+            clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+          }
+        } finally {
+          clientSocket.off("close", abort);
+        }
         return;
       }
       if (!hostAllowed(target.hostname, authorization)) {
@@ -598,14 +673,13 @@ export async function startSecretEgressProxyServer(params: {
         tlsServers: new Map(),
         // Node pools by origin. Grant ownership keeps connections and TLS sessions
         // isolated and lets revocation destroy idle sockets as well as live work.
-        upstreamTlsAgent: new HttpsAgent({
-          secureContext: upstreamSecureContext,
-          keepAlive: true,
-          maxSockets: 64,
-          maxTotalSockets: 64,
-          maxFreeSockets: 4,
-          timeout: 30_000,
-        }),
+        upstreamTlsAgent:
+          createNodeProxyAgent({
+            mode: "env",
+            protocol: "https",
+            agentOptions: upstreamTlsOptions,
+          }) ?? new HttpsAgent(upstreamTlsOptions),
+        upstreamHttpAgent: createNodeProxyAgent({ mode: "env", protocol: "http" }),
       };
       registrations.add(registered);
       // Basic is deliberately used because curl and Go net/http derive it from
@@ -615,16 +689,7 @@ export async function startSecretEgressProxyServer(params: {
       const token = registered.token.toString("base64url");
       const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${token}@127.0.0.1:${address.port}`;
       return {
-        env: {
-          HTTPS_PROXY: proxyUrl,
-          HTTP_PROXY: proxyUrl,
-          NODE_USE_ENV_PROXY: "1",
-          NODE_EXTRA_CA_CERTS: trustBundlePath,
-          SSL_CERT_FILE: trustBundlePath,
-          CURL_CA_BUNDLE: trustBundlePath,
-          REQUESTS_CA_BUNDLE: trustBundlePath,
-          GIT_SSL_CAINFO: trustBundlePath,
-        },
+        env: createSecretEgressProxyEnvironment(proxyUrl, trustBundlePath),
         revoke: () => revokeRegistration(registered),
       };
     },

@@ -1,7 +1,8 @@
 import path from "node:path";
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it as baseIt, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
   sqliteSessionIdWriteScope,
@@ -35,10 +36,7 @@ import {
   consumeSessionPendingInput,
   readSessionInputCompletion,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  appendTranscriptEventSync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type {
   SessionActorHotState,
   SessionActorOperations,
@@ -50,8 +48,12 @@ import {
   createSessionActorReplica,
   readSessionActorEntryFacts,
   readSessionActorRowFacts,
+  readSessionActorTranscriptReplica,
   retainSessionActorEntryFacts,
+  retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
+import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
+import { sessionActorFileTarget } from "./session-actor-worker.test-support.js";
 import { createSessionActor } from "./session-actor.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
@@ -62,85 +64,266 @@ import { prepareSessionMaintenancePreservation } from "./store-maintenance-prese
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 type Fixture = Parameters<Parameters<typeof withReplica>[0]>[0];
+type Replica = ReturnType<typeof replicaFor>;
+const lifetime = { assertCurrent() {}, assertReadable() {} };
+const entry = (label = "before", updatedAt = 1, sessionId = "replica-session") => ({
+  sessionId,
+  updatedAt,
+  label,
+});
+
+function replicaFor(
+  target: Parameters<typeof createSessionActorReplica>[0]["target"],
+  currentGeneration: () => string,
+) {
+  const replica = createSessionActorReplica({ target, lifetime, currentGeneration });
+  return Object.assign(replica, { [Symbol.dispose]: () => replica.close() });
+}
+
+function tokenFor(state: SessionActorHotState, databasePath: string) {
+  return readSqliteDatabaseScopedWriteTokenForPath(databasePath, [
+    ...collectSessionEntryLookupKeys(state.target.sessionKey),
+    ...state.dependencySessionIds.map(sqliteSessionIdWriteScope),
+  ])!;
+}
+
+function retainEntry(
+  state: SessionActorHotState,
+  facts: Parameters<typeof retainSessionActorEntryFacts>[1][number]["facts"],
+  generation: string,
+) {
+  assert(state.target.database.kind === "file", "Replica fixture requires a durable target");
+  retainSessionActorEntryFacts(
+    state.target.database,
+    [{ sessionKey: state.target.sessionKey, facts }],
+    generation,
+  );
+}
+
+function retainText(state: SessionActorHotState, text: string) {
+  const transcript: SessionActorTranscriptReplica = {
+    sessionId: state.entry?.sessionId,
+    version: state.transcript.version,
+    tail: {
+      coveredAfterSeq: -1,
+      events: [{ rawSeq: 0, event: { text }, serializedBytes: text.length }],
+    },
+  };
+  retainSessionActorTranscriptReplica(state, transcript);
+  return transcript;
+}
 
 async function withReplica(
   run: (fixture: {
-    replica: ReturnType<typeof createSessionActorReplica>;
+    replica: Replica;
     database: ReturnType<typeof openOpenClawAgentDatabase>;
     scope: { agentId: string; sessionKey: string; storePath: string; env: NodeJS.ProcessEnv };
     load: (epoch?: string, sequence?: number) => SessionActorHotState;
-    reacquire: () => ReturnType<typeof createSessionActorReplica>;
+    reacquire: () => Replica;
     retireGeneration: () => void;
   }) => void | Promise<void>,
+  sessionKey = "agent:main:actor-replica",
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:actor-replica",
-      storePath: database.path,
-      env,
-    };
-    replaceSessionEntrySync(scope, { sessionId: "replica-session", updatedAt: 1, label: "before" });
+    const scope = { agentId: "main", sessionKey, storePath: database.path, env };
+    replaceSessionEntrySync(scope, entry());
     const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Replica fixture requires a durable database");
-    }
-    const target = {
-      sessionKey: scope.sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    assert(typeof identity.identity === "string", "Replica fixture requires a durable database");
+    const target = sessionActorFileTarget(database, scope.sessionKey);
     let generation = 0;
-    const reacquire = () =>
-      createSessionActorReplica({
-        target,
-        lifetime: { assertCurrent() {}, assertReadable() {} },
-        currentGeneration: () => `${identity.incarnation}:${generation}`,
-      });
-    const replica = reacquire();
+    const reacquire = () => replicaFor(target, () => `${identity.incarnation}:${generation}`);
+    using replica = reacquire();
     const load = (epoch = "first", sequence = 0): SessionActorHotState => {
       const writeToken = readSqliteDatabaseScopedWriteTokenForPath(
         database.path,
         collectSessionEntryLookupKeys(target.sessionKey),
       );
-      if (!writeToken) {
-        throw new Error("Replica fixture has an unsettled native writer");
-      }
+      assert(writeToken, "Replica fixture has an unsettled native writer");
       const state = hydrateSessionActorState(database, target, { epoch, sequence }, writeToken).hot;
-      state.writeToken = readSqliteDatabaseScopedWriteTokenForPath(database.path, [
-        ...collectSessionEntryLookupKeys(target.sessionKey),
-        ...state.dependencySessionIds.map(sqliteSessionIdWriteScope),
-      ])!;
+      state.writeToken = tokenFor(state, database.path);
       return state;
     };
-    try {
-      await run({
-        replica,
-        database,
-        scope,
-        load,
-        reacquire,
-        retireGeneration() {
-          generation += 1;
-        },
-      });
-    } finally {
-      replica.close();
-    }
+    await run({
+      replica,
+      database,
+      scope,
+      load,
+      reacquire,
+      retireGeneration() {
+        generation += 1;
+      },
+    });
   });
 }
+
+const it = baseIt.extend<{ fixture: Fixture }>({
+  fixture: async ({ task: _task }, use) => withReplica(use),
+});
 
 function hydrate({ replica, load }: Fixture, epoch = "first", sequence = 0) {
   const selected = replica.beginRead();
   const snapshot = load(epoch, sequence);
-  expect(selected.install(snapshot)).toBe(true);
+  expect(selected(snapshot)).toBe(true);
   return snapshot;
 }
+
+function reloadInvalidated(fixture: Fixture) {
+  expect(fixture.replica.read()).toBeUndefined();
+  return hydrate(fixture);
+}
+
+it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
+  await drainGlobalSingletonLifecycleState("restart");
+  await withReplica((fixture) => {
+    const original = fixture.load();
+    fixture.replica.close();
+    fixture.replica.invalidate();
+    const cells: Array<{ replica: Replica; state: SessionActorHotState }> = [];
+    const create = (entryFirst = false, keepOpen = false) => {
+      const state: SessionActorHotState = {
+        ...structuredClone(original),
+        target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
+      };
+      state.dependencySessionIds = [];
+      state.writeToken = tokenFor(state, fixture.database.path);
+      if (entryFirst) {
+        retainEntry(state, { entry: state.entry, snapshots: "full" }, "budget-reader");
+      }
+      const replica = replicaFor(
+        sessionActorFileTarget(fixture.database, state.target.sessionKey),
+        () => "budget-reader",
+      );
+      expect(replica.beginRead()(state)).toBe(true);
+      if (!keepOpen) {
+        replica.close();
+      }
+      const cell = { replica, state };
+      cells.push(cell);
+      return cell;
+    };
+    const retain = (cell: (typeof cells)[number], characters: number) =>
+      retainText(cell.state, "x".repeat(characters));
+    try {
+      const first = create(false, true);
+      const second = create(true);
+      const third = create();
+      const firstTranscript = retain(first, 1024 * 1024);
+      retain(second, 1024 * 1024);
+      const thirdTranscript = retain(third, 1024 * 1024);
+      // A copy-on-write append charges shared payloads again and evicts the next oldest.
+      const grown: SessionActorTranscriptReplica = {
+        ...firstTranscript,
+        tail: {
+          ...firstTranscript.tail,
+          events: [
+            ...firstTranscript.tail.events,
+            { ...firstTranscript.tail.events[0]!, rawSeq: 1 },
+          ],
+        },
+      };
+      retainSessionActorTranscriptReplica(first.state, grown);
+      expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
+      expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
+      retain(first, 512 * 1024);
+      first.replica.invalidate();
+      expect(first.replica.beginRead()(first.state)).toBe(true);
+      retain(first, 1024 * 1024);
+      const fourth = create();
+      retain(fourth, 2 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(third.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(first.state)).toBeDefined();
+      const oversized = retain(fourth, 5 * 1024 * 1024);
+      expect(readSessionActorTranscriptReplica(first.state)).toBeUndefined();
+      expect(readSessionActorTranscriptReplica(fourth.state)).toBe(oversized);
+      retain(fourth, 16);
+      for (const cell of cells) {
+        cell.replica.close();
+        cell.replica.invalidate();
+      }
+      const small = Array.from({ length: 129 }, (_, index) => {
+        const cell = create(index % 2 === 0, true);
+        return { cell, transcript: retain(cell, 16) };
+      });
+      expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
+      for (const { cell, transcript } of small.slice(1)) {
+        expect(readSessionActorTranscriptReplica(cell.state)).toBe(transcript);
+      }
+    } finally {
+      for (const { replica } of cells) {
+        replica.close();
+        replica.invalidate();
+      }
+    }
+  });
+});
+
+it.each(["entry", "transcript", "plugin keys"] as const)(
+  "evicts old replicas for large %s strings and releases replaced bytes",
+  async (payload) => {
+    await withReplica(({ replica, load }) => {
+      const first = load();
+      assert(first.target.database.kind === "file", "Replica fixture requires a durable target");
+      const database = first.target.database;
+      const siblingTarget = {
+        database,
+        sessionKey: "agent:main:budget-sibling",
+      };
+      using sibling = replicaFor(siblingTarget, () => "budget-sibling");
+      const large = "x".repeat(5 * 1024 * 1024);
+      const install = (label: string) => {
+        const next = load();
+        if (payload !== "transcript") {
+          next.entry = entry(label);
+          if (payload === "plugin keys") {
+            next.entry.label = "before";
+            next.entry.pluginExtensions = { fixture: { [label]: null } };
+          }
+        }
+        expect(replica.beginRead()(next)).toBe(true);
+        if (payload === "transcript") {
+          retainText(next, label);
+        }
+        return next;
+      };
+      const installSibling = () => {
+        const next = { ...load(), target: siblingTarget };
+        next.writeToken = tokenFor(next, database.nativeLocation);
+        expect(sibling.beginRead()(next)).toBe(true);
+        return next;
+      };
+      const oversized = install(large);
+      expect(replica.read()).toBe(oversized);
+      const small = installSibling();
+      expect(replica.read()).toBeUndefined();
+      expect(sibling.read()).toBe(small);
+      install(large);
+      expect(sibling.read()).toBeUndefined();
+      const replaced = install("small");
+      installSibling();
+      expect(replica.read()).toBe(replaced);
+    });
+  },
+);
+
+it("keeps actor facts after usage cache writes and pruning", async ({ fixture }) => {
+  const { database, scope, replica } = fixture;
+  const usage = prepareSessionCostUsageRefreshLock(scope.agentId, database.path, {
+    env: scope.env,
+  });
+  try {
+    expect(await usage.acquire()).toBe(true);
+    const snapshot = hydrate(fixture);
+    const valueJson = new TextEncoder().encode("{}");
+    await usage.writeRollup([{ rollupId: "usage-rollup", valueJson, blob: null, updatedAt: 1 }]);
+    expect(replica.read()).toEqual(snapshot);
+    await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
+    expect(replica.read()).toEqual(snapshot);
+  } finally {
+    await usage.release();
+  }
+});
 
 it("retains the first creation after restart before any replica reader and applies later writes", async () => {
   await drainGlobalSingletonLifecycleState("restart");
@@ -153,19 +336,7 @@ it("retains the first creation after restart before any replica reader and appli
       entry: { sessionId: "first-reader-session", updatedAt: 1, label: "created" },
     }));
     expect(created.ok).toBe(true);
-    const identity = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof identity.identity !== "string") {
-      throw new Error("Expected durable session target");
-    }
-    const durableTarget = {
-      sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const durableTarget = sessionActorFileTarget(database, sessionKey);
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "created" });
     await patchSessionEntryCore(createdScope, () => ({ updatedAt: 2, label: "updated" }));
     expect(readSessionActorEntryFacts(durableTarget)?.entry).toMatchObject({ label: "updated" });
@@ -210,376 +381,234 @@ function committed(
   return { kind: "committed", value: undefined, receipt };
 }
 
-it("returns a newer committed replica when a receipt arrives during a worker read", async () => {
-  await withReplica(async ({ replica, load, scope }) => {
-    const initial = load();
-    const started = Promise.withResolvers<void>();
-    const reply = Promise.withResolvers<SessionActorHotState>();
-    const execute = vi
-      .fn<SqliteWorkerStore<SessionActorOperations>["execute"]>()
-      .mockReturnValue(reply.promise);
-    const actor = createSessionActor({
-      target: initial.target,
-      lifetime: { assertCurrent() {}, assertReadable() {} },
-      replica,
-      transport: {
-        run: async (operation) => {
-          const result = operation({
-            execute,
-          });
-          started.resolve();
-          return result;
-        },
-        async release() {},
+it("returns a newer committed replica when a receipt arrives during a worker read", async ({
+  fixture: { replica, load, scope },
+}) => {
+  const initial = load();
+  const started = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<SessionActorHotState>();
+  const execute = vi
+    .fn<SqliteWorkerStore<SessionActorOperations>["execute"]>()
+    .mockReturnValue(reply.promise);
+  const actor = createSessionActor({
+    target: initial.target,
+    lifetime,
+    replica,
+    transport: {
+      run: async (operation) => {
+        const result = operation({ execute });
+        started.resolve();
+        return result;
       },
-    });
-    const publish = () => {
-      const pending = replica.beginCommand();
-      replaceSessionEntrySync(scope, {
-        sessionId: "replica-session",
-        updatedAt: 2,
-        label: "after",
-      });
-      expect(pending.settle(committed(command(initial, "newer"), load("first", 1)))).toBe(true);
-    };
-    const authorize = vi.fn();
-    try {
-      const reading = actor.read({ assertCurrent() {}, authorize });
-      await started.promise;
-      publish();
-      reply.resolve(initial);
-      expect((await reading).entry).toMatchObject({ updatedAt: 2, label: "after" });
-      expect(execute).toHaveBeenCalledOnce();
-      expect(authorize).toHaveBeenLastCalledWith(
-        "commit",
-        expect.objectContaining({ entry: expect.objectContaining({ updatedAt: 2 }) }),
-      );
-    } finally {
-      reply.resolve(initial);
-      await actor.release();
-    }
+      async release() {},
+    },
   });
+  const authorize = vi.fn();
+  try {
+    const reading = actor.read({ assertCurrent() {}, authorize });
+    await started.promise;
+    const pending = replica.beginCommand();
+    replaceSessionEntrySync(scope, entry("after", 2));
+    expect(pending.settle(committed(command(initial, "newer"), load("first", 1)))).toBe(true);
+    reply.resolve(initial);
+    expect((await reading).entry).toMatchObject({ updatedAt: 2, label: "after" });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenLastCalledWith(
+      "commit",
+      expect.objectContaining({ entry: expect.objectContaining({ updatedAt: 2 }) }),
+    );
+  } finally {
+    reply.resolve(initial);
+    await actor.release();
+  }
 });
 
 it("shares committed facts across released handles and retires them for writes and worker loss", async () => {
   await withReplica((fixture) => {
-    const first = hydrate(fixture);
-    const replacement = fixture.reacquire();
-    fixture.replica.close();
-    try {
-      expect(fixture.replica.read()).toBeUndefined();
-      expect(replacement.read()).toEqual(first);
-      const context = command(first, "replacement-command");
-      const pending = replacement.beginCommand();
-      const sibling = fixture.reacquire();
-      try {
-        expect(sibling.read()).toEqual(first);
-        expect(pending.settle(committed(context, fixture.load("first", 1)))).toBe(true);
-        expect(sibling.read()?.version).toEqual({ epoch: "first", sequence: 1 });
-        replacement.close();
-        expect(sibling.read()?.version.sequence).toBe(1);
-        assignSessionOwner(fixture.scope, {
-          owner: { type: "agent", id: "new-owner" },
-          assignedBy: { type: "agent", id: "main" },
-          assignedAt: 2,
-        });
-        expect(sibling.read()).toBeUndefined();
-        hydrate({ ...fixture, replica: sibling }, "after-write");
-        expect(sibling.read()?.entry?.owner?.actor.id).toBe("new-owner");
-        fixture.retireGeneration();
-        const restarted = fixture.reacquire();
-        try {
-          expect(restarted.read()).toBeUndefined();
-          expect(sibling.read()).toBeUndefined();
-          hydrate({ ...fixture, replica: restarted }, "restarted");
-          expect(restarted.read()?.version.epoch).toBe("restarted");
-        } finally {
-          restarted.close();
-        }
-      } finally {
-        sibling.close();
-      }
-    } finally {
-      replacement.close();
-    }
-  });
-});
-
-it("retains unrelated session postimages but invalidates a shared physical session window", async () => {
-  await withReplica((fixture) => {
-    const other = { ...fixture.scope, sessionKey: "agent:main:other-replica" };
-    replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 1, label: "other" });
-    const snapshot = hydrate(fixture);
-    if (snapshot.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
-    retainSessionActorEntryFacts(
-      { ...snapshot.target, database: snapshot.target.database },
-      { entry: snapshot.entry, snapshots: [] },
-      "partial-entry-reader",
-    );
-    expect(fixture.replica.read()).toEqual(snapshot);
-    replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 2, label: "changed" });
-    expect(fixture.replica.read()).toEqual(snapshot);
-    using sibling = openNodeSqliteDatabase(fixture.database.path);
-    withSqliteDatabaseWriteScope(
-      sibling,
-      [other.sessionKey, sqliteSessionIdWriteScope("other-session")],
-      () =>
-        runSqliteImmediateTransactionSync(sibling, () => {
-          sibling
-            .prepare("UPDATE session_windows SET display_name = ? WHERE session_id = ?")
-            .run("sibling-window", "other-session");
-        }),
-    );
-    expect(fixture.replica.read()).toEqual(snapshot);
-
-    // A second logical key can point at the actor's existing physical window.
-    replaceSessionEntrySync(other, { sessionId: "replica-session", updatedAt: 3, label: "shared" });
+    hydrate(fixture);
+    const change = { ...fixture.scope, sessionKey: fixture.scope.sessionKey.toLowerCase() };
+    sessionChanges.invalidate({ ...change, factsInvalidated: true });
     expect(fixture.replica.read()).toBeUndefined();
-    expect(
-      fixture.database.db
-        .prepare("SELECT display_name FROM session_windows WHERE session_id = ?")
-        .get("replica-session"),
-    ).toEqual({ display_name: "shared" });
+    hydrate(fixture);
+    sessionChanges.invalidate({ all: true, scope: { storePath: change.storePath } });
+    expect(fixture.replica.read()).toBeUndefined();
+    const first = hydrate(fixture);
+    using replacement = fixture.reacquire();
+    fixture.replica.close();
+    expect(fixture.replica.read()).toBeUndefined();
+    expect(replacement.read()).toEqual(first);
+    const context = command(first, "replacement-command");
+    const pending = replacement.beginCommand();
+    using sibling = fixture.reacquire();
+    expect(sibling.read()).toEqual(first);
+    expect(pending.settle(committed(context, fixture.load("first", 1)))).toBe(true);
+    expect(sibling.read()?.version).toEqual({ epoch: "first", sequence: 1 });
+    replacement.close();
+    expect(sibling.read()?.version.sequence).toBe(1);
+    assignSessionOwner(fixture.scope, {
+      owner: { type: "agent", id: "new-owner" },
+      assignedBy: { type: "agent", id: "main" },
+      assignedAt: 2,
+    });
+    expect(sibling.read()).toBeUndefined();
+    hydrate({ ...fixture, replica: sibling }, "after-write");
+    expect(sibling.read()?.entry?.owner?.actor.id).toBe("new-owner");
+    fixture.retireGeneration();
+    using restarted = fixture.reacquire();
+    expect(restarted.read()).toBeUndefined();
+    expect(sibling.read()).toBeUndefined();
+    hydrate({ ...fixture, replica: restarted }, "restarted");
+    expect(restarted.read()?.version.epoch).toBe("restarted");
+  }, "agent:main:matrix:group:!Room:server");
+});
+
+it("retains unrelated session postimages but invalidates a shared physical session window", ({
+  fixture,
+}) => {
+  const other = { ...fixture.scope, sessionKey: "agent:main:other-replica" };
+  replaceSessionEntrySync(other, entry("other", 1, "other-session"));
+  const snapshot = hydrate(fixture);
+  retainEntry(snapshot, { entry: snapshot.entry, snapshots: [] }, "partial-entry-reader");
+  expect(fixture.replica.read()).toEqual(snapshot);
+  replaceSessionEntrySync(other, entry("changed", 2, "other-session"));
+  expect(fixture.replica.read()).toEqual(snapshot);
+  using sibling = openNodeSqliteDatabase(fixture.database.path);
+  withSqliteDatabaseWriteScope(
+    sibling,
+    [other.sessionKey, sqliteSessionIdWriteScope("other-session")],
+    () =>
+      runSqliteImmediateTransactionSync(sibling, () => {
+        sibling
+          .prepare("UPDATE session_windows SET display_name = ? WHERE session_id = ?")
+          .run("sibling-window", "other-session");
+      }),
+  );
+  expect(fixture.replica.read()).toEqual(snapshot);
+
+  // A second logical key can point at the actor's existing physical window.
+  replaceSessionEntrySync(other, entry("shared", 3));
+  expect(fixture.replica.read()).toBeUndefined();
+  expect(
+    fixture.database.db
+      .prepare("SELECT display_name FROM session_windows WHERE session_id = ?")
+      .get("replica-session"),
+  ).toEqual({ display_name: "shared" });
+  expect(hydrate(fixture).entry?.label).toBe("before");
+  const shared = fixture.replica.read();
+  assignSessionOwner(other, {
+    owner: { type: "agent", id: "other-owner" },
+    assignedBy: { type: "agent", id: "main" },
+    assignedAt: 4,
+  });
+  // Ownership belongs to the other logical row, not its shared window.
+  expect(fixture.replica.read()).toEqual(shared);
+});
+
+it("invalidates partial native publications before disclosure and count-only participant writes through the shared receipt", ({
+  fixture,
+}) => {
+  const { replica, scope, database, load } = fixture;
+  hydrate(fixture);
+  const disclosures: Array<SessionActorHotState | undefined> = [];
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+      disclosures.push(replica.read());
+    }
+  });
+  try {
+    addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 2 });
+    expect(disclosures.length).toBeGreaterThan(0);
+    expect(disclosures.every((value) => value === undefined)).toBe(true);
+    expect(reloadInvalidated(fixture).members).toEqual([
+      { identityId: "reader", addedBy: "owner", addedAt: 2 },
+    ]);
+
+    const participant = {
+      identity: { type: "agent" as const, id: "helper" },
+      sessionAgentId: "main",
+    };
+    recordSessionParticipant(scope, { ...participant, promptedAt: 3 });
+    hydrate(fixture);
+    expect(replica.read()?.participants[0]?.contributionCount).toBe(1);
+    recordSessionParticipant(scope, { ...participant, promptedAt: 4 });
+    // This writer intentionally omits a display delta for contribution-only changes.
+    expect(reloadInvalidated(fixture).participants[0]).toMatchObject({
+      contributionCount: 2,
+      lastPromptedAt: 4,
+    });
+
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        (current) => {
+          writeSessionEntry(current, scope.sessionKey, entry("rolled back", 5));
+          throw new Error("abort replica fixture");
+        },
+        { agentId: scope.agentId, path: database.path, env: scope.env },
+      ),
+    ).toThrow("abort replica fixture");
+    expect(load().entry?.label).toBe("before");
     expect(hydrate(fixture).entry?.label).toBe("before");
-    const shared = fixture.replica.read();
-    assignSessionOwner(other, {
-      owner: { type: "agent", id: "other-owner" },
-      assignedBy: { type: "agent", id: "main" },
-      assignedAt: 4,
-    });
-    // Ownership belongs to the other logical row, not its shared window.
-    expect(fixture.replica.read()).toEqual(shared);
-  });
+  } finally {
+    unsubscribe();
+  }
 });
 
-it("invalidates partial native publications before disclosure and count-only participant writes through the shared receipt", async () => {
-  await withReplica((fixture) => {
-    const { replica, scope, database, load } = fixture;
-    hydrate(fixture);
-    const disclosures: Array<SessionActorHotState | undefined> = [];
-    const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
-        disclosures.push(replica.read());
-      }
-    });
-    try {
-      addSessionMember(scope, { identityId: "reader", addedBy: "owner", addedAt: 2 });
-      expect(disclosures.length).toBeGreaterThan(0);
-      expect(disclosures.every((value) => value === undefined)).toBe(true);
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).members).toEqual([
-        { identityId: "reader", addedBy: "owner", addedAt: 2 },
-      ]);
+it("invalidates unaccounted native writes and retains accepted postimages across handle closure", ({
+  fixture,
+}) => {
+  const { replica, load, scope, database } = fixture;
+  const initial = hydrate(fixture);
+  const shared = replica.read()!;
+  expect(shared).toBe(initial);
+  expect(replica.read()).toBe(shared);
+  expect(replica.beginRead()(shared)).toBe(true);
+  expect(replica.read()).toBe(shared);
 
-      const participant = {
-        identity: { type: "agent" as const, id: "helper" },
-        sessionAgentId: "main",
-      };
-      recordSessionParticipant(scope, { ...participant, promptedAt: 3 });
-      hydrate(fixture);
-      expect(replica.read()?.participants[0]?.contributionCount).toBe(1);
-      recordSessionParticipant(scope, { ...participant, promptedAt: 4 });
-      // This writer intentionally omits a display delta for contribution-only changes.
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).participants[0]).toMatchObject({
-        contributionCount: 2,
-        lastPromptedAt: 4,
-      });
-
-      expect(() =>
-        runOpenClawAgentWriteTransaction(
-          (current) => {
-            writeSessionEntry(current, scope.sessionKey, {
-              sessionId: "replica-session",
-              updatedAt: 5,
-              label: "rolled back",
-            });
-            throw new Error("abort replica fixture");
-          },
-          { agentId: scope.agentId, path: database.path, env: scope.env },
-        ),
-      ).toThrow("abort replica fixture");
-      expect(load().entry?.label).toBe("before");
-      expect(hydrate(fixture).entry?.label).toBe("before");
-    } finally {
-      unsubscribe();
-    }
+  const accepted = command(initial, "accepted");
+  const pending = replica.beginCommand();
+  expect(replica.read()).toBe(shared);
+  const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
+  expect(readSessionActorRowFacts(rowTarget)).toMatchObject({
+    entry: { sessionId: "replica-session", updatedAt: 1, label: "before" },
+    hasBoard: false,
   });
-});
-
-it("installs complete outcomes, fences unknowns, and rejects delayed epochs", async () => {
-  await withReplica((fixture) => {
-    const { replica, load, scope, database } = fixture;
-    const initial = hydrate(fixture);
-    if (initial.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
-    const target = { ...initial.target, database: initial.target.database };
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: null,
-      has_optional_references: 0,
-    });
-    const shared = replica.read()!;
-    expect(replica.read()).toBe(shared);
-    expect(() => {
-      shared.entry!.label = "caller edit";
-    }).toThrow(TypeError);
-    const detached = structuredClone(shared);
-    detached.entry!.label = "caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
-
-    const accepted = command(initial, "accepted");
-    const pending = replica.beginCommand();
-    expect(replica.read()).toBe(shared);
-    const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
-    expect(readSessionActorRowFacts(rowTarget)).toMatchObject({
-      entry: { sessionId: "replica-session", updatedAt: 1, label: "before" },
-      hasBoard: false,
-    });
-    withSqliteDatabaseWriteScope(database.db, [scope.sessionKey], () =>
-      runSqliteImmediateTransactionSync(database.db, () => {
-        database.db
-          .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
-          .run(2, JSON.stringify({ ...shared.entry, updatedAt: 2 }), scope.sessionKey);
-      }),
-    );
-    expect(replica.read()).toBeUndefined();
-    expect(readSessionActorRowFacts(rowTarget)).toBeUndefined();
-    replaceSessionEntrySync(scope, {
-      sessionId: "replica-session",
-      updatedAt: 1,
-      label: "before",
-      sessionStartedAt: 23,
-      usageFamilySessionIds: [],
-    });
-    const outcome = committed(accepted, load("first", 1));
-    expect(pending.settle(outcome)).toBe(true);
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
-    outcome.receipt.postimage.entry!.label = "receipt caller edit";
-    expect(replica.read()?.entry?.label).toBe("before");
-    expect(pending.settle(outcome)).toBe(false);
-
-    const rollback = replica.beginCommand();
-    expect(
-      rollback.settle({ kind: "rolled-back", error: { name: "Error", message: "refused" } }),
-    ).toBe(true);
-    expect(replica.read()?.version.sequence).toBe(1);
-    const unknown = replica.beginCommand();
-    expect(
-      unknown.settle({
-        kind: "unknown",
-        target: initial.target,
-        commandId: "unknown",
-        error: { name: "Error", message: "reply lost without receipt" },
-      }),
-    ).toBe(false);
-    expect(replica.read()).toBeUndefined();
-    expect(readSessionActorEntryFacts(target)).toBeUndefined();
-    retainSessionActorEntryFacts(
-      target,
-      { entry: load().entry, snapshots: "full" },
-      "cold-entry-reader",
-    );
-    expect(readSessionActorEntryFacts(target)?.predicateColumns).toEqual({
-      session_started_at: 23,
-      has_optional_references: 1,
-    });
-
-    const stale = replica.beginCommand();
-    const superseded = load("superseded");
-    expect(
-      stale.settle({
-        kind: "stale-version",
-        expected: initial.version,
-        postimage: superseded,
-        error: { name: "SessionActorStaleVersionError", message: "Session actor version changed" },
-      }),
-    ).toBe(true);
-    expect(replica.read()?.version).toEqual(superseded.version);
-    const older = replica.beginRead();
-    const newer = replica.beginRead();
-    expect(newer.install(load("second"))).toBe(true);
-    expect(older.install(initial)).toBe(false);
-    expect(replica.read()?.version.epoch).toBe("second");
-
-    const delayedContext = command(load("second"), "delayed");
-    const delayed = replica.beginCommand();
-    sessionChanges.invalidate({
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      factsInvalidated: true,
-    });
-    hydrate(fixture, "reconciled");
-    expect(delayed.settle(committed(delayedContext, load("second", 1)))).toBe(false);
-    expect(replica.read()?.version.epoch).toBe("reconciled");
-
-    const current = hydrate(fixture, "final");
-    const closingContext = command(current, "accepted-before-close");
-    const closing = replica.beginCommand();
-    replica.close();
-    expect(closing.settle(committed(closingContext, load("final", 1)))).toBe(true);
-    expect(replica.read()).toBeUndefined();
+  withSqliteDatabaseWriteScope(database.db, [scope.sessionKey], () =>
+    runSqliteImmediateTransactionSync(database.db, () => {
+      database.db
+        .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
+        .run(2, JSON.stringify({ ...shared.entry, updatedAt: 2 }), scope.sessionKey);
+    }),
+  );
+  expect(replica.read()).toBeUndefined();
+  expect(readSessionActorRowFacts(rowTarget)).toBeUndefined();
+  replaceSessionEntrySync(scope, {
+    ...entry(),
+    sessionStartedAt: 23,
+    usageFamilySessionIds: [],
   });
-});
+  const outcome = committed(accepted, load("first", 1));
+  expect(pending.settle(outcome)).toBe(true);
+  expect(replica.read()).toBe(outcome.receipt.postimage);
 
-it("invalidates for native owner, replacement, transcript and deletion writers", async () => {
-  await withReplica((fixture) => {
-    const { replica, scope, database } = fixture;
-    hydrate(fixture);
-    assignSessionOwner(scope, {
-      owner: { type: "agent", id: "assigned" },
-      assignedBy: { type: "agent", id: "main" },
-      assignedAt: 10,
-    });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.owner?.actor.id).toBe("assigned");
+  const opaque = load("opaque");
+  opaque.entry!.swarmOutputSchema = { value: new Date(0) };
+  expect(replica.beginRead()(opaque)).toBe(true);
+  const borrowed = replica.read()!;
+  expect(replica.beginRead()(borrowed)).toBe(true);
+  expect(replica.read()).toBe(borrowed);
+  expect(replica.read()?.entry?.swarmOutputSchema).toEqual({ value: new Date(0) });
 
-    replaceSessionEntrySync(scope, {
-      ...fixture.load().entry!,
-      category: "work",
-      archivedAt: 12,
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-    });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toMatchObject({
-      category: "work",
-      archivedAt: 12,
-      restartRecoveryDeliveryRunId: "recovery-run",
-    });
-
-    const transcriptScope = { ...scope, sessionId: "replica-session" };
-    expect(
-      appendTranscriptEventSync(transcriptScope, { type: "proof", id: "first-event" }).ok,
-    ).toBe(true);
-    expect(replica.read()).toBeUndefined();
-    const first = hydrate(fixture).transcript.watermark;
-    expect(first.maxSeq).not.toBeNull();
-    expect(
-      replaceTranscriptEventsSync(transcriptScope, [{ type: "proof", id: "replacement-event" }]),
-    ).toBe(true);
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).transcript.watermark).not.toEqual(first);
-
-    runOpenClawAgentWriteTransaction(
-      (current) => deleteSessionEntryRows(current, scope.sessionKey),
-      {
-        agentId: scope.agentId,
-        path: database.path,
-        env: scope.env,
-      },
-    );
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toBeUndefined();
-  });
+  const current = hydrate(fixture, "final");
+  const closingContext = command(current, "accepted-before-close");
+  const closing = replica.beginCommand();
+  replica.close();
+  expect(closing.settle(committed(closingContext, load("final", 1)))).toBe(true);
+  expect(replica.read()).toBeUndefined();
 });
 
 it("reuses list facts and invalidates summary watermarks after transcript writes", async () => {
+  // Worker retirement revokes resident facts, so settle earlier fixtures before asserting reuse.
+  await drainGlobalSingletonLifecycleState("restart");
   await withReplica(async (fixture) => {
     const { scope, replica } = fixture;
     replaceSessionEntrySync(scope, {
@@ -608,31 +637,48 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
       hasBoard: false,
       activitySummaryWatermark: { generation: null, maxSeq: null },
     });
-    if (!facts) {
-      throw new Error("Expected resident row facts");
-    }
+    assert(facts, "Expected resident row facts");
     facts.entry.label = "caller edit";
     expect(readSessionActorRowFacts(target)?.entry.label).toBeUndefined();
 
-    if (before.target.database.kind !== "file") {
-      throw new Error("Replica fixture requires a durable target");
-    }
+    assert(before.target.database.kind === "file", "Replica fixture requires a durable target");
     const entryTarget = { ...before.target, database: before.target.database };
     const projection = {
       hasBoard: before.hasBoard,
       activitySummaryWatermark: before.transcript.watermark,
     };
     expect(readSessionActorEntryFacts(entryTarget)?.projection).toEqual(projection);
+    const readEntry = (fields?: Parameters<typeof readSessionActorEntryFacts>[1]) =>
+      readSessionActorEntryFacts(entryTarget, fields);
+    const metadata = readEntry([]);
+    expect(metadata?.snapshots).toEqual([]);
+    expect(metadata?.entry).not.toHaveProperty("skillsSnapshot");
+    const selected = readEntry(["skillsSnapshot"]);
+    expect(selected?.snapshots).toEqual(["skillsSnapshot"]);
+    expect(selected?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
+    expect(selected?.entry?.skillsSnapshot).toBe(before.entry?.skillsSnapshot);
+    expect(() => {
+      selected!.entry!.skillsSnapshot!.prompt = "Caller edit";
+    }).toThrow(TypeError);
+    expect(readEntry()?.entry?.skillsSnapshot?.prompt).toBe("Saved instructions");
     replica.invalidate();
-    retainSessionActorEntryFacts(
-      entryTarget,
-      {
-        entry: { ...before.entry!, skillsSnapshot: undefined },
-        snapshots: [],
-        projection,
-      },
-      "row-facts-reader",
-    );
+    const retainedEntry = { ...before.entry!, skillsSnapshot: undefined };
+    retainEntry(before, { entry: retainedEntry, snapshots: [], projection }, "row-facts-reader");
+    const retained = readEntry()!;
+    expect(retained.entry).toBe(retainedEntry);
+    expect(retained.projection).toBe(projection);
+    expect(retained.entry?.label).toBeUndefined();
+    expect(retained.projection?.hasBoard).toBe(false);
+    expect(readEntry()?.entry).toBe(retained.entry);
+    expect(() => {
+      retained.entry!.label = "Caller edit after reading";
+    }).toThrow(TypeError);
+    expect(() => {
+      retained.projection!.hasBoard = true;
+    }).toThrow(TypeError);
+    expect(readEntry()?.entry?.label).toBeUndefined();
+    expect(readEntry()?.projection?.hasBoard).toBe(false);
+    expect(readEntry(["skillsSnapshot"])?.snapshots).toEqual([]);
     expect((await readSessionEntryReadOnlyInWorker(scope))?.skillsSnapshot?.prompt).toBe(
       "Saved instructions",
     );
@@ -654,154 +700,144 @@ it("reuses list facts and invalidates summary watermarks after transcript writes
   });
 });
 
-it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", async () => {
-  await withReplica((fixture) => {
-    const { replica, scope, database } = fixture;
-    const options = { agentId: scope.agentId, path: database.path, env: scope.env };
-    const mutate = (input: PendingInputMutation) =>
-      mutatePendingInput(
-        input,
-        {
-          admit() {},
-          writeTransaction: (operationLabel, _owner, write) =>
-            runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
-        },
-        () => {},
-      );
-    const stage = (id: string) => {
-      const identity = {
-        sessionKey: scope.sessionKey,
-        sessionId: "replica-session",
-        idempotencyKey: id,
-        runId: `run-${id}`,
-        requestHash: id,
-        lifecycleGeneration: "lifecycle",
-      };
-      const expected = readPendingInput(database, {
-        ...identity,
-        kind: "stage",
-        trackCompletion: true,
-      });
-      if (expected.kind !== "stage") {
-        throw new Error("Expected a pending input staging snapshot");
-      }
-      mutate({
-        ...identity,
-        kind: "stage",
-        expected,
-        trackCompletion: true,
-        inputId: id,
-        messageJson: JSON.stringify({ role: "user", content: id, timestamp: 1 }),
-      });
-      return identity;
-    };
-
-    hydrate(fixture);
-    stage("promote");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toMatchObject([
-      { input_id: "promote", state: "queued" },
-    ]);
-    runOpenClawAgentWriteTransaction(
-      (current) =>
-        consumeSessionPendingInput(current, {
-          inputId: "promote",
-          message: { role: "user", content: "promote", timestamp: 1 },
-          alreadyPromoted: false,
-        }),
-      options,
+it("invalidates pending custody for staging, promotion, terminal completion and withdrawal", ({
+  fixture,
+}) => {
+  const { scope, database } = fixture;
+  const options = { agentId: scope.agentId, path: database.path, env: scope.env };
+  const mutate = (input: PendingInputMutation) =>
+    mutatePendingInput(
+      input,
+      {
+        admit() {},
+        writeTransaction: (operationLabel, _owner, write) =>
+          runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+      },
+      () => {},
     );
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toEqual([]);
-
-    const complete = stage("complete");
-    hydrate(fixture);
-    mutate({ ...complete, kind: "complete", outcome: { reason: "completed", status: "ok" } });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toEqual([]);
-    expect(readSessionInputCompletion(database, complete)?.outcome).toMatchObject({
-      reason: "completed",
-      status: "ok",
-    });
-
-    const withdraw = stage("withdraw");
-    hydrate(fixture);
-    mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).pendingInputs).toMatchObject([
-      { input_id: "withdraw", state: "cancelled" },
-    ]);
-  });
-});
-
-it("retires hot facts across the released SDK and restart delivery owners", async () => {
-  await withReplica(async (fixture) => {
-    const { scope, replica } = fixture;
-    replaceSessionEntrySync(scope, {
-      ...fixture.load().entry!,
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "source-run",
-    });
-    hydrate(fixture);
-    await expect(
-      patchSdkSessionEntry({
-        ...scope,
-        skipMaintenance: true,
-        update: () => ({ label: "sdk label" }),
-      }),
-    ).resolves.toMatchObject({ label: "sdk label" });
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry).toMatchObject({
-      label: "sdk label",
-      restartRecoveryDeliveryRunId: "recovery-run",
-    });
-
-    const delivery = {
-      ...scope,
+  const stage = (id: string) => {
+    const identity = {
+      sessionKey: scope.sessionKey,
       sessionId: "replica-session",
-      sourceTurnId: "source-run",
-      toolCallId: "synthetic-delivery",
+      idempotencyKey: id,
+      runId: `run-${id}`,
+      requestHash: id,
+      lifecycleGeneration: "lifecycle",
     };
-    await expect(beginRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("started");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
-    await expect(completeRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("recorded");
-    expect(replica.read()).toBeUndefined();
-    expect(hydrate(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
+    const expected = readPendingInput(database, {
+      ...identity,
+      kind: "stage",
+      trackCompletion: true,
+    });
+    assert(expected.kind === "stage", "Expected a pending input staging snapshot");
+    mutate({
+      ...identity,
+      kind: "stage",
+      expected,
+      trackCompletion: true,
+      inputId: id,
+      messageJson: JSON.stringify({ role: "user", content: id, timestamp: 1 }),
+    });
+    return identity;
+  };
+
+  hydrate(fixture);
+  stage("promote");
+  expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
+    { input_id: "promote", state: "queued" },
+  ]);
+  runOpenClawAgentWriteTransaction(
+    (current) =>
+      consumeSessionPendingInput(current, {
+        inputId: "promote",
+        message: { role: "user", content: "promote", timestamp: 1 },
+        alreadyPromoted: false,
+      }),
+    options,
+  );
+  expect(reloadInvalidated(fixture).pendingInputs).toEqual([]);
+
+  const complete = stage("complete");
+  hydrate(fixture);
+  mutate({ ...complete, kind: "complete", outcome: { reason: "completed", status: "ok" } });
+  expect(reloadInvalidated(fixture).pendingInputs).toEqual([]);
+  expect(readSessionInputCompletion(database, complete)?.outcome).toMatchObject({
+    reason: "completed",
+    status: "ok",
   });
+
+  const withdraw = stage("withdraw");
+  hydrate(fixture);
+  mutate({ ...withdraw, kind: "finish", inputId: "withdraw", disposition: "cancelled" });
+  expect(reloadInvalidated(fixture).pendingInputs).toMatchObject([
+    { input_id: "withdraw", state: "cancelled" },
+  ]);
 });
 
-it("retires a resident session when native maintenance archives it", async () => {
-  await withReplica(async (fixture) => {
-    const { scope, replica, database } = fixture;
-    const preservation = await prepareSessionMaintenancePreservation(scope.storePath);
-    try {
-      hydrate(fixture);
-      const result = runOpenClawAgentWriteTransaction(
-        (current) =>
-          applySessionEntryMaintenance(current, {
-            storePath: scope.storePath,
-            archiveDirectory: path.join(path.dirname(scope.storePath), "archives"),
-            forceMaintenance: true,
-            preservation: preservation.capture,
-            maintenanceConfig: {
-              ...resolveMaintenanceConfigFromInput(),
-              mode: "enforce",
-              pruneAfterMs: 1,
-              archiveDashboardAfterMs: null,
-              preserveRecentMs: null,
-            },
-          }),
-        { agentId: scope.agentId, path: database.path, env: scope.env },
-      );
-      expect(result.archived).toBe(1);
-      expect(replica.read()).toBeUndefined();
-      expect(hydrate(fixture).entry).toMatchObject({
-        archivedAt: expect.any(Number),
-        archiveReason: "age-retention",
-      });
-    } finally {
-      preservation.dispose();
-    }
+it("retires hot facts across the released SDK and restart delivery owners", async ({ fixture }) => {
+  const { scope } = fixture;
+  replaceSessionEntrySync(scope, {
+    ...fixture.load().entry!,
+    restartRecoveryDeliveryRunId: "recovery-run",
+    restartRecoveryDeliverySourceRunId: "source-run",
   });
+  hydrate(fixture);
+  await expect(
+    patchSdkSessionEntry({
+      ...scope,
+      skipMaintenance: true,
+      update: () => ({ label: "sdk label" }),
+    }),
+  ).resolves.toMatchObject({ label: "sdk label" });
+  expect(reloadInvalidated(fixture).entry).toMatchObject({
+    label: "sdk label",
+    restartRecoveryDeliveryRunId: "recovery-run",
+  });
+
+  const delivery = {
+    ...scope,
+    sessionId: "replica-session",
+    sourceTurnId: "source-run",
+    toolCallId: "synthetic-delivery",
+  };
+  await expect(beginRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("started");
+  expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
+    "terminal-pending",
+  );
+  await expect(completeRestartRecoveryTerminalDelivery(delivery)).resolves.toBe("recorded");
+  expect(reloadInvalidated(fixture).entry?.restartRecoveryDeliveryReceiptState).toBe(
+    "delivered-terminal",
+  );
+});
+
+it("retires a resident session when native maintenance archives it", async ({ fixture }) => {
+  const { scope, database } = fixture;
+  const preservation = await prepareSessionMaintenancePreservation(scope.storePath);
+  try {
+    hydrate(fixture);
+    const result = runOpenClawAgentWriteTransaction(
+      (current) =>
+        applySessionEntryMaintenance(current, {
+          storePath: scope.storePath,
+          archiveDirectory: path.join(path.dirname(scope.storePath), "archives"),
+          forceMaintenance: true,
+          preservation: preservation.capture,
+          maintenanceConfig: {
+            ...resolveMaintenanceConfigFromInput(),
+            mode: "enforce",
+            pruneAfterMs: 1,
+            archiveDashboardAfterMs: null,
+            preserveRecentMs: null,
+          },
+        }),
+      { agentId: scope.agentId, path: database.path, env: scope.env },
+    );
+    expect(result.archived).toBe(1);
+    expect(reloadInvalidated(fixture).entry).toMatchObject({
+      archivedAt: expect.any(Number),
+      archiveReason: "age-retention",
+    });
+  } finally {
+    preservation.dispose();
+  }
 });

@@ -126,6 +126,22 @@ The Control UI waits up to 10 seconds for its service worker. If that times out 
 
 Run `openclaw doctor --fix` with the Gateway stopped. Web Push refuses to use the retired JSON stores until Doctor imports them into SQLite.
 
+### An enabled notification does not arrive
+
+Check the Gateway's `gateway/web-push` logs. Preparation failures include the
+category, stage (`subscriptions`, `sender`, or `authority`), error class, cause,
+and stack. Push-service failures include the subscription ID, endpoint host,
+HTTP status, response body, and whether the subscription will be pruned or
+retained. These diagnostics are written raw to local logs; review them before
+sharing.
+
+HTTP 404 and 410 responses remove the dead subscription unless a newer
+registration has replaced it. Re-enable notifications in that browser to
+subscribe again. Other failures retain the subscription. Failed events are not
+automatically retried; `retry=false` records that decision. A cleanup warning
+means removal failed, so the stale subscription may be attempted on the next
+event. Correct the reported storage problem before testing again.
+
 ### Tests arrive but approval requests do not
 
 Reconnect or reload the Control UI once so an older subscription is bound to the current paired device. The device must still have `operator.approvals` and `operator.read`. When Gateway roles are enabled, the current user profile's role must allow those scopes too. Approval visibility and session-sharing rules can intentionally exclude a request that the same Gateway sends to another operator.

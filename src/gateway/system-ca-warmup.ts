@@ -39,20 +39,8 @@ type SystemCaWarmupMessage = { ok: true; certificateCount: number } | { ok: fals
 
 let macOSSystemCaWarmupPromise: Promise<void> | undefined;
 
-function isSystemCaWarmupMessage(value: unknown): value is SystemCaWarmupMessage {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const message = value as Record<string, unknown>;
-  return message.ok === true
-    ? typeof message.certificateCount === "number"
-    : message.ok === false && typeof message.error === "string";
-}
-
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
-export async function warmMacOSSystemCaOffMainThread(
-  options: SystemCaWarmupOptions = {},
-): Promise<void> {
+async function warmMacOSSystemCaOffMainThread(options: SystemCaWarmupOptions = {}): Promise<void> {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (
@@ -98,14 +86,7 @@ export async function warmMacOSSystemCaOffMainThread(
       resolve();
     };
 
-    worker.once("message", (value: unknown) => {
-      if (!isSystemCaWarmupMessage(value)) {
-        settle(
-          "macOS CA warmup returned an invalid result; gateway startup will continue and trust settings will load lazily",
-          true,
-        );
-        return;
-      }
+    worker.once("message", (value: SystemCaWarmupMessage) => {
       if (!value.ok) {
         settle(
           `macOS CA warmup failed: ${value.error}; gateway startup will continue and trust settings will load lazily`,

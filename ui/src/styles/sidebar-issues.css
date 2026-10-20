@@ -114,34 +114,25 @@
 }
 
 .sidebar-issues-panel__tabs {
-  display: block;
+  display: flex;
   flex: none;
-  overflow: hidden;
+  overflow-x: auto;
   background: var(--secondary);
-}
-
-.sidebar-issues-panel__tabs::part(tabs) {
   box-sizing: border-box;
   flex-shrink: 0;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
   padding-inline: 8px;
 }
 
-.shell--mobile-nav .sidebar-issues-panel__tabs::part(tabs) {
+.shell--mobile-nav .sidebar-issues-panel__tabs {
   gap: 0;
   padding-inline: 0;
 }
 
-.sidebar-issues-panel__tabs wa-tab.hub-tab {
-  /* Keep labels and counts whole; Web Awesome scrolls the row when they no longer fit. */
+.sidebar-issues-panel__tabs .hub-tab {
   flex: 1 0 auto;
-}
-
-.sidebar-issues-panel__tabs wa-tab.hub-tab::part(base) {
   /* Popover tabs are tap targets (mobile sheet); keep a taller hit area than
      the page-hub sub tabs. */
-  width: 100%;
   justify-content: center;
   padding-block: 8px 11px;
 }

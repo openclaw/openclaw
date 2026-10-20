@@ -1,23 +1,21 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
+import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
-const controllers: ChatStateController<ChatPageHost>[] = [];
+const disposals: Array<() => void> = [];
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("localStorage", createStorageMock());
 });
 afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
+  for (const dispose of disposals.splice(0)) {
+    dispose();
   }
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -35,19 +33,10 @@ function userMessage(sendId: string) {
   };
 }
 function setup() {
-  const host: ReactiveControllerHost = {
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  };
-  const controller = new ChatStateController<ChatPageHost>(host);
-  controllers.push(controller);
-  controller.hostConnected();
-  const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
-    dispatchEvent: () => true,
-    querySelector: () => null,
-  });
+  const { pane, state } = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
+  const controller = getPaneTestRuntime(pane).chatState;
+  const dispose = controller.dispose;
+  disposals.push(dispose);
   state.sessionKey = "agent:main:scroll-ownership";
   state.currentSessionId = "physical-session";
   state.chatMessages = [userMessage("loaded")];
@@ -71,20 +60,93 @@ function setup() {
     scrollport.scrollTop = height - scrollport.clientHeight;
     return true;
   };
-  controller.attach(state);
+  controller.publishPendingRunState();
+  controller.captureRenderChanges();
+  controller.commitRender();
+  vi.advanceTimersToNextFrame();
+  const published = vi.fn();
+  disposals.push(chatRunPresentation(state).subscribe(published));
   return {
     state,
+    controller,
+    dispose,
+    published,
     scrollport,
     commitGrowth: () => {
-      state.requestUpdate?.();
       height += 889;
-      controller.hostUpdated();
+      controller.publishPendingRunState();
+      controller.captureRenderChanges();
+      controller.commitRender();
       vi.advanceTimersToNextFrame();
     },
   };
 }
 
 describe("transcript arrival scroll ownership", () => {
+  it("coalesces streamed replies without delaying the draft or new transcript rows", () => {
+    const { state, controller, published } = setup();
+    for (let index = 0; index < 36; index++) {
+      chatRunPresentation(state).batch(() => {
+        state.chatStream = `Reply ${index}`;
+      }, "animation-frame");
+    }
+    expect(published).not.toHaveBeenCalled();
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledOnce();
+    expect(state.chatStream).toBe("Reply 35");
+
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "A queued reply";
+    }, "animation-frame");
+    state.handleChatDraftChange("Keep this draft");
+    expect(controller.composerDraft.read().draft).toBe("Keep this draft");
+    expect(published).toHaveBeenCalledOnce();
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledTimes(2);
+
+    chatRunPresentation(state).publish("animation-frame");
+    state.chatMessages = [...state.chatMessages, userMessage("remote")];
+    expect(published).toHaveBeenCalledTimes(3);
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledTimes(3);
+  });
+
+  it("absorbs a pending stream publication into a commit and cancels on teardown", async () => {
+    const { controller, dispose, published, state } = setup();
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "Waiting for a frame";
+    }, "animation-frame");
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledOnce();
+
+    const effect = vi.fn();
+    state.renderLifecycle.afterCommit(effect);
+    await Promise.resolve();
+    expect(effect).toHaveBeenCalledOnce();
+    chatRunPresentation(state).batch(() => {
+      state.chatStream = "Retired before publication";
+    }, "animation-frame");
+    dispose();
+    const publicationsAtDisposal = published.mock.calls.length;
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledTimes(publicationsAtDisposal);
+  });
+
+  it("preserves follow effects when a host commit consumes a queued stream frame", () => {
+    const { controller, state } = setup();
+    const follow = vi.spyOn(state, "chatScrollToEnd");
+    state.chatStream = "A response arrived before the property commit.";
+    chatRunPresentation(state).publish("animation-frame");
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
+    controller.commitRender();
+    vi.advanceTimersToNextFrame();
+    expect(follow).toHaveBeenCalledOnce();
+    expect(state.chatStreamRenderFrame).toBeNull();
+  });
+
   it.each(["message", "pending input", "resumed stream", "speech"] as const)(
     "follows remote %s growth only while the viewer is following",
     (source) => {

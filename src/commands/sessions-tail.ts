@@ -7,7 +7,7 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -156,7 +156,7 @@ async function selectSessionsToTail(
     runtime.log("explicit store: ordered by activity");
   } else {
     try {
-      const cfg = getRuntimeConfig();
+      const cfg = await captureRuntimeConfigAsyncReader()();
       const { sessions } = await callGatewayFromCliWithTransport<{
         sessions: Pick<GatewaySessionRow, "key" | "sessionId" | "hasActiveRun" | "status">[];
       }>(
@@ -280,7 +280,7 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {

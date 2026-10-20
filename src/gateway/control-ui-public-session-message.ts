@@ -1,13 +1,15 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
+import { HEARTBEAT_PROMPT, isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { splitMediaOutput } from "../media/parse-output.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../sessions/input-provenance.js";
-import { extractAssistantTranscriptSourceText } from "../shared/chat-message-content.js";
+import {
+  extractAssistantTranscriptSourceText,
+  prepareAssistantTranscriptText,
+} from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
-import { stripSuppressedControlReplyToken } from "./control-reply-text.js";
 
 /** Publication excludes private runtime input, including its attachments and tool activity. */
 export function publicSessionMessageEntry(message: unknown): Record<string, unknown> | undefined {
@@ -38,7 +40,8 @@ export function publicSessionMessageEntry(message: unknown): Record<string, unkn
   const roleContent = { role: String(entry.role), content: raw ?? "" };
   if (
     raw &&
-    (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT) || isHeartbeatOkResponse(roleContent))
+    (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT) ||
+      (entry.role === "assistant" && isHeartbeatAcknowledgementText(raw)))
   ) {
     return undefined;
   }
@@ -71,7 +74,7 @@ export function publicSessionMessageText(entry: Record<string, unknown>): string
   if (entry.role !== "user" && entry.role !== "assistant") {
     return "";
   }
-  let text = rawMessageText(entry);
+  let text = prepareAssistantTranscriptText(entry, rawMessageText(entry));
   if (!text) {
     return "";
   }
@@ -84,11 +87,11 @@ export function publicSessionMessageText(entry: Record<string, unknown>): string
     text = sanitizeAssistantVisibleTextWithProfile(text, "history", true);
   }
   const roleContent = { role: entry.role, content: text };
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT) || isHeartbeatOkResponse(roleContent)) {
+  if (
+    isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT) ||
+    (entry.role === "assistant" && isHeartbeatAcknowledgementText(text))
+  ) {
     return "";
-  }
-  if (entry.role === "assistant") {
-    text = stripSuppressedControlReplyToken(text);
   }
   return splitMediaOutput(text, { extractAudioDirectives: false }).text.trim();
 }

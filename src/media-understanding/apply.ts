@@ -19,14 +19,10 @@ import {
   type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
+import type { MediaExecutionContext } from "./provider-execution.js";
 import { resolveConcurrency } from "./resolve.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  resolveMediaAttachmentLocalRoots,
-  runCapability,
-} from "./runner.js";
+import { createScopedMediaAttachmentCache } from "./runner.attachments.js";
+import { buildProviderRegistry, normalizeMediaAttachments, runCapability } from "./runner.js";
 import type {
   MediaAttachment,
   MediaUnderstandingCapability,
@@ -48,9 +44,9 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string | undefined, suffix: string | undefined): string {
+function appendFileBlocks(body: string, suffix: string | undefined): string {
   if (suffix === undefined) {
-    return body ?? "";
+    return body;
   }
   const base = typeof body === "string" ? body.trim() : "";
   if (!base) {
@@ -88,15 +84,18 @@ function enableLocalPathSelfServe(
 
 function renderMediaAttachmentMarkers(params: {
   attachments: MediaAttachment[];
+  capabilities: MediaUnderstandingCapability[];
   decisions: MediaUnderstandingDecision[];
   outputs: MediaUnderstandingOutput[];
   deliveredImageIndexes?: ReadonlySet<number>;
 }): AttachmentContextBlock[] {
   const handledIndexes = new Set(params.outputs.map((output) => output.attachmentIndex));
-  const decisions = new Map(params.decisions.map((decision) => [decision.capability, decision]));
   return params.attachments.flatMap((attachment) => {
     const capability = resolveAttachmentKind(attachment);
-    if (capability !== "image" && capability !== "audio" && capability !== "video") {
+    if (
+      (capability !== "image" && capability !== "audio" && capability !== "video") ||
+      !params.capabilities.includes(capability)
+    ) {
       return [];
     }
     // The ACP caller resolved these exact indexes into native turn attachments;
@@ -104,7 +103,12 @@ function renderMediaAttachmentMarkers(params: {
     if (capability === "image" && params.deliveredImageIndexes?.has(attachment.index)) {
       return [];
     }
-    const decision = decisions.get(capability);
+    // A later pass can consume preflight selection without recording new dispositions.
+    const decision = params.decisions.findLast(
+      (candidate) =>
+        candidate.capability === capability &&
+        candidate.attachmentDispositions?.[attachment.index] !== undefined,
+    );
     if (!decision || handledIndexes.has(attachment.index)) {
       return [];
     }
@@ -134,6 +138,7 @@ export async function applyMediaUnderstanding(params: {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
+  execution?: MediaExecutionContext;
   /** Limit utility processing while preserving native image and video inputs. */
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   /** Render local paths immediately only when the caller owns the final tool surface. */
@@ -164,18 +169,7 @@ export async function applyMediaUnderstanding(params: {
       throw error;
     }
   };
-  const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({
-      cfg,
-      ctx,
-      workspaceDir: params.workspaceDir,
-    }),
-    // The scoped root set is authoritative: merging sessionless defaults back in would restore
-    // the shared workspace/sandbox parents for sandboxed sessions.
-    includeDefaultLocalPathRoots: false,
-    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: params.workspaceDir,
-  });
+  const cache = createScopedMediaAttachmentCache(attachments, params);
 
   try {
     const results = await pMap(
@@ -197,6 +191,7 @@ export async function applyMediaUnderstanding(params: {
           providerRegistry,
           config: cfg.tools?.media?.[capability],
           activeModel: params.activeModel,
+          execution: params.execution,
         };
         try {
           return await runCapability(request);
@@ -324,7 +319,8 @@ export async function applyMediaUnderstanding(params: {
     // add markers for image/video inputs still owned by the native harness.
     const mediaMarkers = renderMediaAttachmentMarkers({
       attachments,
-      decisions,
+      capabilities: decisions.map((decision) => decision.capability),
+      decisions: ctx.MediaUnderstandingDecisions ?? [],
       outputs,
       deliveredImageIndexes: params.deliveredImageIndexes,
     });

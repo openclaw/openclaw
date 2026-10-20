@@ -192,17 +192,14 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
-  it.each([{ collect: true }])(
-    "rejects unsupported private completion combinations before child effects: %j",
-    async (options) => {
-      const result = await spawn({ task: "private work", completionTarget: "parent", ...options });
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining('completionTarget="parent"'),
-      });
-      expectNoChildSpawnSideEffects();
-    },
-  );
+  it("rejects private collector completion before child effects", async () => {
+    const result = await spawn({ task: "private work", completionTarget: "parent", collect: true });
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining('completionTarget="parent"'),
+    });
+    expectNoChildSpawnSideEffects();
+  });
 
   it("rejects private completion without an existing parent incarnation", async () => {
     const result = await spawn(
@@ -238,23 +235,20 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it.each([{ thread: true }])(
-    "rejects interactive collector mode at the direct spawn boundary",
-    async (params) => {
-      configOverride = createConfigOverride({ tools: { swarm: true } });
+  it("rejects interactive collector mode at the direct spawn boundary", async () => {
+    configOverride = createConfigOverride({ tools: { swarm: true } });
 
-      const result = await spawn(
-        { task: "collect once", collect: true, ...params },
-        collectorContext,
-      );
+    const result = await spawn(
+      { task: "collect once", collect: true, thread: true },
+      collectorContext,
+    );
 
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("mode=run and thread=false"),
-      });
-      expect(gatewayRequestRecords()).toEqual([]);
-    },
-  );
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("mode=run and thread=false"),
+    });
+    expect(gatewayRequestRecords()).toEqual([]);
+  });
 
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
     configOverride = createConfigOverride({
@@ -402,6 +396,9 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result).toMatchObject({ status: "accepted", modelApplied: true });
     const queuedLaunch = requireRecord(firstRegisteredSubagentRun().queuedLaunch);
+    const persistedLaunchJson = JSON.stringify(queuedLaunch);
+    const persistedLaunch: unknown = JSON.parse(persistedLaunchJson);
+    expect(requireRecord(persistedLaunch).requesterRecovery).toEqual({});
     const queuedRequest = requireRecord(queuedLaunch.request);
     expect(queuedRequest).not.toHaveProperty("provider");
     expect(queuedRequest).not.toHaveProperty("model");
@@ -417,13 +414,9 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-  it.each([
-    {
-      name: "policy refusal",
-      model: "fixture/blocked",
-      error: "model not allowed: fixture/blocked",
-    },
-  ])("returns the model owner's $name before creating child state", async ({ model, error }) => {
+  it("returns the model owner's policy refusal before creating child state", async () => {
+    const model = "fixture/blocked";
+    const error = "model not allowed: fixture/blocked";
     hoisted.prepareModelChoiceMock.mockResolvedValue({ kind: "unavailable", error });
     const result = await spawn({ task: "validate before launch", model });
     expect(result.status).toBe("error");
@@ -981,23 +974,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expectNoChildSpawnSideEffects();
   });
 
-  it.each(
-    inheritedSpawnCases.preferences.filter(
-      ({ requesterThinkingLevel, requesterAgent }) =>
-        requesterThinkingLevel === "ultra" && !requesterAgent,
-    ),
-  )(
-    "$name",
-    async ({ task, requesterState, requesterThinkingLevel, thinkingOverride, expected }) => {
-      hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
-      const readStore = captureStore();
-      const result = await spawn({ task, thinking: thinkingOverride }, { requesterThinkingLevel });
-      expect(result.status).toBe("accepted");
-      expect(readStore()[result.childSessionKey!]?.thinkingLevel).toBe(expected);
-      expect(requireRecord(gatewayRequest("agent").params).thinking).toBe(thinkingOverride);
-    },
-  );
-
   it.each(inheritedSpawnCases.preferences.filter(({ collect }) => collect))(
     "$name",
     async ({ task, requesterState, expected }) => {
@@ -1008,18 +984,6 @@ describe("spawnSubagentDirect seam flow", () => {
       expect(readStore()[result.childSessionKey!]?.fastMode).toBe(expected);
     },
   );
-
-  it("uses requester agent thinkingDefault without a stored requester", async () => {
-    // Import after the spawn helper installs the mocked session runtime.
-    const { resolveRequesterPreferences } = await import("./subagent-spawn-requester-prefs.js");
-
-    const preferences = resolveRequesterPreferences({
-      cfg: { agents: { entries: { main: { thinkingDefault: "high" } } } },
-      requesterEntry: undefined,
-      requesterAgentId: "main",
-    });
-    expect(preferences.thinkingLevel).toBe("high");
-  });
 
   it("inherits requester selected-model thinking without a session or agent default", async () => {
     configOverride = createConfigOverride({

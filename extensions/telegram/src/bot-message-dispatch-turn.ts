@@ -1,3 +1,4 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   readAgentRunTerminalOutcome,
@@ -41,7 +42,6 @@ import {
   handleReplySkip,
   resetReasoningStepState,
 } from "./bot-message-dispatch-reply.js";
-import { resolveHumanDelayConfig } from "./bot-message-dispatch.agent.runtime.js";
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
@@ -50,6 +50,7 @@ const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
 export async function runTelegramDispatchTurn(turn: Turn) {
   const { context } = turn;
+  const hasRepliedRef = { value: false };
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
   const toolProgressEnabled =
@@ -70,9 +71,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     enqueueDraftEvent(turn, task).then(() => false);
 
   try {
-    const { onModelSelected, ...replyPipeline } = (
-      turn.telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
-    )({
+    const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg: turn.cfg,
       agentId: context.route.agentId,
       channel: "telegram",
@@ -152,6 +151,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
+            hasRepliedRef,
             onPreparedAgentRunStart: ({ runId }) => {
               turn.transcriptMirrorRunId = runId;
             },
@@ -260,6 +260,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   })
               : () => false,
             onQueuedFollowupAdmitted: () => {
+              hasRepliedRef.value = false;
               beginDraftQueuedFollowup(turn);
               turn.previewLifecycle.reset();
               turn.finalDispatchClaimed = false;

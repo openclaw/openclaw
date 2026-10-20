@@ -4,6 +4,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type {
   RepositoryGitHubPublicationRow,
   RepositoryGitHubPublicationReceiptTarget,
@@ -34,12 +35,8 @@ const checkpointColumns = [
   "workspace_tree",
 ] satisfies (keyof RepositoryGitHubPublicationRow)[];
 const table = "github_repository_publication_requests";
-const query = (db: Parameters<typeof getNodeSqliteKysely>[0]) =>
-  getNodeSqliteKysely<Pick<DB, typeof table>>(db);
-function changed(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
-  row: RepositoryGitHubPublicationRow,
-) {
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+function changed(db: EngineConnection, row: RepositoryGitHubPublicationRow) {
   checked(row);
   githubPublicationReceipts.stageRow(db, "repository", row);
   deferSharedGitHubPublicationChanged(db, row);
@@ -69,7 +66,7 @@ export function readRepositoryGitHubPublicationBranchInDatabase(
 }
 
 export function readRepositoryGitHubPublicationInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   requestId: string,
 ): RepositoryGitHubPublicationRow | undefined {
   if (!tableExists(db, table)) {
@@ -83,7 +80,7 @@ export function readRepositoryGitHubPublicationInDatabase(
 }
 
 export function readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
+  db: EngineConnection,
   row: RepositoryGitHubPublicationReceiptTarget,
 ): string[] {
   const known = new Set(row.pull_request_url ? [row.pull_request_url] : []);
@@ -118,13 +115,20 @@ export function insertRepositoryGitHubPublicationInDatabase(
   assertCurrent();
   ensureRepositoryGitHubPublicationSchema(db);
   checked(row);
-  const inserted = executeSqliteQuerySync(
+  const inserted = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .insertInto(table)
       .values(row)
-      .onConflict((conflict) => conflict.doNothing()),
+      .onConflict((conflict) => conflict.doNothing())
+      .returningAll(),
   );
+  if (inserted) {
+    assertCurrent();
+    githubPublicationReceipts.stageRow(db, "repository", inserted);
+    deferSharedGitHubPublicationChanged(db, inserted);
+    return inserted;
+  }
   const stored = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -150,6 +154,7 @@ export function insertRepositoryGitHubPublicationInDatabase(
         "identity_login",
         "title",
         "body",
+        "draft",
         "claim_id",
         "run_id",
         "placement_generation",
@@ -169,10 +174,6 @@ export function insertRepositoryGitHubPublicationInDatabase(
   }
   checked(stored);
   assertCurrent();
-  if (inserted.numAffectedRows === 1n) {
-    githubPublicationReceipts.stageRow(db, "repository", stored);
-    deferSharedGitHubPublicationChanged(db, stored);
-  }
   return stored;
 }
 

@@ -17,12 +17,14 @@ import {
   resolveTargetSqlitePath,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-db.paths.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
 
 export type CanonicalSessionCandidate = {
@@ -172,17 +174,14 @@ export function collectCanonicalSessionRepairGroups(
   stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
   const candidates = collectCanonicalSessionCandidateFacts(params, stores);
-  const byCanonicalKey = new Map<string, CanonicalSessionCandidateFact[]>();
-  for (const candidate of candidates) {
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
+  const byCanonicalKey = groupRecords(candidates, (candidate) => {
     const sentinelOwner =
       candidate.canonicalKey === "global" || candidate.canonicalKey === "unknown"
         ? candidate.agentId
         : "";
-    const groupKey = `${candidate.canonicalKey}\0${sentinelOwner}`;
-    const group = byCanonicalKey.get(groupKey) ?? [];
-    group.push(candidate);
-    byCanonicalKey.set(groupKey, group);
-  }
+    return `${candidate.canonicalKey}\0${sentinelOwner}`;
+  });
   return [...byCanonicalKey.values()].flatMap((group) => {
     const first = group[0]!;
     const destination = resolveCanonicalSessionDestination({
@@ -198,14 +197,14 @@ export function collectCanonicalSessionRepairGroups(
           candidate.inventoryFact.rawCompareRequired ||
           candidate.lineageRepairRequired ||
           candidate.sessionKey !== candidate.canonicalKey ||
-          candidate.sqlitePath !== destination.sqlitePath,
+          !isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath),
       );
     if (!repairRequired) {
       return [];
     }
     const canonicalRowSurvives = group.some(
       (candidate) =>
-        candidate.sqlitePath === destination.sqlitePath &&
+        isSameDatabasePath(candidate.sqlitePath, destination.sqlitePath) &&
         candidate.sessionKey === candidate.canonicalKey,
     );
     return [{ candidates: group, removedRows: group.length - (canonicalRowSurvives ? 1 : 0) }];

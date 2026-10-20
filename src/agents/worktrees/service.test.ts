@@ -7,6 +7,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -46,7 +50,7 @@ function isWorktreeAdd(argv: readonly string[]): boolean {
 
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
-  checkoutBases: string[],
+  checkoutBases: [string, string],
   networkTimeouts: number[] = [],
 ) {
   const gitCommands = commandSpy.mock.calls
@@ -55,10 +59,12 @@ function expectCheckoutTimeouts(
       checkout: isWorktreeAdd(argv) || (argv.includes("read-tree") && argv.includes("-u")),
       base: argv.at(-1),
       timeoutMs: typeof options === "number" ? options : options.timeoutMs,
+      noOutputTimeoutMs: typeof options === "number" ? undefined : options.noOutputTimeoutMs,
     }));
-  expect(gitCommands.filter((command) => command.checkout)).toEqual(
-    checkoutBases.map((base) => ({ checkout: true, base, timeoutMs: 300_000 })),
-  );
+  expect(gitCommands.filter((command) => command.checkout)).toEqual([
+    { checkout: true, base: checkoutBases[0], timeoutMs: 300_000, noOutputTimeoutMs: undefined },
+    { checkout: true, base: checkoutBases[1], timeoutMs: undefined, noOutputTimeoutMs: 300_000 },
+  ]);
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
   ).toEqual(new Set([120_000, ...networkTimeouts]));
@@ -99,6 +105,7 @@ describe("ManagedWorktreeService", () => {
       runLeaseTesting.resetForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
       cleanup();
     }),
   );
@@ -133,10 +140,9 @@ describe("ManagedWorktreeService", () => {
     repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    now = 1_700_000_000_000;
+    now = Date.now();
     service = new ManagedWorktreeService({
       env,
-      now: () => now,
       getConfig: () => ({ worktreeAcceleration: false }),
     });
   });
@@ -294,7 +300,9 @@ describe("ManagedWorktreeService", () => {
         ownerKind: "session",
         ownerId: "agent:main:dashboard:two",
       }),
-    ).rejects.toThrow(/already in use by session/);
+    ).rejects.toThrow(
+      /already in use by session agent:main:dashboard:one: shared-name; choose an unused name, or omit it to generate one\./,
+    );
     await expect(
       service.create({ repoRoot: repo, name: "shared-name", baseRef: "HEAD" }),
     ).rejects.toThrow(/already in use by session/);
@@ -313,7 +321,7 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
     await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
     await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
-      "Remote default branch is unavailable",
+      "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
     );
     expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
   });
@@ -501,7 +509,8 @@ describe("ManagedWorktreeService", () => {
     );
     expect(await git(repo, "ls-tree", removed.snapshotRef!, "tool.sh")).toMatch(/^100644 /);
     await fs.writeFile(path.join(repo, "present.env"), "new source value\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { removedAt: Date.now() - IDLE_GC_MS - 1 });
+    const restoreStarted = Date.now();
     const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const restored = await service.create({ ...request, baseRef: created.branch });
     expect(restored.id).toBe(created.id);
@@ -510,7 +519,8 @@ describe("ManagedWorktreeService", () => {
       await git(repo, "rev-parse", removed.snapshotRef!),
     ]);
     expect(restored.removedAt).toBeUndefined();
-    expect(restored.lastActiveAt).toBe(now);
+    expect(restored.lastActiveAt).toBeGreaterThanOrEqual(restoreStarted);
+    expect(restored.lastActiveAt).toBeLessThanOrEqual(Date.now());
     expect((await service.gc()).removed).toEqual([]);
     expect(await git(restored.path, "branch", "--show-current")).toBe(created.branch);
     expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
@@ -601,7 +611,8 @@ describe("ManagedWorktreeService", () => {
 
   describe("run-end cleanup", () => {
     beforeEach(() => {
-      service = new ManagedWorktreeService({ env, now: () => now });
+      setRuntimeConfigSnapshot({});
+      service = new ManagedWorktreeService({ env });
     });
     async function materialize(name: string) {
       return await materializeManagedWorktreeFixture({
@@ -649,6 +660,7 @@ describe("ManagedWorktreeService", () => {
       await service.acquire(created.id);
       const staleRecord = getRegistryWorktree(env, created.id)!;
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
 
       let contention: unknown;
@@ -662,10 +674,15 @@ describe("ManagedWorktreeService", () => {
       }
       expect(contention).toBeInstanceOf(WorktreeRemovalContentionError);
       expect(contention).toMatchObject({ kind: "finalized" });
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        removedAt: now,
-        runEndCleanup: { outcome: "removed-lossless", at: now },
+      const finalized = getRegistryWorktree(env, created.id)!;
+      expect(finalized).toMatchObject({
+        removedAt: expect.any(Number),
+        runEndCleanup: { outcome: "removed-lossless", at: expect.any(Number) },
       });
+      expect(finalized.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
+      expect(finalized.removedAt).toBeLessThanOrEqual(Date.now());
+      expect(finalized.runEndCleanup?.at).toBeGreaterThanOrEqual(cleanupStarted);
+      expect(finalized.runEndCleanup?.at).toBeLessThanOrEqual(Date.now());
 
       // A stale remover that aborted its claim writes retained/failed outcomes with
       // the live-row condition (recordOutcome); against a finalized row it must be
@@ -677,23 +694,21 @@ describe("ManagedWorktreeService", () => {
         { onlyIfLive: true },
       );
 
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        removedAt: now,
-        runEndCleanup: { outcome: "removed-lossless", at: now },
-      });
+      expect(getRegistryWorktree(env, created.id)).toEqual(finalized);
     });
 
     it("rejects stale lifecycle writes and records a newer post-restore cleanup outcome", async () => {
       const created = await materialize("restore-generation");
-      const staleActiveAt = created.lastActiveAt;
       await service.acquire(created.id);
+      const staleActiveAt = Date.now() + IDLE_GC_MS;
+      await updateRegistryWorktree(env, created.id, { lastActiveAt: staleActiveAt });
       await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
       expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toMatchObject({
         outcome: "removed-lossless",
       });
 
       const restored = await service.restore({ id: created.id });
-      // The pinned clock still requires a fresh activity stamp after restore.
+      // A future stored stamp still requires a strictly newer activity stamp after restore.
       expect(restored.lastActiveAt).toBe(staleActiveAt + 1);
       // Restore starts a new lifecycle: the stale removal outcome must not show
       // on the now-live row.
@@ -713,11 +728,18 @@ describe("ManagedWorktreeService", () => {
       expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
       await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
       await service.acquire(created.id);
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: { outcome: "retained-dirty", at: now },
+        runEndCleanup: { outcome: "retained-dirty", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
         "retain me\n",
       );
@@ -739,11 +761,18 @@ describe("ManagedWorktreeService", () => {
       expect(await git(created.path, "log", "HEAD", "--not", "--remotes", "--oneline")).toBe("");
       await service.acquire(created.id);
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: { outcome: "retained-dirty", at: now },
+        runEndCleanup: { outcome: "retained-dirty", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
       expect(await fs.readFile(localState, "utf8")).toBe("keep nested checkout state\n");
       expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
@@ -756,28 +785,42 @@ describe("ManagedWorktreeService", () => {
       await git(created.path, "add", "committed.txt");
       await git(created.path, "commit", "-m", "unpushed worktree commit");
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       const retained = getRegistryWorktree(env, created.id);
       expect(retained).toMatchObject({
-        runEndCleanup: { outcome: "retained-unpushed", at: now },
+        runEndCleanup: { outcome: "retained-unpushed", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
     });
 
     it("records busy retention while a run lease is live", async () => {
       const created = await materialize("busy");
       const lease = await acquireWorktreeRunLease(created.id, { env });
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       const retained = getRegistryWorktree(env, created.id);
       expect(retained).toMatchObject({
-        runEndCleanup: { outcome: "retained-busy", at: now },
+        runEndCleanup: { outcome: "retained-busy", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
       await lease.release();
     });
 
@@ -791,16 +834,23 @@ describe("ManagedWorktreeService", () => {
           throw failure;
         });
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).rejects.toBe(failure);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
         runEndCleanup: {
           outcome: "failed",
-          at: now,
+          at: expect.any(Number),
           reason: "synthetic removal claim failure",
         },
       });
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
+      await fs.access(created.path);
       removalClaim.mockRestore();
       await lease.release();
     });
@@ -865,8 +915,22 @@ describe("ManagedWorktreeService", () => {
     it("gc retires an unchanged missing checkout", async () => {
       const created = await fixture("missing");
       await git(repo, "worktree", "remove", "--force", created.path);
-      expect(await service.gc()).toEqual({ ...completedGcResult, orphansRetired: 1 });
-      expect(getRegistryWorktree(env, created.id)).toEqual({ ...created, removedAt: now });
+      const cleanupStarted = Date.now();
+      expect(await service.gc()).toEqual({
+        ...completedGcResult,
+        orphansRetired: 1,
+        packsRemoved: 0,
+        gitMaintenance: {
+          repoRoot: created.repoRoot,
+          stage: "completed",
+          packsBefore: 0,
+          packsAfter: 0,
+        },
+      });
+      const retired = getRegistryWorktree(env, created.id)!;
+      expect(retired).toEqual({ ...created, removedAt: retired.removedAt });
+      expect(retired.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
+      expect(retired.removedAt).toBeLessThanOrEqual(Date.now());
     });
 
     it("list preserves a checkout restored after a missing-path observation", async () => {
@@ -934,7 +998,16 @@ describe("ManagedWorktreeService", () => {
         expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
           "retained user changes\n",
         );
-        expect(result).toEqual(completedGcResult);
+        expect(result).toEqual({
+          ...completedGcResult,
+          packsRemoved: 0,
+          gitMaintenance: {
+            repoRoot: liveIdentity.repoRoot,
+            stage: "completed",
+            packsBefore: 0,
+            packsAfter: 0,
+          },
+        });
       } finally {
         gate.inspect.resolve();
         gate.resume.resolve();

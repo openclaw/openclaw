@@ -2,6 +2,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { formatMediaSize } from "../../media/store.shared.js";
 import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -92,9 +93,12 @@ export function decodeDataUrl(
   if (!mimeType.startsWith("image/")) {
     throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
   }
-  if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
+  const estimatedBytes = estimateBase64DecodedBytes(b64);
+  if (typeof opts?.maxBytes === "number" && estimatedBytes > opts.maxBytes) {
     // Estimate before decoding so oversized inline payloads do not allocate large buffers.
-    throw new Error("Invalid data URL: payload exceeds size limit.");
+    throw new Error(
+      `Invalid data URL: payload exceeds size limit (${formatMediaSize(estimatedBytes)}, limit ${formatMediaSize(opts.maxBytes)}).`,
+    );
   }
   const buffer = Buffer.from(b64, "base64");
   if (buffer.length === 0) {
@@ -135,12 +139,8 @@ function modelIdMatchesProviderlessRef(params: {
 
 function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
   const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
-
   const matches = new Set<string>();
-  for (const [providerKey, providerConfig] of Object.entries(providers)) {
+  for (const [providerKey, providerConfig] of Object.entries(providers ?? {})) {
     const provider = normalizeProviderId(providerKey);
     if (!provider || !Array.isArray(providerConfig?.models)) {
       continue;

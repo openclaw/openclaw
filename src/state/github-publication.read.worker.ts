@@ -7,21 +7,31 @@ import {
   listSharedGitHubPublicationsInDatabase,
   readGitHubPublicationRequest,
 } from "../gateway/github-publication-store.worker.js";
-import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
+import {
+  listRepositoryGitHubPublicationsInDatabase,
+  readPendingRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-repository-publication-read.worker.js";
 import {
   readRepositoryGitHubPublicationBranchInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
-import type { PublicationReadOperations } from "./github-publication-worker.types.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  readTaskPublicationReceipts,
+  type TaskPublicationRead,
+} from "./github-publication-task-reads.worker.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 export const publicationReadOperations = {
+  "githubPublications.taskReceipts": (input: TaskPublicationRead, db) => ({
+    type: "githubPublications.taskReceipts" as const,
+    result: readTaskPublicationReceipts(db, input),
+  }),
   "githubPublications.sharedRead": (
-    input: PublicationReadOperations["githubPublications.sharedRead"]["input"],
-    { open },
+    input: Parameters<typeof readGitHubPublicationRequest>[1],
+    db,
   ) => {
-    const { db } = open();
     return {
       type: "githubPublications.sharedRead" as const,
       row: tableExists(db, "github_publication_requests")
@@ -30,49 +40,59 @@ export const publicationReadOperations = {
     };
   },
   "githubPublications.sharedList": (
-    input: PublicationReadOperations["githubPublications.sharedList"]["input"],
-    { open },
+    input: Parameters<typeof listSharedGitHubPublicationsInDatabase>[1],
+    db,
   ) => ({
     type: "githubPublications.sharedList" as const,
-    rows: listSharedGitHubPublicationsInDatabase(open().db, input),
+    rows: listSharedGitHubPublicationsInDatabase(db, input),
   }),
   "githubPublications.claimRequests": (
-    input: PublicationReadOperations["githubPublications.claimRequests"]["input"],
-    { open },
+    input: {
+      claim: Parameters<typeof listGitHubPublicationsForClaimInDatabase>[1];
+      pendingOnly?: boolean;
+    },
+    db,
   ) => ({
     type: "githubPublications.claimRequests" as const,
-    rows: listGitHubPublicationsForClaimInDatabase(open().db, input.claim, input),
+    rows: listGitHubPublicationsForClaimInDatabase(db, input.claim, input),
   }),
   "githubPublications.personalRead": (
     input: {
       owner: string;
       request: Parameters<typeof readPersonalGitHubPublicationInDatabase>[2];
     },
-    { open },
+    db,
   ) => ({
     type: "githubPublications.personalRead" as const,
-    row: readPersonalGitHubPublicationInDatabase(open().db, input.owner, input.request),
+    row: readPersonalGitHubPublicationInDatabase(db, input.owner, input.request),
   }),
-  "githubPublications.unreported": (_input: undefined, { open }) => ({
+  "githubPublications.unreported": (_input: undefined, db) => ({
     type: "githubPublications.unreported" as const,
-    rows: listUnreportedPersonalGitHubPublicationsInDatabase(open().db),
+    rows: listUnreportedPersonalGitHubPublicationsInDatabase(db),
   }),
   "githubPublications.repositoryList": (
     input: Parameters<typeof listRepositoryGitHubPublicationsInDatabase>[1],
-    { open },
+    db,
   ) => ({
     type: "githubPublications.repositoryList" as const,
-    rows: listRepositoryGitHubPublicationsInDatabase(open().db, input),
+    rows: listRepositoryGitHubPublicationsInDatabase(db, input),
   }),
-  "githubPublications.repositoryRead": ({ requestId }: { requestId: string }, { open }) => ({
+  "githubPublications.repositoryRead": ({ requestId }: { requestId: string }, db) => ({
     type: "githubPublications.repositoryRead" as const,
-    row: readRepositoryGitHubPublicationInDatabase(open().db, requestId),
+    row: readRepositoryGitHubPublicationInDatabase(db, requestId),
   }),
   "githubPublications.branch": (
     input: Parameters<typeof readRepositoryGitHubPublicationBranchInDatabase>[1],
-    { open },
+    db,
   ) => ({
     type: "githubPublications.branch" as const,
-    branch: readRepositoryGitHubPublicationBranchInDatabase(open().db, input),
+    branch: readRepositoryGitHubPublicationBranchInDatabase(db, input),
   }),
-} satisfies WorkerOperationHandlers;
+  "githubPublications.personalPending": (
+    input: Parameters<typeof readPendingRepositoryGitHubPublicationInDatabase>[1],
+    db,
+  ) => ({
+    type: "githubPublications.personalPending" as const,
+    row: readPendingRepositoryGitHubPublicationInDatabase(db, input),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;

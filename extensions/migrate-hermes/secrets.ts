@@ -1,7 +1,5 @@
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  resolveAuthStorePathForDisplay,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
+import { AuthStorage } from "openclaw/plugin-sdk/agent-sessions";
 import {
   markMigrationItemConflict,
   markMigrationItemError,
@@ -28,7 +26,11 @@ import {
   readHermesSecretDetails,
 } from "./items.js";
 import { normalizeHermesProviderId } from "./model.js";
-import { SECRET_MAPPINGS, type SecretCredentialMode } from "./secret-mappings.js";
+import {
+  SECRET_MAPPINGS,
+  type SecretCredentialMode,
+  type SecretMapping,
+} from "./secret-mappings.js";
 import type { HermesSource } from "./source.js";
 
 type SecretCandidate = {
@@ -43,10 +45,6 @@ type SecretCandidate = {
   sourceCredentialId?: string;
   secretField?: string;
 };
-
-function authProfileTarget(agentDir: string, profileId: string): string {
-  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
-}
 
 function secretAuthProfileConfig(details: {
   provider: string;
@@ -68,32 +66,20 @@ function buildEnvSecretCandidates(params: {
 }): SecretCandidate[] {
   const configuredBindings = collectHermesProviderSecretBindings(params.config, params.env);
   const claimedEnvVars = new Set(configuredBindings.map((binding) => binding.envVar));
-  const configured = configuredBindings.flatMap((binding) => {
-    const value = params.env[binding.envVar]?.trim();
-    if (!value) {
-      return [];
-    }
-    return [
-      {
-        id: `secret:${binding.provider}`,
-        source: params.envPath,
-        envVar: binding.envVar,
-        provider: binding.provider,
-        profileId: `${binding.provider}:hermes-import`,
-        mode: "api_key" as const,
-      },
-    ];
-  });
-  const standard = SECRET_MAPPINGS.flatMap((mapping) => {
-    if (claimedEnvVars.has(mapping.envVar)) {
-      return [];
-    }
+  const mappings: SecretMapping[] = [
+    ...configuredBindings.map((binding) =>
+      Object.assign({}, binding, { profileId: `${binding.provider}:hermes-import` }),
+    ),
+    ...SECRET_MAPPINGS.filter((mapping) => !claimedEnvVars.has(mapping.envVar)),
+  ];
+  return mappings.flatMap((mapping) => {
     const value = params.env[mapping.envVar]?.trim();
     if (!value) {
       return [];
     }
     const provider =
-      mapping.envVar === "KIMI_API_KEY" || mapping.envVar === "KIMI_CODING_API_KEY"
+      !claimedEnvVars.has(mapping.envVar) &&
+      (mapping.envVar === "KIMI_API_KEY" || mapping.envVar === "KIMI_CODING_API_KEY")
         ? value.startsWith("sk-kimi-")
           ? "kimi"
           : "moonshot"
@@ -109,7 +95,6 @@ function buildEnvSecretCandidates(params: {
       },
     ];
   });
-  return [...configured, ...standard];
 }
 
 async function buildOpenCodeSecretCandidates(
@@ -267,7 +252,10 @@ export async function buildSecretItems(params: {
   if (candidates.length === 0) {
     return [];
   }
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
+  const [store, authStorePath] = await Promise.all([
+    loadAuthProfileStoreWithoutExternalProfilesAsync(params.targets.agentDir),
+    AuthStorage.resolvePathForDisplayAsync(params.targets.agentDir),
+  ]);
   const seenProfiles = new Set<string>();
   const items: MigrationItem[] = [];
   for (const candidate of candidates) {
@@ -285,7 +273,7 @@ export async function buildSecretItems(params: {
       createHermesSecretItem({
         id: candidate.id,
         source: candidate.source,
-        target: authProfileTarget(params.targets.agentDir, candidate.profileId),
+        target: `${authStorePath}#${candidate.profileId}`,
         includeSecrets: params.ctx.includeSecrets,
         existsAlready: (existsAlready && !params.ctx.overwrite) || configConflict,
         details: {

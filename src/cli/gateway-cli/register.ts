@@ -1,22 +1,15 @@
-import { formatByteSize } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import type { DiagnosticStabilityBundle } from "../../logging/diagnostic-stability-bundle.js";
-import type {
-  DiagnosticStabilityEventRecord,
-  DiagnosticStabilitySnapshot,
-} from "../../logging/diagnostic-stability.js";
+import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
-import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
 import {
   addGatewayClientOptions,
   callGatewayFromCliWithTransport,
@@ -27,16 +20,19 @@ import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
+import { gatewayAction } from "./gateway-action.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
+import { addGatewayLockRecoveryCommand } from "./register-recover-lock.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
+import { formatStabilityBytes, formatStabilityEvent } from "./stability-format.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 const loadWideAreaDnsModule = createLazyPromise(() => import("../../infra/widearea-dns.js"));
-const loadUsageFormatModule = createLazyPromise(() => import("../../utils/usage-format.js"));
+const loadCostUsageRenderer = createLazyPromise(() => import("./usage-cost-renderer.js"));
 const loadStabilityBundleModule = createLazyPromise(
   () => import("../../logging/diagnostic-stability-bundle.js"),
 );
@@ -67,38 +63,6 @@ function parseGatewayCallParams(value = "{}"): unknown {
   }
 }
 
-function gatewayAction(action: Parameters<Command["action"]>[0], label?: string) {
-  return async function (this: Command, ...args: Parameters<typeof action>) {
-    const json = Boolean(this.opts<{ json?: boolean }>().json);
-    // JSON mode preserves structured gateway errors for automation callers.
-    try {
-      await action.apply(this, args);
-    } catch (err) {
-      if (!json) {
-        rethrowExpectedCliError(err);
-      }
-      if (json) {
-        const {
-          formatGatewayAuthErrorJson,
-          formatGatewayClientRequestErrorJson,
-          formatGatewayTransportErrorJson,
-        } = await import("../../gateway/call.js");
-        defaultRuntime.writeJson(
-          formatGatewayAuthErrorJson(err) ??
-            formatGatewayClientRequestErrorJson(err) ??
-            formatGatewayTransportErrorJson(err) ??
-            formatCliJsonFailure(err),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      const message = formatErrorMessage(err);
-      defaultRuntime.error(label ? `${label}: ${message}` : message);
-      defaultRuntime.exit(1);
-    }
-  };
-}
-
 function parseDaysOption(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
@@ -108,9 +72,7 @@ function parseDaysOption(raw: unknown): number {
     if (parsed !== undefined) {
       return parsed;
     }
-    // A present-but-unparseable value (including an explicit empty one) is
-    // operator error; the main RPC path rejects malformed --timeout the same
-    // way instead of silently defaulting.
+    // A present but malformed value is operator error, like an invalid --timeout.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return 30;
@@ -128,76 +90,6 @@ async function printGatewayResult(
   for (const line of await render(isRich())) {
     defaultRuntime.log(line);
   }
-}
-
-async function renderCostUsageSummaryAsync(
-  summary: CostUsageSummary,
-  days: number,
-  rich: boolean,
-): Promise<string[]> {
-  const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
-  const { formatCostUsageCachePrefix, formatTokenCount, formatUsd } = await loadUsageFormatModule();
-  const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
-  const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
-  const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
-  const lines = [
-    colorize(rich, theme.heading, `Usage cost (${days} days)`),
-    `${cachePrefix}${colorize(rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
-  ];
-
-  if (summary.totals.missingCostEntries > 0) {
-    lines.push(
-      `${colorize(rich, theme.muted, "Missing cost:")} ${formatMissingCostEntries(summary.totals)}`,
-    );
-  }
-
-  const latest = summary.daily.at(-1);
-  if (latest) {
-    const latestCost = formatUsd(latest.totalCost) ?? "$0.00";
-    const latestTokens = formatTokenCount(latest.totalTokens) ?? "0";
-    lines.push(
-      `${colorize(rich, theme.muted, "Latest day:")} ${latest.date} · ${latestCost} · ${latestTokens} tokens`,
-    );
-  }
-
-  return lines;
-}
-
-function formatBytes(value: number | undefined): string {
-  if (value === undefined) {
-    return "n/a";
-  }
-  return formatByteSize(value, {
-    style: "iec",
-    maxUnit: "giga",
-    separator: " ",
-    fractionDigits: (amount, unit) => (unit === "byte" || amount >= 100 ? 0 : 1),
-  });
-}
-
-function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
-  const parts = [
-    new Date(record.ts).toISOString(),
-    `#${record.seq}`,
-    record.type,
-    record.level ? `level=${record.level}` : "",
-    record.action ? `action=${record.action}` : "",
-    record.outcome ? `outcome=${record.outcome}` : "",
-    record.surface ? `surface=${record.surface}` : "",
-    record.channel ? `channel=${record.channel}` : "",
-    record.pluginId ? `plugin=${record.pluginId}` : "",
-    record.reason ? `reason=${record.reason}` : "",
-    record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
-    record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
-    record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
-    record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
-    record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
-    record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
-    record.queued !== undefined ? `queued=${record.queued}` : "",
-    record.memory ? `rss=${formatBytes(record.memory.rssBytes)}` : "",
-    record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
-  ].filter(Boolean);
-  return parts.join(" ");
 }
 
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
@@ -220,9 +112,9 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   const memory = snapshot.summary.memory;
   if (memory) {
     lines.push(
-      `${colorize(rich, theme.muted, "Memory:")} rss=${formatBytes(
+      `${colorize(rich, theme.muted, "Memory:")} rss=${formatStabilityBytes(
         memory.latest?.rssBytes,
-      )} heap=${formatBytes(memory.latest?.heapUsedBytes)} maxRss=${formatBytes(
+      )} heap=${formatStabilityBytes(memory.latest?.heapUsedBytes)} maxRss=${formatStabilityBytes(
         memory.maxRssBytes,
       )} pressure=${memory.pressureCount}`,
     );
@@ -253,76 +145,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function renderStabilityBundleSummary(params: {
-  bundle: DiagnosticStabilityBundle;
-  path: string;
-  snapshot: DiagnosticStabilitySnapshot;
-  rich: boolean;
-}): string[] {
-  const { bundle, path, rich, snapshot } = params;
-  const processDetails = [
-    `pid=${bundle.process.pid}`,
-    `node=${bundle.process.node}`,
-    `${bundle.process.platform}/${bundle.process.arch}`,
-    `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
-  ].join(" ");
-  const lines = [
-    colorize(rich, theme.heading, "Stability bundle"),
-    `${colorize(rich, theme.muted, "Path:")} ${path}`,
-    `${colorize(rich, theme.muted, "Generated:")} ${bundle.generatedAt}`,
-    `${colorize(rich, theme.muted, "Reason:")} ${bundle.reason}`,
-    `${colorize(rich, theme.muted, "Process:")} ${processDetails}`,
-    `${colorize(rich, theme.muted, "Host:")} ${bundle.host.hostname}`,
-  ];
-  if (bundle.error) {
-    const errorParts = [
-      bundle.error.name ? `name=${bundle.error.name}` : "",
-      bundle.error.code ? `code=${bundle.error.code}` : "",
-    ].filter(Boolean);
-    if (errorParts.length > 0) {
-      lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
-    }
-  }
-  const memoryPressure = bundle.evidence?.memoryPressure;
-  if (memoryPressure) {
-    lines.push(
-      `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
-        memoryPressure.reason
-      } rss=${formatBytes(memoryPressure.memory.rssBytes)} heap=${formatBytes(
-        memoryPressure.memory.heapUsedBytes,
-      )} threshold=${formatBytes(memoryPressure.thresholdBytes)}`,
-    );
-    if (memoryPressure.heapStatistics) {
-      lines.push(
-        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatBytes(
-          memoryPressure.heapStatistics.usedHeapSizeBytes,
-        )} limit=${formatBytes(
-          memoryPressure.heapStatistics.heapSizeLimitBytes,
-        )} available=${formatBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
-      );
-    }
-    if (memoryPressure.activeResources) {
-      const resources = Object.entries(memoryPressure.activeResources.byType)
-        .map(([type, count]) => `${type}=${count}`)
-        .join(", ");
-      lines.push(
-        `${colorize(rich, theme.muted, "Active resources:")} total=${
-          memoryPressure.activeResources.total
-        }${resources ? ` · ${resources}` : ""}`,
-      );
-    }
-    if (memoryPressure.topSessionFiles?.length) {
-      const files = memoryPressure.topSessionFiles
-        .slice(0, 5)
-        .map((file) => `${file.relativePath}=${formatBytes(file.sizeBytes)}`)
-        .join(", ");
-      lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
-    }
-  }
-  lines.push("", ...renderStabilitySummary(snapshot, rich));
-  return lines;
-}
-
 function renderSupportExportResult(
   result: WriteDiagnosticSupportExportResult,
   rich: boolean,
@@ -330,7 +152,7 @@ function renderSupportExportResult(
   return [
     colorize(rich, theme.heading, "Diagnostics export"),
     `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
-    `${colorize(rich, theme.muted, "Size:")} ${formatBytes(result.bytes)}`,
+    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
     `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
     `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
   ];
@@ -410,6 +232,7 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
+  addGatewayLockRecoveryCommand(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
 
   gateway
@@ -523,8 +346,8 @@ export function registerGatewayCli(program: Command) {
             ...(agentId ? { agentId } : {}),
             ...(opts.allAgents ? { agentScope: "all" } : {}),
           })) as CostUsageSummary;
-          await printGatewayResult(rpcOpts.json, summary, (rich) =>
-            renderCostUsageSummaryAsync(summary, days, rich),
+          await printGatewayResult(rpcOpts.json, summary, async (rich) =>
+            (await loadCostUsageRenderer()).renderGatewayCostUsageSummary(summary, days, rich),
           );
         }, "Gateway usage cost failed"),
       ),
@@ -649,13 +472,75 @@ export function registerGatewayCli(program: Command) {
                   snapshot,
                 },
               },
-              (rich) =>
-                renderStabilityBundleSummary({
-                  bundle: result.bundle,
-                  path: result.path,
-                  rich,
-                  snapshot,
-                }),
+              (rich) => {
+                const { bundle, path } = result;
+                const processDetails = [
+                  `pid=${bundle.process.pid}`,
+                  ...(bundle.process.openclawVersion
+                    ? [`openclaw=${bundle.process.openclawVersion}`]
+                    : []),
+                  ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
+                  ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
+                  `node=${bundle.process.node}`,
+                  `${bundle.process.platform}/${bundle.process.arch}`,
+                  `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,
+                ].join(" ");
+                const lines = [
+                  colorize(rich, theme.heading, "Stability bundle"),
+                  `${colorize(rich, theme.muted, "Path:")} ${path}`,
+                  `${colorize(rich, theme.muted, "Generated:")} ${bundle.generatedAt}`,
+                  `${colorize(rich, theme.muted, "Reason:")} ${bundle.reason}`,
+                  `${colorize(rich, theme.muted, "Process:")} ${processDetails}`,
+                  `${colorize(rich, theme.muted, "Host:")} ${bundle.host.hostname}`,
+                ];
+                if (bundle.error) {
+                  const errorParts = [
+                    bundle.error.name ? `name=${bundle.error.name}` : "",
+                    bundle.error.code ? `code=${bundle.error.code}` : "",
+                  ].filter(Boolean);
+                  if (errorParts.length > 0) {
+                    lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
+                  }
+                }
+                const memoryPressure = bundle.evidence?.memoryPressure;
+                if (memoryPressure) {
+                  lines.push(
+                    `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
+                      memoryPressure.reason
+                    } rss=${formatStabilityBytes(memoryPressure.memory.rssBytes)} heap=${formatStabilityBytes(
+                      memoryPressure.memory.heapUsedBytes,
+                    )} threshold=${formatStabilityBytes(memoryPressure.thresholdBytes)}`,
+                  );
+                  if (memoryPressure.heapStatistics) {
+                    lines.push(
+                      `${colorize(rich, theme.muted, "V8 heap:")} used=${formatStabilityBytes(
+                        memoryPressure.heapStatistics.usedHeapSizeBytes,
+                      )} limit=${formatStabilityBytes(
+                        memoryPressure.heapStatistics.heapSizeLimitBytes,
+                      )} available=${formatStabilityBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+                    );
+                  }
+                  if (memoryPressure.activeResources) {
+                    const resources = Object.entries(memoryPressure.activeResources.byType)
+                      .map(([type, count]) => `${type}=${count}`)
+                      .join(", ");
+                    lines.push(
+                      `${colorize(rich, theme.muted, "Active resources:")} total=${
+                        memoryPressure.activeResources.total
+                      }${resources ? ` · ${resources}` : ""}`,
+                    );
+                  }
+                  if (memoryPressure.topSessionFiles?.length) {
+                    const files = memoryPressure.topSessionFiles
+                      .slice(0, 5)
+                      .map((file) => `${file.relativePath}=${formatStabilityBytes(file.sizeBytes)}`)
+                      .join(", ");
+                    lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
+                  }
+                }
+                lines.push("", ...renderStabilitySummary(snapshot, rich));
+                return lines;
+              },
             );
             return;
           }
@@ -810,4 +695,3 @@ export function registerGatewayCli(program: Command) {
       }, "gateway discover failed"),
     );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

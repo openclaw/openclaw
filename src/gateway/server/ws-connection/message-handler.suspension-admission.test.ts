@@ -1,4 +1,3 @@
-// WebSocket connect suspension tests cover root admission before handshake mutations.
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -47,6 +46,10 @@ vi.mock("../health-state.js", () => ({
   })),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
+}));
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
@@ -151,6 +154,18 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
   if (!onMessage) {
     throw new Error("expected websocket message handler");
   }
+  const sendConnect = (id: string, connect: unknown) =>
+    onMessage?.(
+      Buffer.from(JSON.stringify({ type: "req", id, method: "connect", params: connect })),
+    );
+  const connectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role: "operator",
+    scopes: [],
+    caps: [],
+  };
 
   return {
     close,
@@ -158,72 +173,23 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     get client() {
       return client;
     },
-    sendConnect: () =>
-      onMessage?.(
-        Buffer.from(
-          JSON.stringify({
-            type: "req",
-            id: "connect-1",
-            method: "connect",
-            params: {
-              minProtocol: PROTOCOL_VERSION,
-              maxProtocol: PROTOCOL_VERSION,
-              client: {
-                id: "gateway-client",
-                version: "dev",
-                platform: "test",
-                mode: "backend",
-              },
-              role: "operator",
-              scopes: [],
-              caps: [],
-            },
-          }),
-        ),
-      ),
-    sendWorkerConnect: () =>
-      onMessage?.(
-        Buffer.from(
-          JSON.stringify({
-            type: "req",
-            id: "worker-connect",
-            method: "connect",
-            params: { role: "worker" },
-          }),
-        ),
-      ),
+    sendConnect: () => sendConnect("connect-1", connectParams),
+    sendWorkerConnect: () => sendConnect("worker-connect", { role: "worker" }),
     sendStartupNodeConnect: () =>
-      onMessage?.(
-        Buffer.from(
-          JSON.stringify({
-            type: "req",
-            id: "startup-node-connect",
-            method: "connect",
-            params: {
-              minProtocol: PROTOCOL_VERSION,
-              maxProtocol: PROTOCOL_VERSION,
-              client: {
-                id: "node-host",
-                version: "dev",
-                platform: "linux",
-                mode: "node",
-              },
-              role: "node",
-              scopes: [],
-              caps: [],
-              commands: [],
-              auth: { bootstrapToken: "startup-bootstrap-token" },
-              device: {
-                id: "startup-node-device",
-                publicKey: "startup-node-public-key",
-                signature: "startup-node-signature",
-                signedAt: Date.now(),
-                nonce: "suspension-connect-nonce",
-              },
-            },
-          }),
-        ),
-      ),
+      sendConnect("startup-node-connect", {
+        ...connectParams,
+        client: { id: "node-host", version: "dev", platform: "linux", mode: "node" },
+        role: "node",
+        commands: [],
+        auth: { bootstrapToken: "startup-bootstrap-token" },
+        device: {
+          id: "startup-node-device",
+          publicKey: "startup-node-public-key",
+          signature: "startup-node-signature",
+          signedAt: Date.now(),
+          nonce: "suspension-connect-nonce",
+        },
+      }),
     send,
     setCloseCause,
     setClient,
@@ -251,9 +217,7 @@ describe("WebSocket connect suspension admission", () => {
 
     harness.sendConnect();
 
-    await vi.waitFor(() => {
-      expect(harness.socketSend).toHaveBeenCalledOnce();
-    });
+    await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
     const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
       error?: {
         code?: string;
@@ -275,9 +239,9 @@ describe("WebSocket connect suspension admission", () => {
     expect(harness.client).toBeNull();
     expect(harness.setClient).not.toHaveBeenCalled();
     expect(upsertPresenceMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
-    });
+    await vi.waitFor(() =>
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress"),
+    );
     suspension?.rollback();
   });
 
@@ -290,9 +254,7 @@ describe("WebSocket connect suspension admission", () => {
 
       harness.sendConnect();
 
-      await vi.waitFor(() => {
-        expect(harness.setClient).toHaveBeenCalledOnce();
-      });
+      await vi.waitFor(() => expect(harness.setClient).toHaveBeenCalledOnce());
       expect(harness.client).not.toBeNull();
       expect(harness.close).not.toHaveBeenCalled();
       const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}");
@@ -313,9 +275,9 @@ describe("WebSocket connect suspension admission", () => {
       reason: "gateway-restarting",
     });
     expect(harness.setClient).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(harness.close).toHaveBeenCalledWith(1013, "gateway restart in progress");
-    });
+    await vi.waitFor(() =>
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway restart in progress"),
+    );
   });
 
   it("keeps suspension closed to an exact startup node shape", async () => {
@@ -327,9 +289,9 @@ describe("WebSocket connect suspension admission", () => {
 
     await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
     expect(harness.setClient).not.toHaveBeenCalled();
-    await vi.waitFor(() => {
-      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
-    });
+    await vi.waitFor(() =>
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress"),
+    );
     suspension?.release();
   });
 
@@ -338,9 +300,7 @@ describe("WebSocket connect suspension admission", () => {
 
     harness.sendConnect();
 
-    await vi.waitFor(() => {
-      expect(harness.socketSend).toHaveBeenCalledOnce();
-    });
+    await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();
@@ -348,9 +308,7 @@ describe("WebSocket connect suspension admission", () => {
     expect(suspension?.rollback()).toBe(true);
 
     harness.finishSocketSend();
-    await vi.waitFor(() => {
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("rejects worker identity on the general gateway ingress", async () => {

@@ -3,6 +3,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
+  getAgentRunContext,
   recordAgentRunModel,
   registerAgentRunContext,
   releaseAgentRunContext,
@@ -23,6 +24,10 @@ it("publishes affected session identities for registration, moves, models, and r
   const before = { sessionKey: "agent:main:before", agentId: "main" };
   const after = { sessionKey: "agent:other:after", agentId: "other" };
   registerAgentRunContext("moving", before);
+  expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
+  changed.mockClear();
+
+  registerAgentRunContext("moving", { ...before, sessionId: "admitted-session" });
   expect(changed.mock.calls).toEqual([[{ ...before, scope: "runtime" }]]);
   changed.mockClear();
 
@@ -57,7 +62,53 @@ it("invalidates the run projection on lifecycle rotation and orphan cleanup", ()
   changed.mockClear();
   expect(sweepStaleRunContexts(1)).toBe(1);
   expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+});
+
+it("retains both session identities when an ID-only run moves, then releases only its current identity", () => {
+  const changed = vi.fn();
+  onTestFinished(sessionChanges.subscribe(changed));
+  const before = { agentId: "worker", sessionId: "before" };
+  const after = { agentId: "worker", sessionId: "after" };
+  const notification = (runtimeSession: typeof before) => ({
+    all: true,
+    scope: "agent-runs",
+    runtimeSession,
+  });
+  registerAgentRunContext("session-id-only", before);
+  expect(changed.mock.calls).toEqual([[notification(before)]]);
   changed.mockClear();
-  registerAgentRunContext("session-id-only", { agentId: "worker", sessionId: "shared-id" });
-  expect(changed.mock.calls).toEqual([[{ all: true, scope: "agent-runs" }]]);
+  registerAgentRunContext("session-id-only", after);
+  expect(changed.mock.calls).toEqual([[notification(before)], [notification(after)]]);
+  changed.mockClear();
+  clearAgentRunContext("session-id-only");
+  expect(changed.mock.calls).toEqual([[notification(after)]]);
+});
+
+it("retains model request numbering across run metadata updates and resets fresh registrations", () => {
+  const staleSequence = { value: 99 };
+  registerAgentRunContext("retrying", { sessionKey: "session", modelCallSequence: staleSequence });
+  const sequence = getAgentRunContext("retrying")?.modelCallSequence;
+  expect(sequence).toEqual({ value: 0 });
+  expect(sequence).not.toBe(staleSequence);
+  if (!sequence) {
+    throw new Error("registered run must own its model request sequence");
+  }
+  sequence.value += 1;
+  registerAgentRunContext("retrying", { sessionKey: "session", modelCallSequence: { value: 0 } });
+  claimAgentRunContext("retrying", { sessionKey: "session" });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).toBe(sequence);
+  expect(sequence.value).toBe(1);
+
+  clearAgentRunContext("retrying");
+  registerAgentRunContext("retrying", { sessionKey: "session", modelCallSequence: sequence });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).toEqual({ value: 0 });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).not.toBe(sequence);
+
+  const generation = rotateAgentRunRegistryLifecycleGeneration();
+  claimAgentRunContext("retrying", {
+    lifecycleGeneration: generation,
+    modelCallSequence: sequence,
+  });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).toEqual({ value: 0 });
+  expect(getAgentRunContext("retrying")?.modelCallSequence).not.toBe(sequence);
 });

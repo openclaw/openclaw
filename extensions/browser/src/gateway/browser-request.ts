@@ -10,7 +10,7 @@ import {
   type NodeSession,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   asNullableRecord,
@@ -307,7 +307,6 @@ export async function handleBrowserGatewayRequest({
   }
   if (nodeTarget) {
     try {
-      assertRequesterCurrent();
       preparedUpload = await prepareBrowserProxyUploadRequest({
         method: methodRaw,
         path,

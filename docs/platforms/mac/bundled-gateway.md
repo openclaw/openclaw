@@ -69,11 +69,25 @@ device-auth, device-identity, and exec-approval migrations; this is not a promis
 that all worker startup is read-only. Public `node run`, Gateway, and Doctor
 retain their existing startup policies.
 
-When the native app creates identity, device-auth, or approval tables before
-the worker starts, node startup completes that recognized version-zero database
-through the shared initializer before plugins read their state. Existing
-native rows are preserved. This does not migrate an already-versioned shared
-Gateway database or adopt unknown or occupied bootstrap state.
+The native app loads private identities and cached device tokens from its local
+`client/credentials.sqlite` before connecting, without opening the selected
+Gateway database. The active app serves bounded same-user credential operations,
+holding exclusive SQLite custody only for each operation. A fresh client can create an identity while
+PostgreSQL or the Gateway is unavailable; shared approval policy still requires
+its existing state owner.
+
+Updater or Doctor migrates existing shared credentials before the new clients
+use them. A recognized credential-only native version-zero database can be
+extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
+other application tables require the supported Doctor/port route. Existing
+private keys are preserved; migration failure never silently creates replacement
+keys. Update older apps after shared credential retirement and run the matching
+`openclaw doctor --fix` for an incomplete migration.
+
+Independent native credential sources remain untouched after their read-only
+import. The previous app can still read them after rollback. The local copy keeps
+source identity and content hash, preserving refreshed tokens for an unchanged
+source and rebuilding after a source change. Consumed JSON imports remain consumed.
 
 ## Automatic setup
 
@@ -81,7 +95,9 @@ On a fresh Mac, choose **This Mac** during onboarding. **Getting things ready**
 prepares the included runtime, starts the Gateway, and verifies that it is
 ready. This setup needs no runtime download, Node installation, Terminal,
 Homebrew, or administrator access. Connecting an AI provider can still require
-internet access.
+internet access. The first-run handoff keeps waiting while the app retries
+Gateway startup, then opens automatic setup once the Gateway is ready. A terminal
+failure or cancellation leaves onboarding unfinished.
 
 The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the
 current bundled CLI with Bun and the included SQLite library. When the app runs
@@ -106,12 +122,14 @@ is no longer available on reattachment, local setup becomes available again.
 An unreadable service ownership record blocks automatic installation instead
 of being treated as a missing service; check the LaunchAgent and retry.
 
-Chrome-extension preparation also runs automatically for the default app
-profile, including remote-only and attach-only Macs. It uses the validated
-private runtime, registers the native helper before requesting the Store
-extension, and leaves Chrome’s permission approval to you. Browser setup does not
-run Gateway-wide Doctor or migrate Gateway state. The Dashboard’s **Set up Chrome
-on this device** action retries the same serialized operation. See
+Choose **Settings → This Mac → Set up Chrome on this device** in the Dashboard to
+prepare the Chrome extension, including on remote-only and attach-only Macs.
+Startup does not inspect or change Chrome data. After you start setup, the default
+app profile maintains registration on CLI updates during that app session.
+Setup uses the validated private runtime, registers the native helper before
+requesting the Store extension, and leaves Chrome’s permission approval to you.
+It does not run Gateway-wide Doctor or migrate Gateway state. The same action
+retries setup when needed. See
 [Chrome extension](/tools/chrome-extension).
 
 ## Manual recovery
@@ -177,6 +195,16 @@ Enabling an existing service from the app preserves its saved runtime pin.
 If the pin is invalid, enabling fails with the CLI error; reinstall explicitly with
 `--runtime` or `--runtime-path` to replace the saved pin.
 Disabling it uninstalls the LaunchAgent, which removes the pin.
+
+Runtime intent lives in the daemon-owned local SQLite store
+`<state>/control/services.sqlite`, independently of the selected shared-state
+engine. The app reads typed intent through its bundled CLI; it does not open the
+shared database. Unknown, malformed, or stale intent preserves the service and
+requires an explicit runtime selection before replacement. A pending migration is
+reported as `migrationPending`; update and resume preserve the current runtime
+until Doctor or a CLI start/repair completes it. An app-hosted resume that runs
+neither Doctor nor the CLI start fence may keep the receipt pending; the next
+CLI start/repair or `openclaw doctor` completes it.
 
 A newly installed app-managed Bun service is pinned to
 `<state>/runtime/<runtimeBuildId>/bin/bun`, with the matching package and
@@ -291,6 +319,15 @@ Logging:
   launchd-marker workaround in
   [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gateway%2Fnode-launchagents).
 
+When a shell CLI and the running Gateway report the same version, they can still
+belong to different physical installations. Inspect `openclaw gateway status --deep`
+and `openclaw health` alongside the shell version to identify the service command
+and runtime. A terminal shim path such as `/opt/homebrew/bin/openclaw` alone does
+not identify its package owner. For app-owned recovery, choose **Retry** in the app;
+it uses the app's captured runtime and existing repair owners. Keep recovery
+preferences intact. Successful health verifies readiness; required repair work
+must also complete before the update receipt settles.
+
 ## App-hosted lifecycle and updates
 
 During local startup, readiness probes own the retry cadence and deadline.
@@ -305,6 +342,13 @@ unresponsive process group to exit.
 
 After an app update, including a rebuild with the same public version, the app
 seeds the new runtime and restarts its Gateway in the selected hosting mode.
+The app drains its producer and runs Doctor through the selected runtime before
+restarting the Gateway. Doctor owns core migrations and configured plugin host-link
+repair; the app owns service publication and activation. Required repair refusals
+keep recovery pending and restore the previous service when native custody permits.
+If Doctor cleanup cannot be confirmed, the app keeps the Gateway stopped and recovery
+pending; preserve the reported custody diagnostics before retrying.
+Conditional plugin warnings remain visible, with their pending repair records retained.
 It verifies health before removing old builds. A paused Gateway stays paused.
 Seeded installations never run npm self-update; update OpenClaw.app to update
 their Gateway. A paused legacy app-managed Node installation keeps background-service
@@ -332,10 +376,9 @@ the release app's Keychain items. See
 
 ### Existing app-managed Node services
 
-For the default profile after onboarding, the app migrates its exact-version
-Node installation in two separate attempts. If the installed version differs
-from the bundled version, the existing managed updater first updates the Node
-installation to the app's version. The core updater owns backups, rollback, and
+For the default profile after onboarding, the app migrates an app-managed Node
+installation at the app's version in two separate attempts. An older installation
+first uses its existing managed updater to reach the app's version. The core updater owns backups, rollback, and
 database migrations. A failed update leaves the runtime on Node and shows the
 existing update failure and Retry window.
 
@@ -349,7 +392,8 @@ Node resume path; it does not skip the version update or enable the hosting
 toggle early.
 
 Before an app-owned install through the bundled CLI, the app reads runtime intent
-with that same CLI, runtime, and environment using `gateway status --deep --json`.
+with that same CLI, runtime, and environment using `gateway status --runtime-intent-only --json`.
+This local inspection remains available when the Gateway or PostgreSQL is stopped.
 It passes the observed revision and service definition to the installer after its
 final local custody checks. Failed or unknown inspection stops the install. If an
 operator changes the service or runtime pin before installation begins, the CLI
@@ -376,12 +420,17 @@ the LaunchAgent is absent. This applies to default and named profiles using an
 exact or unset install policy. While paused, the app only records the hosting
 preference; it does not update, seed, or install a Gateway.
 
-On Resume, the app uses that Node installation's core updater to reach the app's
+On Resume, an older Node installation uses its core updater to reach the app's
 version without restarting a service. It then seeds Bun, installs the service,
 and verifies health in the same startup attempt. If the runtime switch fails,
 the app reinstalls and verifies the same-version Node service and shows the
 update failure with Retry. Fresh profiles retain app hosting; channel policies,
 attach-only profiles, and independently managed installations are not adopted.
+
+A compatible newer Node installation resumes through its existing selected CLI;
+the app does not downgrade it or switch it to the app's older bundled runtime.
+Health verification, required migration completion, and current runtime ownership
+still govern recovery completion.
 
 ## Version compatibility
 

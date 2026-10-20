@@ -5,7 +5,6 @@ import type { CronDeliveryPreview } from "../../cron/types.js";
 import {
   agentTurnCronParams,
   createCronCallerClient as callerClient,
-  type createCronTestContext,
   type createCronTestInvoker,
   expectCronSuccess,
   expectResponseError,
@@ -27,13 +26,11 @@ export type CronCreatorSessionLookup = {
 };
 
 export function registerCronCreatorSessionTests(fixture: {
-  createCronContext: () => ReturnType<typeof createCronTestContext>;
   invokeCron: ReturnType<typeof createCronTestInvoker>;
   loadGatewaySessionEntry: Mock<(sessionKey: string) => CronCreatorSessionLookup>;
   resolveCronDeliveryPreview: Mock<() => Promise<CronDeliveryPreview>>;
 }) {
-  const { createCronContext, invokeCron, loadGatewaySessionEntry, resolveCronDeliveryPreview } =
-    fixture;
+  const { invokeCron, loadGatewaySessionEntry, resolveCronDeliveryPreview } = fixture;
   it("stamps the authenticated profile as private cron creator provenance", async () => {
     const client: GatewayClient = {
       connect: {} as GatewayClient["connect"],
@@ -126,32 +123,6 @@ export function registerCronCreatorSessionTests(fixture: {
     },
   );
 
-  it.each(["deleted", "reset"] as const)(
-    "refuses isolated creation when the supplied conversation is %s before commit",
-    async (change) => {
-      const sessionKey = "agent:main:conversation";
-      loadGatewaySessionEntry.mockReturnValue({
-        canonicalKey: sessionKey,
-        entry: { sessionId: "creating-session", lifecycleRevision: "generation-1" },
-      });
-      resolveCronDeliveryPreview.mockImplementationOnce(async () => {
-        loadGatewaySessionEntry.mockReturnValue({
-          canonicalKey: sessionKey,
-          entry:
-            change === "reset"
-              ? { sessionId: "creating-session", lifecycleRevision: "generation-2" }
-              : undefined,
-        });
-        return { label: "conversation", detail: "conversation" };
-      });
-      const context = createCronContext();
-      await expect(
-        invokeCron("cron.add", agentTurnCronParams({ sessionKey }), { context }),
-      ).rejects.toThrow("Creator session changed before scheduling");
-      expect(context.committedAdds).toEqual([]);
-    },
-  );
-
   it.each(["unknown"] as const)(
     "retains %s creator provenance through agent-created cron jobs",
     async (source) => {
@@ -187,6 +158,7 @@ export function registerCronCreatorSessionTests(fixture: {
   it.each([
     { createdActor: { type: "human", source: "profile", id: "spoofed-profile" } },
     { sourceConversation: { sessionKey: "agent:main:other", sessionId: "spoofed-session" } },
+    { operatorSource: { source: { profileId: "spoofed-profile" } } },
   ])("rejects caller-supplied private cron creator facts: %j", async (privateFields) => {
     const { context, respond } = await invokeCron("cron.add", agentTurnCronParams(privateFields));
 

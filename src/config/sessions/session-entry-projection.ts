@@ -17,7 +17,9 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  pendingExecNotifications: undefined,
   restartRecoveryOperatorSource: undefined,
+  restartRecoveryRequesterSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   sessionDiffBaselineCapture: undefined,
@@ -33,7 +35,9 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "pendingExecNotifications",
   "restartRecoveryOperatorSource",
+  "restartRecoveryRequesterSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "sessionDiffBaselineCapture",
@@ -74,6 +78,7 @@ export function projectPublicSessionEntryPatch(
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.
 export const COMPACTION_RUN_USAGE_CLEAR_PATCH = {
+  usageReport: undefined,
   inputTokens: undefined,
   outputTokens: undefined,
   cacheRead: undefined,
@@ -87,7 +92,8 @@ export function projectCompactionAccountingPatch(
     amount?: number;
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
-    tokensAfter?: number;
+    /** Null invalidates an earlier estimate without incrementing the boundary count. */
+    tokensAfter?: number | null;
     /** Omission preserves host suppression; null clears it across the worker boundary. */
     transcriptByteCompactionLatch?: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
   },
@@ -117,7 +123,7 @@ export function projectCompactionAccountingPatch(
       totalTokensFresh: true,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
-  } else if (incrementBy > 0) {
+  } else if (incrementBy > 0 || params.tokensAfter === null) {
     patch.totalTokensFresh = false;
     patch.totalTokensVersion = undefined;
   }

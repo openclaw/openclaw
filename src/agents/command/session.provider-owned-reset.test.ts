@@ -7,16 +7,12 @@ const hoisted = vi.hoisted(() => ({
   terminalTranscriptNewer: false,
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadExactSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => {
+// mock-isolation: Provider-reset fixtures read cloned synthetic rows without opening a session store.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async ({ sessionKey }: { sessionKey: string }) => {
     const entry = hoisted.store[sessionKey];
-    return entry ? { sessionKey, entry: structuredClone(entry) } : undefined;
+    return entry ? structuredClone(entry) : undefined;
   },
-  listSessionEntriesReadOnly: () =>
-    Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    })),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -112,6 +108,13 @@ describe("command resolveSession provider-owned daily reset", () => {
         verboseLevel: "full",
         pendingTranscriptRepair: [{ id: "old-repair", text: "old reply", createdAt: startedAt }],
         lastRunId: "settled-old-run",
+        restartRecoveryRequesterSource: {
+          agentId: "main",
+          sessionKey,
+          sessionId: "daily-expired-session-id",
+          sourceRunId: "settled-old-run",
+          requesterOrigin: { sessionKey, operatorProfileId: "original-requester" },
+        },
       },
     };
     const result = await resolveSession({
@@ -124,6 +127,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.sessionId).not.toBe("daily-expired-session-id");
     expect(result.sessionEntry?.pendingTranscriptRepair).toBeUndefined();
     expect(result.sessionEntry?.lastRunId).toBeUndefined();
+    expect(result.sessionEntry?.restartRecoveryRequesterSource).toBeUndefined();
     expect(result.persistedThinking).toBe("high");
     expect(result.persistedVerbose).toBe("full");
   });

@@ -6,6 +6,7 @@ import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type {
   SessionParentForkDecision,
+  ForkSessionFromParentTranscriptParams,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { findSessionTranscriptHeader, isIndexedSessionEntry } from "./session-entry-codec.js";
@@ -367,4 +368,25 @@ export function buildForkedChildTranscriptEvents(params: {
     ...labelEntries,
     ...(leafEntry ? [leafEntry] : []),
   ];
+}
+
+export function resolveParentForkLimitDecision(
+  params: Pick<
+    ForkSessionFromParentTranscriptParams,
+    "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
+  >,
+  source: ParentForkSourceTranscript,
+): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
+  if (!params.enforceTokenLimit) {
+    return undefined;
+  }
+  const decision = planParentForkDecision(
+    params.parentEntry,
+    estimateParentForkPromptTokens(source),
+    {
+      maxTokens: params.maxTokens,
+      preferTranscriptEstimate: params.forkFrom === "last-completed",
+    },
+  );
+  return decision.status === "skip" ? decision : undefined;
 }

@@ -15,7 +15,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { downloadGoogleChatMedia, GoogleChatApiError, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
@@ -52,22 +52,6 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   }
 }
 
-function resolveBotDisplayName(params: {
-  accountName?: string;
-  agentId: string;
-  config: OpenClawConfig;
-}): string {
-  const { accountName, agentId, config } = params;
-  if (accountName?.trim()) {
-    return accountName.trim();
-  }
-  const agent = resolveAgentConfig(config, agentId);
-  if (agent?.name?.trim()) {
-    return agent.name.trim();
-  }
-  return agent?.identity?.name?.trim() || "OpenClaw";
-}
-
 async function processGoogleChatEvent(
   event: GoogleChatEvent,
   target: WebhookTarget,
@@ -97,7 +81,7 @@ async function processGoogleChatEvent(
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
-  const senderEmail = sender?.email ?? undefined;
+  const senderEmail = sender?.email;
   const isBotSender = sender?.type?.toUpperCase() === "BOT";
   const appUserId = account.config.botUser?.trim() || "users/app";
 
@@ -194,15 +178,18 @@ async function processGoogleChatEvent(
         runtime.error?.(`[${account.accountId}] ${notice}`);
       }
     } catch (error) {
-      if (!(error instanceof MediaFetchError) || error.code !== "max_bytes") {
+      const missing = error instanceof GoogleChatApiError && error.status === 404;
+      if (!missing && (!(error instanceof MediaFetchError) || error.code !== "max_bytes")) {
         throw error;
       }
-      // Adopt permanent size failures after authorizing the original text; retrying
+      // Adopt permanent attachment failures after authorizing the original text; retrying
       // them would block every later durable message in the same conversation.
-      const notice = `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
+      const notice = missing
+        ? "[Google Chat attachment unavailable: file not found; upload the file directly]"
+        : `[Google Chat attachment too large; maximum ${mediaMaxMb} MB]`;
       rawBody = formatInboundMediaUnavailableText({ body: rawBody, notice });
       runtime.error?.(
-        `[${account.accountId}] ${notice} Increase channels.googlechat.mediaMaxMb to process larger attachments.`,
+        `[${account.accountId}] ${notice}${missing ? "" : " Increase channels.googlechat.mediaMaxMb to process larger attachments."}`,
       );
     }
   }
@@ -272,7 +259,7 @@ async function processGoogleChatEvent(
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       GroupSubject: undefined,
-      GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
+      GroupSpace: isGroup ? space.displayName : undefined,
     },
   });
 
@@ -291,11 +278,17 @@ async function processGoogleChatEvent(
 
   if (typingIndicator === "message") {
     try {
-      const botName = resolveBotDisplayName({
-        accountName: account.config.name,
-        agentId: route.agentId,
-        config,
-      });
+      const accountName = account.config.name;
+      const agentId = route.agentId;
+      let botName: string;
+      if (accountName?.trim()) {
+        botName = accountName.trim();
+      } else {
+        const agent = resolveAgentConfig(config, agentId);
+        botName = agent?.name?.trim()
+          ? agent.name.trim()
+          : agent?.identity?.name?.trim() || "OpenClaw";
+      }
       const result = await sendGoogleChatMessage({
         account,
         space: spaceId,
@@ -394,7 +387,7 @@ async function downloadAttachment(
   if (!resourceName) {
     return null;
   }
-  const maxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
+  const maxBytes = mediaMaxMb * 1024 * 1024;
   const downloaded = await downloadGoogleChatMedia({ account, resourceName, maxBytes });
   const saved = await core.channel.media.saveMediaBuffer(
     downloaded.buffer,

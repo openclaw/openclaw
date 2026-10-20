@@ -12,7 +12,7 @@ import {
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getCliLiveSessionGeneration } from "../agents/cli-runner/cli-live-session-registry.js";
 import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
@@ -64,7 +64,7 @@ import {
   verifyCliCronMcpProbe,
 } from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -549,6 +549,7 @@ describeLive("gateway live (cli backend)", () => {
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+      using _ = useLiveTestRuntimeConfig(nextCfg);
       const cacheProbeBackend = CLI_CACHE_PROBE
         ? prepareClaudeCacheProbeBackend({ config: nextCfg, liveBackend, providerId })
         : undefined;
@@ -729,7 +730,8 @@ describeLive("gateway live (cli backend)", () => {
             }>("chat.history", { sessionKey });
             // Imported history can be fully deduplicated against local rows; the persisted
             // binding, not imported-message metadata, owns native session continuity.
-            const { entry: continuityEntry } = loadGatewaySessionEntryReadOnly(sessionKey);
+            const { entry: continuityEntry } =
+              await loadGatewaySessionEntryReadOnlyAsync(sessionKey);
             expectedCliSessionId = continuityEntry?.cliSessionBindings?.[providerId]?.sessionId;
             expect(expectedCliSessionId).toBeTruthy();
             // Native imports must keep private runtime context out of the visible transcript,
@@ -820,8 +822,9 @@ describeLive("gateway live (cli backend)", () => {
               expectedLiveSessionGeneration,
             );
             expect(
-              loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.[providerId]
-                ?.sessionId,
+              (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry?.cliSessionBindings?.[
+                providerId
+              ]?.sessionId,
             ).toBe(expectedCliSessionId);
           } else {
             expect(
@@ -980,16 +983,20 @@ describeLive("gateway live (cli backend)", () => {
           announceBarrier,
           requestTimeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS,
           logStep: logCliBackendLiveStep,
+          ...(CLI_CACHE_PROBE ? { minCacheHitRate: CLI_BACKEND_MIN_CACHE_HIT_RATE } : {}),
         });
       } finally {
         try {
           logCliBackendLiveStep("cleanup:start");
           announceBarrier.release();
-          clearRuntimeConfigSnapshot();
           try {
             await client?.stopAndWait();
           } finally {
-            await server?.close();
+            try {
+              await server?.close();
+            } finally {
+              clearRuntimeConfigSnapshot();
+            }
           }
         } finally {
           cliBackendsTesting.resetDepsForTest();

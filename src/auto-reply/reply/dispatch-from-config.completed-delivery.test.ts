@@ -46,9 +46,10 @@ describe("completed delivery through runner and dispatcher", () => {
       visible: "Shown.",
     },
     {
-      name: "explicit speech alongside silence",
+      name: "explicit speech alongside a literal silence token",
       source: "[[tts:text]]Speak this.[[/tts:text]]NO_REPLY",
       speech: "Speak this.",
+      visible: "NO_REPLY",
     },
     { name: "channel veto", source: "[[tts:text]]Do not speak.[[/tts:text]]", veto: true },
     {
@@ -142,7 +143,6 @@ describe("completed delivery through runner and dispatcher", () => {
       const { replyPayloads } = await buildReplyPayloads({
         payloads: embedded,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",

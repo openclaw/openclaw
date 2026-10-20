@@ -4,14 +4,17 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
+import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
-import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
+import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
 } from "./runtime-process-core-build-entries.mts";
+import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
@@ -39,19 +42,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       console.error(`[vitest-workers] ${phase} after ${Math.round(performance.now() - started)}ms`);
     }
   };
-  const compilerInputs = collectRuntimeImportClosure(
-    root,
-    [
-      "scripts/lib/vitest-worker-compiler.mts",
-      "scripts/lib/vitest-worker-run.mts",
-      "scripts/lib/vitest-cli-mode.mts",
-    ],
-    { includeDynamicImports: true },
-  );
   const cache = useVitestWorkerCache(process.env, process.execArgv)
-    ? await (
-        await import("./vitest-worker-cache.mts")
-      ).createVitestWorkerCache(root, directory, compilerInputs)
+    ? await (await import("./vitest-worker-cache.mts")).createVitestWorkerCache(root, directory)
     : undefined;
   const restored = await cache?.restore();
   if (cache) {
@@ -67,6 +59,21 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     console.error("[vitest-workers] reused local compiler outputs");
     return;
   }
+  const { collectRuntimeImportClosure } = await import("./runtime-import-closure.mts");
+  const { readNativeTypeScriptConfig } = await import("./native-typescript-config.mts");
+  const compilerInputs = collectRuntimeImportClosure(
+    root,
+    [
+      "scripts/lib/vitest-worker-compiler.mts",
+      "scripts/lib/vitest-worker-run.mts",
+      "scripts/lib/vitest-cli-mode.mts",
+    ],
+    { includeDynamicImports: true },
+  );
+  const { configFiles } = readNativeTypeScriptConfig({
+    cwd: root,
+    configFileName: "tsconfig.json",
+  });
   // The native child owns the compiler module graph for this one preparation.
   const { build }: typeof import("tsdown") = require("tsdown");
   const inputs: Record<string, string> = {};
@@ -94,13 +101,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     }
   };
   for (const name of [
-    "tsconfig.json",
+    ...configFiles,
     "package.json",
     "pnpm-lock.yaml",
     // Pin compiler, lifetime, and source-versus-compiled selection code, including lazy platforms.
     ...compilerInputs,
   ]) {
-    recordInput(path.join(root, name));
+    recordInput(path.resolve(root, name));
   }
   const entry = {
     ...vitestWorkerBuildEntries,
@@ -117,6 +124,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
       createPublicSessionCardAssetsPlugin(root, recordInput),
+      createPublicSessionLocalesPlugin(root, recordInput),
+      createSqliteSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
         name: "openclaw:worker-build-inputs",
@@ -159,7 +168,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
-  const maintenanceModuleBoundaries = new Map([
+  const fixtureModuleBoundaries = new Map([
     [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
     [
       path.join(root, "src/daemon/service-process-membership.ts"),
@@ -169,6 +178,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     [
       path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
       "cli/update-cli/update-command-service-drain.js",
+    ],
+    // Doctor fixtures disable passive observation without replacing discovery or repair.
+    [
+      path.join(root, "src/infra/owned-directory-observation.ts"),
+      "infra/owned-directory-observation.js",
     ],
   ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
@@ -200,7 +214,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               kind: "include",
               expr: {
                 kind: "importerId",
-                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]message[\\/]helpers\.ts$/,
+                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]register\.message\.ts$/,
                 params: { cleanUrl: false },
               },
             },
@@ -209,7 +223,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             // Preserve the broadcast fixture's exact native command substitution.
             if (
               importer &&
-              path.normalize(importer) === path.join(root, "src/cli/program/message/helpers.ts") &&
+              path.normalize(importer) === path.join(root, "src/cli/program/register.message.ts") &&
               id.startsWith(".") &&
               path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
                 path.join(root, "src/commands/message.ts")
@@ -224,7 +238,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         },
       },
       {
-        name: "openclaw:maintenance-service-boundary",
+        name: "openclaw:fixture-module-boundary",
         resolveId: {
           // Keep normalization aliases: the target component can come from either operand.
           filter: [
@@ -236,13 +250,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                   {
                     kind: "id",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                   {
                     kind: "importerId",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                 ],
@@ -254,7 +268,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               return null;
             }
             const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
-            const boundary = maintenanceModuleBoundaries.get(source);
+            const boundary = fixtureModuleBoundaries.get(source);
             return boundary
               ? {
                   id: pathToFileURL(path.join(outDir, boundary)).href,
@@ -310,7 +324,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
       await build({
         ...config,
         entry: { [name]: source },
-        outputOptions: { codeSplitting: false },
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
       });
     }
     reportPhase("standalone workers compiled");
@@ -322,7 +336,12 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         outDir,
         clean: false,
         logLevel: config.logLevel,
-        plugins: config.plugins,
+        // Keep the invocation's loader boundaries while recording the binary
+        // input and output alongside its sealed JavaScript consumers.
+        plugins: [
+          createFsSafeWindowsHelperAssetPlugin(root, undefined, recordInput),
+          config.plugins,
+        ],
       });
     }
     reportPhase("managed handoff compiled");

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { unregisterResolvedAgentDir } from "../../agents/agent-dir-registry.js";
-import { replaceRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { loadPersistedPluginModelCatalogsReadOnly } from "../../agents/plugin-model-catalog.js";
 import { usePreparedCatalogWorkerFixtures } from "../../agents/test-helpers/prepared-model-catalog-worker-fixture.js";
 import * as runtimeConfig from "../../config/config.js";
@@ -16,7 +15,10 @@ import * as configLoader from "./load-config.js";
 const providerId = "refresh-completion-fixture";
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeConfig.clearRuntimeConfigSnapshot();
+});
 
 describe("standalone models list refresh", () => {
   it("persists a slow offline refresh once before printing its discovered rows", async () => {
@@ -103,11 +105,18 @@ module.exports = {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_GATEWAY_PORT: undefined,
     };
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: { version: 1, profiles: {} } }]);
     retireAfterTest(() => {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
-    vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue(config);
+    vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
+      Object.assign(
+        async () => {
+          runtimeConfig.setRuntimeConfigSnapshot(config, config);
+          return config;
+        },
+        { assertCurrent() {} },
+      ),
+    );
     vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
       sourceConfig: config,
       resolvedConfig: config,

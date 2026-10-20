@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -27,7 +27,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
     return current;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
   if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;

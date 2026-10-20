@@ -16,8 +16,6 @@ import {
   updateSessionLastRoute,
 } from "../../config/sessions/inbound.runtime.js";
 import {
-  loadSessionEntryReadOnly,
-  loadSessionEntryReadOnlyInScope,
   updateSessionLastRouteInScope,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
@@ -31,8 +29,10 @@ import {
   buildInboundSessionCreationStamp,
   inheritSessionCreationPolicy,
 } from "../../config/sessions/session-entry-provenance.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { isNativeSessionEntryRead } from "../../config/sessions/session-entry-read-request.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -237,8 +237,6 @@ type OutboundSessionEntryParams = {
   mirrorSessionKey?: string;
   creation?: MsgContext["SessionCreation"];
   sourceSessionKey?: string;
-  /** Revalidates caller-owned route authority at the final persistence boundary. */
-  assertCommitAllowed?: SessionSourceAssertion;
   workerGuard?: SessionEntryPatchGuard;
 };
 
@@ -315,14 +313,33 @@ async function persistOutboundSessionEntry(
     });
   let creation = params.creation;
   if (!creation && params.sourceSessionKey) {
-    const source = prepared?.source
-      ? loadSessionEntryReadOnlyInScope(prepared.source)
-      : loadSessionEntryReadOnly({
-          sessionKey: params.sourceSessionKey,
-          storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
-          }),
-        });
+    const sourceScope = prepared?.source;
+    const source =
+      sourceScope && !isNativeSessionEntryRead(sourceScope, sourceScope.agentId)
+        ? await withSessionHistoryWorkerDatabase(
+            {
+              agentId: sourceScope.databaseAgentId,
+              path: sourceScope.storePath,
+              env: sourceScope.env,
+            },
+            async (reader) =>
+              (
+                await reader.readExactEntries({
+                  sessionKeys: [sourceScope.sessionKey],
+                  projection: "exact",
+                  snapshotFields: [],
+                  env: sourceScope.env ?? process.env,
+                })
+              ).entries[0]?.entry,
+          )
+        : await readSessionEntryReadOnlyInWorker(
+            sourceScope ?? {
+              sessionKey: params.sourceSessionKey,
+              storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+                agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
+              }),
+            },
+          );
     if (source?.sandbox === "required") {
       creation = { via: source.createdVia ?? "channel", ...inheritSessionCreationPolicy(source) };
     }
@@ -357,7 +374,6 @@ async function persistOutboundSessionEntry(
     accountId: params.accountId ?? undefined,
     threadId: params.route.threadId,
     ctx,
-    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     ...(params.workerGuard ? { workerGuard: params.workerGuard } : {}),
   };
   const entry = prepared
@@ -381,10 +397,10 @@ async function persistOutboundSessionEntry(
         creation: buildInboundSessionCreationStamp({ SessionCreation: creation }),
       },
       {
+        result: "none",
         fallbackEntry,
         preserveActivity: true,
         workerGuard: params.workerGuard ?? {},
-        assertCommitAllowed: params.assertCommitAllowed,
       },
     );
   }

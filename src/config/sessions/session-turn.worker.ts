@@ -16,21 +16,28 @@ import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
 import { readSessionGoalOperationReceipt } from "./goals-operations.js";
 import {
+  readQualifiedSessionEntryRow,
+  readSessionKeyBySessionIdInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
+import {
   readSessionPendingInputWorkerReceipt,
   runWithSessionPendingInputWorkerCustody,
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   readTranscriptContextStateInTransaction,
   readTranscriptContextVersionInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import type { ResolvedSessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -91,11 +98,14 @@ function inCustody<T>(
 }
 
 export function prepareSessionTurn(
-  input: SessionTurnPlan,
+  requested: SessionTurnPlan,
   context: AgentWorkerOperationContext,
   incarnation?: string,
+  resident?: SessionActorStoredState,
 ) {
+  let input = requested;
   const database = context.open();
+  let runtimeTarget: ResolvedSessionTranscriptRuntimeTarget | undefined;
   if (input.options.sessionTurnMutation) {
     ensureSessionGoalOperationsSchema(database.db);
   }
@@ -103,7 +113,37 @@ export function prepareSessionTurn(
   const readPreparation = input.custody?.preparedAuthority
     ? runSqliteReadSnapshotSync
     : runSqliteReadOperationSync;
-  return readPreparation(database.db, () => {
+  const prepared = readPreparation(database.db, () => {
+    let runtimeSelection: ReturnType<typeof readQualifiedSessionEntryRow>;
+    if (input.options.resolveRuntimeTarget) {
+      // Cron base/run keys can share an ID; the retained window owns its transcript.
+      const persistedKey = resident
+        ? resident.window?.session_key
+        : readSessionKeyBySessionIdInDatabase(database, input.options.expectedSessionId);
+      runtimeSelection = resident
+        ? resident.entryRows.get(input.sessionKey)
+        : readQualifiedSessionEntryRow(database, input.agentId, persistedKey ?? input.sessionKey, {
+            allowCanonicalMove: !persistedKey,
+          });
+      runtimeTarget = {
+        agentId: input.agentId,
+        sessionId: input.options.expectedSessionId,
+        sessionKey: persistedKey ?? runtimeSelection?.row.session_key ?? input.sessionKey,
+        storePath: context.options.path,
+        selectedSessionId: runtimeSelection?.entry?.sessionId ?? null,
+        selectedLifecycleRevision: runtimeSelection?.entry?.lifecycleRevision ?? null,
+      };
+      input = {
+        ...input,
+        sessionKey: runtimeTarget.sessionKey,
+        options: {
+          ...input.options,
+          selectedSessionId: runtimeTarget.selectedSessionId,
+          selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
+          sessionFile: runtimeTarget.sessionKey,
+        },
+      };
+    }
     const scope = {
       agentId: input.agentId,
       path: context.options.path,
@@ -111,7 +151,11 @@ export function prepareSessionTurn(
       sessionId: input.options.expectedSessionId,
     };
     const kernel = createSessionTranscriptTurnKernel(scope, input.options);
-    const selected = kernel.readEntry(database);
+    const selected = input.options.resolveRuntimeTarget
+      ? runtimeSelection?.entry
+        ? { entry: runtimeSelection.entry, row: runtimeSelection.row }
+        : undefined
+      : kernel.readEntry(database);
     const revision = getSqliteReadScopeRevision(database.db);
     const ownerSourceValidation = input.ownerSources?.length
       ? readSessionSourceValidation(
@@ -151,7 +195,9 @@ export function prepareSessionTurn(
           : undefined;
     const transcriptState =
       !result && input.options.messages.length
-        ? readTranscriptContextStateInTransaction(database, scope.sessionId)
+        ? resident
+          ? { version: resident.hot.transcript.version, coldArchive: undefined }
+          : readTranscriptContextStateInTransaction(database, scope.sessionId)
         : undefined;
     if (input.prepareColdTranscript && transcriptState?.coldArchive) {
       return {
@@ -172,9 +218,22 @@ export function prepareSessionTurn(
             input.options.messages.map((append) => {
               const key = readMessageIdempotencyKey(append.message);
               return {
-                pending: Boolean(resolveSessionPendingInputAppend(database, scope, append.message)),
+                pending: Boolean(
+                  resolveSessionPendingInputAppend(
+                    database,
+                    scope,
+                    append.message,
+                    resident?.pendingInputs,
+                  ),
+                ),
                 existing:
-                  key && append.idempotencyLookup !== "caller-checked"
+                  key &&
+                  append.idempotencyLookup !== "caller-checked" &&
+                  (!resident?.transcript.complete ||
+                    append.idempotencyLookup === "scan-assistant" ||
+                    [...resident.transcript.identities.values()].some(
+                      (identity) => identity.message_idempotency_key === key,
+                    ))
                     ? readTranscriptMessageByScopedIdempotencyKey(
                         database,
                         scope,
@@ -195,12 +254,18 @@ export function prepareSessionTurn(
       messages,
       coldArchive: undefined,
       version: transcriptState?.version,
+      expectedSessionState:
+        expectedEntry &&
+        buildRestartRecoveryExpectedState(
+          selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
+        ),
       goalId:
         mutation && !result && expectedEntry && input.options.messages.length
           ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
           : undefined,
     };
   });
+  return { ...prepared, ...(runtimeTarget ? { runtimeTarget } : {}) };
 }
 
 export function commitSessionTurn(input: SessionTurnPlan, context: AgentWorkerOperationContext) {
@@ -291,25 +356,6 @@ export function applySessionTurn<T>(
               },
               assertRouting,
             );
-            // Prepared host hooks are never replayed after a foreign writer changes their idempotency decision.
-            for (const append of input.options.messages) {
-              if (!append.preparedMessage?.prepared) {
-                continue;
-              }
-              const key = readMessageIdempotencyKey(append.message);
-              const current =
-                key && append.idempotencyLookup !== "caller-checked"
-                  ? readTranscriptMessageByScopedIdempotencyKey(
-                      database,
-                      scope,
-                      key,
-                      append.idempotencyLookup,
-                    )
-                  : undefined;
-              if (!isDeepStrictEqual(current, append.preparedMessage.expected)) {
-                throw new Error("Transcript idempotency changed while preparing the turn");
-              }
-            }
             let projectionNeedsReconcile = false;
             const committed = kernel.commit(
               database,

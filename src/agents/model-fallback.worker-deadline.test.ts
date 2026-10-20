@@ -1,15 +1,10 @@
-// Real-boundary regression coverage: a genuine worker-pool deadline is detected
-// as local infrastructure (so reply copy stays accurate) while the configured
-// fallback chain is preserved — a later candidate rebuilds its own context and
-// can recover from an intermittent worker deadline. A genuine provider HTTP
-// timeout also keeps rotating. Only the deadline timers are faked; the worker
-// spawn and IPC stay real, and the check never depends on CI scheduling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { workerTaskPoolEntrypoints } from "../infra/worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { hasLocalWorkerTaskTimeout, resolveModelFallbackError } from "./failover-error.js";
+import { resolveModelFallbackError } from "./failover-error.js";
+import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.worker);
@@ -55,11 +50,13 @@ async function runPoolTaskWithDeadline(
       onNotification: () => started.resolve(),
     },
   );
+  // Handle the expected rejection before advancing timers yields to the event loop.
+  const deadline = pending.catch((value: unknown) => value);
   await started.promise;
   try {
     await vi.advanceTimersByTimeAsync(50);
     return {
-      deadline: (await pending.catch((value: unknown) => value)) as Error & { code?: string },
+      deadline: (await deadline) as Error & { code?: string },
       view,
     };
   } finally {
@@ -83,17 +80,13 @@ const fallbackOptions = {
 };
 
 describe("model fallback with a real local worker deadline", () => {
-  it("preserves configured fallback when a real pool deadline fires during the turn", async () => {
+  it("stops configured fallback when a real pool deadline fires during preparation", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const pool = new WorkerTaskPool<unknown, { label: string }>({ workerUrl, maxWorkers: 1 });
     pools.push(pool);
     let dispatched: Int32Array | undefined;
     let deadline: (Error & { code?: string }) | undefined;
     try {
-      // The first candidate performs context-worker work during the turn; that
-      // work hangs and the host deadline aborts it while the fallback owner is
-      // awaiting this attempt. The deadline is still detected as local, but the
-      // configured chain must advance so a later candidate can recover.
       const run = vi.fn<() => Promise<string>>().mockImplementation(async () => {
         if (run.mock.calls.length === 1) {
           const outcome = await runPoolTaskWithDeadline(pool);
@@ -118,17 +111,13 @@ describe("model fallback with a real local worker deadline", () => {
       // assertion cannot fake the real-dispatch or attribution claims.
       expect(dispatched?.[0]).toBeGreaterThan(0);
       expect(deadline).toBeDefined();
-      expect(hasLocalWorkerTaskTimeout(deadline!)).toBe(true);
-      const resolution = resolveModelFallbackError(deadline!);
-      expect(resolution.kind).toBe("failover");
-      if (resolution.kind === "failover") {
-        expect(resolution.error.status).toBeUndefined();
-      }
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value.outcome).toBe("completed");
-      }
-      expect(run).toHaveBeenCalledTimes(2);
+      expect(findLocalWorkerTaskTimeout(deadline)).toBe(deadline);
+      expect(resolveModelFallbackError(deadline)).toEqual({
+        kind: "coordination",
+        error: deadline,
+      });
+      expect(result).toEqual({ ok: false, value: deadline });
+      expect(run).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

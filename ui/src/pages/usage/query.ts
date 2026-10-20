@@ -1,7 +1,8 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
-import type { CostDailyEntry, UsageSessionEntry } from "./types.ts";
+import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
+import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 function csvEscape(value: string, neutralizeFormulas = true): string {
   const safeValue =
@@ -38,6 +39,13 @@ function buildCsv<Entry>(
   ].join("\n");
 }
 
+function usageCsvValue(
+  value: number | undefined,
+  report?: CostDailyEntry["usageReport"],
+): CsvValue {
+  return report?.state === "unavailable" ? undefined : value;
+}
+
 const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
   buildCsv(sessions, {
     key: (session) => session.key,
@@ -51,27 +59,29 @@ const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
     messages: (session) => session.usage?.messageCounts?.total,
     errors: (session) => session.usage?.messageCounts?.errors,
     toolCalls: (session) => session.usage?.messageCounts?.toolCalls,
-    inputTokens: (session) => session.usage?.input,
-    outputTokens: (session) => session.usage?.output,
-    cacheReadTokens: (session) => session.usage?.cacheRead,
-    cacheWriteTokens: (session) => session.usage?.cacheWrite,
-    totalTokens: (session) => session.usage?.totalTokens,
-    totalCost: (session) => session.usage?.totalCost,
+    inputTokens: (session) => usageCsvValue(session.usage?.input, session.usage?.usageReport),
+    outputTokens: (session) => usageCsvValue(session.usage?.output, session.usage?.usageReport),
+    cacheReadTokens: (session) =>
+      usageCsvValue(session.usage?.cacheRead, session.usage?.usageReport),
+    cacheWriteTokens: (session) =>
+      usageCsvValue(session.usage?.cacheWrite, session.usage?.usageReport),
+    totalTokens: (session) => usageCsvValue(session.usage?.totalTokens, session.usage?.usageReport),
+    totalCost: (session) => usageCsvValue(session.usage?.totalCost, session.usage?.usageReport),
   });
 
 const buildDailyCsv = (daily: CostDailyEntry[]): string =>
   buildCsv(daily, {
     date: (day) => day.date,
-    inputTokens: (day) => day.input,
-    outputTokens: (day) => day.output,
-    cacheReadTokens: (day) => day.cacheRead,
-    cacheWriteTokens: (day) => day.cacheWrite,
-    totalTokens: (day) => day.totalTokens,
-    inputCost: (day) => day.inputCost,
-    outputCost: (day) => day.outputCost,
-    cacheReadCost: (day) => day.cacheReadCost,
-    cacheWriteCost: (day) => day.cacheWriteCost,
-    totalCost: (day) => day.totalCost,
+    inputTokens: (day) => usageCsvValue(day.input, day.usageReport),
+    outputTokens: (day) => usageCsvValue(day.output, day.usageReport),
+    cacheReadTokens: (day) => usageCsvValue(day.cacheRead, day.usageReport),
+    cacheWriteTokens: (day) => usageCsvValue(day.cacheWrite, day.usageReport),
+    totalTokens: (day) => usageCsvValue(day.totalTokens, day.usageReport),
+    inputCost: (day) => usageCsvValue(day.inputCost, day.usageReport),
+    outputCost: (day) => usageCsvValue(day.outputCost, day.usageReport),
+    cacheReadCost: (day) => usageCsvValue(day.cacheReadCost, day.usageReport),
+    cacheWriteCost: (day) => usageCsvValue(day.cacheWriteCost, day.usageReport),
+    totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
   });
 
 type QuerySuggestion = {
@@ -79,18 +89,15 @@ type QuerySuggestion = {
   value: string;
 };
 
-export type UsageFilterOptions = Record<
-  "agent" | "channel" | "provider" | "model" | "tool",
-  string[]
->;
-
-const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
-  const trimmed = query.trim();
-  if (!trimmed) {
+const buildQuerySuggestions = (
+  query: string,
+  terms: ReturnType<typeof extractQueryTerms>,
+  options: SessionsUsageOverview["filterOptions"],
+): QuerySuggestion[] => {
+  if (!query.trim()) {
     return [];
   }
-  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
-  const lastQueryWord = tokens.at(-1) ?? "";
+  const lastQueryWord = terms.at(-1)?.raw ?? "";
   const [rawKey, rawValue] = lastQueryWord.includes(":")
     ? [
         lastQueryWord.slice(0, lastQueryWord.indexOf(":")),

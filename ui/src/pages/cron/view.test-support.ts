@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { CronProps } from "./view-types.ts";
 import { CronView } from "./view.tsx";
 
@@ -39,6 +39,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     hasLoaded: true,
     listError: null,
     canManage: true,
+    connected: true,
     jobsLoadingMore: false,
     status: {
       enabled: true,
@@ -94,7 +95,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onClone: () => undefined,
     onToggle: () => undefined,
     onRun: () => undefined,
-    onRemove: () => undefined,
+    onRemove: async () => undefined,
     onLoadMoreJobs: () => undefined,
     onJobsFiltersChange: () => undefined,
     onJobsFiltersReset: () => undefined,
@@ -105,10 +106,19 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
 }
 
 export function renderCronView(overrides: Partial<CronProps> = {}) {
-  const container = document.createElement("div");
-  mountSolid(() => CronView(createCronViewProps(overrides)), { container });
+  const { container } = mountSolid(() => CronView(createCronViewProps(overrides)));
   flush();
   return container;
+}
+
+export async function openCronMenu(container: Element, selector: string) {
+  const trigger = getElement(container, `${selector} .oc-menu-trigger`, HTMLButtonElement);
+  trigger.click();
+  await waitForSolid(() => {
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.getAttribute("data-state")).toBe("open");
+  });
+  return trigger;
 }
 
 export function getButtonByText(container: Element, text: string): HTMLButtonElement {

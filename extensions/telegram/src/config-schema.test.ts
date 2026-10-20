@@ -1,4 +1,3 @@
-// Telegram tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelegramConfigSchema } from "../config-api.js";
 
@@ -14,7 +13,7 @@ function expectTelegramConfigIssue(config: unknown, path: string) {
   }
 }
 
-describe("telegram custom commands schema", () => {
+describe("telegram config schema", () => {
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     expectTelegramConfigIssue(
       { dmPolicy: "open", allowFrom: ["123456789"], botToken: "fake" },
@@ -107,18 +106,11 @@ describe("telegram custom commands schema", () => {
   });
 
   it("normalizes hyphens in custom command names", () => {
-    const res = TelegramConfigSchema.safeParse({
+    const res = TelegramConfigSchema.parse({
       customCommands: [{ command: "Bad-Name", description: "Override status" }],
     });
 
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-
-    expect(res.data.customCommands).toEqual([
-      { command: "bad_name", description: "Override status" },
-    ]);
+    expect(res.customCommands).toEqual([{ command: "bad_name", description: "Override status" }]);
   });
 });
 
@@ -295,22 +287,14 @@ describe("telegram webhook schema", () => {
 
   it("rejects webhookUrl without webhookSecret", () => {
     expectTelegramConfigIssue(
-      {
-        webhookUrl: "https://example.com/telegram-webhook",
-      },
+      { webhookUrl: "https://example.com/telegram-webhook" },
       "webhookSecret",
     );
   });
 
   it("rejects account webhookUrl without webhookSecret", () => {
     expectTelegramConfigIssue(
-      {
-        accounts: {
-          ops: {
-            webhookUrl: "https://example.com/telegram-webhook",
-          },
-        },
-      },
+      { accounts: { ops: { webhookUrl: "https://example.com/telegram-webhook" } } },
       "accounts.ops.webhookSecret",
     );
   });

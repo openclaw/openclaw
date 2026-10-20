@@ -11,6 +11,7 @@ import {
   readBoundedResponseText,
   toLintErrorObject,
 } from "../../../lib/bounded-response.mjs";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { isRecord } from "../../../lib/record-shared.mjs";
 import { resolveWindowsTaskkillPath } from "../../../lib/windows-taskkill.mjs";
 import { readJson, writeJson } from "../fixtures/common.mjs";
@@ -1005,6 +1006,10 @@ function assertSpeechProviderVisible(payload, provider, label) {
 
 async function runWatchdog(options) {
   const readyOffset = findReadyLogOffset(options.logPath);
+  // Read-only install discovery is deferred until ready and can still own a
+  // package-manager root probe. Join it through the status owner before checking
+  // for leaked processes, retaining the original ready offset for install work.
+  await retryRpcCall("update.status", { refreshCheckout: true }, options);
   await delay(WATCHDOG_MS);
   if (hasChildExited(options.child)) {
     throw new Error(
@@ -1211,16 +1216,8 @@ export function createIsolatedStateEnv(label) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${label}-`));
   const home = path.join(root, "home");
   const stateDir = path.join(home, ".openclaw");
-  const configPath = path.join(stateDir, "openclaw.json");
   fs.mkdirSync(stateDir, { recursive: true });
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-  };
+  const env = createBuildSmokeEnv(home, process.env);
   isolatedStateRoots.set(env, root);
   return env;
 }
