@@ -6,18 +6,28 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "./providers.js";
 
-function lookupFor(
-  snapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>,
-  source: "manifest" | "snapshot",
-) {
-  return source === "manifest"
-    ? { manifestRegistry: snapshot.manifestRegistry }
-    : { metadataSnapshot: snapshot };
-}
+type Plugins = NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>["plugins"];
 
 describe.each(["manifest", "snapshot"] as const)("provider ownership through %s", (source) => {
+  function lookup(plugins: Plugins) {
+    const snapshot = createPluginMetadataSnapshotFixture({ plugins });
+    const scope =
+      source === "manifest"
+        ? { manifestRegistry: snapshot.manifestRegistry }
+        : { metadataSnapshot: snapshot };
+    return {
+      provider: (provider: string) => resolveOwningPluginIdsForProvider({ ...scope, provider }),
+      ref: (provider: string) => resolveOwningPluginIdsForProviderRef({ ...scope, provider }),
+      model: (model: string) =>
+        resolveOwningPluginIdsForModelRef({
+          model,
+          manifestRegistry: snapshot.manifestRegistry,
+        }),
+    };
+  }
+
   it("requires an alias receiver while preserving CLI and model ownership", () => {
-    const emptyOwner = {
+    const owner = {
       id: "empty-owner",
       providers: [],
       cliBackends: ["shared-ref"],
@@ -26,112 +36,77 @@ describe.each(["manifest", "snapshot"] as const)("provider ownership through %s"
       modelSupport: { modelPrefixes: ["synthetic-prefix-"] },
       setup: { providers: [{ id: "target" }] },
     };
-    const empty = createPluginMetadataSnapshotFixture({ plugins: [emptyOwner] });
-    const lookup = lookupFor(empty, source);
-
-    for (const provider of ["shared-ref", "catalog-ref"]) {
-      expect(resolveOwningPluginIdsForProvider({ ...lookup, provider })).toBeUndefined();
-    }
-    expect(resolveOwningPluginIdsForProviderRef({ ...lookup, provider: " SHARED-REF " })).toEqual([
-      "empty-owner",
+    const empty = lookup([owner]);
+    expect([empty.provider("shared-ref"), empty.provider("catalog-ref")]).toEqual([
+      undefined,
+      undefined,
     ]);
-    expect(
-      resolveOwningPluginIdsForModelRef({
-        model: "synthetic-prefix-model",
-        manifestRegistry: empty.manifestRegistry,
-      }),
-    ).toEqual(["empty-owner"]);
+    expect(empty.ref(" SHARED-REF ")).toEqual(["empty-owner"]);
+    expect(empty.model("synthetic-prefix-model")).toEqual(["empty-owner"]);
 
-    const populated = createPluginMetadataSnapshotFixture({
-      plugins: [
-        emptyOwner,
-        {
-          id: "runtime-owner",
-          providers: ["TARGET"],
-          providerAuthAliases: { "shared-ref": "target" },
-          modelCatalog: { aliases: { "catalog-ref": { provider: "target" } } },
-        },
-      ],
-    });
-    const nextLookup = lookupFor(populated, source);
-    for (const provider of [" SHARED-REF ", "catalog-ref"]) {
-      expect(resolveOwningPluginIdsForProvider({ ...nextLookup, provider })).toEqual([
-        "runtime-owner",
-      ]);
-      expect(resolveOwningPluginIdsForProviderRef({ ...nextLookup, provider })).toEqual([
-        "runtime-owner",
+    const populated = lookup([
+      owner,
+      {
+        id: "runtime-owner",
+        providers: ["TARGET"],
+        providerAuthAliases: owner.providerAuthAliases,
+        modelCatalog: owner.modelCatalog,
+      },
+    ]);
+    for (const ref of [" SHARED-REF ", "catalog-ref"]) {
+      expect([populated.provider(ref), populated.ref(ref)]).toEqual([
+        ["runtime-owner"],
+        ["runtime-owner"],
       ]);
     }
   });
+
   it("publishes sorted, deduplicated owners with provider precedence", () => {
-    const snapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "z-owner",
-          providers: ["TARGET", "target"],
-          cliBackends: ["cli-ref", "CLI-REF"],
-        },
-        { id: "a-owner", providers: ["target"], cliBackends: ["cli-ref"] },
-        { id: "cli-only", providers: [], cliBackends: ["target"] },
-      ],
-    });
-    const lookup = lookupFor(snapshot, source);
-    const providerOwners = resolveOwningPluginIdsForProvider({ ...lookup, provider: "target" });
+    const index = lookup([
+      { id: "z-owner", providers: ["TARGET", "target"], cliBackends: ["cli-ref", "CLI-REF"] },
+      { id: "a-owner", providers: ["target"], cliBackends: ["cli-ref"] },
+      { id: "cli-only", providers: [], cliBackends: ["target"] },
+    ]);
+    const providerOwners = index.provider("target");
     expect(providerOwners).toEqual(["a-owner", "z-owner"]);
-    for (const provider of [" TARGET ", "cli-ref"]) {
-      const owners = resolveOwningPluginIdsForProviderRef({ ...lookup, provider });
+    for (const ref of [" TARGET ", "cli-ref"]) {
+      const owners = index.ref(ref);
       expect(owners).toEqual(["a-owner", "z-owner"]);
       expect(Object.isFrozen(owners)).toBe(true);
-      expect(resolveOwningPluginIdsForProviderRef({ ...lookup, provider })).toBe(owners);
+      expect(index.ref(ref)).toBe(owners);
     }
-    expect(resolveOwningPluginIdsForProviderRef({ ...lookup, provider: "target" })).toBe(
-      providerOwners,
-    );
+    expect(index.ref("target")).toBe(providerOwners);
   });
 
   it("shares immutable owner results and replaces them with the generation", () => {
-    const makeSnapshot = (id: string) =>
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id,
-            providers: ["TARGET", "target"],
-            providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
-            modelCatalog: {
-              aliases: {
-                "catalog-ref": { provider: "target" },
-                "orphan-catalog": { provider: "absent" },
-              },
+    const generation = (id: string) =>
+      lookup([
+        {
+          id,
+          providers: ["TARGET", "target"],
+          providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
+          modelCatalog: {
+            aliases: {
+              "catalog-ref": { provider: "target" },
+              "orphan-catalog": { provider: "absent" },
             },
           },
-          { id: "cli-owner", providers: [], setup: { cliBackends: ["auth-ref", "cli-ref"] } },
-        ],
-      });
-    const first = makeSnapshot("first-owner");
-    const lookup = (snapshot: typeof first, provider: string) =>
-      resolveOwningPluginIdsForProviderRef({
-        provider,
-        ...lookupFor(snapshot, source),
-      });
+        },
+        { id: "cli-owner", providers: [], setup: { cliBackends: ["auth-ref", "cli-ref"] } },
+      ]);
+    const first = generation("first-owner");
     for (const ref of ["target", "auth-ref", "catalog-ref", "cli-ref"]) {
-      const owners = lookup(first, ref);
+      const owners = first.ref(ref);
       expect(owners).toEqual([ref === "cli-ref" ? "cli-owner" : "first-owner"]);
-      expect(lookup(first, ` ${ref.toUpperCase()} `)).toBe(owners);
+      expect(first.ref(` ${ref.toUpperCase()} `)).toBe(owners);
       expect(Object.isFrozen(owners)).toBe(true);
-      expect(
-        resolveOwningPluginIdsForModelRef({
-          model: `${ref}/synthetic-model`,
-          manifestRegistry: first.manifestRegistry,
-        }),
-      ).toBe(owners);
+      expect(first.model(`${ref}/synthetic-model`)).toBe(owners);
     }
     for (const ref of ["orphan", "orphan-catalog", "missing"]) {
-      expect(lookup(first, ref)).toBeUndefined();
+      expect(first.ref(ref)).toBeUndefined();
     }
-    const replacement = makeSnapshot("replacement-owner");
-    expect(lookup(replacement, "target")).toEqual(["replacement-owner"]);
-    expect(lookup(first, "target")).toEqual(["first-owner"]);
-    const empty = createPluginMetadataSnapshotFixture({ plugins: [] });
-    expect(lookup(empty, "target")).toBeUndefined();
+    expect(generation("replacement-owner").ref("target")).toEqual(["replacement-owner"]);
+    expect(first.ref("target")).toEqual(["first-owner"]);
+    expect(lookup([]).ref("target")).toBeUndefined();
   });
 });

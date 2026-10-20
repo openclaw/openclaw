@@ -9,29 +9,29 @@ import {
 } from "./plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import {
-  captureProviderSyntheticAuthFacts,
-  resolveProviderSyntheticAuthWithPlugin,
+  captureProviderSyntheticAuthFacts as capture,
+  resolveProviderSyntheticAuthWithPlugin as resolve,
 } from "./provider-runtime.js";
+import { PROVIDER_RUNTIME_TEST_MODEL } from "./provider-runtime.test-support.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
-const roots: string[] = [];
 let testRoot: string;
 beforeEach(() => {
   testRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-entry-")));
-  roots.push(testRoot);
 });
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+afterEach(() => fs.rmSync(testRoot, { recursive: true, force: true }));
 
-function writeEntry(root: string, id: string, body: string) {
-  const rootDir = path.join(root, id);
+function writeEntry(id: string, body: string) {
+  const rootDir = path.join(testRoot, id);
   fs.mkdirSync(rootDir);
   const source = path.join(rootDir, "discovery.cjs");
   fs.writeFileSync(source, body);
   return { id, rootDir, source, providerDiscoverySource: source, providers: [id] };
+}
+
+function authParams(provider: string) {
+  const config = {};
+  return { provider, config, env: {}, context: { config, provider } };
 }
 
 async function withEntries<T>(
@@ -51,7 +51,6 @@ describe("synthetic auth discovery entries", () => {
     "keeps an auth-only owner available beside broken discovery with %s",
     async (shape) => {
       const owner = writeEntry(
-        testRoot,
         "native-auth",
         `let calls = 0;
 const provider = {
@@ -67,24 +66,13 @@ module.exports = ${
         };`,
       );
       const unrelated = writeEntry(
-        testRoot,
         "unrelated",
         'throw new Error("Unrelated discovery must stay lazy");',
       );
       const catalog = {
         baseUrl: "https://provider.example.test/v1",
         api: "openai-completions" as const,
-        models: [
-          {
-            id: "fixture-model",
-            name: "Fixture model",
-            reasoning: false,
-            input: ["text" as const],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 4096,
-            maxTokens: 1024,
-          },
-        ],
+        models: [{ ...PROVIDER_RUNTIME_TEST_MODEL, api: "openai-completions" as const }],
       };
       await withEntries(
         [
@@ -96,26 +84,17 @@ module.exports = ${
           unrelated,
         ],
         async () => {
-          const config = {};
-          const env = {};
-          const capture = () =>
-            captureProviderSyntheticAuthFacts({ config, env, providerRefs: [owner.id] });
+          const params = authParams(owner.id);
+          const captureFacts = () => capture({ ...params, providerRefs: [owner.id] });
           for (const call of [1, 2]) {
-            expect(await capture()).toEqual([
+            expect(await captureFacts()).toEqual([
               {
                 providerRef: owner.id,
                 result: { apiKey: `fixture-${call}`, source: "fixture native auth", mode: "oauth" },
               },
             ]);
           }
-          expect(
-            resolveProviderSyntheticAuthWithPlugin({
-              provider: owner.id,
-              config,
-              env,
-              context: { config, provider: owner.id },
-            }),
-          ).toBeUndefined();
+          expect(resolve(params)).toBeUndefined();
         },
       );
     },
@@ -124,31 +103,22 @@ module.exports = ${
   it("does not evaluate unrelated entries when the declared owner has no synthetic auth", async () => {
     const marker = path.join(testRoot, "unrelated-loaded");
     const owner = writeEntry(
-      testRoot,
       "configured-provider",
       'module.exports = { id: "configured-provider", label: "Configured provider", auth: [] };',
     );
     const unrelated = writeEntry(
-      testRoot,
       "unrelated",
       `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");
 throw new Error("Unrelated discovery must stay lazy");`,
     );
     await withEntries([owner, unrelated], async () => {
-      expect(
-        await captureProviderSyntheticAuthFacts({
-          config: {},
-          env: {},
-          providerRefs: [owner.id],
-        }),
-      ).toEqual([]);
+      expect(await capture({ ...authParams(owner.id), providerRefs: [owner.id] })).toEqual([]);
       expect(fs.existsSync(marker)).toBe(false);
     });
   });
 
   it("retains lightweight discovery for an alias without a declared owner", async () => {
     const owner = writeEntry(
-      testRoot,
       "local-provider",
       `const provider = {
   id: "local-provider", aliases: ["custom-local"], label: "Local provider", auth: [],
@@ -156,15 +126,7 @@ throw new Error("Unrelated discovery must stay lazy");`,
 };
 module.exports = [{...provider, resolveSyntheticAuth: undefined, staticCatalog: {run() {}}}, provider];`,
     );
-    const result = await withEntries([owner], () => {
-      const config = {};
-      return resolveProviderSyntheticAuthWithPlugin({
-        provider: "custom-local",
-        config,
-        env: {},
-        context: { config, provider: "custom-local" },
-      });
-    });
+    const result = await withEntries([owner], () => resolve(authParams("custom-local")));
     expect(result).toEqual({ apiKey: "fixture-local", source: "fixture", mode: "api-key" });
   });
 });
