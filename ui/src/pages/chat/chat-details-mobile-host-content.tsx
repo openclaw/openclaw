@@ -1,18 +1,15 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
-import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
-import { createMobileAutomationBinding } from "./chat-mobile-automation-binding.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import type { ChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import type { ChatMobilePeople } from "./chat-mobile-people.ts";
 import { ChatAuthorAvatar } from "./components/chat-author-avatar-view.tsx";
-import { SessionAutomationMobileHeading } from "./components/chat-automation-mobile.tsx";
 import type { ChatDetailsGoalProps } from "./components/chat-details-goal.tsx";
 import {
   ChatDetailsMobileContent,
@@ -129,14 +126,6 @@ function MobileHostContent(
         key: "id" in value ? `${value.kind}:${value.id}` : value.kind,
         title,
         details: value,
-        heading:
-          value.kind === "automation"
-            ? () => (
-                <Show when={automation?.body()?.job} fallback={title}>
-                  {(job) => <SessionAutomationMobileHeading job={job()} />}
-                </Show>
-              )
-            : undefined,
       },
       backTo: props.host.destination,
     });
@@ -170,41 +159,8 @@ function MobileHostContent(
     },
     () => nativeHost,
   );
-  const automation = context
-    ? createMobileAutomationBinding({
-        context,
-        jobId: () => {
-          const value = route();
-          return value?.kind === "automation" || value?.kind === "automation-transcript"
-            ? value.id
-            : undefined;
-        },
-        agentId: () => props.details.currentAgentId ?? undefined,
-        host: () => props.host.detailsMount,
-        presented: () => props.presented,
-        onTranscript: () => {
-          const value = route();
-          if (value?.kind === "automation") {
-            open({ kind: "automation-transcript", id: value.id }, t("cron.runEntry.transcript"));
-          }
-        },
-        onTranscriptClose: () => {
-          if (route()?.kind === "automation-transcript") {
-            props.host.back();
-          }
-        },
-      })
-    : undefined;
-  let wasTranscript = false;
-  function TranscriptExit() {
-    onSettled(() => {
-      if (wasTranscript) {
-        wasTranscript = false;
-        automation?.closeTranscript();
-      }
-    });
-    return null;
-  }
+  const openAutomation = (jobId: string) =>
+    context?.navigate("cron", { search: `?${new URLSearchParams({ job: jobId })}` });
   const snapshot = () => props.bindings?.pullRequests?.snapshot;
   const recovery = () => ({
     status: snapshot()?.status ?? ("ready" as const),
@@ -345,10 +301,7 @@ function MobileHostContent(
               open(destination, t("chat.sessionDetails.automations"));
               break;
             case "automation":
-              open(
-                { kind: "automation", id: destination.jobId },
-                t("chat.sessionAutomation.title"),
-              );
+              openAutomation(destination.jobId);
               break;
             case "task-progress":
               open(destination, t("sessionProgressCard.composerTitle"));
@@ -407,8 +360,7 @@ function MobileHostContent(
         content: {
           inventory,
           basePath: context?.basePath ?? "",
-          onOpenAutomation: (id) =>
-            open({ kind: "automation", id }, t("chat.sessionAutomation.title")),
+          onOpenAutomation: openAutomation,
         },
       },
     ];
@@ -434,16 +386,6 @@ function MobileHostContent(
             morePeople: (count) => t("chat.sessionHeader.morePeople", { count: String(count) }),
           },
         },
-      });
-    }
-    const automationBody = automation?.body();
-    if (automationBody) {
-      result.push({ kind: "automation", content: automationBody });
-    }
-    if (automation) {
-      result.push({
-        kind: "automation-transcript",
-        content: { transcript: automation.transcript, revision: automation.revision },
       });
     }
     if (props.details.onShowTaskProgressChange) {
@@ -563,7 +505,6 @@ function MobileHostContent(
   return (
     <>
       {inventory.lifecycle}
-      {automation?.lifecycle}
       <Show when={activePeople()} keyed>
         {(activate) => {
           onSettled(activate);
@@ -575,33 +516,6 @@ function MobileHostContent(
           onSettled(() => sharing.prepare());
           return null;
         }}
-      </Show>
-      <Show when={route()?.kind === "automation-transcript"} fallback={<TranscriptExit />}>
-        {(_visible) => {
-          onSettled(() => {
-            wasTranscript = true;
-          });
-          return null;
-        }}
-      </Show>
-      <Show
-        when={
-          props.presented &&
-          route()?.kind === "automation" &&
-          (!automation?.body() || automation?.error())
-        }
-      >
-        <Show
-          when={automation?.error()}
-          fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
-        >
-          <div class="callout danger" role="alert">
-            <p>{automation?.error()}</p>
-            <button type="button" class="btn" onClick={() => automation?.retry()}>
-              {t("common.retry")}
-            </button>
-          </div>
-        </Show>
       </Show>
       <For each={pages()} keyed={(page) => page.kind}>
         {(page) => {
