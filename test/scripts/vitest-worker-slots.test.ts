@@ -14,7 +14,7 @@ function fixture(lateMetadata = false) {
   const ownerUrl = copyWorkerRunFixture(root);
   const occupied = path.join(root, ".artifacts/vitest-workers/run-cache-0");
   fs.mkdirSync(occupied, { recursive: true });
-  fs.writeFileSync(path.join(occupied, "retained"), "uncertain borrower still owns this directory");
+  fs.writeFileSync(path.join(occupied, "retained"), "owned");
   const probe = writeFixture(
     root,
     "slot-probe.mjs",
@@ -34,24 +34,24 @@ if (${JSON.stringify(lateMetadata)}) {
 }
 const { createVitestWorkerRun } = await import(${JSON.stringify(ownerUrl)});
 const owners = [];
+const reserve = () => {
+  const owner = createVitestWorkerRun();
+  owners.push(owner);
+  return owner;
+};
 let observed;
 try {
-  const first = createVitestWorkerRun();
+  const first = reserve();
   metadataTarget = first.descriptor.directory;
-  owners.push(first);
   const firstMode = fs.statSync(first.descriptor.directory).mode & 0o777;
-  const second = createVitestWorkerRun();
-  owners.push(second);
+  const second = reserve();
   await first.dispose();
   const firstReleased = !fs.existsSync(first.descriptor.directory);
   const secondAlive = fs.existsSync(second.descriptor.directory);
-  const third = createVitestWorkerRun();
-  owners.push(third);
+  const third = reserve();
   observed = {
-    first: first.descriptor.directory,
+    directories: [first, second, third].map(owner => owner.descriptor.directory),
     firstMode,
-    second: second.descriptor.directory,
-    third: third.descriptor.directory,
     firstReleased,
     secondAlive,
     metadataInjected,
@@ -94,10 +94,8 @@ it.each([
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr + result.stdout).toBe(0);
     const observed = JSON.parse(result.stdout) as {
-      first: string;
+      directories: [string, string, string];
       firstMode: number;
-      second: string;
-      third: string;
       firstReleased: boolean;
       secondAlive: boolean;
       metadataInjected: boolean;
@@ -110,20 +108,14 @@ it.each([
     if (process.platform !== "win32") {
       expect(observed.firstMode).toBe(0o700 & ~process.umask());
     }
-    expect(observed.first).not.toBe(observed.second);
-    expect(observed.third).not.toBe(observed.second);
-    if (reusesReleasedSlot) {
-      expect(observed.third).toBe(observed.first);
-    } else {
-      expect(observed.third).not.toBe(observed.first);
-    }
-    for (const directory of new Set([observed.first, observed.second, observed.third])) {
+    const [first, second, third] = observed.directories;
+    expect([first, third]).not.toContain(second);
+    expect(third === first).toBe(reusesReleasedSlot);
+    for (const directory of new Set(observed.directories)) {
       expect(directory).not.toBe(f.occupied);
       expect(fs.existsSync(directory)).toBe(false);
     }
-    expect(fs.readFileSync(path.join(f.occupied, "retained"), "utf8")).toBe(
-      "uncertain borrower still owns this directory",
-    );
+    expect(fs.readFileSync(path.join(f.occupied, "retained"), "utf8")).toBe("owned");
     expect(fs.readdirSync(path.dirname(f.occupied))).toEqual([path.basename(f.occupied)]);
   },
 );

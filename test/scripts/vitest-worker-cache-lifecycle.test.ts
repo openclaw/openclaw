@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -16,9 +15,8 @@ it("retains verified artifacts after the runner's module loader stops", async ()
     path.join(root, "scripts/lib/vitest-worker-artifacts.mts"),
   ).href;
   const cacheUrl = pathToFileURL(path.join(root, "scripts/lib/vitest-worker-cache.mts")).href;
-  const input = path.join(root, "fixture-input.ts");
+  const input = writeFixture(root, "fixture-input.ts", "export {};\n");
   const output = 'export const value = "compiled fixture";\n';
-  fs.writeFileSync(input, "export {};\n");
   // The real owner still launches and joins a native compiler child and verifies its files.
   writeFixture(
     root,
@@ -28,12 +26,10 @@ import path from 'node:path';
 import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
 const directory = process.argv[2];
 fs.mkdirSync(path.join(directory, 'dist'));
-const code = ${JSON.stringify(output)};
-const info = '{}\\n';
-fs.writeFileSync(path.join(directory, 'dist/probe.js'), code);
-fs.writeFileSync(path.join(directory, 'dist/build-info.json'), info);
+const files = { 'probe.js': ${JSON.stringify(output)}, 'build-info.json': '{}\\n' };
+for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(directory, 'dist', name), bytes);
 const inputs = { [${JSON.stringify(input)}]: hash(fs.readFileSync(${JSON.stringify(input)})) };
-const outputs = { 'probe.js': hash(code), 'build-info.json': hash(info) };
+const outputs = Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, hash(bytes)]));
 fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
   identity: hash(JSON.stringify([inputs, outputs])), inputs, outputs, durationMs: 1,
   cacheSignature: hash('fixture compiler generation'),
@@ -61,6 +57,7 @@ try {
     "probe.mjs",
     `import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { registerHooks } from 'node:module';
@@ -79,13 +76,7 @@ try {
   const child = spawn(process.execPath, [${JSON.stringify(borrower)}, owner.descriptor.directory], {
     cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
   });
-  const completion = new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code === 0 && signal === null) resolve();
-      else reject(new Error('borrower failed: ' + code + '/' + signal));
-    });
-  });
+  const completion = once(child, 'close').then(result => assert.deepEqual(result, [0, null]));
   await owner.borrow(child, completion);
   stopped = true;
   await owner.dispose();

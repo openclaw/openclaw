@@ -26,6 +26,22 @@ const artifacts = path.join(root, ".artifacts");
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
 type CompilerEnv = (env: NodeJS.ProcessEnv, runtime: "node" | "bun") => NodeJS.ProcessEnv;
 const currentRuntime = process.versions.bun ? "bun" : "node";
+export function compilerFixtureEnv(
+  preload: string,
+  env: NodeJS.ProcessEnv,
+  runtime: "node" | "bun",
+) {
+  const result = { ...env };
+  for (const [key, value] of Object.entries(fixturePreloadEnv(preload, runtime))) {
+    result[key] = `${env[key] ?? ""} ${value}`.trim();
+  }
+  return result;
+}
+
+export function readFixtureLines<T>(filename: string): T[] {
+  const lines = fs.readFileSync(filename, "utf8").trim();
+  return lines.split("\n").map((line) => JSON.parse(line));
+}
 export const preparationClient = `
   import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(root, artifactsModule)).href)};
   try {await requestVitestWorkerArtifacts();}
@@ -114,9 +130,7 @@ function createWorkerArtifactFixtures(
       fs.closeSync(out);
       fs.closeSync(err);
       const completion = observeChild(handle.child, handle.completion);
-      void fixtureLifetime.verifyCleanup(async () => {
-        await completion;
-      });
+      void fixtureLifetime.verifyCleanup(() => completion.then(() => undefined));
       return {
         ...handle,
         completion,
@@ -151,9 +165,7 @@ function createWorkerArtifactFixtures(
           }),
         ),
       );
-      void fixtureLifetime.verifyCleanup(async () => {
-        await completion;
-      });
+      void fixtureLifetime.verifyCleanup(() => completion.then(() => undefined));
       const result = await completion;
       expect(result.code, stderr).toBe(0);
       return JSON.parse(
@@ -215,31 +227,18 @@ export function createControlledWorkerCompiler(
     }
   `,
   );
-  const preloadEnv = Object.fromEntries(
-    Object.entries(fixturePreloadEnv(preload, runtime)).map(([key, value]) => [
-      key,
-      `${env[key] ?? ""} ${value}`.trim(),
-    ]),
-  );
   return {
     args: (generation: string) => [compiler, generation, input, receipt],
-    env: {
-      ...env,
-      ...preloadEnv,
-    },
-    read: (): Array<{
-      pid: number;
-      processStartTime: number;
-      isMainThread: boolean;
-      directory: string;
-      inputs: number;
-      outputs: number;
-    }> =>
-      fs
-        .readFileSync(receipt, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
+    env: compilerFixtureEnv(preload, env, runtime),
+    read: () =>
+      readFixtureLines<{
+        pid: number;
+        processStartTime: number;
+        isMainThread: boolean;
+        directory: string;
+        inputs: number;
+        outputs: number;
+      }>(receipt),
   };
 }
 
@@ -301,8 +300,22 @@ export function fixtureFileBeforeSettlement(
   return Promise.race([receipts.waitFor(filename, expected ?? "written"), settled]);
 }
 
+function probeConfig(directory: string, test: string, provide = "") {
+  return {
+    config: writeFixture(
+      directory,
+      "vitest.config.mts",
+      `
+    import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
+    const project = name => ({extends:false,plugins:shared.plugins,resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(path.join(directory, "value.ts"))}},...shared.resolve.alias]},test:{name,environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,provide:{launcherArgv:process.argv${provide}}}});
+    export default async () => ({root:${JSON.stringify(root)},plugins:shared.plugins,test:{projects:[project('first'),project('second')]}});
+  `,
+    ),
+  };
+}
+
 export function workerBorrowingProbe(directory: string) {
-  const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
+  writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
     directory,
     "child.test.ts",
@@ -326,16 +339,7 @@ export function workerBorrowingProbe(directory: string) {
     });
   `,
   );
-  const config = writeFixture(
-    directory,
-    "vitest.config.mts",
-    `
-    import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-    const project = name => ({extends:false,plugins:shared.plugins,resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,provide:{launcherArgv:process.argv}}});
-    export default async () => ({root:${JSON.stringify(root)},plugins:shared.plugins,test:{projects:[project('first'),project('second')]}});
-  `,
-  );
-  return { config };
+  return probeConfig(directory, test);
 }
 
 export function workerProbe(
@@ -344,7 +348,7 @@ export function workerProbe(
   mode: "compiled" | "source" = "compiled",
   receiptEndpoint?: string,
 ) {
-  const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
+  writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
     directory,
     "child.test.ts",
@@ -447,15 +451,9 @@ export function workerProbe(
     });
   `,
   );
-  const shared = pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href;
-  const config = writeFixture(
+  return probeConfig(
     directory,
-    "vitest.config.mts",
-    `
-    import {sharedVitestConfig as shared} from ${JSON.stringify(shared)};
-    const project = name => ({extends:false,plugins:shared.plugins,resolve:{...shared.resolve,alias:[{find:'#fixture-value',replacement:${JSON.stringify(value)}},...shared.resolve.alias]},test:{name,environment:shared.test.environment,include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1,testTimeout:shared.test.testTimeout,provide:{launcherArgv:process.argv,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null}}});
-    export default async () => ({root:${JSON.stringify(root)},plugins:shared.plugins,test:{projects:[project('first'),project('second')]}});
-  `,
+    test,
+    `,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null`,
   );
-  return { config };
 }
