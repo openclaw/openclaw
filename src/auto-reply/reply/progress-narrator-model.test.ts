@@ -6,6 +6,7 @@ import {
 } from "./progress-narrator-model.js";
 
 const complete = vi.hoisted(() => vi.fn());
+// mock-isolation: Narration fixtures control completion without loading live auth/provider state.
 vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: complete }));
 const prepared: Parameters<typeof generateNarrationWithUtilityModel>[0]["prepared"] = {
   config: {},

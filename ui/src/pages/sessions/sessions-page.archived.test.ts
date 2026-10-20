@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -35,7 +35,7 @@ async function mount(
   context.agentSelection.state.scopeId = null;
   return createRenderedPage(context, sessionsResult(rows, 1), "archived", deepLink);
 }
-beforeEach(() => vi.mocked(showConfirmDialog).mockResolvedValue(true));
+beforeEach(() => vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true));
 afterEach(() => {
   document.body.replaceChildren();
   vi.mocked(showConfirmDialog).mockReset();
@@ -62,6 +62,7 @@ describe("sessions page archived deletion", () => {
     });
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
     const sessions = createTestSessionCapability(gateway);
+    onTestFinished(() => sessions.dispose());
     const page = await createRenderedPage(
       createContext(gateway, sessions),
       sessionsResult([target]),

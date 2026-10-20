@@ -10,6 +10,7 @@ vi.mock("./matrix/client.js", () => ({
   resolveMatrixAuth: vi.fn(),
 }));
 
+// mock-isolation: Directory fixtures replace the HTTP transport to prevent live Matrix requests.
 vi.mock("./matrix/sdk/http-client.js", () => ({
   MatrixAuthedHttpClient: class {
     requestJson(params: unknown) {
