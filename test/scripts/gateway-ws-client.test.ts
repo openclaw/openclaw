@@ -1,16 +1,24 @@
 import { createServer, type Server } from "node:http";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createGatewayWsClient } from "../../scripts/lib/gateway-ws-client.js";
 
 let server: Server | undefined;
 let wss: WebSocketServer | undefined;
+let activeClient: ReturnType<typeof createGatewayWsClient> | undefined;
+let closing = false;
+const sockets = new Set<Duplex>();
 
 afterEach(async () => {
-  // A failed assertion can skip client.close(); wss.close() waits for those peers.
+  closing = true;
+  activeClient?.close();
+  // Terminate peers before wss.close(), including after a failed assertion.
   for (const client of wss?.clients ?? []) {
     client.terminate();
+  }
+  for (const socket of sockets) {
+    socket.destroy();
   }
   if (wss) {
     await new Promise<void>((resolve) => {
@@ -24,65 +32,42 @@ afterEach(async () => {
     });
   }
   server = undefined;
+  activeClient = undefined;
+  sockets.clear();
 });
 
-async function listen(handler: (ws: WebSocket) => void): Promise<string> {
+async function makeClient(handler?: (ws: WebSocket) => void, openTimeoutMs = 8000) {
+  closing = false;
   server = createServer();
-  wss = new WebSocketServer({ server });
-  wss.on("connection", handler);
-  return listenServer(server);
-}
-
-async function listenServer(httpServer: Server): Promise<string> {
-  await new Promise<void>((resolve) => {
-    httpServer.listen(0, "127.0.0.1", resolve);
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    if (closing) {
+      socket.destroy();
+    }
   });
-  const address = httpServer.address();
+  if (handler) {
+    wss = new WebSocketServer({ server });
+    wss.on("connection", handler);
+  } else {
+    // Leave upgrades open to exercise pre-handshake close and timeout paths.
+    server.on("upgrade", () => {});
+  }
+  await new Promise<void>((resolve) => {
+    server!.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test websocket server did not get a TCP address");
   }
-  return `ws://127.0.0.1:${address.port}`;
+  activeClient = createGatewayWsClient({ url: `ws://127.0.0.1:${address.port}`, openTimeoutMs });
+  return activeClient;
 }
 
 async function openClient(handler: (ws: WebSocket) => void = () => {}) {
-  const client = createGatewayWsClient({ url: await listen(handler) });
+  const client = await makeClient(handler);
   await client.waitOpen();
   return client;
-}
-
-async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url: string }> {
-  const stalledServer = createServer();
-  const sockets = new Set<Duplex>();
-  let closing = false;
-  stalledServer.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => {
-      sockets.delete(socket);
-    });
-    if (closing) {
-      socket.destroy();
-    }
-  });
-  stalledServer.on("upgrade", (_req, socket) => {
-    // Keep the socket open without completing the websocket handshake.
-    sockets.add(socket);
-    if (closing) {
-      socket.destroy();
-    }
-  });
-  const url = await listenServer(stalledServer);
-  return {
-    close: async () => {
-      closing = true;
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        stalledServer.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-    url,
-  };
 }
 
 describe("createGatewayWsClient", () => {
@@ -105,7 +90,6 @@ describe("createGatewayWsClient", () => {
     await expect(client.request("health", {}, 1000)).rejects.toThrow(
       "gateway websocket closed (1011): boom",
     );
-    client.close();
   });
 
   it("rejects pending RPC requests when the socket errors", async () => {
@@ -115,45 +99,23 @@ describe("createGatewayWsClient", () => {
     client.ws.emit("error", new Error("socket exploded"));
 
     await expect(pending).rejects.toThrow("socket exploded");
-    client.close();
   });
 
   it("rejects websocket closes before opening", async () => {
-    const stalled = await listenStalledUpgrade();
-    const client = createGatewayWsClient({ openTimeoutMs: 1000, url: stalled.url });
+    const client = await makeClient(undefined, 1000);
     const opened = client.waitOpen();
 
     client.ws.emit("close", 1006, Buffer.from("bye"));
 
-    try {
-      await expect(opened).rejects.toThrow("closed before open (1006): bye");
-    } finally {
-      client.close();
-      await stalled.close();
-    }
+    await expect(opened).rejects.toThrow("closed before open (1006): bye");
   });
 
   it("terminates stalled websocket handshakes after the open timeout", async () => {
-    const stalled = await listenStalledUpgrade();
-    const client = createGatewayWsClient({ openTimeoutMs: 5, url: stalled.url });
-    try {
-      await expect(client.waitOpen()).rejects.toThrow("ws open timeout");
-      await waitFor(() => client.ws.readyState === WebSocket.CLOSED);
-    } finally {
-      client.close();
-      await stalled.close();
-    }
+    const client = await makeClient(undefined, 5);
+    await expect(client.waitOpen()).rejects.toThrow("ws open timeout");
+    await vi.waitFor(() => expect(client.ws.readyState).toBe(WebSocket.CLOSED), {
+      timeout: 1_000,
+      interval: 10,
+    });
   });
 });
-
-async function waitFor(condition: () => boolean, timeoutMs = 1_000) {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-}
