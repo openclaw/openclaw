@@ -1,6 +1,5 @@
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionFileBrowserEntry,
@@ -31,6 +30,7 @@ import {
   type WorkspaceRoot,
   updateWorkspaceFile,
   type WorkspaceFileUpdateResult,
+  workspaceFileCasHash,
   workspaceRelativePath,
 } from "./workspace-fs.js";
 
@@ -39,6 +39,18 @@ export type LoadedSessionFiles = SessionFileReadBoundary & {
   diffCwd?: string;
   files: TouchedFile[];
 };
+
+/**
+ * Bind the session Files CAS token to the resolved session workspace root: the
+ * same-chat reset flow can replace a managed worktree under one session key,
+ * and a stale editor's retained hash must not authorize saving into the
+ * replacement even when its bytes are identical. Only the Gateway session
+ * Files RPC opts in; the node workspace-inspection protocol and stored
+ * repository artifacts keep the unbound content hash.
+ */
+export function sessionWorkspaceFileHashBinding(root: string | undefined): string | undefined {
+  return root === undefined ? undefined : `openclaw-session-workspace\u0000${root}`;
+}
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
@@ -130,6 +142,7 @@ function isDetectedTextMime(mimeType: string): boolean {
 export async function populateSessionFilePreview(
   entry: SessionFileEntry,
   buffer: Buffer,
+  hashBinding?: string,
 ): Promise<void> {
   const mimeType = await detectMime({ buffer });
   if (mimeType && BROWSER_IMAGE_MIME_TYPES.has(mimeType)) {
@@ -147,7 +160,7 @@ export async function populateSessionFilePreview(
     entry.content = text;
     // The hash doubles as the sessions.files.set CAS token. Binary files
     // never receive one, so replacement characters cannot be saved back.
-    entry.hash = sha256Hex(buffer);
+    entry.hash = workspaceFileCasHash(hashBinding, buffer);
     return;
   }
   entry.previewKind = "unsupported";
@@ -166,6 +179,7 @@ async function toSessionFileEntry(
     assertCurrent?: () => void;
     authorizeHostRead?: () => Promise<boolean>;
     onOutsideBoundary?: () => void;
+    hashBinding?: string;
   } = {},
 ): Promise<SessionFileEntry> {
   const target = await resolveSessionFileReadTarget(
@@ -214,7 +228,7 @@ async function toSessionFileEntry(
   entry.size = read.stat.size;
   entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
   if (inline) {
-    await populateSessionFilePreview(entry, read.buffer);
+    await populateSessionFilePreview(entry, read.buffer, opts.hashBinding);
     if (read.readOnly || target.outside) {
       delete entry.hash;
     }
@@ -249,6 +263,7 @@ export async function listSessionWorkspaceFiles(
     path?: string;
     search?: string;
     assertCurrent?: () => void;
+    hashBinding?: string;
   },
 ): Promise<{
   root?: string;
@@ -282,6 +297,7 @@ export async function listSessionWorkspaceFiles(
         workspaceRoot,
         assertCurrent: params.assertCurrent,
         authorizeHostRead: params.authorizeHostRead,
+        hashBinding: params.hashBinding,
       }),
     ),
   );
@@ -379,6 +395,7 @@ export async function getSessionWorkspaceFile(
     path: string;
     assertCurrent?: () => void;
     includeContent?: boolean;
+    hashBinding?: string;
   },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
@@ -386,6 +403,7 @@ export async function getSessionWorkspaceFile(
     includeContent: params.includeContent !== false,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
+    hashBinding: params.hashBinding,
     onOutsideBoundary: () => {
       outsideBoundary = true;
     },
@@ -452,6 +470,7 @@ export async function setSessionWorkspaceFile(params: {
   content: string;
   expectedHash: string;
   assertCurrent?: () => void;
+  hashBinding?: string;
 }): Promise<SessionWorkspaceWriteResult> {
   // Reject content the preview cannot round-trip, before encoding oversized input.
   if (params.content.includes("\0")) {
@@ -492,6 +511,7 @@ export async function setSessionWorkspaceFile(params: {
       params.content,
       params.expectedHash,
       params.assertCurrent,
+      { hashBinding: params.hashBinding },
     );
   } catch (error) {
     if (!(error instanceof FsSafeError)) {

@@ -70,6 +70,7 @@ import {
   listSessionWorkspaceFiles,
   setSessionWorkspaceFile,
   resolveFileRoot,
+  sessionWorkspaceFileHashBinding,
   type LoadedSessionFiles,
 } from "./workspace-files.js";
 
@@ -439,6 +440,7 @@ async function handleSessionFilesRead(
                     ...query,
                     assertCurrent,
                     authorizeHostRead: hostRead.authorizeHostRead,
+                    hashBinding: sessionWorkspaceFileHashBinding(loaded.root),
                   });
           assertCurrent();
           const { file } = fileResult;
@@ -572,6 +574,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
               root: loaded.root,
               fileRoot: loaded.fileRoot,
               assertCurrent: authorize,
+              hashBinding: sessionWorkspaceFileHashBinding(loaded.root),
             });
         assertSourceCurrent();
         if (update.status === "missing") {

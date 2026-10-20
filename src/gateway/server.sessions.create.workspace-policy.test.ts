@@ -424,3 +424,82 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
     testState.agentConfig = undefined;
   }
 });
+
+test("a files save cannot overwrite a replacement workspace after a same-chat reset", async () => {
+  await using fixture = await setupResetWorktree("openclaw-session-files-replacement-");
+  const operatorClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const created = await mainSession({ worktree: true });
+  expect(created.ok).toBe(true);
+  const worktree = created.payload!.worktree;
+  fixture.track(worktree.id);
+
+  // The editor reads the original workspace and retains the returned hash.
+  const read = await directSessionReq<{ file?: { hash?: string } }>(
+    "sessions.files.get",
+    {
+      sessionKey: "agent:main:main",
+      path: "README.md",
+    },
+    { client: operatorClient },
+  );
+  expect(read.ok, JSON.stringify(read.error)).toBe(true);
+  const readHash = read.payload?.file?.hash;
+  expect(typeof readHash).toBe("string");
+
+  // Same-chat reset detaches the managed workspace, then a replacement is prepared.
+  const reset = await mainSession({}, "operator.write");
+  expectDetached(reset);
+  const replacement = await mainSession({ worktree: true });
+  expect(replacement.ok, JSON.stringify(replacement.error)).toBe(true);
+  const replacementWorktree = replacement.payload!.worktree;
+  fixture.track(replacementWorktree.id);
+  expect(replacementWorktree.id).not.toBe(worktree.id);
+  await expect(fs.readFile(path.join(replacementWorktree.path, "README.md"), "utf8")).resolves.toBe(
+    "base\n",
+  );
+
+  // The stale editor's save must refuse the changed workspace target, even
+  // though the replacement's identical bytes still match the retained hash.
+  const staleSave = await directSessionReq(
+    "sessions.files.set",
+    {
+      sessionKey: "agent:main:main",
+      path: "README.md",
+      content: "draft from the original workspace\n",
+      expectedHash: readHash,
+    },
+    { client: operatorClient },
+  );
+  expect(staleSave).toMatchObject({
+    ok: false,
+    error: { details: { type: "session_file_conflict" } },
+  });
+  await expect(fs.readFile(path.join(replacementWorktree.path, "README.md"), "utf8")).resolves.toBe(
+    "base\n",
+  );
+
+  // A fresh read of the replacement authorizes a new edit through the same flow.
+  const freshRead = await directSessionReq<{ file?: { hash?: string } }>(
+    "sessions.files.get",
+    {
+      sessionKey: "agent:main:main",
+      path: "README.md",
+    },
+    { client: operatorClient },
+  );
+  expect(freshRead.ok, JSON.stringify(freshRead.error)).toBe(true);
+  const freshSave = await directSessionReq(
+    "sessions.files.set",
+    {
+      sessionKey: "agent:main:main",
+      path: "README.md",
+      content: "replacement draft\n",
+      expectedHash: freshRead.payload?.file?.hash,
+    },
+    { client: operatorClient },
+  );
+  expect(freshSave.ok, JSON.stringify(freshSave.error)).toBe(true);
+  await expect(fs.readFile(path.join(replacementWorktree.path, "README.md"), "utf8")).resolves.toBe(
+    "replacement draft\n",
+  );
+});

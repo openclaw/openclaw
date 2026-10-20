@@ -39,6 +39,18 @@ type WorkspaceFileReadResult = {
 
 export const enqueueWorkspaceFileUpdate = createAsyncLock();
 
+/**
+ * Session Files CAS tokens are bound to the read-time workspace so a stale
+ * editor cannot authorize a save into a replacement workspace that happens to
+ * hold identical bytes. Without a binding the token is a plain content hash.
+ */
+export function workspaceFileCasHash(binding: string | undefined, buffer: Buffer): string {
+  if (binding === undefined) {
+    return sha256Hex(buffer);
+  }
+  return sha256Hex(Buffer.concat([Buffer.from(`${binding}\u0000`, "utf8"), buffer]));
+}
+
 export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   // Resolve the owner before trying local storage. A stopped remote binding must
   // remain unavailable rather than exposing a Gateway-side copy.
@@ -257,7 +269,7 @@ export async function updateWorkspaceFile(
   content: string | Buffer,
   expectedHash: string | undefined,
   assertCurrent?: () => void,
-  options?: { maxBytes?: number },
+  options?: { maxBytes?: number; hashBinding?: string },
 ): Promise<WorkspaceFileUpdateResult> {
   const workspaceRoot = await openWorkspaceRoot(rootDir);
   if (!workspaceRoot) {
@@ -279,7 +291,7 @@ export async function updateWorkspaceFile(
     if (typeof content === "string" && decodeUtf8Strict(current.buffer) === undefined) {
       return { status: "unsafe" };
     }
-    const currentHash = sha256Hex(current.buffer);
+    const currentHash = workspaceFileCasHash(options?.hashBinding, current.buffer);
     if (expectedHash !== undefined && currentHash !== expectedHash) {
       return { status: "conflict", currentHash };
     }
@@ -296,7 +308,7 @@ export async function updateWorkspaceFile(
     return {
       status: "updated",
       canonicalPath: workspaceRelativePath(workspaceRoot.rootReal, current.realPath),
-      hash: sha256Hex(content),
+      hash: workspaceFileCasHash(options?.hashBinding, Buffer.from(content)),
       stat,
     };
   });
