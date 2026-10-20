@@ -51,7 +51,11 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
-import { mediaResult, textToolResult } from "./dynamic-tools.test-support.js";
+import {
+  installResultMiddleware,
+  mediaResult,
+  textToolResult,
+} from "./dynamic-tools.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolCallParams,
@@ -69,23 +73,6 @@ const COMPUTER_FRAME_IMAGE =
 const REPLACEMENT_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
-function installResultMiddleware(
-  handler: ReturnType<
-    typeof createEmptyPluginRegistry
-  >["agentToolResultMiddlewares"][number]["handler"],
-) {
-  const registry = createEmptyPluginRegistry();
-  registry.agentToolResultMiddlewares.push({
-    pluginId: "test-result",
-    pluginName: "Test result",
-    rawHandler: handler,
-    handler,
-    runtimes: ["codex"],
-    source: "test",
-  });
-  setActivePluginRegistry(registry);
-}
-
 function createScreenshotBridge() {
   const computerContextEpoch: {
     value: number;
@@ -93,8 +80,7 @@ function createScreenshotBridge() {
     frameImageIdentity?: string;
   } = { value: 0 };
   const bridge = createSingleToolBridge(
-    createTool({
-      name: "computer",
+    createTool("computer", {
       execute: vi.fn(async (toolCallId: string) => {
         computerContextEpoch.frameToolCallId = toolCallId;
         computerContextEpoch.frameImageIdentity = frameImageIdentity(COMPUTER_FRAME_IMAGE);
@@ -144,9 +130,9 @@ function createDynamicToolCall(
   };
 }
 
-function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
+function createTool(name: string, overrides: Partial<AnyAgentTool> = {}): AnyAgentTool {
   return {
-    name: "tts",
+    name,
     description: "Convert text to speech.",
     parameters: { type: "object", properties: {}, additionalProperties: true },
     execute: vi.fn(),
@@ -193,10 +179,9 @@ function createBridgeWithToolResult(
   toolResult: AgentToolResult<unknown>,
   hookContext?: Parameters<typeof createCodexDynamicToolBridge>[0]["hookContext"],
 ) {
-  return createSingleToolBridge(
-    createTool({ name: toolName, execute: vi.fn(async () => toolResult) }),
-    { hookContext },
-  );
+  return createSingleToolBridge(createTool(toolName, { execute: vi.fn(async () => toolResult) }), {
+    hookContext,
+  });
 }
 
 function firstInputText(response: CodexDynamicToolCallResponse) {
@@ -206,6 +191,8 @@ function firstInputText(response: CodexDynamicToolCallResponse) {
   }
   return firstItem.text;
 }
+
+const inputText = (text: string) => [{ type: "inputText" as const, text }];
 
 function expectInputText(response: CodexDynamicToolCallResponse, text: string, success = true) {
   expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
@@ -289,8 +276,7 @@ async function runSchemaToolCall(params: {
 }) {
   const name = params.name ?? "strict_tool";
   const execute = vi.fn(async () => textToolResult("done"));
-  const tool = createTool({
-    name,
+  const tool = createTool(name, {
     parameters: params.parameters ?? STRICT_INSTRUCTION_SCHEMA,
     prepareArguments: params.prepareArguments,
     execute,
@@ -301,12 +287,8 @@ async function runSchemaToolCall(params: {
     directToolNames: params.direct ? [name] : undefined,
   });
   const response = await bridge.handleToolCall({
-    threadId: "thread-1",
-    turnId: "turn-1",
-    callId: params.callId,
+    ...createDynamicToolCall(name, params.arguments, params.callId),
     namespace: params.direct ? CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE : null,
-    tool: name,
-    arguments: params.arguments,
   });
   return { bridge, execute, response, tool };
 }
@@ -320,7 +302,7 @@ function expectSchemaRejection(
   expect(response).toMatchObject({
     success: false,
     executionStarted: false,
-    contentItems: [{ type: "inputText", text: expect.stringContaining(message) }],
+    contentItems: inputText(expect.stringContaining(message)),
   });
 }
 
@@ -360,7 +342,7 @@ describe("createCodexDynamicToolBridge", () => {
           const tool = createDecisionToolForBridge(state.workspaceDir);
           const tools = filterCodexDynamicTools([tool], {});
           expect(tools).toEqual([tool]);
-          const createBridge = () =>
+          const createDecisionBridge = () =>
             createCodexDynamicToolBridge({
               tools,
               loading,
@@ -379,7 +361,7 @@ describe("createCodexDynamicToolBridge", () => {
               textToolResult(JSON.stringify(outcome), outcome),
             );
             tool.execute = execute;
-            const bridge = createBridge();
+            const bridge = createDecisionBridge();
             expect(specNames(bridge.availableSpecs)).toContain("decision_evaluate");
             const response = await bridge.handleToolCall(
               createDynamicToolCall("decision_evaluate", batch),
@@ -403,7 +385,7 @@ describe("createCodexDynamicToolBridge", () => {
             throw new Error("Cancelled Decision must not return a result");
           });
           const call = new AbortController();
-          const pending = createBridge().handleToolCall(
+          const pending = createDecisionBridge().handleToolCall(
             createDynamicToolCall("decision_evaluate", batch),
             {
               signal: call.signal,
@@ -423,7 +405,7 @@ describe("createCodexDynamicToolBridge", () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const execute = vi.fn(async () => textToolResult("executed"));
-    const bridge = createSingleToolBridge(createTool({ name: "synthetic", execute }), {
+    const bridge = createSingleToolBridge(createTool("synthetic", { execute }), {
       assertCurrentAsync: async () => {
         entered.resolve();
         await release.promise;
@@ -562,20 +544,20 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("keeps model-visible tools stable when plugin discovery order changes", () => {
     const tools = [
-      createTool({ name: "web_search" }),
-      createTool({ name: "computer", catalogMode: "direct-only" }),
-      createTool({ name: "agents_list" }),
-      createTool({ name: "openclaw" }),
+      createTool("web_search"),
+      createTool("computer", { catalogMode: "direct-only" }),
+      createTool("agents_list"),
+      createTool("openclaw"),
     ];
-    const createBridge = (orderedTools: AnyAgentTool[]) =>
+    const createOrderedBridge = (orderedTools: AnyAgentTool[]) =>
       createCodexDynamicToolBridge({
         tools: orderedTools,
         registeredTools: orderedTools,
         signal: new AbortController().signal,
         directToolNames: ["openclaw"],
       });
-    const forward = createBridge(tools);
-    const reversed = createBridge(tools.toReversed());
+    const forward = createOrderedBridge(tools);
+    const reversed = createOrderedBridge(tools.toReversed());
 
     expect(forward.availableSpecs).toEqual(reversed.availableSpecs);
     expect(forward.specs).toEqual(reversed.specs);
@@ -599,10 +581,10 @@ describe("createCodexDynamicToolBridge", () => {
     const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
     const onToolOutcome = vi.fn();
     const bridge = createCodexDynamicToolBridge({
-      tools: [createTool({ name: "message" })],
+      tools: [createTool("message")],
       registeredTools: [
-        createTool({ name: "message" }),
-        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+        createTool("message"),
+        createTool(HEARTBEAT_RESPONSE_TOOL_NAME, { execute: heartbeatExecute }),
       ],
       signal: new AbortController().signal,
       hookContext: { runId: "run-unavailable", onToolOutcome },
@@ -661,9 +643,8 @@ describe("createCodexDynamicToolBridge", () => {
     );
     const badExecute = vi.fn();
     const tools = [
-      createTool({ name: "message" }),
-      createTool({
-        name: "fuzzplugin_move_angles",
+      createTool("message"),
+      createTool("fuzzplugin_move_angles", {
         parameters: { type: "array", items: { type: "number" } },
         execute: badExecute,
       }),
@@ -735,9 +716,9 @@ describe("createCodexDynamicToolBridge", () => {
     const execute = vi.fn(async () => textToolResult("healthy sibling executed"));
     const placement =
       testCase.placement === "direct-only" ? { catalogMode: "direct-only" as const } : {};
-    const invalidTool = createTool({ name: testCase.name, ...placement });
-    const sibling = createTool({ name: "valid_sibling", execute, ...placement });
-    const registeredOnly = createTool({ name: "registered_sibling", ...placement });
+    const invalidTool = createTool(testCase.name, { ...placement });
+    const sibling = createTool("valid_sibling", { execute, ...placement });
+    const registeredOnly = createTool("registered_sibling", { ...placement });
     const tools = [sibling, ...(testCase.source === "registered" ? [] : [invalidTool])];
     const registeredTools = [
       sibling,
@@ -781,7 +762,7 @@ describe("createCodexDynamicToolBridge", () => {
   it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     function unreadable(name: string, key: string) {
-      const tool = createTool({ name });
+      const tool = createTool(name);
       Object.defineProperty(tool, key, {
         enumerable: true,
         get() {
@@ -792,17 +773,11 @@ describe("createCodexDynamicToolBridge", () => {
     }
     const poisonedName = unreadable("fuzzplugin_unreadable_name", "name");
     const poisonedSchema = unreadable("fuzzplugin_unreadable_schema", "parameters");
-    const invalidName = createTool({ name: "" });
+    const invalidName = createTool("");
     const poisonedExecute = unreadable("fuzzplugin_unreadable_execute", "execute");
 
     const bridge = createCodexDynamicToolBridge({
-      tools: [
-        poisonedName,
-        poisonedSchema,
-        invalidName,
-        poisonedExecute,
-        createTool({ name: "message" }),
-      ],
+      tools: [poisonedName, poisonedSchema, invalidName, poisonedExecute, createTool("message")],
       signal: new AbortController().signal,
     });
 
@@ -829,11 +804,8 @@ describe("createCodexDynamicToolBridge", () => {
       },
     ]);
     const registeredBridge = createCodexDynamicToolBridge({
-      tools: [poisonedExecute, createTool({ name: "message" })],
-      registeredTools: [
-        createTool({ name: "fuzzplugin_unreadable_execute" }),
-        createTool({ name: "message" }),
-      ],
+      tools: [poisonedExecute, createTool("message")],
+      registeredTools: [createTool("fuzzplugin_unreadable_execute"), createTool("message")],
       signal: new AbortController().signal,
     });
 
@@ -901,7 +873,7 @@ describe("createCodexDynamicToolBridge", () => {
             });
       const outer = new AbortController();
       const bridge = createCodexDynamicToolBridge({
-        tools: [createTool({ name: tool, execute: vi.fn(async () => result) })],
+        tools: [createTool(tool, { execute: vi.fn(async () => result) })],
         signal: outer.signal,
       });
       const handle = vi.spyOn(bridge, "handleToolCall");
@@ -909,14 +881,7 @@ describe("createCodexDynamicToolBridge", () => {
       vi.useFakeTimers();
       try {
         const response = handleDynamicToolCallWithTimeout({
-          call: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: "held-result",
-            namespace: null,
-            tool,
-            arguments: { text: "hello" },
-          },
+          call: createDynamicToolCall(tool, { text: "hello" }, "held-result"),
           toolBridge: bridge,
           signal: outer.signal,
           timeoutMs: 1,
@@ -1039,8 +1004,7 @@ describe("createCodexDynamicToolBridge", () => {
       ]),
     );
     const bridge = createSingleToolBridge(
-      createTool({
-        name: "message",
+      createTool("message", {
         execute: vi.fn(async () => {
           hasRepliedRef.value = true;
           return textToolResult("Sent.", {
@@ -1099,8 +1063,7 @@ describe("createCodexDynamicToolBridge", () => {
         mode === "older"
           ? {
               bridge: createSingleToolBridge(
-                createTool({
-                  name: "computer",
+                createTool("computer", {
                   execute: vi.fn(async () => textToolResult("older result")),
                 }),
                 { computerContextEpoch: newerEpoch },
@@ -1154,7 +1117,7 @@ describe("createCodexDynamicToolBridge", () => {
     warn.mockClear();
     const rawResult = textToolResult("committed effect", { receipt: "effect-1" });
     const execute = vi.fn(async () => rawResult);
-    const bridge = createSingleToolBridge(createTool({ name: "exec", execute }));
+    const bridge = createSingleToolBridge(createTool("exec", { execute }));
     const result = await bridge.handleToolCall(
       createDynamicToolCall("exec", { command: "write synthetic effect" }, "observer-success"),
       { onAgentToolResult },
@@ -1165,7 +1128,7 @@ describe("createCodexDynamicToolBridge", () => {
       diagnosticTerminalType: "completed",
       executionStarted: true,
       sideEffectEvidence: true,
-      contentItems: [{ type: "inputText", text: "committed effect" }],
+      contentItems: inputText("committed effect"),
       transcriptDetails: { receipt: "effect-1" },
     });
     const protocolResponse = toCodexDynamicToolProtocolResponse(result);
@@ -1183,16 +1146,12 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("classifies replay safety for async read results", async () => {
-    const bridge = createSingleToolBridge(
-      createTool({
-        name: "web_search",
-        execute: vi.fn(async () =>
-          textToolResult("Background task started.", {
-            async: true,
-            status: "started",
-            taskId: "task-1",
-          }),
-        ),
+    const bridge = createBridgeWithToolResult(
+      "web_search",
+      textToolResult("Background task started.", {
+        async: true,
+        status: "started",
+        taskId: "task-1",
       }),
     );
     const result = await bridge.handleToolCall(
@@ -1211,7 +1170,7 @@ describe("createCodexDynamicToolBridge", () => {
     }));
     installResultMiddleware(handler);
     const execute = vi.fn(async () => textToolResult("added", { id: "job-1" }));
-    const bridge = createSingleToolBridge(createTool({ name: "cron", execute }));
+    const bridge = createSingleToolBridge(createTool("cron", { execute }));
 
     const result = await bridge.handleToolCall(
       createDynamicToolCall(
@@ -1273,7 +1232,7 @@ describe("createCodexDynamicToolBridge", () => {
     setActivePluginRegistry(registry);
 
     const execute = vi.fn(async () => textToolResult("done"));
-    const bridge = createSingleToolBridge(createTool({ name: "exec", execute }), {
+    const bridge = createSingleToolBridge(createTool("exec", { execute }), {
       hookContext: {
         agentId: "agent-1",
         config: config as never,
@@ -1316,7 +1275,7 @@ describe("createCodexDynamicToolBridge", () => {
       );
       const { entered, release } = holdResults();
       const execute = vi.fn(async () => textToolResult(blocked ? "should not run" : "ok"));
-      const bridge = createSingleToolBridge(createTool({ name: "message", execute }), {
+      const bridge = createSingleToolBridge(createTool("message", { execute }), {
         hookContext: { runId },
       });
 
@@ -1369,7 +1328,7 @@ describe("createCodexDynamicToolBridge", () => {
           );
         }),
     );
-    const bridge = createSingleToolBridge(createTool({ name: "message", execute }), {
+    const bridge = createSingleToolBridge(createTool("message", { execute }), {
       hookContext: { runId },
     });
     const controller = new AbortController();
@@ -1405,7 +1364,7 @@ describe("createCodexDynamicToolBridge", () => {
         createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
       );
       const execute = vi.fn(async () => textToolResult("should not run"));
-      const rawTool = createTool({ name: "exec", execute });
+      const rawTool = createTool("exec", { execute });
       const tool = scheduled
         ? rawTool
         : wrapToolWithBeforeToolCallHook(
@@ -1454,12 +1413,9 @@ describe("createCodexDynamicToolBridge", () => {
       }
       expect(result).toMatchObject({
         success: false,
-        contentItems: [
-          {
-            type: "inputText",
-            text: expect.stringContaining("cron runs have no approval-capable initiating surface"),
-          },
-        ],
+        contentItems: inputText(
+          expect.stringContaining("cron runs have no approval-capable initiating surface"),
+        ),
       });
       expect(callArg(beforeToolCall, 0, 1, "scheduled before_tool_call context")).toMatchObject({
         requester: {
@@ -1512,7 +1468,7 @@ describe("createCodexDynamicToolBridge", () => {
       events.push("execute");
       return textToolResult("raw output", { stage: "execute" });
     });
-    const bridge = createSingleToolBridge(createTool({ name: "exec", execute }), {
+    const bridge = createSingleToolBridge(createTool("exec", { execute }), {
       hookContext: { runId: "run-middleware" },
     });
 
@@ -1589,7 +1545,7 @@ describe("createCodexDynamicToolBridge", () => {
     const runController = new AbortController();
     const callController = new AbortController();
     const bridge = createCodexDynamicToolBridge({
-      tools: [createTool({ name: "exec", execute })],
+      tools: [createTool("exec", { execute })],
       signal: runController.signal,
     });
 
@@ -1633,7 +1589,7 @@ function createMediaMessageBridge(
 ) {
   const execute = vi.fn(async (_callId: string, _args: unknown) => toolResult);
   const bridge = createCodexDynamicToolBridge({
-    tools: [createTool({ name: "message", execute })],
+    tools: [createTool("message", { execute })],
     signal: new AbortController().signal,
     hookContext,
   });
@@ -1657,8 +1613,7 @@ it("preserves accepted child receipts when middleware strips their details", asy
     },
   }));
   const bridge = createSingleToolBridge(
-    createTool({
-      name: "sessions_spawn",
+    createTool("sessions_spawn", {
       parameters: Type.Object({ task: Type.String() }),
       execute: async () =>
         textToolResult("Accepted: launching child session.", { status: "accepted", ...receipt }),
@@ -1790,12 +1745,8 @@ describe("Codex automation tool references", () => {
     });
     async function call(args: JsonValue) {
       return bridge.handleToolCall({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
+        ...createDynamicToolCall("automations", args),
         namespace: "openclaw",
-        tool: "automations",
-        arguments: args,
       });
     }
     return { call, execute };
@@ -1924,7 +1875,7 @@ describe("Codex tool operator hints", () => {
       expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
       expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
       expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
-        contentItems: [{ type: "inputText", text: message }],
+        contentItems: inputText(message),
         success: false,
       });
       expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({

@@ -1,6 +1,3 @@
-// A `canDeliverSourceReply` dynamic tool ends the Codex turn with its own reply;
-// ordinary tools, non-final replies and middleware-withdrawn replies stay on the
-// normal model path.
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -8,37 +5,27 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { installResultMiddleware, textToolResult } from "./dynamic-tools.test-support.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 
-function createBridge(params: {
-  canDeliverSourceReply?: boolean;
-  details: Record<string, unknown>;
-}) {
-  return createCodexDynamicToolBridge({
+async function callOrderStatus({
+  canDeliverSourceReply = true,
+  namespace = CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+}: { canDeliverSourceReply?: boolean; namespace?: string | null } = {}) {
+  const bridge = createCodexDynamicToolBridge({
     tools: [
       {
         name: "order_status",
         label: "order_status",
         description: "Order status fixture",
         parameters: Type.Object({}, { additionalProperties: true }),
-        ...(params.canDeliverSourceReply ? { canDeliverSourceReply: true } : {}),
-        execute: async () => ({
-          content: [{ type: "text" as const, text: JSON.stringify(params.details) }],
-          details: params.details,
-        }),
+        ...(canDeliverSourceReply ? { canDeliverSourceReply: true } : {}),
+        execute: async () => textToolResult(JSON.stringify(replyDetails), replyDetails),
       },
     ],
     signal: new AbortController().signal,
   });
-}
-
-// Codex keeps the model-only namespace out of Code Mode programs, so a call in it
-// comes straight from the model.
-function callOrderStatus(
-  bridge: ReturnType<typeof createCodexDynamicToolBridge>,
-  namespace: string | null = CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-) {
-  return bridge.handleToolCall({
+  const result = await bridge.handleToolCall({
     threadId: "thread-1",
     turnId: "turn-1",
     callId: "call-1",
@@ -46,23 +33,7 @@ function callOrderStatus(
     tool: "order_status",
     arguments: {},
   });
-}
-
-function installResultMiddleware(
-  handler: ReturnType<
-    typeof createEmptyPluginRegistry
-  >["agentToolResultMiddlewares"][number]["handler"],
-) {
-  const registry = createEmptyPluginRegistry();
-  registry.agentToolResultMiddlewares.push({
-    pluginId: "test-result",
-    pluginName: "Test result",
-    rawHandler: handler,
-    handler,
-    runtimes: ["codex"],
-    source: "test",
-  });
-  setActivePluginRegistry(registry);
+  return { bridge, result };
 }
 
 const replyDetails = {
@@ -79,9 +50,7 @@ afterEach(() => {
 
 describe("Codex tool-authored source replies", () => {
   it("holds the reply candidate until batch settlement for a capable tool", async () => {
-    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
-
-    const result = await callOrderStatus(bridge);
+    const { bridge, result } = await callOrderStatus();
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBe(true);
@@ -106,9 +75,7 @@ describe("Codex tool-authored source replies", () => {
         details: { sourceReply: { text: "Pedido SO1 creado." } },
       },
     }));
-    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
-
-    const result = await callOrderStatus(bridge);
+    const { bridge, result } = await callOrderStatus();
 
     expect(result.terminate).toBe(true);
     expect(result.toolAuthoredSourceReply).toMatchObject({ text: "Pedido SO1 creado." });
@@ -119,18 +86,14 @@ describe("Codex tool-authored source replies", () => {
     installResultMiddleware((event) => ({
       result: { content: event.result.content, details: { redacted: true } },
     }));
-    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
-
-    const result = await callOrderStatus(bridge);
+    const { bridge, result } = await callOrderStatus();
 
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
 
   it("ignores sourceReply details from a tool without the capability", async () => {
-    const bridge = createBridge({ details: replyDetails });
-
-    const result = await callOrderStatus(bridge);
+    const { bridge, result } = await callOrderStatus({ canDeliverSourceReply: false });
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBeUndefined();
@@ -138,9 +101,7 @@ describe("Codex tool-authored source replies", () => {
   });
 
   it("ignores a reply from the searchable namespace, which Code Mode programs can reach", async () => {
-    const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
-
-    const result = await callOrderStatus(bridge, "openclaw");
+    const { bridge, result } = await callOrderStatus({ namespace: "openclaw" });
 
     expect(result.success).toBe(true);
     expect(result.terminate).toBeUndefined();

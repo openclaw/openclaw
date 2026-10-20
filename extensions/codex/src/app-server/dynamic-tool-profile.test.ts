@@ -4,6 +4,10 @@ import {
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
 
+const names = (value: string) => value.split(" ");
+const goals = "progress_card get_goal create_goal update_goal";
+const shell = `read write edit apply_patch exec process ${goals} message`;
+
 describe("Codex dynamic tool profile", () => {
   it.each<{
     name: string;
@@ -15,91 +19,21 @@ describe("Codex dynamic tool profile", () => {
   }>([
     {
       name: "native-owned tools",
-      input: [
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "update_plan",
-        "progress_card",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "dispatch_action",
-        "tool_describe",
-        "tool_search",
-        "web_search",
-        "message",
-        "heartbeat_respond",
-        "sessions_spawn",
-      ],
-      expected: [
-        "progress_card",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "web_search",
-        "message",
-        "heartbeat_respond",
-        "sessions_spawn",
-      ],
+      input: names(
+        `read write edit apply_patch exec process update_plan ${goals} dispatch_action tool_describe tool_search web_search message heartbeat_respond sessions_spawn`,
+      ),
+      expected: names(`${goals} web_search message heartbeat_respond sessions_spawn`),
     },
     {
       name: "disabled native tools with shell replacements",
-      input: [
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "progress_card",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "message",
-      ],
-      expected: [
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "progress_card",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "message",
-      ],
+      input: names(shell),
+      expected: names(shell),
       preserveShell: true,
     },
     {
       name: "disabled native tools with explicit exclusions",
-      input: [
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "progress_card",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "message",
-      ],
-      expected: [
-        "read",
-        "edit",
-        "progress_card",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "message",
-      ],
+      input: names(shell),
+      expected: names(`read edit ${goals} message`),
       excludes: ["write", "apply_patch"],
       preserveShell: false,
     },

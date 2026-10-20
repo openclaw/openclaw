@@ -1,11 +1,6 @@
 import "./dynamic-tool-build.test-support.js";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderCodexSkillsInstructions } from "./attempt-context.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -16,24 +11,18 @@ const {
   cleanupDynamicToolBuildFixture,
   createCodexRuntimePlanFixture,
   createParams,
-  hoisted,
+  setupDynamicToolBuildFixture,
 } = await import("./dynamic-tool-build.test-support.js");
 
 let tempDir: string;
 const hostCapabilityClosers: Array<() => void> = [];
 
 beforeEach(async () => {
-  setRuntimeConfigSnapshot({});
-  hoisted.loadNodeExecAvailability.mockResolvedValue({
-    cacheKey: "eligible",
-    isAvailable: () => true,
-  });
-  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-skills-"));
+  tempDir = await setupDynamicToolBuildFixture();
 });
 
 afterEach(async () => {
   await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
-  clearRuntimeConfigSnapshot();
 });
 
 describe("Codex installed skills", () => {
@@ -44,13 +33,14 @@ describe("Codex installed skills", () => {
   ])("delivers whole host instructions or refuses the read (%j)", async ({ denied, oversized }) => {
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.config = {
-      plugins: { enabled: false },
-      tools: denied ? { deny: ["skills_search", "skills_read"] } : {},
-    };
+    const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir, {
+      disableTools: false,
+      runtimePlan: createCodexRuntimePlanFixture(),
+      config: {
+        plugins: { enabled: false },
+        tools: denied ? { deny: ["skills_search", "skills_read"] } : {},
+      },
+    });
     const skill = {
       name: "release-guide",
       description: "Publish software releases",
@@ -87,6 +77,14 @@ describe("Codex installed skills", () => {
       skillsPrompt: "",
       dynamicTools: bridge.availableSpecs,
     });
+    const call = (tool: string, arguments_: Record<string, string>) =>
+      bridge.handleToolCall({
+        threadId: "thread-skills",
+        turnId: "turn-skills",
+        callId: tool === "skills_read" ? "read-skills" : "search-skills",
+        tool,
+        arguments: arguments_,
+      });
     if (denied) {
       expect(guidance).toBeUndefined();
     } else {
@@ -94,23 +92,11 @@ describe("Codex installed skills", () => {
       expect(guidance).toContain("skills_read");
       expect(guidance).not.toContain("skills.read(");
     }
-    const result = await bridge.handleToolCall({
-      threadId: "thread-skills",
-      turnId: "turn-skills",
-      callId: "search-skills",
-      tool: "skills_search",
-      arguments: { query: "publish release" },
-    });
+    const result = await call("skills_search", { query: "publish release" });
     expect(result.success).toBe(!denied);
     if (!denied) {
       expect(JSON.stringify(result)).toContain("release-guide");
-      const read = await bridge.handleToolCall({
-        threadId: "thread-skills",
-        turnId: "turn-skills",
-        callId: "read-skills",
-        tool: "skills_read",
-        arguments: { name: "release-guide" },
-      });
+      const read = await call("skills_read", { name: "release-guide" });
       expect(read.success).toBe(!oversized);
       if (oversized) {
         expect(read.diagnosticTerminalType).toBe("error");
