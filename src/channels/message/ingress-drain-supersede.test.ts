@@ -12,10 +12,14 @@ describe("channel ingress drain supersede", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
       const guard = vi.fn(() => current);
+      const pendingIds: string[] = [];
       let signal: AbortSignal | undefined;
       const drain = createChannelIngressDrain<Payload>({
         queue,
-        shouldSupersedePending: async () => guard,
+        shouldSupersedePending: async (_candidate, pending) => {
+          pendingIds.push(pending.id);
+          return guard;
+        },
         dispatchClaimedEvent: async (event, lifecycle) => {
           if (event.id === "old") {
             signal = lifecycle.abortSignal;
@@ -30,10 +34,15 @@ describe("channel ingress drain supersede", () => {
         await queue.enqueue("new", { text: "new" }, { laneKey: "shared" });
         expect(await drain.drainOnce()).toEqual({ started: current ? 1 : 0 });
         expect(guard).toHaveBeenCalledOnce();
+        expect(pendingIds).toEqual(["old"]);
         expect(signal?.aborted).toBe(current);
         expect((await queue.enqueue("old", { text: "old" })).kind).toBe(
           current ? "completed" : "claimed",
         );
+        if (current) {
+          await drain.waitForIdle();
+          expect((await queue.enqueue("new", { text: "new" })).kind).toBe("completed");
+        }
       } finally {
         drain.dispose();
       }
@@ -75,41 +84,6 @@ describe("channel ingress drain supersede", () => {
       for (const id of ["album-1", "album-2", "abort"]) {
         expect((await queue.enqueue(id, { text: id })).kind).toBe("completed");
       }
-      drain.dispose();
-    });
-  });
-
-  it("preserves single-owner supersede behavior with default lane holding", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
-      const predicatePendingIds: string[] = [];
-      let oldSignal: AbortSignal | undefined;
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        shouldSupersedePending: (candidate, pending) => {
-          predicatePendingIds.push(pending.id);
-          return candidate.id === "new";
-        },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          if (event.id === "old") {
-            oldSignal = lifecycle.abortSignal;
-            return { kind: "deferred" };
-          }
-          await lifecycle.onAdopted();
-          return { kind: "completed" };
-        },
-      });
-
-      await drain.drainOnce();
-      await queue.enqueue("new", { text: "new" }, { laneKey: "shared" });
-      expect(await drain.drainOnce()).toEqual({ started: 1 });
-      await drain.waitForIdle();
-
-      expect(predicatePendingIds).toEqual(["old"]);
-      expect(oldSignal?.aborted).toBe(true);
-      expect((await queue.enqueue("old", { text: "old" })).kind).toBe("completed");
-      expect((await queue.enqueue("new", { text: "new" })).kind).toBe("completed");
       drain.dispose();
     });
   });
