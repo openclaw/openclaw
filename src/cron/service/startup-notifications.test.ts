@@ -43,11 +43,12 @@ it.each([
       job.sessionKey = "agent:session-owner:main";
     }
     await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const storeKey = cronStoreKey(storePath);
     const database = openOpenClawStateDatabase().db;
     const readEnabled = () =>
       database
         .prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
-        .get(cronStoreKey(storePath), job.id)?.enabled;
+        .get(storeKey, job.id)?.enabled;
     let currentDefault = route === "default" ? "original-agent" : undefined;
     let committed = false;
     const order: string[] = [];
@@ -89,23 +90,15 @@ it.each([
       }
     });
     try {
-      const outcome = await runMissedJobs(state).then(
-        () => ({ kind: "completed" as const }),
-        (error: unknown) => ({ kind: "rejected" as const, error }),
-      );
-      const persistedStore = await loadCronStore(storePath);
-      const persisted = persistedStore.jobs.find((entry) => entry.id === job.id);
+      await expect(runMissedJobs(state)).resolves.toBeUndefined();
+      const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
       expect(runner).not.toHaveBeenCalled();
-      expect(
-        readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
-          .entries,
-      ).toEqual([]);
+      expect(readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries).toEqual([]);
       expect(
         database
           .prepare("SELECT receipt_id FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
-          .all(cronStoreKey(storePath), job.id),
+          .all(storeKey, job.id),
       ).toEqual([]);
-      expect(outcome).toEqual({ kind: "completed" });
       expect(committed).toBe(true);
       expect(persisted).toMatchObject({
         enabled: false,
@@ -134,12 +127,11 @@ it.each([
           "cron: post-persist notification failed",
         );
       } else {
-        const agentId =
-          route === "explicit agent"
-            ? "explicit-owner"
-            : route === "session owner"
-              ? "session-owner"
-              : "original-agent";
+        const agentId = {
+          "explicit agent": "explicit-owner",
+          "session owner": "session-owner",
+          default: "original-agent",
+        }[route];
         expect(order).toEqual(["commit", "notify", "heartbeat"]);
         expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("was auto-disabled"),

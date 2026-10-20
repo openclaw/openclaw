@@ -4,10 +4,23 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
+import type { CronJobCreate } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { add, remove, update } from "./ops-mutations.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-mutation-completion" });
+const guarded = { commitGuard: () => {} };
+function makeInput(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
+  return {
+    name: "mutation completion",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "run" },
+    ...overrides,
+  };
+}
 
 function createMutationState(storePath: string) {
   return createCronRegressionState({
@@ -23,16 +36,10 @@ describe("Cron mutation completion", () => {
   it("records actual mutations while leaving declaration replay, rejection, and absent removal unmarked", async () => {
     const { storePath } = await makeStorePath();
     const state = createMutationState(storePath);
-    const input = {
+    const input = makeInput({
       declarationKey: "plugin:test:completion",
-      name: "mutation completion",
-      enabled: true,
-      schedule: { kind: "every" as const, everyMs: 60_000 },
-      sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
-      payload: { kind: "agentTurn" as const, message: "run", toolsAllow: ["*"] },
-    };
-    const guarded = { commitGuard: () => {} };
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["*"] },
+    });
     try {
       const created = createCronMutationCompletion("cron.add")!;
       const job = await created.run(() => add(state, input, guarded));
@@ -101,18 +108,7 @@ describe("Cron mutation completion", () => {
     try {
       await expect(
         completion.run(() =>
-          add(
-            state,
-            {
-              name: "durable completion boundary",
-              enabled: true,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "run" },
-            },
-            { commitGuard: () => {} },
-          ),
+          add(state, makeInput({ name: "durable completion boundary" }), guarded),
         ),
       ).rejects.toThrow("FOREIGN KEY constraint failed");
       expect((await loadCronStore(storePath)).jobs).toHaveLength(0);
