@@ -1,7 +1,12 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 import { watchDirectory } from "./directory-watch-host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -64,6 +69,51 @@ describe("macOS directory watch host", () => {
       ]);
       watch.close();
       expect(nativeWatch).not.toHaveBeenCalled();
+    },
+  );
+
+  // A watch close can hold the helper's loop on fseventsd long after its caller is
+  // gone. A process that keeps the helper's pipes open models that unread input.
+  it.skipIf(Boolean(process.versions.bun) || process.platform === "win32")(
+    "exits after its caller dies even while its pipes stay open",
+    async () => {
+      const caller = spawn(
+        process.execPath,
+        [
+          "--import",
+          fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+          "--input-type=module",
+          "--eval",
+          `import childProcess from "node:child_process";
+          import { syncBuiltinESMExports } from "node:module";
+          const { spawn } = childProcess;
+          let host;
+          childProcess.spawn = (...args) => (host = spawn(...args));
+          syncBuiltinESMExports();
+          Object.defineProperty(process, "platform", { value: "darwin" });
+          const { watchDirectory } = await import(${JSON.stringify(new URL("./directory-watch-host.ts", import.meta.url).href)});
+          watchDirectory(process.argv[1], () => {});
+          const holder = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+            stdio: [host.stdin, host.stdout, "ignore"],
+            detached: true,
+          });
+          console.log(JSON.stringify({ host: host.pid, holder: holder.pid }));
+          process.kill(process.pid, "SIGKILL");`,
+          tempDirs.make("directory-watch-host-caller-"),
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      let output = "";
+      caller.stdout.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+      await once(caller, "exit");
+      const pids = JSON.parse(output) as { host: number; holder: number };
+      try {
+        await expect(waitForPidToExit(pids.host, 5_000)).resolves.toBe(true);
+        expect(isPidAlive(pids.holder)).toBe(true);
+      } finally {
+        killPidIfAlive(pids.host);
+        killPidIfAlive(pids.holder);
+      }
     },
   );
 });

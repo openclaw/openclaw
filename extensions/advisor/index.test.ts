@@ -30,39 +30,38 @@ function setup(pluginConfig: Record<string, unknown>, reply = "NO_CHANGE") {
   }));
   const warn = vi.fn();
   const logger = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() };
-  plugin.register(
-    createTestPluginApi({
-      id: "advisor",
-      pluginConfig,
-      logger,
-      runtime: createPluginRuntimeMock({
-        subagent: { forkSession },
-        config: {
-          current: () => ({ plugins: { entries: { advisor: { config: pluginConfig } } } }),
-        },
-      }),
-      steerActiveRun: steer,
-      registerService: (registered) => {
-        if (registered.apiVersion === 2) {
-          service = registered;
-        }
-      },
-      setRunContext: ({ runId, namespace, value }) => {
-        if (value !== undefined) {
-          runContexts.set(`${runId}:${namespace}`, value);
-        }
-        return true;
-      },
-      on: (name, handler) => {
-        if (name === "before_agent_reply") {
-          beforeReply = handler as Hook;
-        }
-      },
-      registerAgentEventSubscription: (registered) => {
-        subscription = registered;
+  const api = createTestPluginApi({
+    id: "advisor",
+    pluginConfig,
+    logger,
+    runtime: createPluginRuntimeMock({
+      subagent: { forkSession },
+      config: {
+        current: () => ({ plugins: { entries: { advisor: { config: pluginConfig } } } }),
       },
     }),
-  );
+    registerService: (registered) => {
+      if (registered.apiVersion === 2) {
+        service = registered;
+      }
+    },
+    on: (name, handler) => {
+      if (name === "before_agent_reply") {
+        beforeReply = handler as Hook;
+      }
+    },
+    registerAgentEventSubscription: (registered) => {
+      subscription = registered;
+    },
+  });
+  api.session.workflow.steerActiveRun = steer;
+  api.runContext.setRunContext = ({ runId, namespace, value }) => {
+    if (value !== undefined) {
+      runContexts.set(`${runId}:${namespace}`, value);
+    }
+    return true;
+  };
+  plugin.register(api);
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
   const serviceContext: OpenClawPluginServiceContextV2 = {

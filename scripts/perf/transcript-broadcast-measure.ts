@@ -1,11 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { appendFileSync, createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { Value } from "typebox/value";
+import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
+import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
@@ -24,6 +29,7 @@ import {
   controlGatewayProfile,
   readGatewayCpuProfile,
   readGatewayHeapProfile,
+  readGatewayGcTrace,
   readGatewayCpuUsage,
   startGatewayDiagnostics,
   readGatewayResources,
@@ -51,6 +57,8 @@ const { values } = parseArgs({
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
+    "rpc-concurrency": { type: "string", default: "1" },
+    "reconnect-stagger-ms": { type: "string", default: "125" },
     limit: { type: "string", default: "100" },
     "row-mode": { type: "string", default: "compact" },
     entry: { type: "string", default: "dist/entry.js" },
@@ -63,6 +71,12 @@ const { values } = parseArgs({
     "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
+    "duration-ms": { type: "string", default: "3600000" },
+    "warmup-ms": { type: "string", default: "300000" },
+    "round-interval-ms": { type: "string", default: "15000" },
+    "memory-interval-ms": { type: "string", default: "60000" },
+    "retained-profile-ms": { type: "string", default: "600000" },
+    "reset-every-rounds": { type: "string", default: "20" },
     chunks: { type: "string", default: "100" },
     "chunk-interval-ms": { type: "string", default: "10" },
     "prompt-kib": { type: "string", default: "128" },
@@ -88,30 +102,41 @@ const scenario = values.scenario;
 if (
   ![
     "sessions.list",
+    "sessions.describe",
+    "connect",
+    "reconnect",
     "subscribe",
     "chat.send",
     "transcript-broadcast",
     "attempt-retention",
+    "memory-soak",
     "plugins.reload",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+const soakScenario = scenario === "memory-soak";
+const toolScenario = scenario === "chat.send" || retentionScenario || soakScenario;
 const turnScenario =
-  scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
+  scenario === "chat.send" ||
+  scenario === "transcript-broadcast" ||
+  retentionScenario ||
+  soakScenario;
 if (
   !values.allocations &&
   !values["stream-start-allocations"] &&
   scenario !== "transcript-broadcast" &&
-  !retentionScenario
+  !retentionScenario &&
+  !soakScenario
 ) {
   throw new Error("--scenario requires --allocations");
 }
 const operations = integer(
-  values.operations ?? (scenario === "plugins.reload" ? "1" : "100"),
+  values.operations ??
+    (scenario === "plugins.reload" ? "1" : scenario === "reconnect" ? values.clients : "100"),
   "--operations",
 );
 const limit = integer(values.limit, "--limit");
@@ -120,15 +145,44 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
+const rpcConcurrency = integer(values["rpc-concurrency"], "--rpc-concurrency");
+if (rpcConcurrency > clientCount) {
+  throw new Error("--rpc-concurrency must not exceed --clients");
+}
+const reconnectStaggerMs = integer(values["reconnect-stagger-ms"], "--reconnect-stagger-ms", 0);
+const connectionScenario = scenario === "connect" || scenario === "reconnect";
+if (
+  scenario === "reconnect" &&
+  (Math.min(operations, clientCount) - 1) * reconnectStaggerMs > 5000
+) {
+  throw new Error("reconnect storm starts must fit within 5000 ms; reduce --reconnect-stagger-ms");
+}
 const exactClients = integer(values["exact-clients"] ?? String(clientCount), "--exact-clients", 0);
 if (exactClients > clientCount) {
   throw new Error("--exact-clients must not exceed --clients");
 }
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
+const durationMs = integer(values["duration-ms"], "--duration-ms");
+const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
+const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
+const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
+const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
+if (
+  soakScenario &&
+  (values.allocations || values["stream-start-allocations"] || retainedProfileMs > durationMs)
+) {
+  throw new Error(
+    "memory-soak needs a retained profile no longer than its duration and no allocation-churn capture",
+  );
+}
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+if (connectionScenario && listIntervalMs) {
+  throw new Error("connection scenarios use their own sidebar refresh; omit --list-interval-ms");
+}
 const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
 const recapBurstIntervalMs = integer(
   values["recap-burst-interval-ms"],
@@ -191,13 +245,23 @@ cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
 cfg.plugins = {
   ...cfg.plugins,
-  entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+  entries: {
+    ...(soakScenario ? cfg.plugins?.entries : {}),
+    "memory-core": { config: { dreaming: { enabled: false } } },
+  },
 };
 if (values["active-work-diagnostics"]) {
   if (scenario !== "transcript-broadcast") {
     throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
   }
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
+if (soakScenario) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  if (cfg.plugins.allow?.length) {
+    cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "diagnostics-prometheus"])];
+  }
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
 let reloadPluginId: string | undefined;
@@ -272,6 +336,8 @@ let toolResults = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
+let reasoningResponses = 0;
+let reasoningReplayRequests = 0;
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -326,6 +392,8 @@ let cohort:
       arrivals: Set<number>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
+      reasoningSignatures: Map<string, string>;
+      incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
       ready: Promise<void>;
@@ -368,9 +436,30 @@ const mock = createServer((req, res) => {
           )
         : [];
     const toolOutput = toolOutputs.at(-1);
-    const continuation =
-      (scenario === "chat.send" || retentionScenario) && toolOutput !== undefined;
+    const continuation = toolScenario && toolOutput !== undefined;
     if (continuation) {
+      if (retentionScenario || soakScenario) {
+        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        if (
+          expectedSignature === undefined ||
+          !Array.isArray(input) ||
+          !input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+          )
+        ) {
+          throw new Error("synthetic reasoning signature did not survive the provider request");
+        }
+        const incompleteSignature = cohort?.incompleteReasoningSignatures.get(toolOutput.call_id);
+        if (
+          incompleteSignature !== undefined &&
+          input.some(
+            (item) => item?.type === "reasoning" && item.encrypted_content === incompleteSignature,
+          )
+        ) {
+          throw new Error("reasoning-only output-limit signature was replayed during recovery");
+        }
+        reasoningReplayRequests++;
+      }
       if (
         toolOutputs.some(
           (toolResult) =>
@@ -444,7 +533,8 @@ const mock = createServer((req, res) => {
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
-      if (primary && (scenario === "chat.send" || retentionScenario) && cohort) {
+      let reasoningReplayKey = toolOutput?.call_id;
+      if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
@@ -458,6 +548,7 @@ const mock = createServer((req, res) => {
           };
         });
         toolCalls += items.length;
+        reasoningReplayKey = items.at(-1)?.call_id;
         toolAnswer = [
           ...items.flatMap((item, output_index) => [
             { type: "response.output_item.added", output_index, item: { ...item, arguments: "" } },
@@ -515,7 +606,37 @@ const mock = createServer((req, res) => {
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
-        res.write(`data: ${JSON.stringify(event)}\n\n`);
+        if (
+          (retentionScenario || soakScenario) &&
+          (primary || continuation) &&
+          "response" in event &&
+          event.response !== undefined
+        ) {
+          const reasoning = {
+            type: "reasoning",
+            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            status: "completed",
+            summary: [],
+            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+          };
+          if (reasoningReplayKey) {
+            // Replay keeps completed reasoning and drops reasoning-only length stops.
+            const signatures =
+              event.type === "response.completed"
+                ? cohort?.reasoningSignatures
+                : cohort?.incompleteReasoningSignatures;
+            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          }
+          const output_index = event.response.output.length;
+          for (const type of ["response.output_item.added", "response.output_item.done"]) {
+            res.write(`data: ${JSON.stringify({ type, output_index, item: reasoning })}\n\n`);
+          }
+          res.write(
+            `data: ${JSON.stringify({ ...event, response: { ...event.response, output: [...event.response.output, reasoning] } })}\n\n`,
+          );
+        } else {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
         }
@@ -534,6 +655,19 @@ const mock = createServer((req, res) => {
 });
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
+const responseFrameBytes = new WeakMap<
+  ReturnType<typeof createGatewayWsClient>,
+  Map<string, number>
+>();
+const rpcMeasurements = new Map<string, { latenciesMs: number[]; responseBytes: number }>();
+const handshakeLatenciesMs: number[] = [];
+const reconnectStorms: Array<{
+  clients: number;
+  startSpreadMs: number;
+  allSidebarsCurrentMs: number;
+}> = [];
+const childLogs: ReturnType<typeof createWriteStream>[] = [];
 const counters = new Map<string, number>();
 const eventBytes = new Map<string, number>();
 const sessionEventSizes = new Map<string, { frames: number; bytes: number }>();
@@ -627,8 +761,17 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
     detached: true,
     stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   });
-  child.stdout?.pipe(log);
-  child.stderr?.pipe(log);
+  child.stdout?.pipe(log, { end: false });
+  child.stderr?.pipe(log, { end: false });
+  child.once("close", () => log.end());
+  childLogs.push(log);
+  if (values.allocations || values["stream-start-allocations"]) {
+    // Keep stderr diagnostics from interleaving with V8's line-oriented GC trace.
+    const stdoutLog = createWriteStream(path.join(output, `${name}.stdout.log`));
+    child.stdout?.pipe(stdoutLog, { end: false });
+    child.once("close", () => stdoutLog.end());
+    childLogs.push(stdoutLog);
+  }
   let startupOutput = "";
   const observeStartup = (data: Buffer) => {
     if (!ownedListeners.has(child)) {
@@ -697,13 +840,77 @@ async function rpc(
   onResponse?: (id: string) => void,
 ) {
   assertGatewayAlive();
+  const started = performance.now();
   const response = await client.request(method, params, 180_000);
+  const rpcDurationMs = performance.now() - started;
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
   }
+  if (
+    method === "sessions.messages.subscribe" &&
+    (!isRecord(params) ||
+      !isRecord(response.payload) ||
+      response.payload.subscribed !== true ||
+      response.payload.key !== params.key ||
+      response.payload.agentId !== "main")
+  ) {
+    throw new Error(
+      "sessions.messages.subscribe did not acknowledge the requested fixture session",
+    );
+  }
+  if (measuring) {
+    const measured = rpcMeasurements.get(method) ?? { latenciesMs: [], responseBytes: 0 };
+    const bytes = responseFrameBytes.get(client)?.get(response.id);
+    if (bytes === undefined) {
+      throw new Error(`missing wire response size for ${method}`);
+    }
+    measured.latenciesMs.push(rpcDurationMs);
+    measured.responseBytes += bytes;
+    rpcMeasurements.set(method, measured);
+    responseFrameBytes.get(client)?.delete(response.id);
+  }
   onResponse?.(response.id);
   return response.payload;
+}
+function latencySummary(latenciesMs: number[]) {
+  const sorted = latenciesMs.toSorted((a, b) => a - b);
+  return {
+    count: sorted.length,
+    p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+  };
+}
+function readPromotion(profilePath: string, operationCount: number) {
+  const gcTrace = readGatewayGcTrace(path.join(output, "gateway.stdout.log"), profilePath);
+  return { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount };
+}
+function assertListPage(
+  page: unknown,
+  method: string,
+): asserts page is { totalCount: number; count: number; sessions: unknown[] } {
+  if (
+    !isRecord(page) ||
+    typeof page.totalCount !== "number" ||
+    page.count !== Math.min(limit, page.totalCount) ||
+    !Array.isArray(page.sessions) ||
+    page.sessions.length !== page.count ||
+    page.count === 0
+  ) {
+    throw new Error(`${method} did not return the requested nonempty page`);
+  }
+}
+function sidebarIdentity(page: unknown) {
+  assertListPage(page, "sessions.list");
+  return JSON.stringify({
+    totalCount: page.totalCount,
+    sessions: page.sessions.map((row) => {
+      if (!isRecord(row) || typeof row.key !== "string") {
+        throw new Error("sidebar response contains an invalid session row");
+      }
+      return [row.key, row.sessionId, row.updatedAt];
+    }),
+  });
 }
 function summarizeCpuProfile(profilePath: string) {
   const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
@@ -745,11 +952,17 @@ function summarizeCpuProfile(profilePath: string) {
       .slice(0, 40),
   };
 }
+let completedSoakRounds = 0;
+let sessionResets = 0;
 async function runRound(client: ReturnType<typeof createGatewayWsClient>, measuredRound?: number) {
-  if (retentionScenario) {
+  if (
+    retentionScenario ||
+    (soakScenario && resetEveryRounds > 0 && completedSoakRounds % resetEveryRounds === 0)
+  ) {
     // Retire each previous session generation so retained history is not the measurement.
     for (const key of keys) {
       await rpc(client, "sessions.reset", { key });
+      sessionResets++;
     }
   }
   const child = gateway;
@@ -805,6 +1018,8 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     arrivals: new Set(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
+    reasoningSignatures: new Map(),
+    incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
     beforeRelease: finishAdmissionDiagnostics
       ? async () => {
@@ -905,6 +1120,9 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
       current.phases.completedAtEpochMs = epochNow();
     });
     await Promise.all([cohortReady, captureWork, turns]);
+    if (soakScenario) {
+      completedSoakRounds++;
+    }
     return { phases: current.phases, ...capture };
   } finally {
     clearTimeout(timeout);
@@ -1085,6 +1303,152 @@ function sessionEventSizesSnapshot() {
     [...sessionEventSizes].map(([bucket, sizes]) => [bucket, { ...sizes }]),
   );
 }
+async function connectClient(index: number) {
+  const started = performance.now();
+  assertGatewayAlive();
+  const clientCounters = (perClientCounters[index] ??= new Map<string, number>());
+  const recapRows = new Map<string, RecapReceipt>();
+  perClientRecaps[index] = recapRows;
+  const rowEvents = new GatewaySessionRowEvents();
+  let previousSeq: number | undefined;
+  let receivedFrameBytes = 0;
+  const client = createGatewayWsClient({
+    url: `ws://127.0.0.1:${port}`,
+    onEvent: (event) => {
+      lastSubscriberEventAt = performance.now();
+      if (event.seq !== undefined) {
+        if (previousSeq !== undefined && event.seq !== previousSeq + 1) {
+          subscriberFailure ??= new Error(
+            `client ${index} event sequence gap: ${previousSeq} -> ${event.seq}`,
+          );
+        }
+        previousSeq = event.seq;
+      }
+      const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (values["activity-summaries"]) {
+        const decoded = rowEvents.project(event);
+        if (decoded.missingBaseline) {
+          subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
+        }
+        const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
+        const row = facts && isRecord(facts.session) ? facts.session : undefined;
+        const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
+        if (summary && typeof facts?.sessionKey === "string" && keys.includes(facts.sessionKey)) {
+          const receipt = {
+            client: index,
+            key: facts.sessionKey,
+            state: summary.state,
+            text: summary.text,
+            updatedAt: summary.updatedAt,
+            receivedAtEpochMs: epochNow(),
+          };
+          recapRows.set(facts.sessionKey, receipt);
+          if (facts.reason === "activity-summary") {
+            recapReceipts.push(receipt);
+          }
+        }
+      }
+      if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
+        const sizes = measureFrameFields(event, payload, receivedFrameBytes);
+        if (sizes.duplicateEnvelopeFields !== undefined) {
+          initialFullFrame = sizes;
+        }
+      }
+      if (measuring) {
+        counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
+        clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
+        eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
+        const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
+        if (attribution) {
+          const delivery =
+            index < exactClients &&
+            typeof payload?.sessionKey === "string" &&
+            keys.includes(payload.sessionKey)
+              ? "subscribed"
+              : "roster";
+          const bucket = `${event.event}:${attribution.reason}:${delivery}`;
+          const sizes = sessionEventSizes.get(bucket) ?? { frames: 0, bytes: 0 };
+          sizes.frames++;
+          sizes.bytes += receivedFrameBytes;
+          sessionEventSizes.set(bucket, sizes);
+          if (
+            index === 0 &&
+            event.event === "sessions.changed" &&
+            payload &&
+            receivedFrameBytes > (representativeFrames.get(bucket)?.frameBytes ?? 0)
+          ) {
+            representativeFrames.set(
+              bucket,
+              measureFrameFields(event, payload, receivedFrameBytes),
+            );
+          }
+        }
+      }
+    },
+  });
+  const responseSizes = new Map<string, number>();
+  responseFrameBytes.set(client, responseSizes);
+  // The helper parses frames before onEvent; capture their exact uncompressed size first.
+  client.ws.prependListener("message", (data: import("ws").RawData) => {
+    receivedFrameBytes = Array.isArray(data)
+      ? data.reduce((sum, part) => sum + part.byteLength, 0)
+      : data.byteLength;
+    if (measuring) {
+      const frame = JSON.parse(rawDataToString(data));
+      if (frame.type === "res" && typeof frame.id === "string") {
+        responseSizes.set(frame.id, receivedFrameBytes);
+      }
+    }
+  });
+  client.ws.on("close", (code) => {
+    if (!closing && !expectedClosures.has(client)) {
+      subscriberFailure ??= new Error(`subscriber ${index} unexpectedly closed (${code})`);
+    }
+  });
+  client.ws.on("error", (error) => {
+    if (!closing && !expectedClosures.has(client)) {
+      subscriberFailure ??= new Error(`subscriber ${index}: ${error.message}`);
+    }
+  });
+  clients[index] = client;
+  await client.waitOpen();
+  const hello = await rpc(client, "connect", {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: {
+      id: "gateway-client",
+      displayName: "synthetic-broadcast-measurement",
+      version: "1.0.0",
+      platform: process.platform,
+      mode: "backend",
+    },
+    role: "operator",
+    scopes: ["operator.read", "operator.admin"],
+    caps: [
+      "session-scoped-events",
+      "chat-only-assistant-text",
+      ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
+      ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+      ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
+    ],
+  });
+  const handshakeElapsedMs = performance.now() - started;
+  if (
+    !Value.Check(HelloOkSchema, hello) ||
+    hello.protocol !== PROTOCOL_VERSION ||
+    !hello.features.methods.includes("sessions.list") ||
+    !hello.features.methods.includes("sessions.describe") ||
+    hello.auth.role !== "operator" ||
+    !hello.auth.scopes.includes("operator.admin") ||
+    hello.snapshot.sessionDefaults?.defaultAgentId !== "main"
+  ) {
+    throw new Error("connect did not return a valid hello snapshot");
+  }
+  if (measuring) {
+    handshakeLatenciesMs.push(handshakeElapsedMs);
+  }
+  return client;
+}
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
@@ -1096,6 +1460,7 @@ function cleanup() {
     await Promise.all(
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
+    await Promise.all(childLogs.map((log) => finished(log)));
     mock.closeAllConnections();
     if (mock.listening) {
       await new Promise<void>((resolve, reject) => {
@@ -1122,7 +1487,11 @@ try {
   await ready(mockPort, "/health");
   gateway = launch(
     buildGatewayBenchChildArgs(values.entry, port, [
-      ...(values["trace-gc"] ? ["--trace-gc"] : []),
+      ...(values.allocations || values["stream-start-allocations"]
+        ? ["--trace-gc-nvp"]
+        : values["trace-gc"]
+          ? ["--trace-gc"]
+          : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -1138,126 +1507,7 @@ try {
   // Startup recovery for the retained-run inventory is outside the measured workload.
   await delay(10_000);
   for (let index = 0; index < clientCount; index++) {
-    assertGatewayAlive();
-    const clientCounters = new Map<string, number>();
-    perClientCounters.push(clientCounters);
-    const recapRows = new Map<string, RecapReceipt>();
-    perClientRecaps.push(recapRows);
-    const rowEvents = new GatewaySessionRowEvents();
-    let previousSeq: number | undefined;
-    let receivedFrameBytes = 0;
-    const client = createGatewayWsClient({
-      url: `ws://127.0.0.1:${port}`,
-      onEvent: (event) => {
-        lastSubscriberEventAt = performance.now();
-        if (event.seq !== undefined) {
-          if (previousSeq !== undefined && event.seq !== previousSeq + 1) {
-            subscriberFailure ??= new Error(
-              `client ${index} event sequence gap: ${previousSeq} -> ${event.seq}`,
-            );
-          }
-          previousSeq = event.seq;
-        }
-        const payload = isRecord(event.payload) ? event.payload : undefined;
-        if (values["activity-summaries"]) {
-          const decoded = rowEvents.project(event);
-          if (decoded.missingBaseline) {
-            subscriberFailure ??= new Error(`client ${index} lost its session row baseline`);
-          }
-          const facts = isRecord(decoded.event.payload) ? decoded.event.payload : undefined;
-          const row = facts && isRecord(facts.session) ? facts.session : undefined;
-          const summary = row && isRecord(row.activitySummary) ? row.activitySummary : undefined;
-          if (summary && typeof facts?.sessionKey === "string" && keys.includes(facts.sessionKey)) {
-            const receipt = {
-              client: index,
-              key: facts.sessionKey,
-              state: summary.state,
-              text: summary.text,
-              updatedAt: summary.updatedAt,
-              receivedAtEpochMs: epochNow(),
-            };
-            recapRows.set(facts.sessionKey, receipt);
-            if (facts.reason === "activity-summary") {
-              recapReceipts.push(receipt);
-            }
-          }
-        }
-        if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
-          const sizes = measureFrameFields(event, payload, receivedFrameBytes);
-          if (sizes.duplicateEnvelopeFields !== undefined) {
-            initialFullFrame = sizes;
-          }
-        }
-        if (measuring) {
-          counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
-          clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
-          eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
-          const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
-          if (attribution) {
-            const delivery =
-              index < exactClients &&
-              typeof payload?.sessionKey === "string" &&
-              keys.includes(payload.sessionKey)
-                ? "subscribed"
-                : "roster";
-            const bucket = `${event.event}:${attribution.reason}:${delivery}`;
-            const sizes = sessionEventSizes.get(bucket) ?? { frames: 0, bytes: 0 };
-            sizes.frames++;
-            sizes.bytes += receivedFrameBytes;
-            sessionEventSizes.set(bucket, sizes);
-            if (
-              index === 0 &&
-              event.event === "sessions.changed" &&
-              payload &&
-              receivedFrameBytes > (representativeFrames.get(bucket)?.frameBytes ?? 0)
-            ) {
-              representativeFrames.set(
-                bucket,
-                measureFrameFields(event, payload, receivedFrameBytes),
-              );
-            }
-          }
-        }
-      },
-    });
-    // The helper parses frames before onEvent; capture their exact uncompressed size first.
-    client.ws.prependListener("message", (data: import("ws").RawData) => {
-      receivedFrameBytes = Array.isArray(data)
-        ? data.reduce((sum, part) => sum + part.byteLength, 0)
-        : data.byteLength;
-    });
-    client.ws.on("close", (code) => {
-      if (!closing) {
-        subscriberFailure ??= new Error(`subscriber ${index} unexpectedly closed (${code})`);
-      }
-    });
-    client.ws.on("error", (error) => {
-      if (!closing) {
-        subscriberFailure ??= new Error(`subscriber ${index}: ${error.message}`);
-      }
-    });
-    clients.push(client);
-    await client.waitOpen();
-    await rpc(client, "connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        displayName: "synthetic-broadcast-measurement",
-        version: "1.0.0",
-        platform: process.platform,
-        mode: "backend",
-      },
-      role: "operator",
-      scopes: ["operator.read", "operator.admin"],
-      caps: [
-        "session-scoped-events",
-        "chat-only-assistant-text",
-        ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
-        ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
-        ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
-      ],
-    });
+    const client = await connectClient(index);
     if (index === 0) {
       await rpc(client, "sessions.create", {
         key: parentKey,
@@ -1285,6 +1535,10 @@ try {
   if (!sender) {
     throw new Error("no sender client");
   }
+  const expectedSidebar =
+    scenario === "reconnect"
+      ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
+      : undefined;
   console.log("PHASE subscribed-and-reset");
   const runScenario = async (measuredRound?: number) => {
     if (turnScenario) {
@@ -1294,60 +1548,190 @@ try {
       }
       return streamStart;
     }
-    for (let operation = 0; operation < operations; operation++) {
-      if (scenario === "sessions.list" || scenario === "subscribe") {
-        const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
-        const result = await rpc(sender, method, {
-          limit,
-          rowMode,
-          archived: "all",
-        });
-        const page =
-          scenario === "subscribe"
-            ? isRecord(result) && result.subscribed === true
-              ? result.list
-              : undefined
-            : result;
-        if (
-          !isRecord(page) ||
-          typeof page.totalCount !== "number" ||
-          page.count !== Math.min(limit, page.totalCount)
-        ) {
-          throw new Error(`${method} did not return the requested page`);
+    for (let offset = 0; offset < operations; offset += clientCount) {
+      const batchCount = Math.min(clientCount, operations - offset);
+      const batchStarted = performance.now();
+      const reconnectStarted: number[] = [];
+      const slots = clients.slice(0, batchCount).entries();
+      await Promise.all(
+        clients.slice(0, Math.min(rpcConcurrency, batchCount)).map(async (workerClient) => {
+          for (const [index, oldClient] of slots) {
+            if (connectionScenario) {
+              if (scenario === "reconnect") {
+                await delay(
+                  Math.max(0, batchStarted + index * reconnectStaggerMs - performance.now()),
+                );
+                reconnectStarted.push(performance.now() - batchStarted);
+              }
+              expectedClosures.add(oldClient);
+              const closed = once(oldClient.ws, "close");
+              oldClient.close();
+              await closed;
+              const client = await connectClient(index);
+              if (scenario === "reconnect") {
+                const subscription = await rpc(client, "sessions.subscribe", {
+                  limit,
+                  rowMode,
+                  archived: "all",
+                });
+                assertListPage(
+                  isRecord(subscription) && subscription.subscribed === true
+                    ? subscription.list
+                    : undefined,
+                  "sessions.subscribe",
+                );
+                for (const key of index < exactClients ? keys : []) {
+                  await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
+                }
+                const sidebar = await rpc(client, "sessions.list", {
+                  limit,
+                  rowMode,
+                  archived: "all",
+                });
+                if (sidebarIdentity(sidebar) !== expectedSidebar) {
+                  throw new Error(
+                    `reconnected client ${index} did not recover the current sidebar`,
+                  );
+                }
+              }
+            } else if (scenario === "sessions.list" || scenario === "subscribe") {
+              const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+              const result = await rpc(workerClient, method, {
+                limit,
+                rowMode,
+                archived: "all",
+              });
+              assertListPage(
+                scenario === "subscribe"
+                  ? isRecord(result) && result.subscribed === true
+                    ? result.list
+                    : undefined
+                  : result,
+                method,
+              );
+            } else if (scenario === "sessions.describe") {
+              const result = await rpc(workerClient, "sessions.describe", {
+                key: parentKey,
+              });
+              const row = isRecord(result) ? result.session : undefined;
+              const childKeys = isRecord(row) ? row.childSessions : undefined;
+              if (
+                !isRecord(row) ||
+                row.key !== parentKey ||
+                !Array.isArray(childKeys) ||
+                childKeys.length !== keys.length ||
+                !keys.every((key) => childKeys.includes(key))
+              ) {
+                throw new Error("sessions.describe did not return the parent with seeded children");
+              }
+            } else {
+              const result = await rpc(workerClient, "plugins.reload", {
+                plugins: [{ pluginId: reloadPluginId }],
+                waitForDrain: true,
+              });
+              if (!isRecord(result) || result.restartRequired !== false) {
+                throw new Error("synthetic plugin reload did not apply live");
+              }
+            }
+          }
+        }),
+      );
+      if (scenario === "reconnect") {
+        const startSpreadMs = Math.max(...reconnectStarted) - Math.min(...reconnectStarted);
+        if (startSpreadMs > 5000) {
+          throw new Error("reconnect starts exceeded 5000 ms; increase --rpc-concurrency");
         }
-      } else {
-        const result = await rpc(sender, "plugins.reload", {
-          plugins: [{ pluginId: reloadPluginId }],
-          waitForDrain: true,
-        });
-        if (
-          !result ||
-          typeof result !== "object" ||
-          !("restartRequired" in result) ||
-          result.restartRequired !== false
-        ) {
-          throw new Error("synthetic plugin reload did not apply live");
+        if (measuring) {
+          reconnectStorms.push({
+            clients: batchCount,
+            startSpreadMs,
+            allSidebarsCurrentMs: performance.now() - batchStarted,
+          });
         }
       }
     }
     return undefined;
   };
-  await runScenario();
+  const warmupStartedAt = performance.now();
+  do {
+    const started = performance.now();
+    await runScenario();
+    await drainEvents();
+    if (!soakScenario) {
+      break;
+    }
+    await delay(
+      Math.max(
+        0,
+        Math.min(
+          roundIntervalMs - (performance.now() - started),
+          warmupMs - (performance.now() - warmupStartedAt),
+        ),
+      ),
+    );
+  } while (performance.now() - warmupStartedAt < warmupMs);
   console.log("PHASE warmed");
-  await drainEvents();
-  const initialRetainedResources = retentionScenario
-    ? await readGatewayResources(gateway, { collectGarbage: true })
-    : undefined;
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before fixture readiness and warmup");
     }
     await delay(startAt - Date.now());
   }
+  const initialRetainedResources =
+    retentionScenario || soakScenario
+      ? await readGatewayResources(gateway, { collectGarbage: true })
+      : undefined;
   const measurementStartedAt = Date.now();
+  const measuredGateway = gateway;
   const samples = [];
-  for (let round = 0; round < rounds; round++) {
+  const memorySamples: Array<{
+    atEpochMs: number;
+    elapsedMs: number;
+    completedRounds: number;
+    sessionResets: number;
+    collectedGarbage: boolean;
+    resources: Awaited<ReturnType<typeof readGatewayResources>>;
+  }> = [];
+  const sampleMemory = async (collectGarbage = false) => {
+    const resources = await readGatewayResources(measuredGateway, { collectGarbage });
+    const sample = {
+      atEpochMs: Date.now(),
+      elapsedMs: Date.now() - measurementStartedAt,
+      completedRounds: samples.length,
+      sessionResets,
+      collectedGarbage: collectGarbage,
+      resources,
+    };
+    memorySamples.push(sample);
+    appendFileSync(path.join(output, "memory-samples.jsonl"), `${JSON.stringify(sample)}\n`);
+    console.log(`MEMORY ${JSON.stringify(sample)}`);
+  };
+  const retainedProfilePath = path.join(output, "retained.heapprofile");
+  let retainedProfileStartedAt: number | undefined;
+  if (soakScenario) {
+    await sampleMemory();
+  }
+  for (
+    let round = 0;
+    soakScenario ? Date.now() - measurementStartedAt < durationMs : round < rounds;
+    round++
+  ) {
+    const roundStartedAt = Date.now();
+    if (
+      soakScenario &&
+      retainedProfileMs > 0 &&
+      retainedProfileStartedAt === undefined &&
+      roundStartedAt - measurementStartedAt >= durationMs - retainedProfileMs
+    ) {
+      await controlGatewayProfile(gateway, "heap", "start", retainedProfilePath, {
+        includeCollectedObjects: false,
+      });
+      retainedProfileStartedAt = Date.now();
+    }
     counters.clear();
+    rpcMeasurements.clear();
+    handshakeLatenciesMs.length = 0;
+    reconnectStorms.length = 0;
     eventBytes.clear();
     sessionEventSizes.clear();
     representativeFrames.clear();
@@ -1363,6 +1747,8 @@ try {
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
+    reasoningResponses = 0;
+    reasoningReplayRequests = 0;
     recapRequests = 0;
     recapReceipts.length = 0;
     recapPhase = undefined;
@@ -1430,8 +1816,8 @@ try {
                     throw new Error("concurrent sessions.list did not return the requested page");
                   }
                   const ended = performance.now();
-                  const durationMs = ended - started;
-                  listLatencies.push(durationMs);
+                  const requestDurationMs = ended - started;
+                  listLatencies.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
                       method: "sessions.list",
@@ -1440,7 +1826,7 @@ try {
                       round,
                       startedAtEpochMs: performance.timeOrigin + started,
                       endedAtEpochMs: performance.timeOrigin + ended,
-                      durationMs,
+                      durationMs: requestDurationMs,
                     });
                   }
                   const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
@@ -1497,9 +1883,12 @@ try {
         `expected ${runCount} primary streams: peak=${peakPrimaryStreams}, requests=${primaryStreamRequests}`,
       );
     }
-    if (scenario === "chat.send" && (toolCalls !== 1 || toolResults !== 1)) {
+    if (
+      (scenario === "chat.send" || soakScenario) &&
+      (toolCalls !== runCount || toolResults !== runCount)
+    ) {
       throw new Error(
-        `expected one completed tool call per turn, calls=${toolCalls}, results=${toolResults}`,
+        `expected ${runCount} completed tool calls, calls=${toolCalls}, results=${toolResults}`,
       );
     }
     if (
@@ -1512,6 +1901,15 @@ try {
     ) {
       throw new Error(
         `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
+      );
+    }
+    if (
+      (retentionScenario || soakScenario) &&
+      (reasoningResponses !== runCount * (retentionScenario ? 3 : 2) ||
+        reasoningReplayRequests !== runCount * (retentionScenario ? 2 : 1))
+    ) {
+      throw new Error(
+        `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
@@ -1552,11 +1950,29 @@ try {
       round,
       scenario,
       allocation,
+      rpc: Object.fromEntries(
+        [...rpcMeasurements].map(([method, measurements]) => [
+          method,
+          {
+            ...latencySummary(measurements.latenciesMs),
+            callsPerMinute: (measurements.latenciesMs.length / cpu.wallMs) * 60_000,
+            responseBytes: measurements.responseBytes,
+            responseBytesPerCall: measurements.responseBytes / measurements.latenciesMs.length,
+          },
+        ]),
+      ),
+      ...(connectionScenario
+        ? {
+            handshake: latencySummary(handshakeLatenciesMs),
+            reconnectStorms: [...reconnectStorms],
+          }
+        : {}),
       diagnostics,
       streamStart,
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...((retentionScenario || soakScenario) && { reasoningResponses, reasoningReplayRequests }),
       recapRequests,
       ...(values["activity-summaries"] ? { recapPhase, recapReceipts: [...recapReceipts] } : {}),
       ...(retentionScenario
@@ -1600,11 +2016,30 @@ try {
       deliveredSessionEvents,
       sourceEvents,
       mainThreadMsPerSessionEvent: sourceEvents ? cpu.mainThread.totalMs / sourceEvents : null,
+      mainThreadMsPerSessionEventDelivery: deliveredSessionEvents
+        ? cpu.mainThread.totalMs / deliveredSessionEvents
+        : null,
+      estimatedAllocatedBytesPerSessionEvent:
+        allocation && sourceEvents ? allocation.sampledAllocatedBytes / sourceEvents : null,
       mainThreadMsPerSecond: (cpu.mainThread.totalMs / cpu.wallMs) * 1000,
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
     samples.push(sample);
     console.log(JSON.stringify(sample));
+    if (soakScenario) {
+      if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
+        await sampleMemory();
+      }
+      await delay(
+        Math.max(
+          0,
+          Math.min(
+            roundIntervalMs - (Date.now() - roundStartedAt),
+            durationMs - (Date.now() - measurementStartedAt),
+          ),
+        ),
+      );
+    }
     if (allocation) {
       console.table([
         {
@@ -1619,11 +2054,48 @@ try {
       ]);
     }
   }
+  let retainedProfile;
+  if (soakScenario) {
+    await sampleMemory();
+    await sampleMemory(true);
+    if (retainedProfileStartedAt !== undefined) {
+      await controlGatewayProfile(gateway, "heap", "stop", retainedProfilePath);
+      const { sampledAllocatedBytes, topAllocationSites, ...profile } = readGatewayHeapProfile(
+        retainedProfilePath,
+        { includeCollectedObjects: false },
+      );
+      retainedProfile = {
+        ...profile,
+        startedAtEpochMs: retainedProfileStartedAt,
+        stoppedAtEpochMs: Date.now(),
+        sampledRetainedBytes: sampledAllocatedBytes,
+        topRetainedSites: topAllocationSites,
+      };
+    } else if (retainedProfileMs > 0) {
+      throw new Error("no retained profile window captured; shorten the round duration");
+    }
+    if (values["heap-snapshot"]) {
+      await readGatewayResources(gateway, {
+        snapshotPath: path.join(output, "settled.heapsnapshot"),
+      });
+    }
+  }
+  // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
+  await cleanup();
   const result = {
     output,
     scenario,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? runCount : operations,
+    rpcConcurrency,
+    reconnectStaggerMs,
+    rpcLatencyScope:
+      "client request-to-response; handler and queue timings are in Gateway diagnostics",
+    perEventResourceScope:
+      "whole measured workload main-isolate CPU and sampled allocations divided by session publications or deliveries; not encode/send-only cost",
+    connectionMeasurementScope: connectionScenario
+      ? "owned socket replacement; handshake includes WebSocket open and connect; reconnect adds subscribe and list; events during intentional disconnection are not replayed"
+      : undefined,
     limit,
     rowMode,
     sessionRowDeltas: values["session-row-deltas"],
@@ -1632,7 +2104,7 @@ try {
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     cpuProfile: values["cpu-profile"],
-    traceGc: values["trace-gc"],
+    traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
@@ -1650,7 +2122,44 @@ try {
     streamRequests,
     fixture,
     ...(retentionScenario ? { promptBytes, initialRetainedResources } : {}),
-    samples,
+    ...(soakScenario
+      ? {
+          durationMs,
+          warmupMs,
+          roundIntervalMs,
+          memoryIntervalMs,
+          retainedProfileMs,
+          resetEveryRounds,
+          sessionResets,
+          completedSoakRounds,
+          initialRetainedResources,
+          memorySamples,
+          retainedProfile,
+        }
+      : {}),
+    samples: samples.map((sample) =>
+      Object.assign(sample, {
+        ...(sample.allocation
+          ? {
+              allocation: {
+                ...sample.allocation,
+                ...readPromotion(sample.allocation.profilePath, sample.allocation.operationCount),
+              },
+            }
+          : {}),
+        ...(sample.streamStart?.heapProfile
+          ? {
+              streamStart: {
+                ...sample.streamStart,
+                heapProfile: {
+                  ...sample.streamStart.heapProfile,
+                  ...readPromotion(sample.streamStart.heapProfile.profilePath, runCount),
+                },
+              },
+            }
+          : {}),
+      }),
+    ),
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);

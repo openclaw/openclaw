@@ -4,7 +4,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { resolveChannelAllowFrom } from "../account-resolution.js";
 import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
-import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import { promptChannelAccessConfig } from "./setup-group-access.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   readChannelConfigSection,
@@ -441,8 +441,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         if (access.helpLines && access.helpLines.length > 0) {
           await prompter.note(access.helpLines.join("\n"), access.helpTitle ?? access.label);
         }
-        next = await configureChannelAccessWithAllowlist({
-          cfg: next,
+        const accessConfig = await promptChannelAccessConfig({
           prompter,
           label: access.label,
           currentPolicy: access.currentPolicy(accountContext()),
@@ -450,21 +449,26 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           placeholder: access.placeholder,
           updatePrompt: access.updatePrompt(accountContext()),
           skipAllowlistEntries: access.skipAllowlistEntries,
-          setPolicy: (currentCfg, policy) =>
-            access.setPolicy({ ...accountContext(currentCfg), policy }),
-          resolveAllowlist: access.resolveAllowlist
-            ? async ({ cfg: currentCfg, entries }) =>
-                await access.resolveAllowlist!({
-                  ...stepContext(currentCfg),
-                  entries,
-                  prompter,
-                })
-            : undefined,
-          applyAllowlist: access.applyAllowlist
-            ? ({ cfg: currentCfg, resolved }) =>
-                access.applyAllowlist!({ ...accountContext(currentCfg), resolved })
-            : undefined,
         });
+        if (accessConfig) {
+          if (
+            accessConfig.policy !== "allowlist" ||
+            access.skipAllowlistEntries ||
+            !access.resolveAllowlist ||
+            !access.applyAllowlist
+          ) {
+            // Open/disabled policies must not reapply stale allowlist entries.
+            next = access.setPolicy({ ...accountContext(), policy: accessConfig.policy });
+          } else {
+            const resolved = await access.resolveAllowlist({
+              ...stepContext(),
+              entries: accessConfig.entries,
+              prompter,
+            });
+            next = access.setPolicy({ ...accountContext(), policy: "allowlist" });
+            next = access.applyAllowlist({ ...accountContext(), resolved });
+          }
+        }
       }
 
       if (forceAllowFrom && wizard.allowFrom) {

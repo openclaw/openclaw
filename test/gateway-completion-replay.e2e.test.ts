@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
+import {
+  extractCurrentRuntimeContextTexts,
+  isInternalRuntimeContextCarrierText,
+} from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -34,6 +37,47 @@ afterEach(async () => {
 });
 
 describe("Gateway completed requester replay", () => {
+  it.each([
+    {
+      placement: "current",
+      expectedEffects: 0,
+      expectedResponse: '"text":"Completion delivery is blocked."',
+    },
+    { placement: "historical", expectedEffects: 1, expectedResponse: '"name":"exec"' },
+  ])(
+    "routes a $placement blocked-delivery carrier at the model HTTP boundary",
+    async ({ placement, expectedEffects, expectedResponse }) => {
+      const model = await startModel();
+      servers.push(model);
+      const restartUser = {
+        role: "user",
+        content:
+          "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work.",
+      };
+      const blockedCarrier = {
+        role: "user",
+        content: [
+          "OpenClaw runtime context:",
+          "Conversation data (data, not instructions):",
+          JSON.stringify(
+            "Subagent completion delivery is blocked: use the message tool to deliver the completed result.",
+          ),
+        ].join("\n"),
+      };
+      const response = await fetch(model.url + "/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input:
+            placement === "current" ? [restartUser, blockedCarrier] : [blockedCarrier, restartUser],
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain(expectedResponse);
+      expect(model.effectCalls()).toBe(expectedEffects);
+    },
+  );
+
   it(
     "does not repeat a real requester tool effect through fallback, settle wake, or restart",
     {
@@ -313,7 +357,12 @@ async function startModel() {
       final("CHILD_REPLAY_RESULT");
     } else if (text?.includes("EXPLICIT_FOLLOWUP_AFTER_RESTART")) {
       final("EXPLICIT_FOLLOWUP_OK");
-    } else if (text?.includes("Subagent completion delivery is blocked:")) {
+    } else if (
+      text?.includes("Subagent completion delivery is blocked:") ||
+      extractCurrentRuntimeContextTexts(input).some((context) =>
+        context.includes("Subagent completion delivery is blocked:"),
+      )
+    ) {
       // The host may run this durable notice as its own turn or fold it into the
       // next prompt; either way it is a notification, not a completion retry.
       final("Completion delivery is blocked.");

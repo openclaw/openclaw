@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import { streamFixture } from "./openai-completions-suite.test-support.js";
 import {
-  type CapturedStreamEvent,
   type OpenAICompletionsOutput,
   createAssistantOutput,
   createDeepSeekCompletionsModel,
@@ -151,10 +150,8 @@ describe("openai completions stream", () => {
   });
 
   it.each(["abort", "error"] as const)("does not recover unfinished tags after %s", async (end) => {
-    const model = makeCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, events, runStream } = streamFixture();
     const abort = new AbortController();
-    const events: CapturedStreamEvent[] = [];
     async function* interruptedStream() {
       yield makeCompletionsChunk({ content: "Answer. <think>unfinished reasoning" });
       if (end === "abort") {
@@ -165,13 +162,7 @@ describe("openai completions stream", () => {
     }
 
     await expect(
-      processCompletionsStream(
-        interruptedStream(),
-        output,
-        model,
-        { push: (event) => events.push(event) },
-        { signal: abort.signal, emitReasoning: false },
-      ),
+      runStream(interruptedStream(), { signal: abort.signal, emitReasoning: false }),
     ).rejects.toThrow(end === "abort" ? "Request was aborted" : "Provider disconnected");
     expect(collectVisibleText(output)).toBe("Answer. ");
     expect(
@@ -457,10 +448,8 @@ describe("openai completions stream", () => {
   });
 
   it("does not finalize tool calls when cancellation ends the iterator normally", async () => {
-    const model = makeCompletionsModel();
-    const output = createAssistantOutput(model);
+    const { output, events, runStream } = streamFixture();
     const abort = new AbortController();
-    const events: CapturedStreamEvent[] = [];
 
     async function* silentlyAbortedStream() {
       yield makeCompletionsChunk(
@@ -470,15 +459,9 @@ describe("openai completions stream", () => {
       abort.abort();
     }
 
-    await expect(
-      processCompletionsStream(
-        silentlyAbortedStream(),
-        output,
-        model,
-        { push: (event) => events.push(event as CapturedStreamEvent) },
-        { signal: abort.signal },
-      ),
-    ).rejects.toThrow("Request was aborted");
+    await expect(runStream(silentlyAbortedStream(), { signal: abort.signal })).rejects.toThrow(
+      "Request was aborted",
+    );
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
     expect(output.stopReason).not.toBe("toolUse");
   });

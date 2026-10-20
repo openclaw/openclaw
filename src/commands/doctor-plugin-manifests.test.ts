@@ -37,13 +37,11 @@ async function createManifestFixture(
     params: {
       config: { plugins: { load: { paths: [pluginsRoot] } } } satisfies OpenClawConfig,
       env: { ...process.env },
-      manifestRoots: [pluginsRoot],
       runtime,
       prompter: {
         ...createDoctorPrompter({ runtime, options: {} }),
         confirmAutoFix: vi.fn().mockResolvedValue(true),
       },
-      note: vi.fn(),
     },
   };
 }

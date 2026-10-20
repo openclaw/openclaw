@@ -9,7 +9,14 @@ import {
   runPerFileCountRatchet,
 } from "./lib/shrink-ratchet.mts";
 
-const PATTERNS = ["createEffect", "untrack", "addEventListener", "querySelector"] as const;
+const IMPORTED_PATTERNS = ["flush", "getOwner", "runWithOwner"] as const;
+const PATTERNS = [
+  "createEffect",
+  "untrack",
+  "addEventListener",
+  "querySelector",
+  ...IMPORTED_PATTERNS,
+] as const;
 type Pattern = (typeof PATTERNS)[number];
 const GUIDANCE =
   "Use Solid ownership, derivations, refs, and shared primitives; see .agents/skills/solid/references/refactor-checklist.md.";
@@ -63,24 +70,210 @@ function callName(
   return undefined;
 }
 
+type SolidImport = { kind: "namespace" } | { kind: "member"; name: string };
+
+// Resolve only actual Solid imports; owner methods and shadowed local names are unrelated.
+function solidImportResolver(tree: ts.SourceFile) {
+  const scopes = new WeakMap<ts.Node, Map<string, SolidImport | null>>();
+  const scopeFor = (node: ts.Node, functionOnly = false): ts.Node => {
+    for (let scope = node.parent; scope; scope = scope.parent) {
+      if (
+        ts.isSourceFile(scope) ||
+        ts.isFunctionLikeDeclaration(scope) ||
+        ts.isClassStaticBlockDeclaration(scope)
+      ) {
+        return scope;
+      }
+      if (
+        !functionOnly &&
+        (ts.isBlock(scope) ||
+          ts.isModuleBlock(scope) ||
+          ts.isCaseBlock(scope) ||
+          ts.isCatchClause(scope) ||
+          ts.isForStatement(scope) ||
+          ts.isForInStatement(scope) ||
+          ts.isForOfStatement(scope))
+      ) {
+        return scope;
+      }
+    }
+    return tree;
+  };
+  const bind = (scope: ts.Node, name: string, imported: SolidImport | null = null) => {
+    let names = scopes.get(scope);
+    if (!names) {
+      names = new Map();
+      scopes.set(scope, names);
+    }
+    names.set(name, imported);
+  };
+  const bindPattern = (scope: ts.Node, name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) {
+      bind(scope, name.text);
+    } else {
+      for (const element of name.elements) {
+        if (ts.isBindingElement(element) && element.name) {
+          bindPattern(scope, element.name);
+        }
+      }
+    }
+  };
+  const collect = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      const module = node.moduleSpecifier;
+      const solid =
+        ts.isStringLiteral(module) &&
+        (module.text === "solid-js" || module.text === "@solidjs/signals") &&
+        node.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword;
+      const clause = node.importClause;
+      if (clause?.name) {
+        bind(scopeFor(node), clause.name.text);
+      }
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        bind(scopeFor(node), bindings.name.text, solid ? { kind: "namespace" } : null);
+      } else if (bindings && ts.isNamedImports(bindings)) {
+        for (const binding of bindings.elements) {
+          bind(
+            scopeFor(node),
+            binding.name.text,
+            solid && !binding.isTypeOnly
+              ? { kind: "member", name: (binding.propertyName ?? binding.name).text }
+              : null,
+          );
+        }
+      }
+    }
+    if (ts.isVariableDeclaration(node)) {
+      const isVar =
+        ts.isVariableDeclarationList(node.parent) &&
+        !(node.parent.flags & ts.NodeFlags.BlockScoped);
+      bindPattern(scopeFor(node, isVar), node.name);
+    }
+    if (ts.isFunctionLikeDeclaration(node)) {
+      for (const parameter of node.parameters) {
+        bindPattern(node, parameter.name);
+      }
+    }
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) {
+      bind(scopeFor(node), node.name.text);
+    }
+    if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) {
+      bind(node, node.name.text);
+    }
+    node.forEachChild(collect);
+  };
+  collect(tree);
+  const resolve = (input: ts.Expression): SolidImport | null => {
+    const node = unwrapExpression(input);
+    if (ts.isIdentifier(node)) {
+      for (let scope = node.parent; scope; scope = scope.parent) {
+        const names = scopes.get(scope);
+        if (names?.has(node.text)) {
+          return names.get(node.text) ?? null;
+        }
+      }
+    } else if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      resolve(node.expression)?.kind === "namespace"
+    ) {
+      const name = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : node.argumentExpression && unwrapExpression(node.argumentExpression);
+      if (typeof name === "string") {
+        return { kind: "member", name };
+      }
+      if (name && (ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name))) {
+        return { kind: "member", name: name.text };
+      }
+    }
+    return null;
+  };
+  return (expression: ts.Expression) => {
+    const imported = resolve(expression);
+    return imported?.kind === "member" ? imported.name : undefined;
+  };
+}
+
+function unwrapExpression(input: ts.Expression): ts.Expression {
+  let node = input;
+  while (
+    ts.isParenthesizedExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertion(node) ||
+    ts.isSatisfiesExpression(node)
+  ) {
+    node = node.expression;
+  }
+  return node;
+}
+
+function isLiteralMemo(call: ts.CallExpression): boolean {
+  const argument = call.arguments[0];
+  if (call.arguments.length !== 1 || !argument) {
+    return false;
+  }
+  const callback = unwrapExpression(argument);
+  if (
+    !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ||
+    callback.parameters.length !== 0 ||
+    callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) ||
+    (ts.isFunctionExpression(callback) && callback.asteriskToken)
+  ) {
+    return false;
+  }
+  let value: ts.Expression;
+  if (ts.isBlock(callback.body)) {
+    const statement = callback.body.statements[0];
+    if (
+      callback.body.statements.length !== 1 ||
+      !statement ||
+      !ts.isReturnStatement(statement) ||
+      !statement.expression
+    ) {
+      return false;
+    }
+    value = statement.expression;
+  } else {
+    value = callback.body;
+  }
+  value = unwrapExpression(value);
+  return (
+    ts.isStringLiteral(value) ||
+    ts.isNoSubstitutionTemplateLiteral(value) ||
+    ts.isNumericLiteral(value) ||
+    ts.isBigIntLiteral(value) ||
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword ||
+    value.kind === ts.SyntaxKind.NullKeyword
+  );
+}
+
 function solidPatterns(root: string, sources: ReadonlyMap<string, string>) {
   const counts: Record<Pattern, Map<string, number>> = {
     createEffect: new Map(),
     untrack: new Map(),
     addEventListener: new Map(),
     querySelector: new Map(),
+    flush: new Map(),
+    getOwner: new Map(),
+    runWithOwner: new Map(),
   };
   const forbidden: string[] = [];
   const files = [...sources]
     .filter(
       ([file, text]) =>
         !isTest(file) &&
-        /create(?:Render)?Effect|untrack|addEventListener|querySelector/u.test(text),
+        /create(?:Render)?Effect|untrack|addEventListener|querySelector|solid-js|@solidjs\/signals/u.test(
+          text,
+        ),
     )
     .map(([fileName, text]) => ({ fileName, text }));
   using parser = createNativeTypeScriptParser({ cwd: root });
   for (const tree of parser.parseSourceFiles(files)) {
     const file = path.relative(root, tree.fileName).split(path.sep).join("/");
+    const importedName = solidImportResolver(tree);
     const aliases = new Map<string, string>();
     for (const statement of tree.statements) {
       if (!ts.isImportDeclaration(statement)) {
@@ -96,12 +289,19 @@ function solidPatterns(root: string, sources: ReadonlyMap<string, string>) {
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         const name = callName(node.expression, aliases);
-        const pattern = PATTERNS.find(
-          (entry) => entry === name || (entry === "querySelector" && name === "querySelectorAll"),
+        const imported = importedName(node.expression);
+        const pattern = PATTERNS.find((entry) =>
+          IMPORTED_PATTERNS.some((importedPattern) => importedPattern === entry)
+            ? entry === imported
+            : entry === name || (entry === "querySelector" && name === "querySelectorAll"),
         );
         if (pattern) {
           const entries = counts[pattern];
           entries.set(file, (entries.get(file) ?? 0) + 1);
+        }
+        if (imported === "createMemo" && isLiteralMemo(node)) {
+          const { line } = tree.getLineAndCharacterOfPosition(node.getStart(tree));
+          forbidden.push(`${file}:${line + 1}: createMemo of a literal is unnecessary`);
         }
         if (
           (name === "createRenderEffect" && !file.startsWith("ui/src/lib/reactive/")) ||

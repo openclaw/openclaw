@@ -136,12 +136,23 @@ async function assertActiveTurnVisible(page: Page, streamText: string): Promise<
   ).toHaveCount(0);
 }
 
-async function readWorkingStartedAts(page: Page) {
-  return page
-    .locator(".chat-working-indicator openclaw-elapsed-time")
-    .evaluateAll((elements) =>
-      elements.map((element) => (element as HTMLElement & { startMs?: unknown }).startMs),
-    );
+async function hasWorkingClockFrom(page: Page, startedAt: number) {
+  return page.locator(".chat-working-indicator openclaw-elapsed-time").evaluateAll(
+    (elements, start) =>
+      elements.some((element) => {
+        const text = element.textContent?.trim() ?? "";
+        if (!/^(?:\d+m ?)?(?:\d+s)?$/.test(text) || !text) {
+          return false;
+        }
+        const displayedMs = [...text.matchAll(/(\d+)([ms])/g)].reduce(
+          (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
+          0,
+        );
+        // Allow one polling tick plus the compact label's second rounding.
+        return Math.abs(Date.now() - start - displayedMs) <= 2_000;
+      }),
+    startedAt,
+  );
 }
 
 async function waitForGatewayConnected(page: Page): Promise<void> {
@@ -209,9 +220,9 @@ async function recoverTurn(mode: "navigation" | "reconnect" | "reload") {
   }
   await assertActiveTurnVisible(page, streamText);
   if (mode === "navigation") {
-    await expect.poll(() => readWorkingStartedAts(page)).toContain(startedAt);
+    await expect.poll(() => hasWorkingClockFrom(page, startedAt)).toBe(true);
   } else {
-    expect(await readWorkingStartedAts(page)).toContain(startedAt);
+    expect(await hasWorkingClockFrom(page, startedAt)).toBe(true);
   }
   await expect(
     page.locator(".chat-working-indicator openclaw-elapsed-time").filter({ hasText: "10m" }),

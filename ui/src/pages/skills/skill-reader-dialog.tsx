@@ -62,15 +62,15 @@ export function SkillReaderDialog(props: {
 
 export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: boolean }) {
   const detail = createMemo(() => props.view.state.clawhubDetail);
-  const skillIconUrl = createMemo(() => {
+  const skillIconUrl = () => {
     const icon = detail()?.skill?.icon;
     return icon ? props.view.state.clawhubIconUrls?.[icon] : undefined;
-  });
-  const profileImageUrl = createMemo(() => {
+  };
+  const profileImageUrl = () => {
     const image = detail()?.owner?.image;
     return skillIconUrl() || !image ? undefined : props.view.state.clawhubIconUrls?.[image];
-  });
-  const detailImageUrl = createMemo(() => skillIconUrl() ?? profileImageUrl());
+  };
+  const detailImageUrl = () => skillIconUrl() ?? profileImageUrl();
   return (
     <SkillReaderDialog
       label={

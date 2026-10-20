@@ -63,9 +63,8 @@ export class WorkerInferenceProxyClient {
     this.unsubscribers = [
       connection.onReady(() => this.resume()),
       connection.onTerminalError((error) => this.rejectAllOperations(error)),
-      connection.rpc.onInferenceEvent((frame) => this.handlePayload(frame.payload)),
-      connection.rpc.onInferenceTerminal((frame) => this.handlePayload(frame.payload)),
     ];
+    connection.rpc.onInferenceFrame = (frame) => this.handlePayload(frame.payload);
   }
 
   start(
@@ -109,6 +108,7 @@ export class WorkerInferenceProxyClient {
       return;
     }
     this.disposed = true;
+    this.connection.rpc.onInferenceFrame = () => {};
     for (const unsubscribe of this.unsubscribers) {
       unsubscribe();
     }

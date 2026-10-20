@@ -39,7 +39,7 @@ describe("plugin host hook registry ownership", () => {
           record: createPluginRecord({ id: pluginId }),
           register(api) {
             api.registerControlUiDescriptor({ id: "panel", surface: "session", label });
-            api.registerSessionAction({
+            api.session.controls.registerSessionAction({
               id: "describe",
               requiredScopes: [requiredScope],
               handler: () => ({ result: { label } }),

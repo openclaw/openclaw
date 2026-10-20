@@ -81,7 +81,10 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.runtime-state.js";
 import { resetGatewayLifecycleTestState } from "./test-helpers.server-lifecycle.js";
-import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
+import {
+  closeGatewayTestHomeDatabases,
+  recreateGatewayTestStateDir,
+} from "./test-helpers.server-storage.js";
 
 const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
 // Startup module evaluation belongs to fixture setup, before behavior budgets begin.
@@ -405,13 +408,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
-    await fs.rm(stateDir, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(stateDir, { recursive: true });
+    await recreateGatewayTestStateDir(tempHome, stateDir);
   }
   tempConfigRoot = options.uniqueConfigRoot
     ? path.join(tempHome, ".openclaw-test-suite", `case-${suiteConfigRootSeq++}`)
@@ -978,7 +975,7 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.sqlite`);
+  return path.join(suiteRoot, "test-device-identities", safe, "client", "credentials.sqlite");
 }
 
 export async function readConnectChallengeNonce(

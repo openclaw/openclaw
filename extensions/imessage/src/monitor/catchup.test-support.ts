@@ -168,15 +168,16 @@ describe("catchup", () => {
     const config = resolveCatchupConfig({ enabled: true });
     const now = 1_700_001_000_000;
 
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
+    });
+
     function run(
-      options: Omit<
-        Parameters<typeof performIMessageCatchup>[0],
-        "accountId" | "now" | "config"
-      > & {
+      options: Omit<Parameters<typeof performIMessageCatchup>[0], "accountId" | "config"> & {
         config?: Parameters<typeof performIMessageCatchup>[0]["config"];
       },
     ) {
-      return performIMessageCatchup({ accountId: "primary", config, now, ...options });
+      return performIMessageCatchup({ accountId: "primary", config, ...options });
     }
 
     function row(overrides: Partial<IMessageCatchupRow>): IMessageCatchupRow {
@@ -386,6 +387,10 @@ describe("catchup", () => {
   describe("iMessage catchup cursor writes", () => {
     const now = 1_700_001_000_000;
 
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
+    });
+
     function interceptCursorStore() {
       const state = getIMessageRuntime().state;
       const store = state.openKeyedStoreV2<unknown>({
@@ -439,7 +444,7 @@ describe("catchup", () => {
       const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
 
       await expect(
-        performIMessageCatchup({ accountId: "primary", config: liveConfig, now, fetch, dispatch }),
+        performIMessageCatchup({ accountId: "primary", config: liveConfig, fetch, dispatch }),
       ).rejects.toBe(failure);
       expect(write).toHaveBeenCalledTimes(1);
       expect(fetch).toHaveBeenCalledTimes(1);

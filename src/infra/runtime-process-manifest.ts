@@ -37,6 +37,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
+    clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
@@ -70,12 +71,6 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     ),
     sessionDiskBudget: runtimeProcessEntrypoint("config/sessions/disk-budget.worker"),
     heartbeatOutcomeStore: runtimeProcessEntrypoint("infra/heartbeat-outcome-store.worker"),
-    acpParentStreamStore: runtimeProcessEntrypoint(
-      "agents/subagents/spawn/acp-parent-stream-store.worker",
-    ),
-    messageToolRunOutcomeStore: runtimeProcessEntrypoint(
-      "infra/message-tool-run-outcome-store.worker",
-    ),
     contextEngineTurnOutbox: runtimeProcessEntrypoint(
       "agents/harness/context-engine-turn-outbox.worker",
     ),

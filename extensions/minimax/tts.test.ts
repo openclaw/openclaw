@@ -18,18 +18,21 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 
 import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
-import { minimaxTTS } from "./tts.js";
+const speech = buildMinimaxSpeechProvider({
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+});
 
-function tts(overrides: Partial<Parameters<typeof minimaxTTS>[0]> = {}) {
-  return minimaxTTS({
+async function tts(overrides: Partial<Parameters<typeof speech.synthesize>[0]> = {}) {
+  const result = await speech.synthesize({
     text: "hello",
-    apiKey: "sk-test",
-    baseUrl: "https://api.minimax.io",
-    model: "speech-2.8-hd",
-    voiceId: "English_expressive_narrator",
+    cfg: {},
+    providerConfig: { apiKey: "sk-test" },
+    target: "audio-file",
     timeoutMs: 10_000,
     ...overrides,
   });
+  return result.audioBuffer;
 }
 
 function mockTtsResponse(body: unknown) {
@@ -65,7 +68,7 @@ it("throws on base_resp envelope error even when data.audio is present (regressi
 });
 
 type WireFixture = {
-  entryPoint: "tts" | "speech" | "music";
+  entryPoint: "speech" | "music";
   provider?: "minimax" | "minimax-portal";
   responseBody?: unknown;
   frames?: Array<{ status?: number | string; audio?: string } | "[DONE]">;
@@ -103,9 +106,6 @@ async function runFixture(fixture: WireFixture) {
   }));
 
   try {
-    if (fixture.entryPoint === "tts") {
-      return await tts({ timeoutMs: 1_000 });
-    }
     if (fixture.entryPoint === "speech") {
       const result = await buildMinimaxSpeechProvider({
         isProviderAuthProfileConfigured,
@@ -157,7 +157,7 @@ it.each([
 
 it("rejects odd-length hex TTS audio without truncating it", async () => {
   await expect(
-    runFixture({ entryPoint: "tts", responseBody: successBody({ audio: "666f6" }) }),
+    runFixture({ entryPoint: "speech", responseBody: successBody({ audio: "666f6" }) }),
   ).rejects.toThrow("MiniMax TTS API returned malformed hex audio");
 });
 

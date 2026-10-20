@@ -73,7 +73,7 @@ export class GatewayRpcDiagnostics {
   constructor(
     private readonly method: string,
     clientKind: Extract<RpcEvent, { phase: "received" }>["clientKind"],
-    private readonly startedAt = performance.now(),
+    readonly startedAt = performance.now(),
     queueWaitMs?: number,
     modelsList?: ModelsListAttribution,
     private readonly sessionsList?: SessionsListAttribution,

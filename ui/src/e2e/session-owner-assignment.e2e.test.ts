@@ -392,7 +392,7 @@ suite.define(() => {
           .toEqual(["Assign to…"]);
         const assignTo = menuItem(menu, "Assign to…");
         const panel = sessionMenuSubmenu(assignTo);
-        await assignTo.hover();
+        await openSessionMenuSubmenu(page, "Assign to…");
         const ownerItems = panel.locator('[role="menuitemradio"] .session-menu__text');
         await expectBrowser(ownerItems).toHaveText(ownerNames);
         const paint = await readThemedPopupPaint(panel, "surface");

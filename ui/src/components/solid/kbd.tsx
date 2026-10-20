@@ -97,13 +97,13 @@ export function KeyboardShortcut(
   );
 }
 
+/** Label followed by a keycap chip; the separating space keeps announced text readable. */
 export function ShortcutHint(props: { label: string; combo: KeyboardShortcutCombo }) {
   return (
-    <>
-      {props.label}
-      {" ("}
-      <KeyboardShortcut combo={props.combo} inline />)
-    </>
+    <span class="shortcut-hint">
+      <span>{props.label}</span>{" "}
+      <KeyboardShortcut combo={props.combo} class="shortcut-hint__keys" />
+    </span>
   );
 }
 

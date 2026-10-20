@@ -359,6 +359,7 @@ export async function handleChatSendWithStorage(
       });
       const staged = await userTurnRecorder.stageApproved?.({
         ...pendingAdmission,
+        retryInterrupted: true,
         ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
       });
       stagePhase?.finish();

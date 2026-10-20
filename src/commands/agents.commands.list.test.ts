@@ -1,39 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OutputRuntimeEnv } from "../runtime.js";
+import { defaultRuntime } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  status: vi.fn(),
-  metadata: vi.fn(),
-  providers: vi.fn(),
+  plugins: vi.fn<() => ChannelPlugin[]>(() => []),
   provenance: vi.fn(),
   displayProvenance: vi.fn(),
-  summaryMetadata: new Map([
-    [
-      "telegram",
-      { label: "Telegram", defaultAccountId: "default", visibleInConfiguredLists: true },
-    ],
-  ]),
   config: vi.fn(),
-  bindings: vi.fn(),
 }));
 
 // mock-isolation: List fixture-owned configurations without reading operator state.
 vi.mock("./config-validation.js", () => ({ requireValidConfig: mocks.config }));
 
-// mock-isolation: Control provider summaries without loading channel runtimes.
-vi.mock("./agents.providers.js", () => ({
-  buildProviderStatusIndex: mocks.status,
-  buildProviderSummaryMetadataIndex: mocks.metadata,
-  listProvidersForAgent: mocks.providers,
-  summarizeBindings: mocks.bindings,
+// mock-isolation: Use synthetic plugin descriptors, retaining the command's real provider projection.
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.plugins,
 }));
 
 // mock-isolation: Control provenance rows without opening the state database.
@@ -45,15 +34,12 @@ vi.mock("../state/agent-provenance.js", () => ({
 const { agentsListCommand } = await import("./agents.commands.list.js");
 
 async function list(options: Parameters<typeof agentsListCommand>[0]) {
-  const runtime = {
-    ...createTestRuntime(),
-    writeStdout: vi.fn<OutputRuntimeEnv["writeStdout"]>(),
-    writeJson: vi.fn<OutputRuntimeEnv["writeJson"]>(),
-  };
-  await agentsListCommand(options, runtime);
+  const log = vi.spyOn(defaultRuntime, "log").mockReturnValue(undefined).mockClear();
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockReturnValue(undefined).mockClear();
+  await agentsListCommand(options);
   return {
-    json: runtime.writeJson.mock.calls[0]?.[0],
-    text: runtime.log.mock.calls.flat().join("\n"),
+    json: json.mock.calls[0]?.[0],
+    text: log.mock.calls.flat().join("\n"),
   };
 }
 
@@ -66,15 +52,22 @@ function setEntries(
 }
 
 describe("agentsListCommand", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     setEntries({ main: {} }, telegramBinding);
-    mocks.status.mockResolvedValue(new Map());
-    mocks.metadata.mockReturnValue(mocks.summaryMetadata);
-    mocks.providers.mockReturnValue(["Telegram default: configured"]);
+    mocks.plugins.mockReturnValue([
+      createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        config: {
+          resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+          describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+        },
+      }),
+    ]);
     mocks.provenance.mockResolvedValue([]);
     mocks.displayProvenance.mockResolvedValue([]);
-    mocks.bindings.mockReturnValue(["Telegram default"]);
   });
   it("keeps the migrated default in JSON after reloading explicit ownership", async () => {
     const migrated = createCanonicalAgentConfigFixture({
@@ -98,7 +91,7 @@ describe("agentsListCommand", () => {
       { agentId: "main", createdVia: "operator", creatorAgentId: null, createdAtMs: 42 },
     ]);
     const { json } = await list({ json: true });
-    expect(mocks.status).not.toHaveBeenCalled();
+    expect(mocks.plugins).not.toHaveBeenCalled();
     expect(json).toMatchObject([
       { id: "main", createdVia: "operator", creatorAgentId: null, createdAt: 42 },
     ]);
@@ -124,7 +117,7 @@ describe("agentsListCommand", () => {
     expect((await list({ tree: true })).text).toBe(
       "Agents:\n- main (Main)\n  - child (Child)\n- legacy (Legacy)\n- orphan (Orphan)",
     );
-    expect(mocks.status).not.toHaveBeenCalled();
+    expect(mocks.plugins).not.toHaveBeenCalled();
   });
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
@@ -189,8 +182,21 @@ describe("agentsListCommand", () => {
       },
       telegramBinding,
     );
-    mocks.bindings.mockReturnValue([`${control}Telegram\nroute`]);
-    mocks.providers.mockReturnValue([`${control}Telegram\tconfigured`]);
+    mocks.plugins.mockReturnValue([
+      createChannelTestPluginBase({
+        id: "telegram",
+        label: `${control}Telegram\nroute`,
+        config: {
+          resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
+          describeAccount: () => ({
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            name: `${control}Telegram\tconfigured`,
+          }),
+        },
+      }),
+    ]);
     const { text: textOutput } = await list({ bindings: true });
     expect(textOutput).not.toContain("\u001B");
     expect(textOutput).not.toContain("\nforged-row");

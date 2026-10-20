@@ -156,6 +156,62 @@ describe("sessions_send communication boundary", () => {
       expect(input.callGateway).toHaveBeenCalledOnce();
     });
   });
+  it.each([false, true])(
+    "retains durable delivery identity for owned-task fallback=%s",
+    async (ownedTask) => {
+      const source = endpoint("source");
+      const target = endpoint(
+        "target",
+        ownedTask
+          ? {
+              spawnedBy: source.sessionKey,
+              parentSessionId: "source",
+            }
+          : {},
+      );
+      if (ownedTask) {
+        state.task = {
+          runId: "task",
+          requesterSessionKey: source.sessionKey,
+          requesterAgentId: "main",
+        };
+      }
+      const input = operation(source, target);
+      const inputProvenance = {
+        kind: "inter_session" as const,
+        sourceTool: "sessions_send",
+        sourceSessionKey: input.source.sessionKey,
+      };
+      input.callGateway.mockImplementation(async () => {
+        const admitted = readSessionSendDeliveryAdmission({
+          agentId: "main",
+          sessionKey: input.target.sessionKey,
+          sessionId: "target",
+          runId: "saved-peer",
+        });
+        expect(admitted).toBeDefined();
+        expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
+        expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
+      });
+      const gate = await prepareSessionsSendCommunication({ ...input, inputProvenance });
+      try {
+        const dispatch = ownedTask ? gate.callDurableGateway : gate.callGateway;
+        await dispatch({
+          method: "agent",
+          params: {
+            agentId: "main",
+            sessionKey: input.target.sessionKey,
+            message: input.message,
+            idempotencyKey: "saved-peer",
+            inputProvenance,
+          },
+        });
+        expect(input.callGateway).toHaveBeenCalledOnce();
+      } finally {
+        gate.close();
+      }
+    },
+  );
 
   it.each([
     [undefined, undefined, false],

@@ -131,7 +131,59 @@ export function memoryPublicationHeader(
   return { ...header, delta: removedIds !== undefined };
 }
 
+// A probe prints at most two batches; sources too large for one command keep them with the
+// unread generator so staging resumes the same print instead of repeating it.
+// The manager rebuilds the replacement object for every admission check, so probes key on the
+// prepared chunks array and are reused only while every printed input is the same object.
+type PublicationProbe = {
+  source: MemorySourceIndexReplacement["source"];
+  embeddings: readonly number[][];
+  retained: MemorySourceIndexReplacement["retained"];
+  removedIds: MemorySourceIndexReplacement["removedIds"];
+  fragments?: MemoryPublicationFragment[];
+  staged?: { head: MemoryPublicationFragment[][]; rest: Generator<MemoryPublicationFragment[]> };
+};
+// Prepared entries outlive their publication within a batch, so settled probes are released.
+const publicationProbes = new WeakMap<MemorySourceIndexReplacement["chunks"], PublicationProbe>();
+
+/** Drop the printed fragments once a publication settles; a late call only reprints. */
+export function releaseMemoryPublication(
+  replacement: MemorySourceIndexReplacement | readonly MemorySourceIndexReplacement[],
+) {
+  for (const item of Array.isArray(replacement) ? replacement : [replacement]) {
+    publicationProbes.delete(item.chunks);
+  }
+}
+
+function probeFor(replacement: MemorySourceIndexReplacement) {
+  const probe = publicationProbes.get(replacement.chunks);
+  if (!probe) {
+    return undefined;
+  }
+  return probe.source === replacement.source &&
+    probe.retained === replacement.retained &&
+    probe.removedIds === replacement.removedIds &&
+    probe.embeddings.length === replacement.embeddings.length &&
+    probe.embeddings.every((vector, index) => vector === replacement.embeddings[index])
+    ? probe
+    : undefined;
+}
+
 export function* memoryPublicationBatches(
+  replacement: MemorySourceIndexReplacement,
+): Generator<MemoryPublicationFragment[]> {
+  const probe = probeFor(replacement);
+  if (!probe?.staged) {
+    yield* printPublicationBatches(replacement);
+    return;
+  }
+  const { head, rest } = probe.staged;
+  probe.staged = undefined;
+  yield* head;
+  yield* rest;
+}
+
+function* printPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
@@ -167,12 +219,29 @@ export function* memoryPublicationBatches(
 
 /** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
 export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
-  const batches = memoryPublicationBatches(replacement);
-  const first = batches.next();
-  if (!batches.next().done) {
-    return undefined;
+  let probe = probeFor(replacement);
+  if (!probe) {
+    const rest = printPublicationBatches(replacement);
+    const head: MemoryPublicationFragment[][] = [];
+    while (head.length < 2) {
+      const batch = rest.next();
+      if (batch.done) {
+        break;
+      }
+      head.push(batch.value);
+    }
+    probe = {
+      source: replacement.source,
+      embeddings: [...replacement.embeddings],
+      retained: replacement.retained,
+      removedIds: replacement.removedIds,
+      ...(head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } }),
+    };
+    publicationProbes.set(replacement.chunks, probe);
   }
-  return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+  return probe.fragments
+    ? { header: memoryPublicationHeader(replacement), fragments: probe.fragments }
+    : undefined;
 }
 
 /** A group shares one bounded worker request and one native transaction. */

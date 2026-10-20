@@ -566,7 +566,6 @@ export async function runExecProcess({
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
   let sandboxPrepared = false;
-  let sandboxFinalized = false;
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
   let secretEgressGrant: SecretEgressProcessGrant | undefined;
@@ -589,10 +588,9 @@ export async function runExecProcess({
     exitCode: number | null;
     timedOut: boolean;
   }) => {
-    if (!sandboxPrepared || sandboxFinalized || !opts.sandbox?.finalizeExec) {
+    if (!sandboxPrepared || !opts.sandbox?.finalizeExec) {
       return;
     }
-    sandboxFinalized = true;
     await opts.sandbox.finalizeExec({
       ...params,
       token: sandboxFinalizeToken,

@@ -416,6 +416,18 @@ describe("anonymous public session HTTP boundary", () => {
     expect(revoked.getBody()).not.toContain("The public viewer is ready");
   });
 
+  it("serves a public transcript when its subagent completes during the read", async () => {
+    const server = createPublicGateway();
+    reader.mockImplementationOnce(async () => {
+      sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "runtime" });
+      return PUBLIC_SESSION;
+    });
+    const response = await send(server);
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("The public viewer is ready.");
+    expect(reader).toHaveBeenCalledTimes(1);
+  });
+
   it("rebuilds a cached public document after its committed session changes", async () => {
     const server = createPublicGateway();
     const first = await send(server);

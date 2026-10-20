@@ -309,7 +309,6 @@ export async function reloadGatewayPlugins(
       resourceHandoffIds,
       drainSignal,
       pluginRuntimeGeneration.setReloadStatus,
-      checkpoint,
     );
     await checkpoint();
     pluginRuntimeGeneration.setReloadStatus({

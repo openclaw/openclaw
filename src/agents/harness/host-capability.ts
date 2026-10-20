@@ -133,7 +133,6 @@ export function createAgentHarnessHostCapabilities(params: {
   const { lifecycleGeneration } = delegatedAuthority;
   const { runId } = delegatedAuthority.operationalRunInstance;
   const coreTtsToolResults = new WeakSet<object>();
-  let active = true;
   // Lexical closure must also fence work already past its entry guard. The
   // result guards below cover exact authority loss that does not use close().
   const capabilityAbortController = new AbortController();
@@ -163,7 +162,7 @@ export function createAgentHarnessHostCapabilities(params: {
     attempt,
     delegatedAuthority,
     sourceCaller,
-    isActive: () => active,
+    isActive: () => !capabilityAbortController.signal.aborted,
     isGatewayCurrent: () =>
       !boundGatewayContext || callerIdentity?.gatewayContextResolver?.() !== undefined,
     inactiveError,
@@ -714,10 +713,6 @@ export function createAgentHarnessHostCapabilities(params: {
       }
     },
     close: () => {
-      if (!active) {
-        return;
-      }
-      active = false;
       capabilityAbortController.abort();
     },
   };

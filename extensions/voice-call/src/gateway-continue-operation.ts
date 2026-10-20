@@ -47,9 +47,7 @@ export function createVoiceCallContinueOperationStore(params: {
       params.coreConfig.tts?.timeoutMs ??
       TELEPHONY_DEFAULT_TTS_TIMEOUT_MS;
     return resolveTimerTimeoutMs(
-      (rt.config.transcriptTimeoutMs ?? params.config.transcriptTimeoutMs) +
-        ttsTimeoutMs +
-        VOICE_CALL_CONTINUE_OPERATION_BUFFER_MS,
+      rt.config.transcriptTimeoutMs + ttsTimeoutMs + VOICE_CALL_CONTINUE_OPERATION_BUFFER_MS,
       VOICE_CALL_CONTINUE_OPERATION_BUFFER_MS,
     );
   };

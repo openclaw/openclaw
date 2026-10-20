@@ -16,10 +16,6 @@ import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
-export function DesktopLoading(props: { label: string; overlay?: boolean }) {
-  return <PanelLoadingSkeleton variant="desktop" label={props.label} overlay={props.overlay} />;
-}
-
 export function DesktopPanelView(props: {
   embedded: boolean;
   workspaceControls?: boolean;
@@ -164,7 +160,7 @@ export function DesktopPicker(props: {
           </div>
           <div class="desktop-picker">
             {props.loading && props.environments.length === 0 ? (
-              <DesktopLoading label={t("desktop.loading")} />
+              <PanelLoadingSkeleton variant="desktop" label={t("desktop.loading")} />
             ) : props.environments.length === 0 ? (
               <div class="desktop-status">{t("desktop.empty")}</div>
             ) : (
@@ -350,7 +346,9 @@ function DesktopConnection(props: {
             onClick={props.onTakeControl}
           />
         )}
-        {props.state === "connecting" && <DesktopLoading label={t("desktop.connecting")} overlay />}
+        {props.state === "connecting" && (
+          <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
+        )}
       </div>
     </>
   );

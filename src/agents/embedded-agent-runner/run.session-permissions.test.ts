@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import type { ReplyDispatchRuntimeInfo } from "../../auto-reply/reply/reply-dispatcher.types.js";
@@ -73,6 +75,68 @@ describe("embedded run permissions and timeout delivery", () => {
 
   afterEach(async () => {
     await state?.cleanup();
+  });
+
+  it("releases settled attempt snapshots while harness callbacks remain reachable", async () => {
+    const retainedCallbacks: NonNullable<EmbeddedRunAttemptParams["onSettledTurn"]>[] = [];
+    const snapshots: WeakRef<object>[] = [];
+    mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
+    mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
+      if (!params.onSettledTurn) {
+        throw new Error("The harness must receive the host's settled-turn callback");
+      }
+      retainedCallbacks.push(params.onSettledTurn);
+      const assistant = makeAssistantMessageFixture({
+        content: [{ type: "text", text: "Completed synthetic turn." }],
+        stopReason: "stop",
+      });
+      const attempt = makeAttemptResult({
+        sessionIdUsed: params.sessionId,
+        assistantTexts: ["Completed synthetic turn."],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+        messagesSnapshot: [
+          {
+            role: "user",
+            content: `Synthetic history for ${params.runId}: ${"history ".repeat(4096)}`,
+            timestamp: 1,
+          },
+          assistant,
+        ],
+      });
+      snapshots.push(new WeakRef(attempt.messagesSnapshot));
+      await params.onSettledTurn(attempt, async () => {
+        throw new Error("A completed answer must not require finalization context");
+      });
+      return attempt;
+    });
+    for (let index = 0; index < 12; index++) {
+      const result = await runEmbeddedAgent({
+        ...createPluginHarnessRunParams(state),
+        runId: `settled-retention-${index}`,
+      });
+      expect(result.payloads).toEqual([
+        expect.objectContaining({ text: "Completed synthetic turn." }),
+      ]);
+      expect(result.meta.error).toBeUndefined();
+    }
+    // Mock call/result histories must not become an artificial transcript owner.
+    vi.clearAllMocks();
+    const control = new WeakRef({ unowned: true });
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    const whileCallbacksRetained = snapshots.filter((reference) => reference.deref()).length;
+    expect(retainedCallbacks.length).toBe(12);
+    retainedCallbacks.length = 0;
+    await nextTurn();
+    queryObjects(WeakRef);
+    const afterCallbacksReleased = snapshots.filter((reference) => reference.deref()).length;
+    expect({ whileCallbacksRetained, afterCallbacksReleased }).toEqual({
+      whileCallbacksRetained: 0,
+      afterCallbacksReleased: 0,
+    });
   });
 
   it("preserves the host's requireWorkspaceOnly requirement at attempt dispatch", async () => {

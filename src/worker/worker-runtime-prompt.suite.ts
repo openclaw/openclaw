@@ -16,7 +16,7 @@ import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./laun
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
 type WorkerPromptFixture = {
-  setup: () => Promise<{
+  setup: (options?: { inferencePlans: Array<"safe-tool" | "empty-terminal" | "text"> }) => Promise<{
     gateway: {
       inferenceRequests: WorkerInferenceStartParams[];
       liveEventRequests: WorkerLiveEventParams[];
@@ -31,6 +31,41 @@ type WorkerPromptFixture = {
 };
 
 export function registerWorkerPromptTests({ setup, modelRef: MODEL_REF }: WorkerPromptFixture) {
+  it("finalizes worker tool outcomes after an empty model response", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "text"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+      isError: false,
+    });
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "worker reply" }],
+    });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.inferenceRequests[2]?.context.tools ?? []).toEqual([]);
+    const finalizationPrompt = JSON.stringify(gateway.inferenceRequests[2]?.context.messages);
+    expect(finalizationPrompt).toContain("produce the required result now");
+    expect(finalizationPrompt).toContain("NO_REPLY is not allowed");
+    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+    expect(
+      gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+    ).toMatchObject({ event: { payload: { text: "worker reply" } } });
+  });
+
+  it("finalizes worker tool outcomes with a failure after one empty continuation", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "empty-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.liveEventRequests.at(-1)).toMatchObject({
+      event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
+    });
+  });
+
   it.each([false, true])(
     "runs and replays an embedded turn through remote inference (system updates: %s)",
     async (inHistorySystemUpdates) => {

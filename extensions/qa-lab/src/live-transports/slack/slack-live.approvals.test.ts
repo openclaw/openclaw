@@ -2,11 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.js";
 import { runSlackApprovalScenario, waitForSlackApprovalMessage } from "./slack-live.approvals.js";
 import { runSlackCodexApprovalScenario } from "./slack-live.codex-approval-runner.js";
-import type {
-  SlackMessage,
-  SlackObservedMessage,
-  SlackQaFetchFunction,
-} from "./slack-live.contracts.js";
+import type { SlackMessage, SlackQaFetchFunction } from "./slack-live.contracts.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 vi.mock("./slack-live.approval-checkpoint.js", () => ({
@@ -44,16 +40,13 @@ function observation(pages: SlackMessage[][]) {
     return Response.json({ ok: true, messages });
   };
   const client = loadSlackQaRuntime().createSlackWebClient("xoxb-qa-approval-fixture", { fetch });
-  const observedMessages: SlackObservedMessage[] = [];
   return {
     approvalKind: "plugin" as const,
     channelId: "channel",
     client,
     decision: "allow-once" as const,
-    observedMessages,
     oldestTs: "99.0",
     scenarioId: "approval",
-    scenarioTitle: "Approval",
     sutIdentity: { userId: "sut" },
     timeoutMs: 3_000,
     token: "marker",
@@ -148,7 +141,6 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
     const result = runSlackCodexApprovalScenario({
       channelId: "channel",
       context: { gateway: { call }, sutIdentity: { userId: "sut" }, sutReadClient: client },
-      observedMessages: [],
       primaryModel: "openai/gpt-5.6-luna",
       run: {
         kind: "codex-approval",
@@ -197,7 +189,7 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
   },
 );
 
-it("retains prompt evidence while waiting for the requested native decision", async () => {
+it("waits for the requested native approval actions", async () => {
   vi.useFakeTimers();
   const withoutActions = message({ blocks: [] });
   const params = observation([
@@ -215,23 +207,6 @@ it("retains prompt evidence while waiting for the requested native decision", as
     actionValues: [actionValue],
     message: { ts: "100.1" },
   });
-  expect(params.observedMessages).toEqual([
-    {
-      actionValues: [],
-      blockText: [],
-      botId: undefined,
-      channelId: "channel",
-      matchedScenario: true,
-      scenarioId: "approval",
-      scenarioTitle: "Approval",
-      text: "Plugin approval required marker",
-      threadTs: undefined,
-      ts: "100.1",
-      userId: "sut",
-    },
-    expect.objectContaining({ text: "unrelated approval", matchedScenario: false }),
-    expect.objectContaining({ actionValues: [actionValue], matchedScenario: true }),
-  ]);
 });
 
 it("waits for the original approval message to lose its native actions after resolution", async () => {
@@ -248,10 +223,6 @@ it("waits for the original approval message to lose its native actions after res
   });
   await vi.advanceTimersByTimeAsync(1_000);
   expect(await pending).toMatchObject({ actionValues: [], message: { ts: "100.1" } });
-  expect(params.observedMessages).toMatchObject([
-    { ts: "100.1", matchedScenario: false, actionValues: [actionValue] },
-    { ts: "100.1", matchedScenario: true, actionValues: [] },
-  ]);
 });
 
 it("allows live approval decision RPCs to take longer than the generic gateway probe timeout", async () => {
@@ -272,7 +243,6 @@ it("allows live approval decision RPCs to take longer than the generic gateway p
       sutIdentity: params.sutIdentity,
       sutReadClient: params.client,
     },
-    observedMessages: params.observedMessages,
     run: { kind: "approval", approvalKind: "plugin", decision: "allow-once", token: "marker" },
     scenario: { id: "slack-approval", title: "Slack approval", timeoutMs: 1_000 },
     sutAccountId: "sut",

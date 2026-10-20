@@ -45,7 +45,6 @@ async function withHashes<T>(
 ): Promise<WorkspaceComputationHashResult<T>> {
   const metrics: WorkspaceHashMetrics = {
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   };
   if (!input) {

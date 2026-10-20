@@ -603,11 +603,13 @@ describe("doctor config flow", () => {
       method: "secrets.reload",
       params: {},
       timeoutMs: 3000,
+      sharedStateMode: "read-only",
     });
     expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "models.authStatus",
       params: { refresh: true },
       timeoutMs: 3000,
+      sharedStateMode: "read-only",
     });
   });
 

@@ -368,7 +368,6 @@ async function readClawHubClawContents(
     ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
     ...(params.token ? { token: params.token } : {}),
     timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
   });
   try {
     if (
@@ -526,7 +525,6 @@ export async function withResolvedClawHubSource<T>(
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   if (!trust.ok) {
     throw new ClawHubSourceError(trust.code ?? "clawhub_trust_failed", trust.error, trust.warning);
@@ -553,7 +551,6 @@ export async function withResolvedClawHubSource<T>(
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-    fetchImpl: params.fetchImpl,
   });
   try {
     if (

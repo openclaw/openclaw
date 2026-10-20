@@ -331,7 +331,7 @@ export function subscribeChatMetadata(
   };
 }
 
-export function loadChatMetadata(
+function loadChatMetadata(
   client: GatewayBrowserClient,
   scope: ChatMetadataParams,
 ): Promise<ChatMetadataResult> {

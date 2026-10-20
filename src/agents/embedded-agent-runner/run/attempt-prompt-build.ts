@@ -258,9 +258,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       assertActive: assertHostActive,
       supportsTurnScopedToolRestrictions: attempt.supportsTurnScopedToolRestrictions,
     });
-    if (decisionPrefilter.shouldPruneTools) {
-      decisionPrefilter.restrictionApplied = true;
-    }
+    decisionPrefilter.restrictionApplied = decisionPrefilter.shouldPruneTools;
   }
   activeAbortSignal?.throwIfAborted();
   assertHostActive?.();

@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type ConnectedNodePluginTool = {
   nodeId: string;
@@ -147,14 +148,10 @@ export function normalizeNodePluginToolDescriptors(params: {
       left.descriptor.name.localeCompare(right.descriptor.name) ||
       (left.descriptor.command ?? "").localeCompare(right.descriptor.command ?? ""),
   );
-  const byKey = new Map<string, NormalizedNodePluginTool>();
-  for (const entry of normalized) {
-    const key = `${entry.descriptor.pluginId}\0${entry.descriptor.name}`;
-    if (!byKey.has(key)) {
-      byKey.set(key, entry);
-    }
-  }
-  const entries = [...byKey.values()];
+  const entries = dedupeByKey(
+    normalized,
+    (entry) => `${entry.descriptor.pluginId}\0${entry.descriptor.name}`,
+  );
   const droppedCount = entries.length - NODE_PLUGIN_TOOL_MAX_DESCRIPTORS;
   if (droppedCount > 0) {
     log.warn(

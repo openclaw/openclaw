@@ -7,6 +7,7 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -24,6 +25,11 @@ const providers = new WeakMap<
   HTMLElement,
   ReturnType<typeof createSolidApplicationContextProvider>
 >();
+
+export function composerContextWrapper(container: HTMLElement) {
+  return providers.get(container)?.wrapper;
+}
+
 const composers = new Map<
   HTMLElement,
   { update: (props: NativeComposerProps) => void; unmount: () => void }
@@ -69,7 +75,7 @@ export function renderComposerInto(container: HTMLElement, props: ComposerProps)
     const [current, update] = createSignal<NativeComposerProps>(bind(), { ownedWrite: true });
     const view = mountSolid(() => createComponent(ChatComposer, merge(current)), {
       container,
-      wrapper: providers.get(container)!.wrapper,
+      wrapper: composerContextWrapper(container),
     });
     composers.set(container, {
       update: (next) => {
@@ -179,10 +185,16 @@ export function renderComposerFixture(overrides: Partial<ComposerProps> = {}) {
 export function createComposerContainer() {
   const gateway = createApplicationGateway().gateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
+  const plugins = new ControlUiPluginRuntime(() => application);
   onTestFinished(() => runtimeConfig.dispose());
-  const context: Pick<ApplicationContext, "gateway" | "agentSelection" | "runtimeConfig"> = {
+  onTestFinished(() => plugins.dispose());
+  const context: Pick<
+    ApplicationContext,
+    "gateway" | "agentSelection" | "runtimeConfig" | "plugins"
+  > = {
     gateway,
     runtimeConfig,
+    plugins,
     agentSelection: {
       state: { selectedId: "main", scopeId: "main" },
       intentRevision: 0,

@@ -85,10 +85,7 @@ type ShellInitializationState = {
     snapshot: ApplicationGatewaySnapshot,
     agents: ApplicationContext["agents"],
   ) => void;
-  ensureRuntimeConfig: (
-    snapshot: ApplicationGatewaySnapshot,
-    runtimeConfig: ApplicationContext["runtimeConfig"],
-  ) => void;
+  shellGateway: ShellGatewayOwner;
 };
 
 type I18nRecoveryWiring = {
@@ -426,9 +423,9 @@ describe("OpenClaw shell source initialization", () => {
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, firstAgents);
     shell.ensureAgentsList(snapshot, secondAgents);
-    shell.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
-    shell.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
-    shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, firstRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(firstAgents.ensureList).toHaveBeenCalledOnce();
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
@@ -437,7 +434,7 @@ describe("OpenClaw shell source initialization", () => {
 
     shell.disconnect();
     shell.ensureAgentsList(snapshot, secondAgents);
-    shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+    void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(secondAgents.ensureList).toHaveBeenCalledTimes(2);
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledTimes(2);

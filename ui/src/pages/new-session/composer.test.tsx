@@ -711,6 +711,7 @@ describe("new-session composer attachment drops", () => {
     expect(attachmentDraft.attachments).toEqual([]);
     attachmentDraft.restore([{ id: "old", fileName: "old.txt", mimeType: "text/plain" }]);
     rerender();
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(composer.querySelector('[aria-label*="Remove"]')).not.toBeNull(),
     );

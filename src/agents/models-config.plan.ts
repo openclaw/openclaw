@@ -20,13 +20,13 @@ import {
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
-  enforceSourceManagedProviderSecrets,
   materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-  resolveImplicitProviders,
-  type ProviderConfig,
-} from "./models-config.providers.js";
+} from "./models-config.providers.catalog.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 import {
   encodePluginModelCatalogRelativePath,
   filterGeneratedPluginModelCatalogProviders,

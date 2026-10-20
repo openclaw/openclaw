@@ -309,21 +309,8 @@ function renderPageContent(host: PageHost) {
   owner.connect();
   onCleanup(() => owner.disconnect());
   onSettled(() => {
-    const context = owner.context;
-    const notify = owner.changed;
-    const stops = context
-      ? [
-          context.theme,
-          context.agents,
-          context.agentIdentity,
-          context.sessions,
-          context.placementStartup,
-          context.runtimeConfig,
-          context.config,
-        ].map((source) => source.subscribe(notify))
-      : [];
     const document = host.ownerDocument;
-    stops.push(
+    const stops = [
       installChatComposerPickerDismissal(document),
       listen(
         document,
@@ -337,8 +324,7 @@ function renderPageContent(host: PageHost) {
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),
-    );
-    notify();
+    ];
     return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {

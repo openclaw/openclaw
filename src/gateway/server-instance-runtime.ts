@@ -57,6 +57,7 @@ const loadOutboundMessageRuntime = createLazyRuntimeModule(
   () => import("../infra/outbound/message.js"),
 );
 const loadOperatorRecovery = createLazyRuntimeModule(() => import("./operator-run-recovery.js"));
+const loadChatInputRecovery = createLazyRuntimeModule(() => import("./chat-input-recovery.js"));
 
 const RECOVERY_NOTICE_COMPLETION_RETENTION = {
   idPrefix: "main-session-restart-recovery:",
@@ -193,6 +194,27 @@ export function createGatewayInstanceRuntime(
         ...requestOptions,
       }),
     startRecoveryTyping: (params) => recoveryTyping.start(params),
+    resumeChatInput: async (target, requestOptions) => {
+      assertDispatchAvailable("chat.send");
+      const context = options.getContext();
+      await (
+        await loadChatInputRecovery()
+      ).resumeChatInput(
+        context,
+        target,
+        {
+          ...requestOptions,
+          assertCurrent: () => {
+            assertDispatchAvailable("chat.send");
+            if (options.getContext() !== context) {
+              throw new Error("Gateway chat recovery context changed.");
+            }
+            requestOptions.assertCurrent();
+          },
+        },
+        options.getMethodRegistry(),
+      );
+    },
     dispatchAgent: async <T>(
       payload: AgentRunRequest,
       timeoutMs?: number,
@@ -345,6 +367,20 @@ export function createGatewayInstanceRuntime(
           controllerInput: dispatchOptions.controllerInput,
           replyExpectation: dispatchOptions.replyExpectation,
           assertAdmissionCurrent: assertRecoveryCurrent,
+          assertCancellationCurrent: () => {
+            assertDispatchAvailable("agent");
+            assertRecoveryTarget();
+            dispatchOptions.signal?.throwIfAborted();
+            if (options.getContext() !== context) {
+              throw new Error("Gateway recovery context changed.");
+            }
+            dispatchOptions.assertAdmissionCurrent?.();
+            if (restored?.operator) {
+              restored.operator.assertPolicyCurrent();
+            } else {
+              operatorAuthority?.assertCurrent();
+            }
+          },
           executionSource: dispatchOptions.executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
           expectFinal: dispatchOptions.expectFinal,

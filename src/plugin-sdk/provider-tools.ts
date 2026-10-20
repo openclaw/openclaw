@@ -19,6 +19,7 @@ import {
   readLiteralSchemaValues,
   schemaAnnotationsOnly,
 } from "../shared/json-schema-literals.js";
+import { mapArrayIfChanged } from "../shared/map-array-if-changed.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -247,13 +248,7 @@ function isNullSchemaVariant(schema: unknown): boolean {
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
-    let changed = false;
-    const normalized = schema.map((entry) => {
-      const next = normalizeDeepSeekSchema(entry);
-      changed ||= next !== entry;
-      return next;
-    });
-    return changed ? normalized : schema;
+    return mapArrayIfChanged(schema, normalizeDeepSeekSchema);
   }
   if (!schema || typeof schema !== "object") {
     return schema;

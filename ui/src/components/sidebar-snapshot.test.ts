@@ -79,6 +79,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     eventLog: [],
     eventLogRevision: 0,
     connect() {},
+    defer: () => false,
     setSessionKey() {},
     start() {},
     stop() {},

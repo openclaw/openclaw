@@ -187,7 +187,7 @@ suite.define(() => {
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect
-      .poll(() => openTooltip.locator(".tooltip-content").textContent())
+      .poll(() => openTooltip.locator('[slot="content"]').textContent())
       .toContain("Sessions · Expand sidebar");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);

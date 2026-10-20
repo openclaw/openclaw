@@ -146,6 +146,8 @@ type CodexAppServerJsonClientOptions = Pick<
   signal?: AbortSignal;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  /** Fresh effect check at each physical request, after client acquisition. */
+  assertDispatchCurrentAsync?: () => Promise<void>;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -438,6 +440,7 @@ export async function withCodexAppServerJsonClient<T>(
                   await params.assertCurrentAsync?.();
                   await request.assertCurrentAsync?.();
                   await sandboxGuard.assertCurrent();
+                  await params.assertDispatchCurrentAsync?.();
                   write();
                 },
               };

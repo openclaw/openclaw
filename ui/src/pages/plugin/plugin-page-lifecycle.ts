@@ -74,7 +74,6 @@ export type PluginPageProps = {
 // Auth grants and retired frame epochs must change synchronously at the effect boundary.
 // Solid observes the owner; its deferred signal writes never own these facts.
 export class PluginPageOwner {
-  private readonly listeners = new Set<() => void>();
   private disposed = false;
   bundledViewState: BundledPluginTabViewState = { status: "idle" };
   externalAuthReadyKey: string | null = null;
@@ -87,20 +86,12 @@ export class PluginPageOwner {
     readonly props: PluginPageProps,
     readonly context: ApplicationContext,
     private readonly host: HTMLElement,
+    private readonly notify: () => void,
   ) {
     this.stopListeners = [
       listen(document, "visibilitychange", this.handleVisibilityChange),
       listen(window, "message", this.handlePluginSessionOpen),
     ];
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify() {
-    this.listeners.forEach((listener) => listener());
   }
 
   bundledViewHost: object = {};
@@ -138,7 +129,6 @@ export class PluginPageOwner {
 
   dispose() {
     this.disposed = true;
-    this.listeners.clear();
     this.stopListeners.forEach((stop) => stop());
     this.syncPluginThemeFrame(null);
     this.clearExternalTabAuth();

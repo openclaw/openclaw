@@ -58,7 +58,7 @@ export async function prepareRetainedRuntimeFiles(params: {
     // the process before cleanup, then rechecks authority before using the result.
     assertCurrent() {},
   });
-  // Admission fingerprints stay in the worker. Returning the full plan can
+  // Tree discovery stays in the worker. Returning the full plan can
   // exceed stdout's capture limit after materialization has already succeeded.
   return {
     relocations: plan.relocations,

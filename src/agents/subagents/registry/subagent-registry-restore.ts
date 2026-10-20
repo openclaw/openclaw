@@ -173,6 +173,7 @@ export function createSubagentRegistryRestorer(config: {
       throw failures[0];
     }
     activated = true;
+    requesterActivator.reset();
   }
 
   async function resumeRestoredRuns(

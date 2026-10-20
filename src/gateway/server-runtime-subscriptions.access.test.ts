@@ -15,6 +15,7 @@ import {
   addSessionMember,
   readSessionMembersInWorker,
 } from "../config/sessions/session-sharing-store.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
@@ -78,7 +79,7 @@ async function withAccessFixture(
     } finally {
       for (const subscription of subscriptions) {
         await subscription.agentUnsub();
-        subscription.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscription.transcriptUnsub();
         subscription.lifecycleUnsub();
       }
@@ -389,7 +390,7 @@ it("retires the identity listener with the Gateway lifecycle and installs one on
     const beforeDrainCompletion = readGatewayAccessRevision();
     replaceSessionEntrySync(scope, { sessionId: "drained", updatedAt: 2 });
     expect(readGatewayAccessRevision()).toBeGreaterThan(beforeDrainCompletion);
-    first.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     first.transcriptUnsub();
     first.lifecycleUnsub();
     const stopped = readGatewayAccessRevision();

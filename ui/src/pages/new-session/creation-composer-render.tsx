@@ -93,10 +93,10 @@ export function CreationComposer(props: {
           owner()?.read();
           return prepareCreationComposer(composer, props.onOpenImage);
         });
-        const error = createMemo(() => {
+        const error = () => {
           owner()?.read();
           return composer.error;
-        });
+        };
         return (
           <section
             ref={footerControl}

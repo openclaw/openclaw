@@ -154,7 +154,7 @@ it.skipIf(process.platform === "win32")(
         };
         await instance.state.writeConfig(config);
         const deviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("restart-operator-device.sqlite"),
+          path: instance.state.path("restart-operator-device", "client", "credentials.sqlite"),
         });
         const connect = () =>
           acquireGatewayTestClient(

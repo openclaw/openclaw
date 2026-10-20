@@ -302,6 +302,7 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     });
     entered.resolve(turn);
     await releaseExecution.promise;
+    turn.operation.freezeAbort();
     const execution = createSettledExecution();
     execution.runId = turn.runId;
     execution.outcome.resolved = { provider: "test", model: "test" };
@@ -355,13 +356,10 @@ describe("queued progress refresh settlement", () => {
   it.each([false, true])(
     "reconciles queued completion before a new intent (late cancellation: %s)",
     async (lateCancellation) => {
-      const f = fixture({
-        onQueuedFollowupSettled: () => {
-          if (lateCancellation) {
-            expect(requestRpcSourceCancellation(source.sourceRef)).toBe(false);
-          }
-        },
-      });
+      const onQueuedFollowupSettled = vi.fn(() =>
+        lateCancellation ? requestRpcSourceCancellation(source.sourceRef) : undefined,
+      );
+      const f = fixture({ onQueuedFollowupSettled });
       const source = await f.start();
       expect(isRpcSourceQueued(source.sourceRef)).toBe(true);
       expect(rpcSourceTesting.get(source.runId)).toBe(source.sourceRef);
@@ -377,6 +375,8 @@ describe("queued progress refresh settlement", () => {
 
       await execution.finish();
       await source.sourceRef.input.settlement.promise;
+      expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+      expect(onQueuedFollowupSettled).toHaveReturnedWith(lateCancellation ? false : undefined);
       expectReleased(f, source.runId);
       expectTerminal(await f.refresh());
       expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({
