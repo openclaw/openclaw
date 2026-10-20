@@ -7,32 +7,27 @@ import {
 } from "./manager-session-sync-state.js";
 
 describe("memory session indexability", () => {
+  const indexable = (
+    entry: Omit<Parameters<typeof isMemorySessionIndexable>[0], "sessionKind">,
+    archivedKey?: string,
+  ) => isMemorySessionIndexable({ sessionKind: "interactive", ...entry }, archivedKey);
+
   it("skips Active Memory recall runs, by session id or key", () => {
+    expect(indexable({ sessionId: "active-memory-mvd4zk3v-d58af102" })).toBe(false);
     expect(
-      isMemorySessionIndexable({
-        sessionKind: "interactive",
-        sessionId: "active-memory-mvd4zk3v-d58af102",
-      }),
-    ).toBe(false);
-    expect(
-      isMemorySessionIndexable({
-        sessionKind: "interactive",
+      indexable({
         sessionId: "4c9e2b83-4dd0-43af-87df-4cc3ea75aedf",
         sessionKey: "agent:main:explicit:portal-1:active-memory:0123456789ab",
       }),
     ).toBe(false);
-    expect(
-      isMemorySessionIndexable(
-        { sessionKind: "interactive" },
-        "agent:main:telegram:direct:owner:active-memory:0123456789ab",
-      ),
-    ).toBe(false);
+    expect(indexable({}, "agent:main:telegram:direct:owner:active-memory:0123456789ab")).toBe(
+      false,
+    );
   });
 
   it("keeps ordinary conversations, including ones that mention active memory", () => {
     expect(
-      isMemorySessionIndexable({
-        sessionKind: "interactive",
+      indexable({
         sessionId: "4c9e2b83-4dd0-43af-87df-4cc3ea75aedf",
         sessionKey: "agent:main:explicit:active-memory-notes",
       }),
@@ -41,11 +36,11 @@ describe("memory session indexability", () => {
 });
 
 describe("memory session sync state", () => {
-  it("tracks active paths and source state without rebuilding unchanged full scans", () => {
-    const plan = resolveMemorySessionSyncPlan({
+  const syncPlan = (targetSessionFiles: Set<string> | null = null) =>
+    resolveMemorySessionSyncPlan({
       needsFullReindex: false,
       files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
-      targetSessionFiles: null,
+      targetSessionFiles,
       existingRows: [
         { path: "sessions/a.jsonl", hash: "hash-a" },
         { path: "sessions/b.jsonl", hash: "hash-b" },
@@ -53,29 +48,23 @@ describe("memory session sync state", () => {
       sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
     });
 
-    expect(plan.indexAll).toBe(false);
-    expect(plan.activePaths).toEqual(new Set(["sessions/a.jsonl", "sessions/b.jsonl"]));
-    expect(plan.existingRows).toEqual([
-      { path: "sessions/a.jsonl", hash: "hash-a" },
-      { path: "sessions/b.jsonl", hash: "hash-b" },
-    ]);
+  it("tracks active paths and source state without rebuilding unchanged full scans", () => {
+    expect(syncPlan()).toEqual({
+      indexAll: false,
+      activePaths: new Set(["sessions/a.jsonl", "sessions/b.jsonl"]),
+      existingRows: [
+        { path: "sessions/a.jsonl", hash: "hash-a" },
+        { path: "sessions/b.jsonl", hash: "hash-b" },
+      ],
+    });
   });
 
   it("treats targeted session syncs as refresh-only and skips unrelated pruning", () => {
-    const plan = resolveMemorySessionSyncPlan({
-      needsFullReindex: false,
-      files: ["/tmp/targeted-first.jsonl"],
-      targetSessionFiles: new Set(["/tmp/targeted-first.jsonl"]),
-      existingRows: [
-        { path: "sessions/targeted-first.jsonl", hash: "hash-first" },
-        { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
-      ],
-      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+    expect(syncPlan(new Set(["/tmp/a.jsonl"]))).toEqual({
+      indexAll: true,
+      activePaths: null,
+      existingRows: null,
     });
-
-    expect(plan.indexAll).toBe(true);
-    expect(plan.activePaths).toBeNull();
-    expect(plan.existingRows).toBeNull();
   });
 
   it("marks identity-targeted syncs as session work", () => {

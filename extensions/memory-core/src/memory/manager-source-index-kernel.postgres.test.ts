@@ -124,10 +124,16 @@ describe.skipIf(!connection)("PostgreSQL memory source indexing", () => {
         write();
         markMemoryVectorIndexClean(db);
       });
-      const before = db
-        .prepare("SELECT id, embedding::text FROM memory_index_chunks_vec ORDER BY id")
-        .all();
+      const vectors = () =>
+        db.prepare("SELECT id, embedding::text FROM memory_index_chunks_vec ORDER BY id").all();
+      const changes = () => db.prepare("SELECT id FROM projection_changes").all();
+      const before = vectors();
       expect(before).toHaveLength(129);
+      const expectUnchanged = () => {
+        expect(vectors()).toEqual(before);
+        expect(changes()).toEqual([]);
+        expect(readMemorySourceChunks(db, "memory", value.entry.path)).toHaveLength(129);
+      };
       db.exec(`CREATE TEMP TABLE projection_changes (id TEXT);
         CREATE FUNCTION pg_temp.record_projection_change() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN INSERT INTO projection_changes VALUES (coalesce(NEW.id, OLD.id)); RETURN NULL; END $$;
@@ -158,26 +164,18 @@ describe.skipIf(!connection)("PostgreSQL memory source indexing", () => {
       expect(
         statements.every((statement) => [...statement.matchAll(/\$\d+/g)].length < 65_535),
       ).toBe(true);
-      expect(
-        db.prepare("SELECT id, embedding::text FROM memory_index_chunks_vec ORDER BY id").all(),
-      ).toEqual(before);
-      expect(db.prepare("SELECT id FROM projection_changes").all()).toEqual([]);
-      expect(readMemorySourceChunks(db, "memory", value.entry.path)).toHaveLength(129);
+      expectUnchanged();
       const database = db;
       expect(() =>
         database.runTransaction(() => {
           value.chunks = value.chunks.slice(0, 1);
           value.embeddings = [[0, 1, 0]];
           write();
-          expect(db.prepare("SELECT id FROM projection_changes").all().length).toBeGreaterThan(0);
+          expect(changes().length).toBeGreaterThan(0);
           throw new Error("rollback source fixture");
         }),
       ).toThrow("rollback source fixture");
-      expect(
-        db.prepare("SELECT id, embedding::text FROM memory_index_chunks_vec ORDER BY id").all(),
-      ).toEqual(before);
-      expect(db.prepare("SELECT id FROM projection_changes").all()).toEqual([]);
-      expect(readMemorySourceChunks(db, "memory", value.entry.path)).toHaveLength(129);
+      expectUnchanged();
       expect(
         db.prepare("SELECT hash FROM memory_index_sources WHERE path = ?").get(value.entry.path),
       ).toEqual({ hash: "second" });

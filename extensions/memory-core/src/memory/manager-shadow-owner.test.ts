@@ -53,22 +53,32 @@ function sessionReplacement(sessionId: string, text: string): MemorySourceIndexR
   };
 }
 
+function interceptWorkerClose(intercept: (close: () => Promise<void>) => Promise<void>) {
+  const open = sqliteRuntime.openSqliteWorkerStore;
+  vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
+    const store = await open(options);
+    if (store) {
+      const close = store.close.bind(store);
+      vi.spyOn(store, "close").mockImplementationOnce(() => intercept(close));
+    }
+    return store;
+  });
+}
+const replace = (owner: MemoryIndexDatabase, replacement: MemorySourceIndexReplacement) =>
+  owner.replaceSource(
+    replacement,
+    () => undefined,
+    async () => true,
+  );
+
 describe("private shadow admission", () => {
   it("joins its retained worker before releasing the read-only shadow handle", async () => {
     const entered = createDeferred<void>();
     const released = createDeferred<void>();
-    const open = sqliteRuntime.openSqliteWorkerStore;
-    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
-      const store = await open(options);
-      if (store) {
-        const close = store.close.bind(store);
-        vi.spyOn(store, "close").mockImplementationOnce(async () => {
-          entered.resolve();
-          await released.promise;
-          await close();
-        });
-      }
-      return store;
+    interceptWorkerClose(async (close) => {
+      entered.resolve();
+      await released.promise;
+      await close();
     });
     const owner = await createShadow("retiring.sqlite");
     const db = owner.db;
@@ -126,20 +136,8 @@ describe("private shadow admission", () => {
     await owner.closePublicationWorker();
     const refusedOpen = new Error("controlled publication open refusal");
     vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockRejectedValueOnce(refusedOpen);
-    await expect(
-      owner.replaceSource(
-        replacement,
-        () => undefined,
-        async () => true,
-      ),
-    ).rejects.toBe(refusedOpen);
-    await expect(
-      owner.replaceSource(
-        replacement,
-        () => undefined,
-        async () => true,
-      ),
-    ).rejects.toMatchObject({
+    await expect(replace(owner, replacement)).rejects.toBe(refusedOpen);
+    await expect(replace(owner, replacement)).rejects.toMatchObject({
       code: "ERR_SQLITE_ERROR",
       errcode: 1811,
       entered: true,
@@ -148,37 +146,19 @@ describe("private shadow admission", () => {
     expect(owner.db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
     expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     writer.exec("DROP TRIGGER refuse_source");
-    await expect(
-      owner.replaceSource(
-        replacement,
-        () => undefined,
-        async () => true,
-      ),
-    ).resolves.toBe(true);
+    await expect(replace(owner, replacement)).resolves.toBe(true);
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "retained text" },
     ]);
   });
 
   it("retains committed data when the publication worker reports a close failure", async () => {
-    const open = sqliteRuntime.openSqliteWorkerStore;
-    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
-      const store = await open(options);
-      if (store) {
-        const close = store.close.bind(store);
-        vi.spyOn(store, "close").mockImplementationOnce(async () => {
-          await close();
-          throw new Error("controlled native close failure");
-        });
-      }
-      return store;
+    interceptWorkerClose(async (close) => {
+      await close();
+      throw new Error("controlled native close failure");
     });
     const owner = await createShadow("shadow # committed.sqlite");
-    await owner.replaceSource(
-      sessionReplacement("committed", "committed text"),
-      () => undefined,
-      async () => true,
-    );
+    await replace(owner, sessionReplacement("committed", "committed text"));
     await expect(owner.closePublicationWorker()).rejects.toThrow("controlled native close failure");
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "committed text" },
