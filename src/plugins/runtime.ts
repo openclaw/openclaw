@@ -640,9 +640,8 @@ export async function clearActivePluginRegistry(
   // Reentrant commands and retired cleanup callbacks must not await their own pending attempt.
   if (
     isPluginCommandExecutionActiveHere() ||
-    [...(state.retiredRegistryCleanups?.values() ?? [])].some(
-      ({ registry, work }) =>
-        isPluginCommandExecutionActiveHere(registry) || isAsyncWorkScopeActiveHere(work),
+    [...(state.retiredRegistryCleanups?.values() ?? [])].some(({ work }) =>
+      isAsyncWorkScopeActiveHere(work),
     )
   ) {
     return;
