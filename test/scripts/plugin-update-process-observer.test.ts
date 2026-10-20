@@ -37,12 +37,9 @@ describe("plugin update command observation", () => {
       if (!String(file).startsWith("/proc/")) {
         return readFile(file, options);
       }
-      const value = files.get(String(file));
+      const value = files.get(String(file)) ?? procError("ENOENT");
       if (value instanceof Error) {
         throw value;
-      }
-      if (value === undefined) {
-        throw procError("ENOENT");
       }
       return value;
     });

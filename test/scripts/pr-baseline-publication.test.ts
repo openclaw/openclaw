@@ -14,14 +14,12 @@ function fixture() {
   // hosted head as second parent. The inherited main commit is deliberately unsigned.
   f.git(f.repo, "commit", "--allow-empty", "--no-gpg-sign", "-qm", "test: inherited main");
   const baseline = f.git(f.repo, "rev-parse", "HEAD");
+  const parents = [baseline, f.incoming].flatMap((parent) => ["-p", parent]);
   const reconciled = f.prepGit(
     "commit-tree",
     "-S",
     "HEAD^{tree}",
-    "-p",
-    baseline,
-    "-p",
-    f.incoming,
+    ...parents,
     "-m",
     "fix: reconcile the reviewed correction",
   );

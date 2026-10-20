@@ -27,17 +27,9 @@ const gitRun = (...args: string[]) => spawnSync(git, args, { cwd: root, env, enc
 function invocation(bytes: Buffer) {
   writeFileSync(join(root, authorityPath), bytes);
   rmSync(join(root, ".local/probe.json"), { force: true });
+  const script = join(scripts, "pr-lib/baseline-refresh.mjs");
   return {
-    args: [
-      join(scripts, "pr-lib/baseline-refresh.mjs"),
-      "check-source",
-      "42",
-      head,
-      root,
-      root,
-      "invalid-lock",
-      head,
-    ],
+    args: [script, "check-source", "42", head, root, root, "invalid-lock", head],
     input: `${authorityPath} ${oid(bytes)}\n`,
   };
 }
@@ -158,15 +150,12 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
     const server = createServer();
     server.listen(socketPath);
     await once(server, "listening");
-    const child = spawn(
-      node,
-      [join(scripts, "pr-lib/process-group-runner.mjs"), root, node, ...args],
-      {
-        cwd: root,
-        env: { ...env, CANCEL_SOCKET: socketPath },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    const runner = join(scripts, "pr-lib/process-group-runner.mjs");
+    const child = spawn(node, [runner, root, node, ...args], {
+      cwd: root,
+      env: { ...env, CANCEL_SOCKET: socketPath },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     const closed = once(child, "close");
     child.stdout.resume();
     let stderr = "";

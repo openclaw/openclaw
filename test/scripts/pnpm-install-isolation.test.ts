@@ -14,6 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveTestCorepackHome } from "../test-home-context.mts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const installArgs = ["install", "--offline", "--ignore-scripts", "--no-frozen-lockfile"];
 
 it("keeps installed compiler inputs unchanged when another checkout imports the same package", async () => {
   const root = tempDirs.make("pnpm-install-isolation-");
@@ -79,14 +80,7 @@ it("keeps installed compiler inputs unchanged when another checkout imports the 
       cwd,
       env,
       npmExecPath: process.env.npm_execpath,
-      pnpmArgs: [
-        "install",
-        "--offline",
-        "--ignore-scripts",
-        "--no-frozen-lockfile",
-        "--store-dir",
-        path.join(root, "store"),
-      ],
+      pnpmArgs: [...installArgs, "--store-dir", path.join(root, "store")],
       stdio: "pipe",
     });
     const result = spawnSync(spec.command, spec.args, {

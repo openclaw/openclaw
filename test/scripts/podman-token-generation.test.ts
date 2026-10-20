@@ -7,6 +7,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const { createTempDir } = createScriptTestHarness();
 // Synthetic fixture bytes only; never used by a real Gateway.
 const fixtureToken = "ab".repeat(32);
+const tokenLine = `OPENCLAW_GATEWAY_TOKEN=${fixtureToken}\n`;
 const entrypoints = ["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"] as const;
 const backends = ["openssl", "python3", "od"] as const;
 
@@ -16,8 +17,7 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
   const home = path.join(root, "home");
   const config = path.join(home, ".openclaw");
   const calls = path.join(root, "podman-calls");
-  fs.mkdirSync(bin);
-  fs.mkdirSync(home);
+  [bin, home].forEach((dir) => fs.mkdirSync(dir));
   for (const relative of [
     ...entrypoints,
     "scripts/podman/common.sh",
@@ -37,8 +37,7 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
   }
   const command = (name: string, body: string) =>
     fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
-  // Fixed rootless identity also works when CI itself runs as root. Files and
-  // persistence remain real; no service, container, or host credentials are used.
+  // Rootless identity works in root CI; persistence is real, without containers or credentials.
   command("id", 'case "$1" in -un) printf "fixture\\n";; *) printf "1000\\n";; esac');
   command(
     "stat",
@@ -77,24 +76,21 @@ printf '%s' '${emitted}'`,
 describe("Podman generated gateway tokens", () => {
   for (const entrypoint of entrypoints) {
     it.each(backends)(`${entrypoint} persists a successful %s token`, (backend) => {
-      const fixture = createFixture(backend, 0);
-      const result = fixture.run(entrypoint);
+      const { run, config } = createFixture(backend, 0);
+      const result = run(entrypoint);
       expect(result.status, result.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(fixture.config, ".env"), "utf8")).toContain(
-        `OPENCLAW_GATEWAY_TOKEN=${fixtureToken}\n`,
-      );
+      expect(fs.readFileSync(path.join(config, ".env"), "utf8")).toContain(tokenLine);
       expect(`${result.stdout}${result.stderr}`).not.toContain(fixtureToken);
     });
 
     it.each(backends)(`${entrypoint} stops when %s token generation fails`, (backend) => {
-      const fixture = createFixture(backend, 7);
-      const result = fixture.run(entrypoint);
+      const { run, config, calls } = createFixture(backend, 7);
+      const result = run(entrypoint);
       expect(result.stderr).toContain("fixture random source failed");
       expect(result.status).toBe(7);
-      expect(fs.existsSync(path.join(fixture.config, ".env"))).toBe(false);
+      expect(fs.existsSync(path.join(config, ".env"))).toBe(false);
       expect(`${result.stdout}${result.stderr}`).not.toContain("Generated OPENCLAW_GATEWAY_TOKEN");
-      const calls = fs.existsSync(fixture.calls) ? fs.readFileSync(fixture.calls, "utf8") : "";
-      expect(calls).not.toMatch(/^run /m);
+      expect(fs.existsSync(calls) ? fs.readFileSync(calls, "utf8") : "").not.toMatch(/^run /m);
     });
   }
 });

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
-import { validReview } from "./pr-review-artifact-fixture.js";
+import { reviewWithFinding } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -90,16 +90,7 @@ describePosix("fresh incoming review after a published correction's baseline ref
     ).toBe(true);
     f.pass("review-checkout-pr");
     f.pass("review-artifacts-init");
-    const review = validReview(incoming);
-    review.recommendation = "NEEDS WORK";
-    review.issueValidation.status = "valid";
-    review.findings.push({
-      id: "I2",
-      severity: "IMPORTANT",
-      title: "Current main conflicts with the published correction",
-      area: f.product[0]!,
-      fix: "Resolve the baseline conflict canonically",
-    });
+    const review = reviewWithFinding(incoming, f.product[0]!, "I2");
     write("review.json", JSON.stringify(review));
     f.pass("review-validate-artifacts");
     git("switch", "-q", "pr-42-prep");

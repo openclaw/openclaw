@@ -1,10 +1,22 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect } from "vitest";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
 const scripts = join(process.cwd(), "scripts");
+
+export function reviewWithFinding(head: string, area: string, id = "I1") {
+  const review = validReview(head);
+  review.issueValidation.status = "valid";
+  review.findings.push({
+    id,
+    severity: "IMPORTANT",
+    title: "Incorrect behavior",
+    area,
+    fix: "Correct the behavior",
+  });
+  return review;
+}
 
 export function createCorrectionFixture(root: string, initialContent = "broken\n") {
   const write = (name: string, value: string) => writeFileSync(join(root, name), value);
@@ -18,11 +30,8 @@ export function createCorrectionFixture(root: string, initialContent = "broken\n
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: root, env, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, env, encoding: "utf8" }).trim();
   git("init", "-q", "-b", "topic");
   git("config", "commit.gpgSign", "false");
   git("config", "core.hooksPath", "/dev/null");
@@ -32,15 +41,7 @@ export function createCorrectionFixture(root: string, initialContent = "broken\n
   git("add", ".");
   git("commit", "-qm", "incoming");
   const incoming = git("rev-parse", "HEAD");
-  const review = validReview(incoming);
-  review.issueValidation.status = "valid";
-  review.findings.push({
-    id: "I1",
-    severity: "IMPORTANT",
-    title: "Incorrect behavior",
-    area: "docs/fix.md",
-    fix: "Correct the behavior",
-  });
+  const review = reviewWithFinding(incoming, "docs/fix.md");
   writeReviewArtifacts(root, review, { headSha: incoming, files: ["docs/fix.md"] });
   json(".local/pr-meta.json", {
     number: 42,
@@ -63,10 +64,7 @@ export function createCorrectionFixture(root: string, initialContent = "broken\n
         "-c",
         `set -euo pipefail
 script_parent_dir="$1"
-source "$1/pr-lib/common.sh"
-source "$1/pr-lib/review.sh"
-source "$1/pr-lib/prepare-core.sh"
-source "$1/pr-lib/gates.sh"
+for lib in common review prepare-core gates; do source "$1/pr-lib/$lib.sh"; done
 require_artifact() { [ -s "$1" ]; }
 enter_worktree() { :; }
 pr_git() { "\${OPENCLAW_PR_GIT:-\${GIT_EXEC:-git}}" "$@"; }

@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
-import { validReview } from "./pr-review-artifact-fixture.js";
+import { reviewWithFinding } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -15,16 +15,7 @@ function fixture() {
   const historicalReview = f.readLocal("correction-review.json");
   f.writeLocal("pr-meta.json", JSON.stringify({ ...f.meta, headRefOid: source }));
   f.writeLocal("pr-meta.env", f.readLocal("pr-meta.env").toString().replace(f.incoming, source));
-  const review = validReview(source);
-  review.recommendation = "NEEDS WORK";
-  review.issueValidation.status = "valid";
-  review.findings.push({
-    id: "I2",
-    severity: "IMPORTANT",
-    title: "Integrate the upstream repair",
-    area: f.product[0]!,
-    fix: "Resolve the current baseline conflict",
-  });
+  const review = reviewWithFinding(source, f.product[0]!, "I2");
   const incomingReview = Buffer.from(JSON.stringify(review));
   f.writeLocal("review.json", incomingReview);
   f.pass("prepare-correction-init");
@@ -104,7 +95,7 @@ describePosix("first baseline integration from the reviewed incoming head", () =
       identity[`GIT_${role.toUpperCase()}_EMAIL`] = email;
       identity[`GIT_${role.toUpperCase()}_DATE`] = date;
     }
-    const signed = spawnSync(
+    const signed = execFileSync(
       "git",
       ["commit-tree", "-S", tree, ...parents.flatMap((parent) => ["-p", parent])],
       {
@@ -114,15 +105,13 @@ describePosix("first baseline integration from the reviewed incoming head", () =
         encoding: "utf8",
       },
     );
-    expect(signed.status, signed.stderr).toBe(0);
-    const target = signed.stdout.trim();
-    const commit = spawnSync("git", ["cat-file", "commit", target], {
+    const target = signed.trim();
+    const commit = execFileSync("git", ["cat-file", "commit", target], {
       cwd: f.worktree,
       env: f.env,
     });
-    expect(commit.status, commit.stderr.toString()).toBe(0);
     const response = f.local("signed-commit");
-    writeFileSync(response, commit.stdout);
+    writeFileSync(response, commit);
     const args = ["--request", oid, "--signed-commit", response];
     appendFileSync(f.local("review.json"), "\n");
     const changed = f.run("prepare-baseline-signing-continue", args);
@@ -131,10 +120,10 @@ describePosix("first baseline integration from the reviewed incoming head", () =
     expectUnchanged(f);
     f.writeLocal("review.json", f.incomingReview);
     const failRestore = join(f.root, "fail-restore");
-    const realGit = spawnSync("sh", ["-c", "command -v git"], {
+    const realGit = execFileSync("sh", ["-c", "command -v git"], {
       env: f.env,
       encoding: "utf8",
-    }).stdout.trim();
+    }).trim();
     writeFileSync(
       failRestore,
       `#!/bin/bash
