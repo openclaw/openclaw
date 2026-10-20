@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   loadFreshHealthModulesForTest,
@@ -11,97 +11,92 @@ let plugins: HealthTestPlugin[] = [];
 let sessionStorePath: string;
 let health: Awaited<ReturnType<typeof loadFreshHealthModulesForTest>>;
 
-function inspectAccounts(config: HealthTestPlugin["config"], status: HealthTestPlugin["status"]) {
+async function inspectAccounts(
+  config: HealthTestPlugin["config"],
+  status: HealthTestPlugin["status"],
+) {
   const id = "health-inspection-fixture";
   plugins = [
     { ...health.createChannelTestPluginBase({ id, label: "Inspection" }), config, status },
   ];
-  return health
-    .getHealthSnapshot({ probe: true })
-    .then((snapshot) => snapshot.channels[id]?.accounts);
+  return (await health.getHealthSnapshot({ probe: true })).channels[id]?.accounts;
 }
-
-describe("collectGatewayHealthSnapshot account inspection", () => {
-  beforeAll(async () => {
-    health = await loadFreshHealthModulesForTest({
-      getConfig: () => ({}),
-      getSessionStorePath: () => sessionStorePath,
-      getSessions: () => ({}),
-      getPlugins: () => plugins,
-    });
+beforeAll(async () => {
+  health = await loadFreshHealthModulesForTest({
+    getConfig: () => ({}),
+    getSessionStorePath: () => sessionStorePath,
+    getSessions: () => ({}),
+    getPlugins: () => plugins,
   });
+});
 
-  beforeEach(() => {
-    sessionStorePath = path.join(tempDirs.make("openclaw-health-inspection-"), "sessions.json");
-    plugins = [];
-    health.setActiveDegradedPlugins([]);
-    health.setActivePluginRegistry(health.createTestRegistry([]));
-  });
+beforeEach(() => {
+  sessionStorePath = path.join(tempDirs.make("openclaw-health-inspection-"), "sessions.json");
+  plugins = [];
+  health.setActiveDegradedPlugins([]);
+  health.setActivePluginRegistry(health.createTestRegistry([]));
+});
 
-  afterEach(() => {
-    health.setActivePluginRegistry(health.createTestRegistry([]));
-    tempDirs.cleanup();
-  });
+afterEach(() => {
+  health.setActivePluginRegistry(health.createTestRegistry([]));
+  tempDirs.cleanup();
+});
 
-  it("keeps summary-only unavailable accounts visible and probes only resolved siblings", async () => {
+it.each([false, true])(
+  "keeps unavailable accounts visible (resolved sibling=%s)",
+  async (withSibling) => {
     const probeAccount = vi.fn(async () => ({ ok: true }));
+    const runtimeOnly = vi.fn(() => {
+      throw new Error("runtime hook received an inspection summary");
+    });
     const buildAccountSnapshot = vi.fn(({ account }: { account: unknown }) => {
       if ((account as { token?: string }).token !== "healthy-token") {
-        throw new Error("runtime hook received an inspection summary");
+        runtimeOnly();
       }
       return { accountId: "healthy", configured: true, name: "Resolved healthy account" };
     });
     const accounts = await inspectAccounts(
       {
-        listAccountIds: () => ["default", "healthy"],
+        listAccountIds: () => (withSibling ? ["default", "healthy"] : ["default"]),
         resolveAccount: (_cfg, accountId) => {
-          if (accountId !== "healthy") {
+          if (!withSibling || accountId !== "healthy") {
             throw new Error("credential unavailable");
           }
           return { accountId, enabled: true, configured: true, token: "healthy-token" };
         },
-        inspectAccount: (_cfg, accountId) => ({
-          accountId,
-          enabled: true,
-          configured: true,
-          tokenStatus: accountId === "healthy" ? "available" : "configured_unavailable",
+        inspectAccount: (_cfg, accountId) =>
+          withSibling
+            ? {
+                accountId,
+                enabled: true,
+                configured: true,
+                tokenStatus: accountId === "healthy" ? "available" : "configured_unavailable",
+              }
+            : undefined,
+      },
+      withSibling
+        ? { probeAccount, buildAccountSnapshot }
+        : {
+            probeAccount: runtimeOnly,
+            buildAccountSnapshot: runtimeOnly,
+            buildChannelSummary: runtimeOnly,
+          },
+    );
+    if (withSibling) {
+      expect(accounts).toMatchObject({
+        default: { configured: true, tokenStatus: "configured_unavailable" },
+        healthy: { configured: true, name: "Resolved healthy account" },
+      });
+      expect(probeAccount).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          account: expect.objectContaining({ accountId: "healthy", token: "healthy-token" }),
         }),
-      },
-      { probeAccount, buildAccountSnapshot },
-    );
-    expect(accounts).toMatchObject({
-      default: { configured: true, tokenStatus: "configured_unavailable" },
-      healthy: { configured: true, name: "Resolved healthy account" },
-    });
-    expect(probeAccount).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        account: expect.objectContaining({ accountId: "healthy", token: "healthy-token" }),
-      }),
-    );
-    expect(buildAccountSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps unknown configuration when account resolution and inspection are unavailable", async () => {
-    const runtimeOnly = vi.fn(() => {
-      throw new Error("runtime hook received an inspection summary");
-    });
-    const accounts = await inspectAccounts(
-      {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => undefined,
-        resolveAccount: () => {
-          throw new Error("account resolution failed");
-        },
-      },
-      {
-        probeAccount: runtimeOnly,
-        buildAccountSnapshot: runtimeOnly,
-        buildChannelSummary: runtimeOnly,
-      },
-    );
-    const account = accounts?.default;
-    expect(account?.configured).toBeUndefined();
-    expect(account?.stateReason).toBe("configuration status unavailable");
-    expect(runtimeOnly).not.toHaveBeenCalled();
-  });
-});
+      );
+      expect(buildAccountSnapshot).toHaveBeenCalledTimes(1);
+    } else {
+      expect(accounts?.default?.configured).toBeUndefined();
+      expect(accounts?.default?.stateReason).toBe("configuration status unavailable");
+      expect(runtimeOnly).not.toHaveBeenCalled();
+    }
+  },
+);
