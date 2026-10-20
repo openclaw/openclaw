@@ -247,6 +247,9 @@ it.each(["connection", "listing"] as const)(
     expect(toolNames(failed.catalog)).toEqual(["healthy_tool"]);
     const diagnostics = structuredClone(failed.catalog.diagnostics);
     expect(diagnostics).toEqual([expect.objectContaining({ serverName: "remote" })]);
+    expect(diagnostics?.[0]?.errorCode).toBe(
+      failure === "connection" ? "mcp-service-unavailable" : undefined,
+    );
     vi.setSystemTime(Date.now() + (failure === "connection" ? 600_000 : -600_000));
     expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
 
@@ -316,8 +319,12 @@ it("clears inherited failure cooldowns when the live runtime is explicitly reloa
 
 it("doubles background retry intervals to ten minutes and resets after recovery", async () => {
   const runtime = makeRuntime();
-  expect((await discover(runtime)).waitedMs).toBe(30_000);
-  expect((await discover(makeRuntime())).waitedMs).toBe(0);
+  const first = await discover(runtime);
+  expect(first.waitedMs).toBe(30_000);
+  expect(first.catalog.diagnostics?.[0]?.errorCode).toBe("mcp-service-unavailable");
+  const inherited = await discover(makeRuntime());
+  expect(inherited.waitedMs).toBe(0);
+  expect(inherited.catalog.diagnostics?.[0]?.errorCode).toBe("mcp-service-unavailable");
   await vi.advanceTimersByTimeAsync(4_999);
   expect((await discover(runtime)).waitedMs).toBe(0);
   expect(initializes).toBe(1);

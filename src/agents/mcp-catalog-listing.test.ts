@@ -2,7 +2,11 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Server } from "@modelcontextprotocol/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { listAllMcpTools, listMcpServerItems } from "./mcp-catalog-listing.js";
+import {
+  listAllMcpTools,
+  listMcpServerItems,
+  McpPaginationTimeoutError,
+} from "./mcp-catalog-listing.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -143,11 +147,11 @@ it("keeps the canonical deadline ahead of the nested SDK timeout", async () => {
   });
   vi.useFakeTimers();
   try {
-    const rejected = expect(catalog.list("resources", 50)).rejects.toThrow(
-      "MCP resource listing timed out after 50ms",
-    );
+    const listing = catalog.list("resources", 50);
+    const rejected = expect(listing).rejects.toBeInstanceOf(McpPaginationTimeoutError);
     await vi.advanceTimersByTimeAsync(50);
     await rejected;
+    await expect(listing).rejects.toThrow("MCP resource listing timed out after 50ms");
   } finally {
     release.resolve();
   }
