@@ -1,5 +1,5 @@
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   applyCodexAppServerAuthProfile,
   resolveCodexAppServerPreparedAuthHandoff,
@@ -8,6 +8,7 @@ import type { CodexAppServerHomeScope as Home } from "./config-contracts.js";
 
 const AGENT_DIR = "/tmp/openclaw-codex-auth-matrix";
 const SUBSCRIPTION_REQUIRED_ERROR = "subscription profile required";
+const MISSING_KEY_ERROR = "Prepared Codex API-key route is missing its resolved API key.";
 
 type StoredProfileKind = "oauth" | "api_key" | "unusable" | "none";
 type AuthRequirement = "subscription" | "api-key" | undefined;
@@ -55,10 +56,12 @@ const nativeProfile = (nativeAuthProfile: boolean) => ({
   nativeAuthProfile,
 });
 const nativeHome = { nativeAuthProfile: true };
-type Handoff = [Home, AuthRequirement, StoredProfileKind, Record<string, unknown> | string];
+type HandoffResult = Record<string, unknown> | string;
+type Handoff = [Home, AuthRequirement, StoredProfileKind, HandoffResult, boolean?];
 const HANDOFF_MATRIX: Handoff[] = [
   ["agent", "api-key", "oauth", preparedKey],
   ["agent", "api-key", "none", preparedKey],
+  ["agent", "api-key", "none", MISSING_KEY_ERROR, false],
   ["agent", "subscription", "oauth", preparedProfile],
   ["agent", "subscription", "api_key", SUBSCRIPTION_REQUIRED_ERROR],
   ["agent", "subscription", "none", SUBSCRIPTION_REQUIRED_ERROR],
@@ -71,80 +74,63 @@ const HANDOFF_MATRIX: Handoff[] = [
   ["user", undefined, "none", nativeHome],
 ];
 
-describe("Codex app-server auth requirement matrix", () => {
-  it.each(HANDOFF_MATRIX)(
-    "resolves homeScope=%s authRequirement=%s storedProfile=%s",
-    async (homeScope, authRequirement, storedProfile, expected) => {
-      const authProfileStore = buildStore(storedProfile);
-      const authProfileId = storedProfile === "none" ? undefined : "openai:default";
-      const handoff = resolveCodexAppServerPreparedAuthHandoff({
-        ...(authRequirement ? { authRequirement } : {}),
-        resolvedApiKey: "prepared-platform-key",
-        ...(authProfileId ? { authProfileId } : {}),
-        authProfileStore,
-        ...handoffDefaults,
-        homeScope,
-      });
+it.each(HANDOFF_MATRIX)(
+  "resolves homeScope=%s authRequirement=%s storedProfile=%s",
+  async (homeScope, authRequirement, storedProfile, expected, hasResolvedKey = true) => {
+    const authProfileId = storedProfile === "none" ? undefined : "openai:default";
+    const handoff = resolveCodexAppServerPreparedAuthHandoff({
+      ...(authRequirement ? { authRequirement } : {}),
+      ...(hasResolvedKey ? { resolvedApiKey: "prepared-platform-key" } : {}),
+      ...(authProfileId ? { authProfileId } : {}),
+      authProfileStore: buildStore(storedProfile),
+      ...handoffDefaults,
+      homeScope,
+    });
 
-      if (typeof expected === "string") {
-        await expect(handoff).rejects.toThrow(expected);
-      } else {
-        const resolved = await handoff;
-        expect(resolved).toEqual(expected);
-        if (homeScope === "user" || authRequirement === undefined) {
-          expect(resolved).not.toHaveProperty("preparedAuth");
-        }
+    if (typeof expected === "string") {
+      await expect(handoff).rejects.toThrow(expected);
+    } else {
+      const resolved = await handoff;
+      expect(resolved).toEqual(expected);
+      if (homeScope === "user" || authRequirement === undefined) {
+        expect(resolved).not.toHaveProperty("preparedAuth");
       }
-    },
-  );
+    }
+  },
+);
 
-  it("fails a prepared Platform route that lost its resolved key", async () => {
-    await expect(
-      resolveCodexAppServerPreparedAuthHandoff({
-        authRequirement: "api-key",
-        authProfileStore: buildStore("none"),
-        ...handoffDefaults,
-        homeScope: "agent",
-      }),
-    ).rejects.toThrow("Prepared Codex API-key route is missing its resolved API key.");
-  });
-});
+const NATIVE_ACCOUNT_MATRIX: [AuthRequirement, string | null, "accepts" | "rejects"][] = [
+  ["subscription", "chatgpt", "accepts"],
+  ["subscription", "apiKey", "rejects"],
+  ["subscription", "amazonBedrock", "rejects"],
+  ["subscription", null, "rejects"],
+  ["api-key", "apiKey", "accepts"],
+  ["api-key", "chatgpt", "rejects"],
+  // Custom providers need not report an OpenAI account.
+  ["api-key", "amazonBedrock", "accepts"],
+  ["api-key", null, "accepts"],
+  [undefined, "chatgpt", "accepts"],
+];
 
-// Native homes verify their existing account without logging in over it.
-describe("native Codex account verification", () => {
-  const NATIVE_ACCOUNT_MATRIX: [AuthRequirement, string | null, "accepts" | "rejects"][] = [
-    ["subscription", "chatgpt", "accepts"],
-    ["subscription", "apiKey", "rejects"],
-    ["subscription", "amazonBedrock", "rejects"],
-    ["subscription", null, "rejects"],
-    ["api-key", "apiKey", "accepts"],
-    ["api-key", "chatgpt", "rejects"],
-    // Custom providers need not report an OpenAI account.
-    ["api-key", "amazonBedrock", "accepts"],
-    ["api-key", null, "accepts"],
-    [undefined, "chatgpt", "accepts"],
-  ];
+it.each(NATIVE_ACCOUNT_MATRIX)(
+  "authRequirement=%s native account=%s %s",
+  async (authRequirement, accountType, expected) => {
+    const account = accountType === null ? null : { type: accountType };
+    const request = vi.fn(async (_method: string, _params?: unknown) => ({ account }));
+    const apply = applyCodexAppServerAuthProfile({
+      client: { request } as never,
+      agentDir: AGENT_DIR,
+      authProfileId: null,
+      ...(authRequirement ? { authRequirement } : {}),
+    });
 
-  it.each(NATIVE_ACCOUNT_MATRIX)(
-    "authRequirement=%s native account=%s %s",
-    async (authRequirement, accountType, expected) => {
-      const account = accountType === null ? null : { type: accountType };
-      const request = vi.fn(async (_method: string, _params?: unknown) => ({ account }));
-      const apply = applyCodexAppServerAuthProfile({
-        client: { request } as never,
-        agentDir: AGENT_DIR,
-        authProfileId: null,
-        ...(authRequirement ? { authRequirement } : {}),
-      });
-
-      if (expected === "rejects") {
-        await expect(apply).rejects.toMatchObject({ status: 401 });
-      } else {
-        await expect(apply).resolves.toBeUndefined();
-      }
-      expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual(
-        authRequirement ? [["account/read", { refreshToken: false }]] : [],
-      );
-    },
-  );
-});
+    if (expected === "rejects") {
+      await expect(apply).rejects.toMatchObject({ status: 401 });
+    } else {
+      await expect(apply).resolves.toBeUndefined();
+    }
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual(
+      authRequirement ? [["account/read", { refreshToken: false }]] : [],
+    );
+  },
+);

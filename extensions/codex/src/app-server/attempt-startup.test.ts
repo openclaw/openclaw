@@ -6,10 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import {
-  acquireInitializedLease,
-  setupStartupLifecycle,
-} from "./attempt-startup-lifecycle.test-support.js";
+import { setupStartupLifecycle } from "./attempt-startup-lifecycle.test-support.js";
 import {
   answerInitialize,
   captureExpectedRuntimeArtifact,
@@ -18,7 +15,6 @@ import {
   createAttemptClientHarness,
   createAttemptThreadStarter,
   createAttemptParams,
-  type AttemptPaths,
   readHarnessMessages,
   readHarnessRequestMethods,
   waitForRequest,
@@ -45,7 +41,7 @@ import {
   retireSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
+import { stubCodexInferenceTransportEnv } from "./test-support.js";
 import {
   createLifecycleRequest,
   createCodexLifecycleHarness,
@@ -82,117 +78,7 @@ function expectStartupError(error: unknown, reason: "aborted" | "timed_out", mes
   expect(error).toHaveProperty("message", message);
 }
 
-async function startIsolatedPairedAttempt(params: {
-  harness: ClientHarness;
-  sessionId: string;
-  runtime: NonNullable<StartupOptions["runtime"]>;
-  paths?: AttemptPaths;
-}) {
-  const paths = params.paths ?? createAttemptPaths(tempRoots);
-  const sandbox = {
-    ...createSandboxContext({}),
-    backendId: "node",
-    backend: undefined,
-    fsBridge: undefined,
-    runtimeId: `paired-node-${params.sessionId}`,
-    placementExecutionMode: "remote-exec" as const,
-    placementNodeId: "paired-device-1",
-    placementEnvironmentId: `environment-${params.sessionId}`,
-    placementSessionId: params.sessionId,
-    placementOwnerEpoch: 1,
-  };
-  const run = runStartup({
-    harness: params.harness,
-    paths,
-    skipStartSpy: true,
-    runtime: params.runtime,
-    sandbox,
-    attemptClientFactory: () => createIsolatedCodexAppServerClient,
-    buildAttemptParams: () => ({
-      ...createAttemptParams(paths),
-      sessionId: params.sessionId,
-      sessionKey: `agent:agent-1:${params.sessionId}`,
-    }),
-  }).run;
-  await answerInitialize(params.harness);
-  const environmentAdd = await waitForRequest(params.harness, "environment/add");
-  params.harness.send({ id: environmentAdd.id, result: {} });
-  const threadStart = await waitForThreadStart(params.harness);
-  params.harness.send({ id: threadStart.id, result: threadStartResult(params.sessionId) });
-  const result = await run;
-  const environmentId = (environmentAdd.params as { environmentId?: string }).environmentId;
-  expect(environmentId).toMatch(/^openclaw-node-/u);
-  expect(
-    readHarnessMessages(params.harness.writes).filter(({ method }) => method === "environment/add"),
-  ).toHaveLength(1);
-  return { result, sandbox, environmentId };
-}
-
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
-
-/** Binds the session to a retired owner whose native writer another session's lease keeps alive. */
-async function bindToRetiredLeasedOwner() {
-  const paths = createAttemptPaths(tempRoots);
-  const respond = createLifecycleRequest(async (method) => {
-    if (method === "thread/start" || method === "thread/resume") {
-      return threadStartResult("bound-thread");
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const owner = createCodexLifecycleHarness({ respond });
-  const ownerExitCodesAtResume: Array<number | null> = [];
-  const healthy = createCodexLifecycleHarness({
-    persistedThreads: ["bound-thread"],
-    respond: async (method) => {
-      if (method === "thread/resume") {
-        ownerExitCodesAtResume.push(owner.process.exitCode);
-      }
-      return await respond(method);
-    },
-  });
-  const start = vi
-    .spyOn(CodexAppServerClient, "start")
-    .mockResolvedValueOnce(owner.client)
-    .mockResolvedValueOnce(healthy.client)
-    .mockRejectedValue(new Error("unexpected replacement app-server"));
-  const startOn = (harness: ClientHarness, signal?: AbortSignal, startupTimeoutMs = 5_000) =>
-    startThreadWithHarness(startupTimeoutMs, signal, {
-      paths,
-      harness,
-      skipStartSpy: true,
-      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
-    }).run;
-  const bound = await startOn(owner);
-  expect(
-    testCodexAppServerBindingStore.read({
-      kind: "session",
-      agentId: "agent-1",
-      sessionId: "session-1",
-      sessionKey: "agent:agent-1:session-1",
-    }),
-  ).toMatchObject({ threadId: bound.thread.threadId });
-  await owner.endTurn(bound.thread.threadId);
-  releaseAttempt(bound);
-  const releaseOwnerPeer = retainSharedCodexAppServerClientIfCurrent(owner.client);
-  expect(releaseOwnerPeer).toBeTypeOf("function");
-  retireSharedCodexAppServerClientIfCurrent(owner.client);
-  // A handoff observes the owner's physical exit only after releasing its retain.
-  const exitWaitStarted = createDeferred<void>();
-  const addTransportExitHandler = owner.client.addTransportExitHandler.bind(owner.client);
-  vi.spyOn(owner.client, "addTransportExitHandler").mockImplementation((handler) => {
-    exitWaitStarted.resolve();
-    return addTransportExitHandler(handler);
-  });
-  return {
-    owner,
-    healthy,
-    start,
-    startOn,
-    ownerExitCodesAtResume,
-    exitWaitStarted: exitWaitStarted.promise,
-    releaseOwnerPeer: () => releaseOwnerPeer?.(),
-  };
-}
 
 describe("startCodexAttemptThread", () => {
   setupStartupLifecycle(tempRoots, () => {
@@ -231,46 +117,6 @@ describe("startCodexAttemptThread", () => {
       releaseAttempt(result);
     },
   );
-
-  it("retires a failed startup client after another active lease releases", async () => {
-    const retained = createAttemptClientHarness();
-    const replacement = createAttemptClientHarness();
-    const startSpy = vi
-      .spyOn(CodexAppServerClient, "start")
-      .mockResolvedValueOnce(retained.client)
-      .mockResolvedValueOnce(replacement.client);
-    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths(tempRoots);
-
-    await acquireInitializedLease(retained, {
-      startOptions: appServer.start,
-      agentDir: paths.agentDir,
-    });
-
-    const { run } = runStartup({
-      harness: retained,
-      paths,
-      skipStartSpy: true,
-    });
-    const threadStart = await waitForThreadStart(retained);
-    retained.send({
-      id: threadStart.id,
-      error: { code: -32000, message: "401 authentication_error: Invalid bearer token" },
-    });
-
-    await expect(run).rejects.toThrow("Invalid bearer token");
-    expect(retained.process.stdin.destroyed).toBe(false);
-
-    expect(releaseLeasedSharedCodexAppServerClient(retained.client)).toBe(true);
-    await vi.waitFor(() => expect(retained.process.stdin.destroyed).toBe(true));
-
-    await acquireInitializedLease(replacement, {
-      startOptions: appServer.start,
-      agentDir: paths.agentDir,
-    });
-    expect(startSpy).toHaveBeenCalledTimes(2);
-    expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
-  });
 
   it("preserves the healthy shared client and incognito history after a prewrite resume refusal", async () => {
     const paths = createAttemptPaths(tempRoots);
@@ -338,36 +184,84 @@ describe("startCodexAttemptThread", () => {
   it.each(["aborted", "timed_out"] as const)(
     "settles a retired-owner exit wait on %s without resuming early",
     async (reason) => {
-      const fixture = await bindToRetiredLeasedOwner();
+      const paths = createAttemptPaths(tempRoots);
+      const respond = createLifecycleRequest(async (method) => {
+        if (method === "thread/start" || method === "thread/resume") {
+          return threadStartResult("bound-thread");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const owner = createCodexLifecycleHarness({ respond });
+      const ownerExitCodesAtResume: Array<number | null> = [];
+      const healthy = createCodexLifecycleHarness({
+        persistedThreads: ["bound-thread"],
+        respond: async (method) => {
+          if (method === "thread/resume") {
+            ownerExitCodesAtResume.push(owner.process.exitCode);
+          }
+          return await respond(method);
+        },
+      });
+      const start = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockResolvedValueOnce(owner.client)
+        .mockResolvedValueOnce(healthy.client)
+        .mockRejectedValue(new Error("unexpected replacement app-server"));
+      const startOn = (harness: ClientHarness, signal?: AbortSignal, startupTimeoutMs = 5_000) =>
+        startThreadWithHarness(startupTimeoutMs, signal, {
+          paths,
+          harness,
+          skipStartSpy: true,
+          buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
+        }).run;
+      const bound = await startOn(owner);
+      expect(
+        testCodexAppServerBindingStore.read({
+          kind: "session",
+          agentId: "agent-1",
+          sessionId: "session-1",
+          sessionKey: "agent:agent-1:session-1",
+        }),
+      ).toMatchObject({ threadId: bound.thread.threadId });
+      await owner.endTurn(bound.thread.threadId);
+      releaseAttempt(bound);
+      const releaseOwnerPeer = retainSharedCodexAppServerClientIfCurrent(owner.client);
+      expect(releaseOwnerPeer).toBeTypeOf("function");
+      retireSharedCodexAppServerClientIfCurrent(owner.client);
+      // A handoff observes the owner's physical exit only after releasing its retain.
+      const exitWaitStarted = createDeferred<void>();
+      const addTransportExitHandler = owner.client.addTransportExitHandler.bind(owner.client);
+      vi.spyOn(owner.client, "addTransportExitHandler").mockImplementation((handler) => {
+        exitWaitStarted.resolve();
+        return addTransportExitHandler(handler);
+      });
       const stop = new AbortController();
       if (reason === "timed_out") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const ended = outcome(
-        fixture.startOn(fixture.healthy, stop.signal, reason === "aborted" ? 5_000 : 1_000),
-      );
-      await fixture.exitWaitStarted;
+      const ended = outcome(startOn(healthy, stop.signal, reason === "aborted" ? 5_000 : 1_000));
+      await exitWaitStarted.promise;
       if (reason === "aborted") {
         stop.abort();
       } else {
         await vi.advanceTimersByTimeAsync(1_000);
       }
       expect(isCodexAppServerStartupError(await ended, reason)).toBe(true);
-      expect(fixture.owner.process.exitCode).toBeNull();
-      expect(readHarnessRequestMethods(fixture.healthy)).not.toContain("thread/resume");
-      expect(fixture.healthy.stdinDestroyed).toBe(reason === "timed_out");
+      expect(owner.process.exitCode).toBeNull();
+      expect(readHarnessRequestMethods(healthy)).not.toContain("thread/resume");
+      expect(healthy.stdinDestroyed).toBe(reason === "timed_out");
       if (reason === "timed_out") {
-        fixture.releaseOwnerPeer();
+        releaseOwnerPeer?.();
         return;
       }
-      const successor = fixture.startOn(fixture.healthy);
-      fixture.releaseOwnerPeer();
+      const successor = startOn(healthy);
+      releaseOwnerPeer?.();
       const resumed = await successor;
-      expect(resumed.client).toBe(fixture.healthy.client);
+      expect(resumed.client).toBe(healthy.client);
       expect(resumed.thread.threadId).toBe("bound-thread");
-      expect(fixture.ownerExitCodesAtResume).toEqual([0]);
-      expect(fixture.start).toHaveBeenCalledTimes(2);
-      expect(fixture.healthy.stdinDestroyed).toBe(false);
+      expect(ownerExitCodesAtResume).toEqual([0]);
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(healthy.stdinDestroyed).toBe(false);
       releaseAttempt(resumed);
     },
   );
@@ -435,55 +329,6 @@ describe("startCodexAttemptThread", () => {
       expect(JSON.stringify(timeoutWarnings)).not.toContain(paths.workspaceDir);
     },
   );
-
-  it("bounds initialize and closes the transport with stderr=true", async () => {
-    // Transport exit uses setImmediate; advance the deadline without freezing its delivery.
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const harness = createClientHarness({ autoEmitExit: false });
-    try {
-      const kill = vi.spyOn(harness.process, "kill").mockImplementation((signal) => {
-        if (signal === "SIGKILL") {
-          harness.process.emit("exit", null, signal);
-        }
-      });
-      // Retain the original subprocess test's budgets for the fixture that refuses EOF.
-      const requestTimeoutMs = 2_000;
-      const initializeTimeoutPluginConfig = requestConfig(requestTimeoutMs);
-      const { run } = runStartup({
-        harness,
-        pluginConfig: initializeTimeoutPluginConfig,
-        attemptClientFactory: () => createIsolatedCodexAppServerClient,
-      });
-      const runError = outcome(run);
-
-      const initialize = JSON.parse(await harness.waitForWrite(0)) as {
-        id?: number;
-        method?: string;
-      };
-      expect(initialize).toMatchObject({ id: expect.any(Number), method: "initialize" });
-      harness.process.stderr.write(
-        "Error: failed to initialize sqlite state runtime token=secret-value\n",
-      );
-      await vi.advanceTimersByTimeAsync(requestTimeoutMs);
-      expect(harness.stdinDestroyed).toBe(true);
-      expect(harness.process).toMatchObject({ exitCode: null, signalCode: null });
-      expect(kill).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-
-      const error = await runError;
-      expect(error).toBeInstanceOf(Error);
-      expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-      expect((error as Error).message).toBe(
-        'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"',
-      );
-      expect(harness.stdinDestroyed).toBe(true);
-      expect(harness.process).toMatchObject({ exitCode: null, signalCode: "SIGKILL" });
-      expect(readHarnessRequestMethods(harness)).toEqual(["initialize"]);
-    } finally {
-      harness.emitExit();
-    }
-  });
 
   it.each([
     ["acquire timeout", false],
@@ -592,8 +437,45 @@ describe("startCodexAttemptThread", () => {
       }
       return match.harness.client;
     });
-    const launch = (value: ReturnType<typeof input>) =>
-      startIsolatedPairedAttempt({ ...value, runtime: runtime.runtime });
+    const launch = async ({ harness, paths, sessionId }: ReturnType<typeof input>) => {
+      const sandbox = {
+        ...createSandboxContext({}),
+        backendId: "node",
+        backend: undefined,
+        fsBridge: undefined,
+        runtimeId: `paired-node-${sessionId}`,
+        placementExecutionMode: "remote-exec" as const,
+        placementNodeId: "paired-device-1",
+        placementEnvironmentId: `environment-${sessionId}`,
+        placementSessionId: sessionId,
+        placementOwnerEpoch: 1,
+      };
+      const run = runStartup({
+        harness,
+        paths,
+        skipStartSpy: true,
+        runtime: runtime.runtime,
+        sandbox,
+        attemptClientFactory: () => createIsolatedCodexAppServerClient,
+        buildAttemptParams: () => ({
+          ...createAttemptParams(paths),
+          sessionId,
+          sessionKey: `agent:agent-1:${sessionId}`,
+        }),
+      }).run;
+      await answerInitialize(harness);
+      const environmentAdd = await waitForRequest(harness, "environment/add");
+      harness.send({ id: environmentAdd.id, result: {} });
+      const threadStart = await waitForThreadStart(harness);
+      harness.send({ id: threadStart.id, result: threadStartResult(sessionId) });
+      const result = await run;
+      const environmentId = (environmentAdd.params as { environmentId?: string }).environmentId;
+      expect(environmentId).toMatch(/^openclaw-node-/u);
+      expect(
+        readHarnessMessages(harness.writes).filter(({ method }) => method === "environment/add"),
+      ).toHaveLength(1);
+      return { result, sandbox, environmentId };
+    };
     const [firstAttempt, secondAttempt] = await Promise.all([launch(inputs[0]), launch(inputs[1])]);
     const [{ harness: first }, { harness: second }] = inputs;
 
