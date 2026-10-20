@@ -714,6 +714,7 @@ ${[
   "archive_snapshot_test_result!",
   "write_release_ios_screenshot_attempts!",
   "record_release_ios_screenshot_attempt!",
+  "mark_ios_resource_phase",
   "screenshot_phase",
   "run_screenshot_xcodebuild!",
   "capture_release_ios_screenshot!",
@@ -950,7 +951,17 @@ def set_watch_status_bar_override(*)
   false
 end
 def normalize_watch_screenshot_status_bar(*); end
-def sleep(*); end
+def sleep(seconds)
+  return if seconds == 3
+  @observations << {
+    seconds: seconds,
+    phase: File.read(ENV.fetch("OPENCLAW_IOS_RESOURCE_PHASE_PATH")),
+    builds: @builds.dup,
+    active: @owned.values.map { |device| device.slice("name", "state") },
+    captures: @captures
+  }
+  @owned.each_value { |device| device["state"] = "Shutdown" } if @scenario == "startup-probe-ended" && seconds == 120
+end
 
 def make_product(derived_data_path)
   app = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
@@ -981,6 +992,7 @@ def capture_release_ios_screenshot!(**options)
   active = @owned.fetch(options.fetch(:device_udid))
   raise "selected older runtime" unless active.fetch("runtime").end_with?("27-0")
   raise "capture failed" if @scenario == "capture-failure" || @scenario == "capture-cleanup-failure"
+  @captures += 1
   name = options.fetch(:screenshot).fetch(:name)
   output = File.join(options.fetch(:output_directory), "en-US", "#{options.fetch(:device)}-#{name}.png")
   FileUtils.mkdir_p(File.dirname(output))
@@ -1037,14 +1049,17 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local].map do |scenario|
+results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
+    @observations, @captures = [], 0
     @watch_creates = 0
     ENV["CI"] = scenario == "runtime-local" ? "false" : "true"
     ENV["HOME"] = root
     ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] = scenario == "diagnostics" ? "1" : "0"
+    ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] = scenario.start_with?("startup-probe") ? "1" : "0"
+    ENV["OPENCLAW_IOS_RESOURCE_PHASE_PATH"] = File.join(root, "resource-phase")
     logs = File.join(ios_root, "build", "SnapshotLogs")
     FileUtils.mkdir_p(logs)
     File.write(File.join(logs, "stale.log"), "previous invocation")
@@ -1074,6 +1089,7 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
     {
       scenario: scenario, builds: @builds, error: error, installed: @installed,
       owned: @owned.keys,
+      observations: @observations,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
       repairCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "runtime"] || args[0, 2] == ["xcodebuild", "-downloadPlatform"] },
       watchCreates: @watch_creates,
@@ -1107,6 +1123,13 @@ puts JSON.generate(results)
       logs: string[];
       versions: string[][];
       owned: string[];
+      observations: {
+        seconds: number;
+        phase: string;
+        builds: string[];
+        active: { name: string; state: string }[];
+        captures: number;
+      }[];
       lifecycle: string[][];
       repairCommands: string[][];
       watchCreates: number;
@@ -1143,6 +1166,52 @@ puts JSON.generate(results)
     });
     expect(row("combined").ledgerKeys).toEqual(["attempts", "schemaVersion"]);
     expect(row("combined").diagnostics).toBeNull();
+    expect(row("combined").observations).toEqual([]);
+    expect(row("startup-probe")).toMatchObject({
+      error: null,
+      pngs: 9,
+      observations: [
+        {
+          seconds: 60,
+          phase: "screenshot-all-host-idle",
+          builds: ["snapshot"],
+          active: [],
+          captures: 0,
+        },
+        {
+          seconds: 120,
+          phase: "screenshot-iphone-simulator-idle",
+          builds: ["snapshot"],
+          active: [{ name: "iPhone 17 Pro Max", state: "Booted" }],
+          captures: 0,
+        },
+        {
+          seconds: 120,
+          phase: "screenshot-ipad-simulator-idle",
+          builds: ["snapshot"],
+          active: [{ name: "iPad Pro 13-inch", state: "Booted" }],
+          captures: 4,
+        },
+        {
+          seconds: 120,
+          phase: "screenshot-watch-simulator-idle",
+          builds: ["snapshot"],
+          active: [{ name: "Apple Watch Ultra 3 (49mm)", state: "Booted" }],
+          captures: 8,
+        },
+      ],
+    });
+    expect(row("startup-probe-ended")).toMatchObject({
+      error:
+        "Task-owned screenshot simulator 00000000-0000-0000-0000-000000000001 is Shutdown, not Booted; CoreSimulator ended its session.",
+      pngs: 0,
+      xcresults: 0,
+    });
+    expect(row("startup-probe-ended").lifecycle.map(([operation]) => operation)).toEqual([
+      "create",
+      "bootstatus",
+      "delete",
+    ]);
     expect(row("diagnostics").evidenceEntries).toEqual(row("combined").evidenceEntries);
     expect(row("diagnostics")).toMatchObject({
       error: null,

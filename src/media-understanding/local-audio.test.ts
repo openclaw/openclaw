@@ -83,7 +83,6 @@ it("expands home-directory shorthand in PATH entries containing delimiters", asy
 
   expect(selection.selected).toMatchObject({
     id: "whisper-cli",
-    resolvedCommand: commandPath,
     entry: { command: commandPath },
   });
 });
@@ -127,7 +126,7 @@ it("discovers Windows commands through case-insensitive PATH and PATHEXT values"
     }
     expect(
       (await inspectWindows({ Path: availableDirectory, pAtHeXt: ".AUDIO" })).selected,
-    ).toMatchObject({ id: "whisper", resolvedCommand: commandPath });
+    ).toMatchObject({ id: "whisper", entry: { command: commandPath } });
   });
 });
 

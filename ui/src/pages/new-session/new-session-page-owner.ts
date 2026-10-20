@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
@@ -51,7 +52,7 @@ export type PageHost = SolidBridgeElement<
 >;
 
 export class NewSessionPageOwner {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
@@ -70,14 +71,9 @@ export class NewSessionPageOwner {
         }
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   context?: ApplicationContext;
   get data() {
     return this.host.data;

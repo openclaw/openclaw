@@ -421,10 +421,7 @@ export function createMcpAppView(
     };
   }
 
-  async function setupResources(
-    binding: McpAppBinding,
-    signal: AbortSignal,
-  ): Promise<McpAppResources> {
+  async function setupResources(binding: McpAppBinding, signal: AbortSignal): Promise<void> {
     const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
     try {
@@ -707,7 +704,6 @@ export function createMcpAppView(
       });
       await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
-      return createdResources;
     } catch (error) {
       await teardownResources(resources);
       throw error;

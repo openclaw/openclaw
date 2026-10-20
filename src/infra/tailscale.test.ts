@@ -1,10 +1,11 @@
 import { symlinkSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runExec } from "../process/exec.js";
+import * as processExec from "../process/exec.js";
 import { captureEnv } from "../test-utils/env.js";
 import { waitForTailscaleBackendReady } from "./tailscale-backend-ready.js";
 import {
@@ -14,6 +15,8 @@ import {
   claimTailscaleRoute,
   hasTailscaleFunnelRouteForPort,
 } from "./tailscale.js";
+
+vi.mock("node:timers/promises", { spy: true });
 const tailscaleBin = "tailscale";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -78,8 +81,8 @@ describe("tailscale helpers", () => {
     ["ordinary", getTailnetHostname],
     ["post-Serve", getTailnetHostnameAfterServe],
   ] as const)("reads the hostname from a large %s status response", async (_name, lookup) => {
-    const exec: typeof runExec = (_command, _args, options) =>
-      runExec(
+    const exec: typeof processExec.runExec = (_command, _args, options) =>
+      processExec.runExec(
         process.execPath,
         [
           "-e",
@@ -199,7 +202,7 @@ describe("tailscale helpers", () => {
   });
 
   describe("waitForTailscaleBackendReady", () => {
-    const status = (BackendState: string) => ({ stdout: JSON.stringify({ BackendState }) });
+    const status = (BackendState: string) => ({ ...jsonReply({ BackendState }), stderr: "" });
     const statusArgs = ["status", "--json"];
     const execOptions = { timeoutMs: 5000, logOutput: false };
 
@@ -209,12 +212,13 @@ describe("tailscale helpers", () => {
       const stderr =
         "failed to connect to local tailscaled process; is the Tailscale service running?";
       const exec = vi
-        .fn()
+        .spyOn(processExec, "runExec")
         .mockRejectedValueOnce(Object.assign(new Error("status failed"), { stderr }))
         .mockResolvedValueOnce(status("Running"));
       const info = vi.fn();
 
-      await waitForTailscaleBackendReady({ bin: tailscaleBin, info, exec, pollMs: 1 });
+      vi.mocked(sleep).mockResolvedValueOnce(undefined);
+      await waitForTailscaleBackendReady({ bin: tailscaleBin, info });
 
       expect(exec).toHaveBeenCalledTimes(2);
       expect(info).toHaveBeenCalledWith(
@@ -223,16 +227,16 @@ describe("tailscale helpers", () => {
     });
 
     it("hands over to the route claim once the deadline passes", async () => {
-      const exec = vi.fn().mockResolvedValue(status("NoState"));
+      let now = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => (now += 45_000));
+      const exec = vi.spyOn(processExec, "runExec").mockResolvedValue(status("NoState"));
       const info = vi.fn();
+      vi.mocked(sleep).mockResolvedValueOnce(undefined);
 
       await waitForTailscaleBackendReady({
         bin: tailscaleBin,
         prefix: ["-n", "sudo"],
         info,
-        exec,
-        pollMs: 1,
-        deadlineMs: 20,
       });
 
       expect(exec.mock.calls.length).toBeGreaterThan(1);

@@ -9,7 +9,7 @@ import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -185,14 +185,6 @@ export const createTelegramMessageProcessor = (
     });
     if (!context) {
       return { kind: "skipped" };
-    }
-    if (
-      context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
-    ) {
-      void context.sendTyping().catch((err: unknown) => {
-        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
-      });
     }
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);

@@ -259,8 +259,10 @@ describe("SQLite transcript archive worker", () => {
     const bytes = fs.statSync(archivePath).size;
     for (const selector of [storePath, resolveSqliteTargetFromSessionStorePath(storePath).path]) {
       const usage = await measureSessionPhysicalDiskUsage(selector);
-      expect(usage.sessionFilesBytes).toBe(bytes);
-      expect(usage.totalBytes).toBe(usage.databaseMainBytes + usage.databaseWalBytes + bytes);
+      const databaseBytes = fs.statSync(
+        resolveSqliteTargetFromSessionStorePath(selector).path,
+      ).size;
+      expect(usage.totalBytes).toBe(databaseBytes + usage.databaseWalBytes + bytes);
     }
   });
 

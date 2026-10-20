@@ -25,7 +25,7 @@ const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
     import("./startup-verification.js"),
   ]).then(([configUpdateModule, deviceHealthModule, profileModule, startupVerificationModule]) => ({
     updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
-    summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
+    listStaleOpenClawMatrixDevices: deviceHealthModule.listStaleOpenClawMatrixDevices,
     syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
     ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
   })),
@@ -93,12 +93,12 @@ export async function runMatrixStartupMaintenance(params: {
 
   try {
     throwIfMatrixStartupAborted(params.abortSignal);
-    const deviceHealth = runtimeDeps.summarizeMatrixDeviceHealth(
+    const staleOpenClawDevices = runtimeDeps.listStaleOpenClawMatrixDevices(
       await params.client.listOwnDevices(),
     );
-    if (deviceHealth.staleOpenClawDevices.length > 0) {
+    if (staleOpenClawDevices.length > 0) {
       params.logger.warn(
-        `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${deviceHealth.staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
+        `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
       );
     }
   } catch (err) {

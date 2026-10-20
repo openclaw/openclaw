@@ -6,9 +6,12 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { scheduleTextareaHeightAdjustment } from "./chat-composer-dom.ts";
+import { QuestionFreeText } from "./chat-question-answer-controls.tsx";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 import { ChatQuestionPanel } from "./chat-question-panel.tsx";
+import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt {
   return {
@@ -114,6 +117,67 @@ describe("shared question panel", () => {
     drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), options));
     return panelIn(container);
   }
+
+  it("keeps answer sizing on the live transcript without disturbing native editing", async () => {
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    const replacement = document.createElement("div");
+    const observed = [vi.fn(), vi.fn(), vi.fn()];
+    const stops = [first, second, replacement].map((element, index) =>
+      subscribeTranscriptScroll(element, observed[index]!),
+    );
+    let transcript = first;
+    let replaceGetter!: () => void;
+    mounted = mountSolid(
+      () => {
+        const [value, setValue] = createSignal("alpha");
+        const [source, setSource] = createSignal({ get: () => transcript });
+        replaceGetter = () => setSource({ get: () => replacement });
+        return (
+          <QuestionFreeText
+            question={freeTextQuestion()}
+            value={value()}
+            selected={false}
+            disabled={false}
+            getTranscriptElement={source().get}
+            onInput={setValue}
+          />
+        );
+      },
+      { container },
+    );
+    try {
+      flush();
+      const textarea = container.querySelector("textarea")!;
+      textarea.focus();
+      textarea.value = "alpha beta";
+      textarea.setSelectionRange(2, 2);
+      observed.forEach((observer) => observer.mockClear());
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      flush();
+      expect(observed[0]).toHaveBeenCalledWith({ type: "before-resize" });
+      expect(document.activeElement).toBe(textarea);
+      expect(textarea.selectionStart).toBe(2);
+      expect(textarea.selectionEnd).toBe(2);
+      expect(container.querySelector("textarea")).toBe(textarea);
+
+      transcript = second;
+      scheduleTextareaHeightAdjustment(textarea);
+      await Promise.resolve();
+      expect(observed[1]).toHaveBeenCalledWith({ type: "before-resize" });
+      replaceGetter();
+      flush();
+      expect(observed[2]).toHaveBeenCalledWith({ type: "before-resize" });
+      expect(container.querySelector("textarea")).toBe(textarea);
+      expect(
+        warnings.mock.calls.filter(([text]) => String(text).includes("STRICT_READ_UNTRACKED")),
+      ).toEqual([]);
+    } finally {
+      stops.forEach((stop) => stop());
+      warnings.mockRestore();
+    }
+  });
 
   it("steps from single-select to multi-select and preserves array answers", async () => {
     const prompt = gatewayPrompt({

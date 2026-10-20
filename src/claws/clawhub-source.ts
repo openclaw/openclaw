@@ -1,4 +1,4 @@
-// ClawHub discovery and exact-artifact resolution for official Claws.
+// ClawHub discovery and exact-artifact resolution for public Claws.
 import fs from "node:fs/promises";
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
@@ -17,7 +17,6 @@ import {
   type ClawHubPackageListItem,
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { parseClawManifestSummary } from "./clawhub-manifest-summary.js";
 import {
   readClawHubCatalogPreview,
@@ -30,7 +29,7 @@ import {
   readVerifiedArtifactSource,
   type ResolvedClawHubSource,
 } from "./clawhub-source-artifact.js";
-import { isExactSemVer } from "./schema-portability.js";
+import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 
 export type { ClawHubClawCatalogPreview } from "./clawhub-preview-content.js";
 export { ClawHubSourceError };
@@ -49,9 +48,12 @@ export type ClawHubClawCatalogEntry = {
   displayName: string;
   summary?: string;
   latestVersion?: string;
-  channel: "official";
-  official: true;
+  channel: "official" | "community";
+  official: boolean;
+  ownerHandle: string;
   downloads: number;
+  installs: number;
+  featuredAt?: number;
   updatedAtMs: number;
 };
 export type ClawHubClawCatalogDetail = ClawHubClawCatalogEntry & {
@@ -78,12 +80,10 @@ export type ClawHubClawTrust = {
   trustRecord: AcceptedTrust["trustInstallRecordFields"];
 };
 
-function isOfficialClawName(name: string): boolean {
-  const spec = parseRegistryNpmSpec(name);
-  return spec?.selectorKind === "none" && spec.name === name && name.startsWith("@openclaw/");
-}
+type PublicClawPackage = ClawHubPackageListItem & { channel: "official" | "community" };
+type OwnedClawPackage = PublicClawPackage & { ownerHandle: string };
 
-function isOfficialClawPackage(pkg: unknown): pkg is ClawHubPackageListItem {
+function isPublicClawPackage(pkg: unknown): pkg is PublicClawPackage {
   return (
     isJsonObject(pkg) &&
     typeof pkg.name === "string" &&
@@ -95,38 +95,49 @@ function isOfficialClawPackage(pkg: unknown): pkg is ClawHubPackageListItem {
       pkg.latestVersion === null ||
       typeof pkg.latestVersion === "string") &&
     pkg.family === "claw" &&
-    pkg.channel === "official" &&
-    pkg.isOfficial === true &&
-    isOfficialClawName(pkg.name)
+    ((pkg.channel === "official" && pkg.isOfficial === true) ||
+      (pkg.channel === "community" && pkg.isOfficial === false)) &&
+    isCanonicalClawHubPackageName(pkg.name)
   );
 }
 
-function isOfficialClawListItem(pkg: unknown): pkg is ClawHubPackageListItem {
-  return isOfficialClawPackage(pkg) && pkg.ownerHandle === "openclaw";
+function matchesClawPublisher(name: string, ownerHandle: unknown): ownerHandle is string {
+  return (
+    typeof ownerHandle === "string" &&
+    ownerHandle.length > 0 &&
+    (!name.startsWith("@") || name.slice(1, name.indexOf("/")) === ownerHandle)
+  );
 }
 
-function requireOfficialClawPackage(detail: ClawHubPackageDetail, requestedName: string) {
+function isPublicClawListItem(pkg: unknown): pkg is OwnedClawPackage {
+  return isPublicClawPackage(pkg) && matchesClawPublisher(pkg.name, pkg.ownerHandle);
+}
+
+function requirePublicClawPackage(
+  detail: ClawHubPackageDetail,
+  requestedName: string,
+): OwnedClawPackage {
   const pkg = detail.package;
+  const ownerHandle = detail.owner?.handle;
   if (
-    !pkg ||
-    !isOfficialClawPackage(pkg) ||
+    !isPublicClawPackage(pkg) ||
     pkg.name !== requestedName ||
-    detail.owner?.handle !== "openclaw" ||
-    (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== "openclaw")
+    !matchesClawPublisher(pkg.name, ownerHandle) ||
+    (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== ownerHandle)
   ) {
     throw new ClawHubSourceError(
       "clawhub_identity_mismatch",
-      "ClawHub returned a different official Claw package identity.",
+      "ClawHub returned a different public Claw package identity.",
     );
   }
-  return pkg;
+  return { ...pkg, ownerHandle, ownerOfficial: detail.owner?.official === true };
 }
 
-function requireOfficialName(packageName: string): void {
-  if (!isOfficialClawName(packageName)) {
+function requireClawName(packageName: string): void {
+  if (!isCanonicalClawHubPackageName(packageName)) {
     throw new ClawHubSourceError(
-      "clawhub_official_claw_required",
-      "Only official OpenClaw Claws may be selected.",
+      "clawhub_package_name_invalid",
+      "Select a canonical ClawHub package name without a version selector.",
     );
   }
 }
@@ -140,23 +151,31 @@ function requireExactVersion(version: string): void {
   }
 }
 
-function projectCatalogEntry(pkg: ClawHubPackageListItem): ClawHubClawCatalogEntry {
+function projectCatalogEntry(pkg: OwnedClawPackage): ClawHubClawCatalogEntry {
   const downloads = pkg.stats?.downloads;
+  const installs = pkg.stats?.installs;
   return {
     packageName: pkg.name,
     displayName: pkg.displayName,
     ...(pkg.summary ? { summary: pkg.summary } : {}),
     ...(pkg.latestVersion ? { latestVersion: pkg.latestVersion } : {}),
-    channel: "official",
-    official: true,
+    channel: pkg.channel,
+    official: pkg.ownerOfficial === true,
+    ownerHandle: pkg.ownerHandle,
     downloads:
       typeof downloads === "number" && Number.isFinite(downloads) ? Math.max(0, downloads) : 0,
+    installs: typeof installs === "number" && Number.isFinite(installs) ? Math.max(0, installs) : 0,
+    ...(typeof pkg.featuredAt === "number" ? { featuredAt: pkg.featuredAt } : {}),
     updatedAtMs: Math.max(0, pkg.updatedAt),
   };
 }
 
-function projectOfficialEntries(packages: unknown[]): ClawHubClawCatalogEntry[] {
-  return packages.filter(isOfficialClawListItem).map(projectCatalogEntry);
+function projectPublicEntries(packages: unknown[]): ClawHubClawCatalogEntry[] {
+  return packages.filter(isPublicClawListItem).map(projectCatalogEntry);
+}
+
+function rankByInstalls(left: ClawHubClawCatalogEntry, right: ClawHubClawCatalogEntry): number {
+  return right.installs - left.installs || left.packageName.localeCompare(right.packageName);
 }
 
 function readExactClawArtifact(
@@ -225,31 +244,37 @@ function readExactClawArtifact(
 }
 
 export async function listClawHubClaws(
-  params: ClawHubFetchOptions & { limit?: number } = {},
+  params: ClawHubFetchOptions & { limit?: number; category?: string; featured?: boolean } = {},
 ): Promise<ClawHubClawCatalogEntry[]> {
   const entries = new Map<string, ClawHubClawCatalogEntry>();
+  const finish = () => {
+    const result = [...entries.values()];
+    return params.category && !params.featured ? result.toSorted(rankByInstalls) : result;
+  };
   const seenCursors = new Set<string>();
-  const requestedLimit = params.limit && params.limit > 0 ? params.limit : undefined;
+  const requestedLimit =
+    !params.category && params.limit && params.limit > 0 ? params.limit : undefined;
   let cursor: string | undefined;
   for (let page = 0; page < MAX_CATALOG_PAGES; page += 1) {
     const result = await listClawHubPackages({
       ...params,
       family: "claw",
-      isOfficial: true,
+      category: params.category,
+      featured: params.featured,
       limit: Math.min(
         CATALOG_PAGE_SIZE,
         requestedLimit ? requestedLimit - entries.size : CATALOG_PAGE_SIZE,
       ),
       ...(cursor ? { cursor } : {}),
     });
-    for (const entry of projectOfficialEntries(result.items)) {
+    for (const entry of projectPublicEntries(result.items)) {
       entries.set(entry.packageName, entry);
       if (requestedLimit && entries.size >= requestedLimit) {
-        return [...entries.values()];
+        return finish();
       }
     }
     if (result.nextCursor === null) {
-      return [...entries.values()];
+      return finish();
     }
     if (!result.nextCursor || seenCursors.has(result.nextCursor)) {
       throw new ClawHubSourceError(
@@ -267,7 +292,7 @@ export async function listClawHubClaws(
 }
 
 export async function searchClawHubClaws(
-  params: ClawHubFetchOptions & { query: string; limit?: number },
+  params: ClawHubFetchOptions & { query: string; limit?: number; category?: string },
 ): Promise<ClawHubClawCatalogEntry[]> {
   const query = params.query.trim();
   if (!query) {
@@ -277,18 +302,19 @@ export async function searchClawHubClaws(
     ...params,
     query,
     family: "claw",
-    isOfficial: true,
+    category: params.category,
     limit: params.limit ?? CATALOG_PAGE_SIZE,
   });
-  return projectOfficialEntries(results.map((result) => result.package));
+  const entries = projectPublicEntries(results.map((result) => result.package));
+  return params.category ? entries.toSorted(rankByInstalls) : entries;
 }
 
 export async function readClawHubClawDetail(
   params: ClawHubFetchOptions & { packageName: string; version?: string },
 ): Promise<ClawHubClawCatalogDetail> {
-  requireOfficialName(params.packageName);
+  requireClawName(params.packageName);
   const detail = await fetchClawHubPackageDetail({ ...params, name: params.packageName });
-  const pkg = requireOfficialClawPackage(detail, params.packageName);
+  const pkg = requirePublicClawPackage(detail, params.packageName);
   const version = params.version ?? pkg.latestVersion;
   if (!version) {
     throw new ClawHubSourceError(
@@ -316,8 +342,8 @@ export async function readClawHubClawDetail(
   return {
     ...projectCatalogEntry(pkg),
     version,
-    ...(summary.agent.name ? { agentName: summary.agent.name } : {}),
-    ...(summary.agent.description ? { agentDescription: summary.agent.description } : {}),
+    ...(summary.name ? { agentName: summary.name } : {}),
+    ...(summary.description ? { agentDescription: summary.description } : {}),
     workspaceFiles: contents.instructions.length,
     skills: contents.skills.length,
     plugins: contents.integrations.filter((item) => item.kind === "plugin").length,
@@ -334,8 +360,10 @@ export async function readClawHubClawPreview(
       name: string;
     },
 ): Promise<ClawHubClawCatalogPreview> {
-  requireOfficialName(params.packageName);
+  requireClawName(params.packageName);
   requireExactVersion(params.version);
+  const detail = await fetchClawHubPackageDetail({ ...params, name: params.packageName });
+  requirePublicClawPackage(detail, params.packageName);
   const { preview } = await readClawHubClawContents(params, {
     kind: params.kind,
     name: params.name,
@@ -505,10 +533,10 @@ export async function withResolvedClawHubSource<T>(
   },
 ): Promise<{ value: T } & ClawHubClawTrust> {
   const { packageName, version } = params.coordinate;
-  requireOfficialName(packageName);
+  requireClawName(packageName);
   requireExactVersion(version);
   const detail = await fetchClawHubPackageDetail({ ...params, name: packageName });
-  requireOfficialClawPackage(detail, packageName);
+  requirePublicClawPackage(detail, packageName);
   const artifact = await fetchClawHubPackageArtifact({ ...params, name: packageName, version });
   const resolvedArtifact = readExactClawArtifact(artifact, params.coordinate);
   const expectedSha256 = resolvedArtifact.sha256;

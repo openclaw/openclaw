@@ -16,6 +16,89 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("exports worst-isolate headroom with bounded labels and retires missing baselines", () => {
+    const metrics = createMetricsHarness();
+    const memory = {
+      rssBytes: 1000,
+      heapTotalBytes: 800,
+      heapUsedBytes: 300,
+      heapSizeLimitBytes: 1000,
+      oldGenerationAfterGcBytes: 200,
+      externalBytes: 20,
+      arrayBuffersBytes: 10,
+    };
+    try {
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          workerHeaps: [
+            {
+              script: "sqlite-store.worker.js",
+              threadId: 101,
+              heapUsed: 900,
+              heapTotal: 1000,
+              heapSizeLimitBytes: 1000,
+              oldGenerationAfterGcBytes: 800,
+            },
+            {
+              script: "sqlite-store.worker.js",
+              threadId: 102,
+              heapUsed: 100,
+              heapTotal: 200,
+              heapSizeLimitBytes: 2000,
+              oldGenerationAfterGcBytes: 50,
+            },
+            {
+              script: "other",
+              threadId: 103,
+              heapUsed: 0,
+              heapTotal: 200,
+              heapSizeLimitBytes: 500,
+              oldGenerationAfterGcBytes: 0,
+            },
+          ],
+        },
+      });
+      const rendered = metrics.render();
+      for (const [thread, limit, used, old, ratio] of [
+        ["main", 1000, 0.3, 200, 0.2],
+        ["sqlite-store.worker.js", 1000, 0.9, 800, 0.8],
+        ["other", 500, 0, 0, 0],
+      ] as const) {
+        for (const [name, value] of [
+          ["size_limit_bytes", limit],
+          ["used_ratio", used],
+          ["old_generation_after_gc_bytes", old],
+          ["old_generation_after_gc_ratio", ratio],
+        ] as const) {
+          expect(rendered).toContain(`openclaw_heap_${name}{thread="${thread}"} ${value}\n`);
+        }
+      }
+      expect(rendered.match(/^openclaw_heap_used_ratio\{/gm)).toHaveLength(3);
+      expect(rendered).not.toMatch(/threadId|thread="10[123]"/);
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          oldGenerationAfterGcBytes: undefined,
+          workerHeaps: [{ script: "other", heapUsed: 10, heapTotal: 20, heapSizeLimitBytes: 100 }],
+        },
+      });
+      const next = metrics.render();
+      expect(next).not.toContain("openclaw_heap_old_generation_after_gc");
+      expect(next).not.toContain('thread="sqlite-store.worker.js"');
+      expect(next).toContain('openclaw_heap_used_ratio{thread="other"} 0.1\n');
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: { ...memory, heapSizeLimitBytes: undefined },
+      });
+      expect(metrics.render()).not.toContain("openclaw_heap_used_ratio");
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("counts attributed main-thread stalls by task and reports bounded-buffer losses", () => {
     const metrics = createMetricsHarness();
     try {

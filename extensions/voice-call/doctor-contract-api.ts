@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
@@ -84,6 +85,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "voice-call-sqlite-schema",
     label: "Voice Call SQLite schema",
+    collectBackupResources(params) {
+      const database = path.join(resolveVoiceCallStorePath(params), "state", "openclaw.sqlite");
+      return existsSync(database) ? [{ path: database, kind: "sqlite" }] : [];
+    },
     async detectLegacyState(params) {
       const storePath = resolveVoiceCallStorePath(params);
       if (!existsSync(storePath)) {

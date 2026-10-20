@@ -355,7 +355,6 @@ describe("restart health", () => {
     expect(snapshot.waitOutcome).toBe("build-id-mismatch");
     expect(snapshot.elapsedMs).toBe(0);
     expect(snapshot.gatewayBuildId).toBe("old-build");
-    expect(snapshot.expectedBuildId).toBe("new-build");
     expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
     expect(sleep).not.toHaveBeenCalled();
 

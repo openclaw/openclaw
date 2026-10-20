@@ -278,6 +278,92 @@ phase durations, setup RPC progress, and bounded exit/error diagnostics.
 Raw logs and setup codes are excluded. Setup-code timeouts are preparation failures
 and prevent native test execution.
 
+## Temporary resource investigation
+
+Qualification, screenshot-only runs, and store/TestFlight uploads collect a
+bounded `ios-resource-timeline.jsonl` while their main command runs. This temporary
+instrumentation investigates runner contention; it does not change test deadlines,
+simulator services, build parallelism, or release admission.
+
+The collector takes one serial sample approximately every 15 seconds. It records
+host CPU counters, load, memory compression and swap activity, memory-pressure
+level, disk activity, and at most twelve top CPU/RSS process rows. Process rows
+contain PIDs, parent PIDs and roles, state, CPU time, and RSS. Roles use a fixed
+allowlist plus bounded executable basenames from installed Apple simulator runtime
+system directories. Device data, app bundles, containers, and other unknown names
+remain `other`. Fixed origin categories distinguish runtime, Xcode,
+and host-system executable locations where recognizable. Grouped counts and CPU
+deltas cover every parsed process, including rows outside the top-process display.
+`cpuObservedCount` identifies rows with a previous observation; a missing `ps`
+probe leaves the summary null and resets that baseline. It never exports arguments, environment values, paths, or application
+content. Fixed phase labels correlate samples with builds, simulator startup,
+Gateway preparation, native tests, screenshots, archiving, and upload.
+
+Each native observation requests termination after two seconds. A starved runner
+can delay process termination and output closure beyond that deadline. Samples
+record their start/end timestamps and phases plus each probe's elapsed wall time;
+slow samples can span phases and must not be treated as instantaneous snapshots.
+Collection is independent of the workload, never overlaps or catches up after a
+slow sample, and stops at a 4 MiB output limit. Missing observations remain
+diagnostics, not release failures.
+The footer records collector Node CPU time and RSS; native observation subprocess
+CPU is excluded. RSS is not physical memory footprint, CPU deltas miss processes
+that start and exit between samples, and sparse sampling cannot establish a
+continuous peak. Interpret memory pressure and swap activity alongside free memory.
+
+The timeline is retained with the qualification proof or screenshot diagnostics,
+including after failures. Store runs also preserve the existing sanitized screenshot
+resource/startup/crash JSON before their temporary source checkout is removed.
+Xcode build timing summaries appear in screenshot/archive logs; qualification
+exports recognized task totals as `buildTimings` in its proof. Task totals can
+overlap and must not be summed as wall time.
+
+For a non-publishing comparison on one fixed candidate branch:
+
+```bash
+gh workflow run ios-release-e2e.yml --ref YOUR_BRANCH -f mode=stock -f resource_diagnostics=false
+gh workflow run ios-release-e2e.yml --ref YOUR_BRANCH -f mode=stock -f resource_diagnostics=true
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f resource_diagnostics=true
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f resource_diagnostics=false
+```
+
+Wait for each arm of the same flow to finish before starting the next. Keep source,
+Gateway selection, runner resources, Xcode, and simulator runtime matched; a single
+pair checks integration, not a reliable performance percentile. The switch only
+affects non-publishing dispatches. Real store/TestFlight operations keep collection
+enabled. Locally the same wrapper accepts `OPENCLAW_IOS_RESOURCE_DIAGNOSTICS=0`:
+
+```bash
+node scripts/ios-resource-timeline.mjs --output /tmp/ios-resource-timeline.jsonl -- pnpm ios:screenshots
+```
+
+To distinguish simulator startup from OpenClaw and XCTest, the temporary startup
+probe captures only iPhone screenshots. It observes 60 seconds after the build with
+no simulator active, then 120 seconds after boot before app installation or tests:
+
+```bash
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f startup_probe=true
+```
+
+The probe enables the resource timeline even if `resource_diagnostics` is false.
+After simulator cleanup, it also runs a bounded Spotlight experiment: five
+interleaved pairs copy the built products into fresh ordinary and `.noindex`
+directories, observing each for 45 seconds. `ios-spotlight-probe.json` retains
+aggregate file/index counts, matched Spotlight CPU deltas, timing, and host load.
+Only task-owned copies are removed; machine-wide indexing settings are unchanged.
+Missing ordinary-directory positive controls make the result inconclusive. These
+fresh-directory observations do not measure cold-host or release performance.
+
+It is off by default and only configured by the screenshot job. These added waits
+are diagnostic observations, not a performance improvement; include them in any
+end-to-end comparison. Grouped process CPU is still a lower bound: newly observed
+and short-lived processes have no measured delta. Roles and origin categories
+can remain `other`; they are attribution hints, not a complete process inventory.
+
+Remove the collector, phase markers, and comparison switches after the contention
+cause and its improvement are verified. Do not make full Instruments recordings,
+allocation tracing, or automatic sysdiagnose part of normal release runs.
+
 ## GitHub Actions
 
 Run **iOS Store Release** from `main` with one of these operations:

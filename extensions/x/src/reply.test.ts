@@ -33,7 +33,7 @@ describe("X public reply delivery", () => {
     const result = await sendXReply({
       api,
       text: "界".repeat(145),
-      replyToId: "x:90",
+      replyToId: "90",
       signature: "— signed 🦞",
       visibleWorkSessions: [{ sessionKey: "work", url, publicRead: true }],
     });

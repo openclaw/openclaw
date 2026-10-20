@@ -441,6 +441,7 @@ export async function runSessionEntryWorkerOperation<
             ),
           ),
           receipt.conversationPublication,
+          receipt.fullEntries,
         );
       }
     },

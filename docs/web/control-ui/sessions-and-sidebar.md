@@ -229,6 +229,12 @@ stays visible but disabled with an explanation. Allowed saved choices stay selec
 an unavailable saved choice is corrected without clearing your prompt, model, or
 effort. The Gateway checks access again when the session is created.
 
+When failed Git discovery blocks a selected or restored **New worktree** choice,
+New session keeps that choice. A permission denial names the required access when
+the Gateway provides it and directs you to the person who manages OpenClaw;
+retrying alone cannot grant it. Other discovery failures retain the retry guidance.
+Your unsent draft stays available.
+
 Guests with session access can save these choices in their own profile without
 broader Gateway write permission. This does not allow changing another person's
 preferences or private background resources.

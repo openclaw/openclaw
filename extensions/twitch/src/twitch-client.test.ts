@@ -89,12 +89,11 @@ vi.mock("@twurple/auth", () => ({
   },
 }));
 
-vi.mock("./token.js", () => ({
+vi.mock("./token.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token.js")>()),
   resolveTwitchToken: vi.fn(() => ({
     token: "oauth:mock-token-from-tests",
-    source: "config" as const,
   })),
-  DEFAULT_ACCOUNT_ID: "default",
 }));
 
 describe("TwitchClientManager", () => {
@@ -163,7 +162,6 @@ describe("TwitchClientManager", () => {
     disconnectHandlers.length = 0;
     resolveTwitchTokenMock.mockReturnValue({
       token: "oauth:mock-token-from-tests",
-      source: "config" as const,
     });
     manager = new TwitchClientManager(mockLogger, statusSink);
   });
@@ -314,7 +312,6 @@ describe("TwitchClientManager", () => {
   it("should use token directly when no oauth: prefix", async () => {
     resolveTwitchTokenMock.mockReturnValue({
       token: "raw-token-from-tests",
-      source: "config" as const,
     });
     await manager.getClient(testAccount);
     expect(mockAuthProvider.constructor.mock.calls).toEqual([
@@ -361,7 +358,7 @@ describe("TwitchClientManager", () => {
         twitch: accountId ? { accounts: { [accountId]: emptyAccount } } : emptyAccount,
       },
     };
-    resolveTwitchTokenMock.mockReturnValue({ token: "", source: "none" as const });
+    resolveTwitchTokenMock.mockReturnValue({ token: "" });
     await expect(manager.getClient(testAccount, cfg, accountId)).rejects.toThrow(
       `Missing Twitch token for account ${accountId ?? "default"} (set ${path} or OPENCLAW_TWITCH_ACCESS_TOKEN for default)`,
     );

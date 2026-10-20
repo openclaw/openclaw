@@ -1,6 +1,7 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { prepareExecApprovalPresentation as prepare } from "./approval-presentation.js";
+import type { ExecApprovalRequestPayload } from "./exec-approvals-core.js";
 import type { PluginApprovalRequestPayload } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
@@ -13,6 +14,7 @@ function exec(request: {
   host?: string | null;
   nodeId?: string | null;
   agentId?: string | null;
+  streamProposal?: ExecApprovalRequestPayload["streamProposal"];
 }) {
   return prepare("exec", request, allowedDecisions);
 }
@@ -77,6 +79,11 @@ describe("prepareExecApprovalPresentation", () => {
       host: "gate\nway\u202E",
       nodeId: "node\u0000id",
       agentId: githubToken,
+      streamProposal: {
+        jobId: "watcher-id",
+        name: `Errors\u202E ${githubToken}`,
+        operation: "add",
+      },
     });
 
     expect(presentation).toMatchObject({
@@ -84,6 +91,11 @@ describe("prepareExecApprovalPresentation", () => {
       host: "gate\\u{A}way\\u{202E}",
       nodeId: "node\\u{0}id",
       agentId: githubToken,
+      streamProposal: {
+        jobId: "watcher-id",
+        name: expect.stringContaining("Errors\\u{202E}"),
+        operation: "add",
+      },
     });
     expect(
       exec({ command: "printf safe", host: "   ", nodeId: null, agentId: "\t" }),

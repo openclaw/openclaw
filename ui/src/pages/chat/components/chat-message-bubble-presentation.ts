@@ -266,7 +266,8 @@ export function prepareGroupedMessage(
     : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
-  const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
+  const toolPreview =
+    isStandaloneToolMessage && markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw =
     singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label

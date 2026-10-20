@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   resolveStateDir,
-  type onInternalSessionTranscriptUpdate,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -18,20 +17,10 @@ import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
-  type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
-type MemorySessionTranscriptUpdate = Parameters<
-  Parameters<typeof onInternalSessionTranscriptUpdate>[0]
->[0];
-
-let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
-
-export function resetTranscriptUpdateListener(): void {
-  transcriptUpdateListener = undefined;
-}
 export const startupHarnessDatabases = new Set<MemoryIndexDatabase>();
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
@@ -63,10 +52,6 @@ async function createStartupHarnessDatabase(
   }
   return database;
 }
-export function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdate): void {
-  transcriptUpdateListener?.(update);
-}
-
 export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
@@ -109,7 +94,6 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   private constructor(
     protected publishedDatabase: MemoryIndexDatabase,
     private readonly indexSessionUpdates = false,
-    private readonly subscribeToRealEvents = false,
     protected readonly cfg: OpenClawConfig = {},
   ) {
     super();
@@ -119,22 +103,35 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   static async create(
     sourceRows: SourceStateRow[],
     indexSessionUpdates = false,
-    subscribeToRealEvents = false,
     cfg: OpenClawConfig = {},
   ): Promise<SessionStartupCatchupHarness> {
-    return new SessionStartupCatchupHarness(
+    const harness = new SessionStartupCatchupHarness(
       await createStartupHarnessDatabase(sourceRows),
       indexSessionUpdates,
-      subscribeToRealEvents,
       cfg,
     );
+    await harness.publishedDatabase.writeMetadata({
+      model: "fts-only",
+      provider: "none",
+      sources: ["sessions"],
+      scopeHash: resolveConfiguredScopeHash({
+        workspaceDir: harness.workspaceDir,
+        extraPaths: harness.settings.extraPaths,
+        multimodal: harness.settings.multimodal,
+      }),
+      chunkTokens: harness.settings.chunking.tokens,
+      chunkOverlap: harness.settings.chunking.overlap,
+      chunkingVersion: MEMORY_CHUNKING_VERSION,
+      ftsTokenizer: harness.settings.store.fts.tokenizer,
+      provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
+    });
+    return harness;
   }
 
   restartForStartup(): SessionStartupCatchupHarness {
     return new SessionStartupCatchupHarness(
       this.publishedDatabase,
       this.indexSessionUpdates,
-      false,
       this.cfg,
     );
   }
@@ -200,40 +197,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
     this.sessionUnsubscribe = null;
   }
 
-  protected override subscribeSessionTranscriptUpdates(
-    listener: (update: MemorySessionTranscriptUpdate) => void,
-  ): () => void {
-    if (this.subscribeToRealEvents) {
-      return super.subscribeSessionTranscriptUpdates(listener);
-    }
-    transcriptUpdateListener = listener;
-    return () => {
-      if (transcriptUpdateListener === listener) {
-        transcriptUpdateListener = undefined;
-      }
-    };
-  }
-
   protected computeProviderKey = () => "test";
   protected resolveProviderIndexIdentities = () => [];
-
-  protected override readMeta(): MemoryIndexMeta {
-    return {
-      model: "fts-only",
-      provider: "none",
-      sources: ["sessions"],
-      scopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: this.settings.multimodal,
-      }),
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-      chunkingVersion: MEMORY_CHUNKING_VERSION,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
-    };
-  }
 
   protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});

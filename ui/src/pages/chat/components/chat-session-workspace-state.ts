@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createChangeListeners } from "../../../../../src/shared/listeners.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
@@ -27,20 +28,13 @@ const workspaceOwners = new WeakMap<SessionWorkspaceHost, SessionWorkspaceOwner>
 export function sessionWorkspaceForHost(host: SessionWorkspaceHost): SessionWorkspaceOwner {
   let owner = workspaceOwners.get(host);
   if (!owner) {
-    const listeners = new Set<() => void>();
+    const listeners = createChangeListeners();
     owner = {
       get state() {
         return host.sessionWorkspaceState;
       },
-      subscribe(listener) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      publish() {
-        for (const listener of listeners) {
-          listener();
-        }
-      },
+      subscribe: listeners.subscribe,
+      publish: listeners.publish,
     };
     workspaceOwners.set(host, owner);
   }

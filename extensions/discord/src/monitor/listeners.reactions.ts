@@ -21,7 +21,7 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
-import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./listeners.queue.js";
+import type { DiscordListenerLogger } from "./listeners.queue.js";
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
@@ -63,8 +63,6 @@ export class DiscordReactionListener {
       client,
       action: "added",
       handlerParams: this.params,
-      listener: this.constructor.name,
-      event: this.type,
     });
   }
 }
@@ -80,8 +78,6 @@ export class DiscordReactionRemoveListener {
       client,
       action: "removed",
       handlerParams: this.params,
-      listener: this.constructor.name,
-      event: this.type,
     });
   }
 }
@@ -91,8 +87,6 @@ async function runDiscordReactionHandler(params: {
   client: Client;
   action: "added" | "removed";
   handlerParams: DiscordReactionListenerParams;
-  listener: string;
-  event: string;
 }): Promise<void> {
   const policy = await params.handlerParams.readPolicy?.();
   const handlerParams = policy
@@ -102,17 +96,11 @@ async function runDiscordReactionHandler(params: {
         isPolicyCurrent: policy.isCurrent,
       }
     : params.handlerParams;
-  await runDiscordListenerWithSlowLog({
-    logger: handlerParams.logger,
-    listener: params.listener,
-    event: params.event,
-    run: async () =>
-      handleDiscordReactionEvent({
-        ...handlerParams,
-        data: params.data,
-        client: params.client,
-        action: params.action,
-      }),
+  await handleDiscordReactionEvent({
+    ...handlerParams,
+    data: params.data,
+    client: params.client,
+    action: params.action,
   });
 }
 

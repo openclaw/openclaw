@@ -23,7 +23,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-// These tests own every writer in their disposable state roots.
+
 function source() {
   const root = dirs.make("openclaw-handoff-before-migration-");
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
@@ -40,109 +40,81 @@ function source() {
   storeRetainedUpdateRecovery(record, options);
   const pathname = openOpenClawStateDatabase(options).path;
   closeOpenClawStateDatabaseForTest();
-  const legacy = openNodeSqliteDatabase(pathname);
-  try {
-    // Exercise older version markers on a current-layout fixture; this is not a v15 migration proof.
-    legacy.exec(`PRAGMA foreign_keys=OFF;
+  using legacy = openNodeSqliteDatabase(pathname);
+  // Older markers on current layout, not a v15 migration fixture.
+  legacy.exec(`PRAGMA foreign_keys=OFF;
       PRAGMA user_version=15;
       UPDATE schema_meta SET schema_version=15 WHERE meta_key='primary';`);
-  } finally {
-    legacy.close();
-  }
-  return { root, options, run, to, record, pathname };
+  return { options, run, record, pathname };
 }
 function shape(pathname: string) {
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    return {
-      version: db.prepare("PRAGMA user_version").get(),
-      schema: db
-        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name")
-        .all(),
-      metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
-    };
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  return {
+    version: db.prepare("PRAGMA user_version").get(),
+    schema: db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").all(),
+    metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
+    recovery: db
+      .prepare(
+        "SELECT value_json FROM config_machine_state WHERE state_key LIKE 'update.recovery.%'",
+      )
+      .get(),
+  };
 }
 it("refuses existing-state writes while another connection holds the native transaction", () => {
   const f = source();
   const before = fs.readFileSync(f.pathname);
-  const writer = openNodeSqliteDatabase(f.pathname);
+  using writer = openNodeSqliteDatabase(f.pathname);
   writer.exec("BEGIN IMMEDIATE");
-  try {
-    expect(() => probeExistingWriter(f, 0)).toThrow(/locked/);
-    expect(fs.readFileSync(f.pathname)).toEqual(before);
-  } finally {
-    writer.exec("ROLLBACK");
-    writer.close();
-  }
+  expect(() => probeExistingWriter(f, 0)).toThrow(/locked/);
+  expect(fs.readFileSync(f.pathname)).toEqual(before);
+  writer.exec("ROLLBACK");
 });
 
-it("does not create a canonical database when a prepared handoff loses its source", () => {
+it.each([
+  [
+    "future",
+    "PRAGMA user_version=2147483647; UPDATE schema_meta SET schema_version=2147483647 WHERE meta_key='primary'",
+  ],
+  ["metadata", "UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'"],
+  [
+    "trigger",
+    "CREATE TRIGGER unexpected_recovery_write AFTER UPDATE ON update_runs BEGIN UPDATE schema_meta SET app_version='unexpected'; END;",
+  ],
+])("refuses %s state without changing a retained handoff", (_scenario, sql) => {
   const f = source();
-  fs.renameSync(f.pathname, f.pathname + ".retained");
+  {
+    using db = openNodeSqliteDatabase(f.pathname);
+    db.exec(sql);
+  }
+  const before = shape(f.pathname);
   expect(() => probeExistingWriter(f)).toThrow();
-  expect(fs.existsSync(f.pathname)).toBe(false);
-  expect(shape(f.pathname + ".retained").version).toEqual({ user_version: 15 });
+  expect(shape(f.pathname)).toEqual(before);
+  expect(before.recovery).toBeDefined();
+  expect(JSON.parse(String(before.recovery?.value_json))).toEqual(f.record);
 });
-it.each(["future", "metadata", "trigger"])(
-  "refuses %s state without changing a retained handoff",
-  (scenario) => {
+
+it.each(["before admission", "before tracked open"])(
+  "does not recreate state displaced %s",
+  (when) => {
     const f = source();
-    const raw = openNodeSqliteDatabase(f.pathname);
-    try {
-      if (scenario === "future") {
-        raw.exec(
-          "PRAGMA user_version=2147483647; UPDATE schema_meta SET schema_version=2147483647 WHERE meta_key='primary'",
-        );
-      } else if (scenario === "metadata") {
-        raw.exec("UPDATE schema_meta SET schema_version=14 WHERE meta_key='primary'");
-      } else {
-        raw.exec(
-          "CREATE TRIGGER unexpected_recovery_write AFTER UPDATE ON update_runs BEGIN UPDATE schema_meta SET app_version='unexpected'; END;",
-        );
-      }
-    } finally {
-      raw.close();
-    }
     const before = shape(f.pathname);
-    expect(() => probeExistingWriter(f)).toThrow();
-    expect(shape(f.pathname)).toEqual(before);
-    const read = openNodeSqliteDatabase(f.pathname, { readOnly: true });
-    try {
-      const row = read
-        .prepare(
-          "SELECT value_json FROM config_machine_state WHERE state_key LIKE 'update.recovery.%'",
-        )
-        .get();
-      // Match the exact retained row without opening it through a schema-mutating runtime.
-      expect(row).toBeDefined();
-      expect(JSON.parse(String(row?.value_json))).toEqual(f.record);
-    } finally {
-      read.close();
+    const open = handles.openTrackedStateDatabase;
+    if (when === "before admission") {
+      fs.renameSync(f.pathname, f.pathname + ".retained");
     }
+    using _ =
+      when === "before tracked open"
+        ? vi.spyOn(handles, "openTrackedStateDatabase").mockImplementation((pathname, options) => {
+            fs.renameSync(pathname, pathname + ".retained");
+            return open(pathname, options);
+          })
+        : undefined;
+    expect(() => probeExistingWriter(f)).toThrow();
+    expect(fs.existsSync(f.pathname)).toBe(false);
+    expect(shape(f.pathname + ".retained")).toEqual(before);
+    expect(before.version).toEqual({ user_version: 15 });
   },
 );
-
-it("does not recreate canonical state displaced immediately before the tracked writer", () => {
-  const f = source();
-  const before = shape(f.pathname);
-  const open = handles.openTrackedStateDatabase;
-  const spy = vi
-    .spyOn(handles, "openTrackedStateDatabase")
-    .mockImplementation((pathname, options) => {
-      fs.renameSync(pathname, pathname + ".retained");
-      return open(pathname, options);
-    });
-  try {
-    expect(() => probeExistingWriter(f)).toThrow();
-  } finally {
-    spy.mockRestore();
-  }
-  expect(fs.existsSync(f.pathname)).toBe(false);
-  expect(shape(f.pathname + ".retained")).toEqual(before);
-});
 
 function probeExistingWriter(f: ReturnType<typeof source>, busyTimeoutMs?: number) {
   return runExistingOpenClawStateWriteTransaction(() => undefined, f.options, {

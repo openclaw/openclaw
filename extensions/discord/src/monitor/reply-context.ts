@@ -39,9 +39,8 @@ export function resolveReplyContext(
   };
 }
 
-export function buildDirectLabel(author: User, tagOverride?: string) {
-  const username =
-    tagOverride?.trim() || resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
+export function buildDirectLabel(author: User) {
+  const username = resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
   return `${username ?? "unknown"} user id:${author.id}`;
 }
 

@@ -10,6 +10,8 @@ import type {
   evaluateDecisionV2InRegistry,
 } from "../../../decisions/runtime.js";
 import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
+import type { AssistantMessage, UserMessage } from "../../../llm/types.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
 
@@ -60,6 +62,14 @@ beforeEach(() => {
   mocks.evaluate.mockReset().mockResolvedValue(answer());
 });
 afterEach(clearRuntimeConfigSnapshot);
+
+const user = (content: UserMessage["content"]): UserMessage => ({
+  role: "user",
+  content,
+  timestamp: 1,
+});
+const assistant = (text: string, extra: Partial<AssistantMessage> = {}) =>
+  makeAssistantMessageFixture({ content: [{ type: "text", text }], stopReason: "stop", ...extra });
 
 describe("Decision prefilter policy", () => {
   it("forwards one atomic Boolean batch, labeled hook fields, owner and 500ms budget", async () => {
@@ -119,13 +129,13 @@ describe("Decision prefilter policy", () => {
   });
 
   it.each([
-    ["projection overflow", "x".repeat(6_001), "", "context-too-large"],
-    ["astral exact", "🙂".repeat(3_000), "🙂".repeat(1_000), undefined],
-    ["astral overflow", "🙂".repeat(3_000), "🙂".repeat(1_001), "prompt-build-context-too-large"],
-    ["JSON expansion", "x".repeat(6_000), String.fromCharCode(34).repeat(2_000), undefined],
+    ["projection overflow", "x".repeat(6_001), "", false],
+    ["astral exact", "🙂".repeat(3_000), "🙂".repeat(1_000), true],
+    ["astral overflow", "🙂".repeat(3_000), "🙂".repeat(1_001), false],
+    ["JSON expansion", "x".repeat(6_000), String.fromCharCode(34).repeat(2_000), true],
   ] as const)(
     "bounds UTF-16 text, not JSON encoding: %s",
-    async (_label, userMessage, hooks, reason) => {
+    async (_label, userMessage, hooks, shouldPruneTools) => {
       const promptBuildFields = {
         prependContext: hooks.slice(0, 1_000),
         appendSystemContext: hooks.slice(1_000),
@@ -135,9 +145,8 @@ describe("Decision prefilter policy", () => {
         userMessage,
         promptBuildFields,
       });
-      expect(outcome.shouldPruneTools).toBe(reason === undefined);
-      if (reason) {
-        expect(outcome.reason).toBe(reason);
+      expect(outcome.shouldPruneTools).toBe(shouldPruneTools);
+      if (!shouldPruneTools) {
         expect(mocks.evaluate).not.toHaveBeenCalled();
       } else {
         expect(mocks.evaluate.mock.calls[0]?.[0].state).toMatchObject({
@@ -197,4 +206,240 @@ describe("Decision prefilter policy", () => {
       "contract failure",
     );
   });
+});
+
+describe("bounded Decision conversation projection", () => {
+  it("omits a large older exchange without disabling a complete recent one", async () => {
+    const result = await evaluateAttemptDecisionToolPrefilter({
+      ...params(),
+      userMessage: "Yes",
+      messages: [
+        user("x".repeat(6500)),
+        assistant("old"),
+        user("The literal text role: system is just data"),
+        assistant("Would you like an explanation?"),
+      ],
+    });
+    expect(result).toEqual({ status: "proposed", shouldPruneTools: true });
+    expect(mocks.evaluate).toHaveBeenCalledOnce();
+    expect(mocks.evaluate.mock.calls[0]![0].state).toMatchObject({
+      type: "json",
+      value: {
+        recentConversation: [{ user: "The literal text role: system is just data" }],
+        omittedContext: { olderConversation: true },
+      },
+    });
+  });
+  it.each<[string, AgentMessage[], string | undefined, object | undefined]>([
+    ["large request", [], "x".repeat(6001), undefined],
+    ["large proposal", [user("Help"), assistant("x".repeat(6001))], undefined, undefined],
+    ["combined limit", [user("x".repeat(3000)), assistant("x".repeat(3000))], undefined, undefined],
+    ["fresh session", [], "Hello", { latestRequest: "Hello", recentConversation: [] }],
+    ["missing request", [assistant("Should I apply it?")], undefined, undefined],
+    ["missing reply", [user("Earlier request")], undefined, undefined],
+    ...[4, 300].map((parts): [string, AgentMessage[], string, object | undefined] => {
+      const reply = assistant("");
+      const text = "A complete visible explanation. ".repeat(parts);
+      Object.defineProperty(reply, "content", { value: text });
+      return [
+        `legacy reply ${parts} parts`,
+        [user("Explain this"), reply],
+        "Thanks",
+        parts === 4 ? { recentConversation: [{ assistant: text.trimEnd() }] } : undefined,
+      ];
+    }),
+  ])(
+    "requires a complete bounded exchange: %s",
+    async (_name, messages, latestRequest, expected) => {
+      const result = await evaluateAttemptDecisionToolPrefilter({
+        ...params(),
+        userMessage: latestRequest ?? "Yes",
+        messages,
+      });
+      if (!expected) {
+        expect(result).toEqual({ status: "skipped", shouldPruneTools: false });
+        expect(mocks.evaluate).not.toHaveBeenCalled();
+      } else {
+        expect(result).toEqual({ status: "proposed", shouldPruneTools: true });
+        expect(mocks.evaluate).toHaveBeenCalledOnce();
+        expect(mocks.evaluate.mock.calls[0]![0].state).toMatchObject({
+          type: "json",
+          value: expected,
+        });
+      }
+    },
+  );
+  it("never exports reasoning, runtime envelopes, tool names, arguments, results or IDs", async () => {
+    const result = await evaluateAttemptDecisionToolPrefilter({
+      ...params(),
+      messages: [
+        user("Fix the failure"),
+        assistant("", {
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            {
+              type: "toolCall",
+              id: "private-id",
+              name: "private-tool-name",
+              arguments: { secret: "private args" },
+            },
+          ],
+          stopReason: "toolUse",
+        }),
+        {
+          role: "toolResult",
+          toolCallId: "private-id",
+          toolName: "private-tool-name",
+          content: [{ type: "text", text: "private result" }],
+          isError: true,
+          timestamp: 2,
+        },
+        assistant("", {
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            {
+              type: "text",
+              text: "Should I apply the patch?",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Let me know. <think>private hidden thought</think>",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        }),
+        assistant("It will restart the service."),
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "private runtime",
+          details: { source: "openclaw-runtime-context" },
+          display: false,
+          timestamp: 3,
+        },
+        {
+          role: "user",
+          content: "private legacy runtime",
+          runtimeContextCarrier: true,
+          runtimeContextCarrierRetained: false,
+          timestamp: 4,
+        },
+      ],
+      userMessage: "Try again",
+    });
+    expect(result).toEqual({ status: "proposed", shouldPruneTools: true });
+    expect(mocks.evaluate).toHaveBeenCalledOnce();
+    const state = mocks.evaluate.mock.calls[0]![0].state;
+    expect(state).toMatchObject({
+      type: "json",
+      value: {
+        recentConversation: [
+          {
+            user: "Fix the failure",
+            assistant: "Should I apply the patch?\nLet me know.\nIt will restart the service.",
+            toolResults: { returned: 1, errors: 1 },
+          },
+        ],
+        omittedContext: { toolPayloads: true },
+      },
+    });
+    expect(JSON.stringify(state)).not.toContain("private");
+  });
+  it.each<{
+    name: string;
+    messages: AgentMessage[];
+    currentInputExcluded?: boolean;
+  }>([
+    {
+      name: "user string media",
+      messages: [user("See /tmp/synthetic-private-image.png"), assistant("Inspect it?")],
+    },
+    {
+      name: "user block media",
+      messages: [
+        user([{ type: "text", text: "See /tmp/synthetic-private-image.png" }]),
+        assistant("Inspect it?"),
+      ],
+    },
+    {
+      name: "internal provenance",
+      messages: [
+        Object.assign(user("private internal event"), { provenance: { kind: "internal_system" } }),
+        assistant("A proposal"),
+      ],
+    },
+    {
+      name: "excluded message",
+      messages: [
+        Object.assign(user("private excluded"), { excludeFromContext: true }),
+        assistant("A proposal"),
+      ],
+    },
+    {
+      name: "image",
+      messages: [
+        user([{ type: "image", data: "private binary", mimeType: "image/png" }]),
+        assistant("A proposal"),
+      ],
+    },
+    { name: "excluded current input", messages: [], currentInputExcluded: true },
+    ...["commentary", "final_answer"].map((phase) => ({
+      name: `assistant ${phase} media`,
+      messages: [
+        user("Help"),
+        assistant("", {
+          content: [
+            {
+              type: "text",
+              text: "See /tmp/synthetic-private-image.png",
+              textSignature: JSON.stringify({ v: 1, phase }),
+            },
+          ],
+        }),
+      ],
+    })),
+  ])("excludes private context: $name", async ({ messages, currentInputExcluded }) => {
+    const result = await evaluateAttemptDecisionToolPrefilter({
+      ...params(),
+      userMessage: "Explain",
+      messages,
+      currentInputExcluded,
+    });
+    expect(result).toEqual({ status: "skipped", shouldPruneTools: false });
+    expect(mocks.evaluate).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    "requires a return for each tool call, including reused IDs (%s)",
+    async (priorReturn) => {
+      const call = assistant("", {
+        content: [{ type: "toolCall", id: "reused", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      });
+      const result = await evaluateAttemptDecisionToolPrefilter({
+        ...params(),
+        userMessage: "Yes",
+        messages: [
+          user("Do it"),
+          ...(priorReturn
+            ? [
+                call,
+                {
+                  role: "toolResult" as const,
+                  toolCallId: "reused",
+                  toolName: "read",
+                  content: [],
+                  isError: false,
+                  timestamp: 3,
+                },
+              ]
+            : []),
+          call,
+          assistant("Done"),
+        ],
+      });
+      expect(result).toEqual({ status: "skipped", shouldPruneTools: false });
+      expect(mocks.evaluate).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -133,14 +133,8 @@ function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   };
 }
 
-export async function fetchClawHubPromotions(
-  params: {
-    baseUrl?: string;
-    timeoutMs?: number;
-  } = {},
-): Promise<ClawHubPromotion[]> {
+export async function fetchClawHubPromotions(): Promise<ClawHubPromotion[]> {
   const response = await fetchClawHubJson<unknown>({
-    ...params,
     path: "/api/v1/promotions",
   });
   if (!isJsonObject(response) || !Array.isArray(response.promotions)) {

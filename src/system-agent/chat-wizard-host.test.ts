@@ -484,11 +484,12 @@ describe("SystemAgentChatEngine wizard", () => {
     } satisfies OpenClawConfig;
     const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
     let currentConfig: OpenClawConfig = baseConfig;
+    const configModule = await import("../config/config.js");
+    vi.mocked(configModule.readConfigFileSnapshot).mockImplementation(async () =>
+      configSnapshot(currentConfig),
+    );
     const { engine, stepId } = await startGatewayWizard({
       verifiedInference,
-      deps: {
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-      },
     });
     currentConfig = changedConfig;
     const cancelled = await engine.cancelWizard({ stepId });

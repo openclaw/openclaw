@@ -670,7 +670,6 @@ export function truncateOversizedToolResultsInMessages(
   truncatedCount: number;
   aggregateTruncatedCount: number;
   aggregatePressureEngaged: boolean;
-  aggregateBudgetChars: number;
 } {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets({
     contextWindowTokens,
@@ -713,7 +712,6 @@ export function truncateOversizedToolResultsInMessages(
     truncatedCount: plan.changedIndices.size,
     aggregateTruncatedCount: plan.aggregateReplacementCount,
     aggregatePressureEngaged: plan.aggregatePressureExceeded,
-    aggregateBudgetChars,
   };
 }
 
@@ -989,8 +987,6 @@ function buildToolResultReplacementPlan(params: {
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];
   });
-  const toolResultCount = candidates.length;
-  const totalToolResultChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   const changedIndices = new Set<number>();
   let messages = params.messages;
   const replace = (
@@ -1109,8 +1105,6 @@ function buildToolResultReplacementPlan(params: {
     aggregatePressureExceeded,
     oversizedReducibleChars,
     aggregateReducibleChars,
-    toolResultCount,
-    totalToolResultChars,
   };
 }
 
@@ -1129,12 +1123,7 @@ export function estimateToolResultReductionPotential(params: {
   const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 
   return {
-    maxChars,
-    aggregateBudgetChars,
-    toolResultCount: plan.toolResultCount,
-    totalToolResultChars: plan.totalToolResultChars,
     oversizedCount: plan.oversizedReplacementCount,
-    oversizedReducibleChars: plan.oversizedReducibleChars,
     aggregateReducibleChars: plan.aggregateReducibleChars,
     maxReducibleChars,
   };

@@ -22,11 +22,11 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import {
-  createCompactionHandlers,
+  createCompactionExtension,
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
-import type { ToolDefinition } from "./extensions/types.js";
+import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -59,10 +59,10 @@ function queuedEvents(session: Awaited<ReturnType<typeof createTestSession>>["se
   };
 }
 
-function createCompactingSession(options: Parameters<typeof createTestSession>[0] = {}) {
+async function createCompactingSession(options: Parameters<typeof createTestSession>[0] = {}) {
   return createTestSession({
     settingsManager: createAutoCompactionSettings(),
-    resourceLoader: createResourceLoader(createCompactionHandlers()),
+    resourceLoader: await createResourceLoader(createCompactionExtension()),
     ...options,
   });
 }
@@ -323,16 +323,22 @@ describe("AgentSession loop correctness", () => {
 
   it("emits agent_settled once after a normal run", async () => {
     const lifecycleEvents: string[] = [];
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["agent_end", [async () => lifecycleEvents.push("agent_end")]],
-      ["agent_settled", [async () => lifecycleEvents.push("agent_settled")]],
-    ]);
+    const handlers: ExtensionFactory = (api) => {
+      api.on("agent_end", async () => {
+        lifecycleEvents.push("agent_end");
+      });
+      api.on("agent_settled", async () => {
+        lifecycleEvents.push("agent_settled");
+      });
+    };
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
         createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
       ),
     );
-    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+    const { session } = await createTestSession({
+      resourceLoader: await createResourceLoader(handlers),
+    });
 
     await session.prompt("new prompt");
 
@@ -378,7 +384,7 @@ describe("AgentSession loop correctness", () => {
     );
     const { session } = await createTestSession({
       settingsManager,
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     session.subscribe((event) => {
       if (event.type === "compaction_end") {
@@ -399,14 +405,14 @@ describe("AgentSession loop correctness", () => {
   });
 
   it("surfaces threshold safeguard rejection without appending compaction state", async () => {
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["session_before_compact", [async () => ({ cancel: true })]],
-    ]);
+    const handlers: ExtensionFactory = (api) => {
+      api.on("session_before_compact", async () => ({ cancel: true }));
+    };
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       textResponse(activeModel, "complete answer", activeModel.contextWindow),
     );
     const { session, sessionManager } = await createCompactingSession({
-      resourceLoader: createResourceLoader(handlers),
+      resourceLoader: await createResourceLoader(handlers),
     });
     const compactionEvents = collectCompactionEnds(session);
 
@@ -491,7 +497,7 @@ describe("AgentSession loop correctness", () => {
     );
     const { session } = await createTestSession({
       settingsManager,
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     session.subscribe((event) => {
       if (event.type === "compaction_end") {
@@ -661,7 +667,7 @@ describe("AgentSession loop correctness", () => {
         );
       });
       const { session, sessionManager } = await createCompactingSession({
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       });
       const compactionEvents = collectCompactionEnds(session);
 
@@ -695,7 +701,7 @@ describe("AgentSession loop correctness", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager,
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
 
     const result = await session[agentSessionAutomaticCompaction]();
@@ -717,7 +723,7 @@ describe("AgentSession loop correctness", () => {
     const { session } = await createTestSession({
       sessionManager,
       settingsManager,
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
 
     await expect(session.compact()).rejects.toThrow(
@@ -759,7 +765,7 @@ describe("AgentSession loop correctness", () => {
         compaction: { enabled: true, reserveTokens: 8_192, keepRecentTokens: 1 },
         retry: { enabled: false },
       }),
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
     const originalEntries = sessionManager.getEntries();
 
@@ -806,7 +812,7 @@ describe("AgentSession loop correctness", () => {
         return createAssistantResultStream(createOverflowAssistant(activeModel));
       });
       const { session, sessionManager } = await createCompactingSession({
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       });
       const compactionEvents = collectCompactionEnds(session);
 
@@ -836,7 +842,7 @@ describe("AgentSession loop correctness", () => {
       let agentRequests = 0;
       let summaryRequests = 0;
       const created = await createCompactingSession({
-        resourceLoader: createResourceLoader(),
+        resourceLoader: await createResourceLoader(),
       });
       const { session } = created;
       streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
@@ -899,7 +905,7 @@ describe("AgentSession loop correctness", () => {
     });
     const { session, sessionManager } = await createTestSession({
       settingsManager,
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
     session.subscribe((event) => {
       if (event.type === "compaction_end") {

@@ -830,6 +830,11 @@ changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
 
+Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
+one read snapshot. Paging preserves all selected events and their sequence order;
+it does not impose a history cutoff. Individual oversized events retain bounded
+byte slicing.
+
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are
 isolate-local: statement events are emitted in the database worker, and request

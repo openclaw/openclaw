@@ -91,7 +91,7 @@ import {
 import {
   registerWorkerGatewayToolAvailabilityTests,
   registerWorkerGatewayToolRpcTests,
-} from "./worker-runtime-gateway-tools.suite.js";
+} from "./worker-runtime-gateway-tools.test-support.js";
 import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
 import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";

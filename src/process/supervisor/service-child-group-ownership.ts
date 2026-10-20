@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
 
@@ -17,6 +18,7 @@ export type ProcessCommand =
 
 type GroupMember = {
   pid: number;
+  ppid?: number;
   pgid: number;
   state: string;
   command?: { ppid: number } & ProcessCommand;
@@ -184,18 +186,27 @@ export function* readProcessGroupMembers(
   }
   if (process.platform === "darwin") {
     for (const member of readDarwinProcessCensus(timeoutMs)) {
-      const command = includeCommand
-        ? member.state.startsWith("Z") || member.pid === 0
-          ? { argv: [] }
-          : commandInspection?.readDarwinCommand(member.pid, member.owner)
-        : undefined;
+      const row = { pid: member.pid, pgid: member.pgid, state: member.state };
+      let command: ProcessCommand | undefined;
+      try {
+        command = includeCommand
+          ? member.state.startsWith("Z") || member.pid === 0
+            ? { argv: [] }
+            : commandInspection?.readDarwinCommand(member.pid, member.owner)
+          : undefined;
+      } catch (error) {
+        if (!(error instanceof ProcSafeError) || error.code !== "incomplete") {
+          throw error;
+        }
+        // Preserve unknown custody for this PID without dropping later observations.
+        yield { ...row, ppid: member.ppid };
+        continue;
+      }
       if (includeCommand && !command) {
         continue;
       }
       yield {
-        pid: member.pid,
-        pgid: member.pgid,
-        state: member.state,
+        ...row,
         ...(command ? { command: { ppid: member.ppid, owner: member.owner, ...command } } : {}),
       };
     }

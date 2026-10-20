@@ -73,6 +73,9 @@ const paginationSchema = {
 };
 const snapshotSchema = json.object(
   {
+    board: json.optional(
+      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
+    ),
     widgetHeights: json.optional(
       json.refine(
         json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),

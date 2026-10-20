@@ -1402,6 +1402,35 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
+  owner_key TEXT NOT NULL PRIMARY KEY,
+  source_identity TEXT NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
+  owner_json TEXT NOT NULL,
+  backend_id TEXT NOT NULL CHECK (backend_id = 'docker'),
+  backend_target_json TEXT NOT NULL,
+  workspace_binding_json TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_started_at TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  phase TEXT NOT NULL CHECK (phase IN ('reserved', 'prepared', 'running', 'stopping', 'uncertain', 'stopped')),
+  receipt_json TEXT,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (phase NOT IN ('prepared', 'running') OR receipt_json IS NOT NULL)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container
+  ON sandbox_persistent_execs(container_id, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container_name
+  ON sandbox_persistent_execs(container_name, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_source
+  ON sandbox_persistent_execs(source_identity, owner_key);
+
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,

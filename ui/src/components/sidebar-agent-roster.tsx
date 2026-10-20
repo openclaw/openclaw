@@ -13,6 +13,8 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
+import { clawCreatorFlow } from "../pages/claws/creator-flow.ts";
+import { canCreateClawDraft } from "../pages/claws/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -46,8 +48,6 @@ function cachedRosterCards(host: RosterHost) {
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
     activeNow: false,
-    sessionCount: 0,
-    unreadCount: 0,
     lastActiveAt: 0,
     preview: undefined,
     assistantPreview: undefined,
@@ -141,7 +141,7 @@ export function SidebarAgentRoster(props: RosterProps) {
       await currentContext.agents.refreshList();
     }
   };
-  const agentMenu = (card: () => { id: string; name: string; sessionCount: number }) => (
+  const agentMenu = (card: () => { id: string; name: string }) => (
     <Menu
       id={`sidebar-agent-roster-${card().id}`}
       class="sidebar-customize-menu sidebar-agent-roster__menu"
@@ -169,6 +169,9 @@ export function SidebarAgentRoster(props: RosterProps) {
             context.agentSelection.setScope(card().id);
             host().onNavigate?.("sessions");
             break;
+          case "create-claw":
+            void clawCreatorFlow(context).start(card().id);
+            break;
           case "settings":
             context.navigate("agents", {
               pathname: pathForAgentPanel(card().id, null, context.basePath),
@@ -192,6 +195,16 @@ export function SidebarAgentRoster(props: RosterProps) {
           class: "sidebar-customize-menu__item",
           icon: <Icon name="listTree" />,
         },
+        ...(canCreateClawDraft(context)
+          ? [
+              {
+                id: "create-claw",
+                label: t("clawsDraft.title"),
+                class: "sidebar-customize-menu__item",
+                icon: <Icon name="box" />,
+              },
+            ]
+          : []),
         {
           id: "settings",
           label: t("nav.settings"),

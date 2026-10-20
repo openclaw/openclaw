@@ -175,6 +175,7 @@ async function applyWorkerTranscriptCommit(params: {
             databaseIdentity: databaseIdentity.physicalIdentity,
             sessionKey: target.sessionKey,
             entry: committed.entry,
+            fullEntry: committed.entry,
           });
         }
         if (committed.projectionNeedsReconcile) {

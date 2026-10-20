@@ -176,7 +176,6 @@ export function defineMediaGenerationDuplicateTests(
         requesterSessionKey: agentSessionKey,
         task: testCase.request.prompt,
         status: "succeeded",
-        createdAt: now - 20_000,
         endedAt: now - 10_000,
         progressSummary: testCase.progressSummary,
       },

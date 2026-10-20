@@ -105,8 +105,8 @@ beforeEach(() => {
 
 describe("Browser node proxy nested watchdogs", () => {
   it.each([
-    ["ACT_EVALUATE_DISABLED", { code: "ACT_EVALUATE_DISABLED", unrecognizedCode: undefined }],
-    ["ACT_FUTURE_CODE", { code: undefined, unrecognizedCode: true }],
+    ["ACT_EVALUATE_DISABLED", { code: "ACT_EVALUATE_DISABLED" }],
+    ["ACT_FUTURE_CODE", { code: undefined }],
   ] as const)("preserves the bounded action-code state for %s", async (code, expected) => {
     const body = { error: "evaluation disabled", code };
     runtime.callGatewayTool.mockResolvedValueOnce({

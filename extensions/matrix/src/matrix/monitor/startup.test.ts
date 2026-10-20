@@ -3,8 +3,8 @@ import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 const deps = vi.hoisted(() => ({
-  summarizeMatrixDeviceHealth:
-    vi.fn<typeof import("../device-health.js").summarizeMatrixDeviceHealth>(),
+  listStaleOpenClawMatrixDevices:
+    vi.fn<typeof import("../device-health.js").listStaleOpenClawMatrixDevices>(),
   syncMatrixOwnProfile: vi.fn<typeof import("../profile.js").syncMatrixOwnProfile>(),
   ensureMatrixStartupVerification:
     vi.fn<typeof import("./startup-verification.js").ensureMatrixStartupVerification>(),
@@ -13,7 +13,7 @@ const deps = vi.hoisted(() => ({
 }));
 vi.mock("../device-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../device-health.js")>()),
-  summarizeMatrixDeviceHealth: deps.summarizeMatrixDeviceHealth,
+  listStaleOpenClawMatrixDevices: deps.listStaleOpenClawMatrixDevices,
 }));
 vi.mock("../profile.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../profile.js")>()),
@@ -67,11 +67,7 @@ function createProfileSyncResult(
 }
 describe("runMatrixStartupMaintenance", () => {
   beforeEach(() => {
-    deps.summarizeMatrixDeviceHealth.mockReset().mockReturnValue({
-      currentDeviceId: null,
-      staleOpenClawDevices: [],
-      currentOpenClawDevices: [],
-    });
+    deps.listStaleOpenClawMatrixDevices.mockReset().mockReturnValue([]);
     deps.syncMatrixOwnProfile.mockReset().mockResolvedValue(createProfileSyncResult());
     deps.ensureMatrixStartupVerification.mockReset().mockResolvedValue({
       kind: "verified",
@@ -141,13 +137,9 @@ describe("runMatrixStartupMaintenance", () => {
   });
   it("reports stale devices, pending verification, and restored legacy backups", async () => {
     const params = createParams();
-    deps.summarizeMatrixDeviceHealth.mockReturnValue({
-      currentDeviceId: null,
-      staleOpenClawDevices: [
-        { deviceId: "DEV123", displayName: "OpenClaw Device", current: false },
-      ],
-      currentOpenClawDevices: [],
-    });
+    deps.listStaleOpenClawMatrixDevices.mockReturnValue([
+      { deviceId: "DEV123", displayName: "OpenClaw Device", current: false },
+    ]);
     deps.ensureMatrixStartupVerification.mockResolvedValue({
       kind: "pending",
       verification: createVerificationStatus(),

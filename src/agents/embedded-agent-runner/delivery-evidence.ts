@@ -144,14 +144,11 @@ function hasVisibleMessagingToolTarget(value: unknown): boolean {
   );
 }
 
-function collectPayloadMediaUrls(
-  payloads: unknown,
-  include?: (payload: unknown) => boolean,
-): string[] {
+function collectPayloadMediaUrls(payloads: unknown): string[] {
   const urls = new Set<string>();
   for (const payload of Array.isArray(payloads) ? payloads : []) {
     const record = asOptionalRecord(payload);
-    if (record && (!include || include(payload))) {
+    if (record) {
       collectMediaUrlsFromRecord(record, urls);
     }
   }

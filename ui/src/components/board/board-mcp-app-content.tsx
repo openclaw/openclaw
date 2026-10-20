@@ -1,8 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 type ReadyAppView = Extract<BoardWidgetAppViewState, { status: "ready" }>;
 type RetiringAppView = HTMLElement & {

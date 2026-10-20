@@ -24,6 +24,7 @@ defineSolidBridge<ChatPageProps>(
     });
     onSettled(() => registerSessionSplitHost(host, state.sessionSplitAvailable));
     return createComponent(ChatPageBody, {
+      context: application,
       get snapshot() {
         return state.snapshot();
       },

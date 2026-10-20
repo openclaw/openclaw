@@ -101,6 +101,7 @@ export const forcedUnitFastTestFiles = [
   "src/mcp/openclaw-tools-serve.test.ts",
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
+  "src/node-host/invoke-system-run-plan.cwd.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",

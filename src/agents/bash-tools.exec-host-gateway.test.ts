@@ -1070,7 +1070,7 @@ describe("processGatewayAllowlist", () => {
     expect(defaultExecAutoReviewerMock).toHaveBeenCalledOnce();
     expect(result.deniedResult?.details.status).toBe("failed");
     expect(result.deniedResult?.content[0]).toMatchObject({
-      text: `Exec denied (gateway id=${approvalRouteFixture.id}, approval-timeout): echo ok`,
+      text: `Exec denied (gateway id=${approvalRouteFixture.id}, approval-timeout): echo ok\nCommand did not run: approval timed out.`,
     });
   });
 

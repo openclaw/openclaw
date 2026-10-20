@@ -65,13 +65,6 @@ const STARTUP_PROGRESS_PHASES = new Set([
 const RECOVERY_PHASE = "sidecars.subagent-recovery";
 const RECOVERY_TIMINGS = new Map([
   ["sidecars.recovery-readers", "readersMs"],
-  ["sidecars.delivery-recovery", "deliveryMs"],
-  ["sidecars.delivery-discovery", "deliveryDiscoveryMs"],
-  ["sidecars.delivery-entries", "deliveryEntriesMs"],
-  ["sidecars.delivery-history", "deliveryHistoryMs"],
-  ["sidecars.delivery-replay", "deliveryReplayMs"],
-  ["sidecars.delivery-notices", "deliveryNoticesMs"],
-  ["sidecars.delivery-retry-wait", "retryWaitMs"],
   ["sidecars.exec-recovery", "execMs"],
   ["sidecars.subagent-load", "registryLoadMs"],
   ["sidecars.subagent-activation", "registryActivationMs"],
