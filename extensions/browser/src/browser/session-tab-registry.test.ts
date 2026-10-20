@@ -2,13 +2,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloseTab, RegistryModule } from "./session-tab-registry.sqlite.test-helpers.js";
+import type { CloseTab } from "./session-tab-registry.sqlite.test-helpers.js";
 
-const clientMocks = vi.hoisted(() => ({
-  browserCloseTabByRawTargetId: vi.fn(async () => {}),
-}));
-
-vi.mock("./client-tab-close.runtime.js", () => clientMocks);
+const closeClient = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("./client-tab-close.runtime.js", () => ({ browserCloseTabByRawTargetId: closeClient }));
 
 import {
   closeTrackedBrowserTabsForSessions,
@@ -25,6 +22,18 @@ type CloseParams = Parameters<typeof closeTrackedBrowserTabsForSessions>[0];
 type CloseOptions = Omit<CloseParams, "sessionKeys"> &
   SessionEntryCurrentPreparation & { sessionKeys?: CloseParams["sessionKeys"] };
 
+const controlRoute = (port: number) => ({
+  kind: "browser-control" as const,
+  baseUrl: `http://127.0.0.1:${port}`,
+});
+const surface = (port: number) => ({ route: controlRoute(port), profile: "openclaw" });
+const bundleTab = {
+  sessionKey,
+  targetId: "bridge-tab",
+  route: controlRoute(9999),
+  profile: "remote",
+};
+
 function close(params: CloseOptions = {}) {
   return closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], ...params });
 }
@@ -40,17 +49,12 @@ function closeGate() {
     entered.resolve();
     return release.promise;
   };
-  const prepareCurrent = async () => {
-    await wait();
-    return true;
-  };
+  const prepareCurrent = () => wait().then(() => true);
   return { entered, release, wait, prepareCurrent };
 }
 
-async function whileClosing(
-  gate: ReturnType<typeof closeGate>,
-  action: () => void | Promise<void>,
-) {
+type CleanupGate = ReturnType<typeof closeGate>;
+async function whileClosing(gate: CleanupGate, action: () => void | Promise<void>) {
   try {
     await gate.entered.promise;
     await action();
@@ -59,18 +63,19 @@ async function whileClosing(
   }
 }
 
-function track(targetId: string, params: TrackParams = {}) {
-  const tab = { sessionKey, targetId, ...params };
+async function track(targetId: string, params: TrackParams = {}) {
+  const tab = { sessionKey, targetId, now: 1_000, ...params };
   if (tab.sessionKey) {
     trackedSessionKeys.add(tab.sessionKey);
   }
-  return trackSessionBrowserTabRuntime(tab);
+  await trackSessionBrowserTabRuntime(tab);
+  return tab;
 }
 
 describe("session tab registry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    clientMocks.browserCloseTabByRawTargetId.mockClear();
+    closeClient.mockClear();
     trackedSessionKeys.clear();
   });
 
@@ -84,7 +89,7 @@ describe("session tab registry", () => {
 
   it("reserves cleanup while its client closes before an overlapping closer can fail", async () => {
     const gate = closeGate();
-    clientMocks.browserCloseTabByRawTargetId.mockImplementationOnce(gate.wait);
+    closeClient.mockImplementationOnce(gate.wait);
     await track("closing-client");
     const onWarn = vi.fn();
     const closeTab = vi.fn<() => Promise<void>>(() => {
@@ -95,7 +100,7 @@ describe("session tab registry", () => {
       pending.push(close({ closeTab, onWarn }));
     });
     await expect(Promise.all(pending)).resolves.toEqual([1, 0]);
-    expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledOnce();
+    expect(closeClient).toHaveBeenCalledOnce();
     expect(closeTab).not.toHaveBeenCalled();
     expect(onWarn).not.toHaveBeenCalled();
   });
@@ -121,11 +126,7 @@ describe("session tab registry", () => {
   });
 
   it("coalesces overlapping lifecycle and sweep cleanup for one volatile target", async () => {
-    await track("shared-tab", {
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
-      profile: "openclaw",
-      now: 1_000,
-    });
+    await track("shared-tab", { route: controlRoute(9222), profile: "openclaw" });
     const gate = createDeferred<void>();
     const closeTab = vi.fn(async () => await gate.promise);
 
@@ -139,12 +140,7 @@ describe("session tab registry", () => {
   });
 
   it("preserves lifecycle cleanup after activity cancels a shared sweep", async () => {
-    const tab = {
-      sessionKey,
-      targetId: "touched-during-sweep",
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" } as const,
-    };
-    await track(tab.targetId, { ...tab, now: 1_000 });
+    const tab = await track("touched-during-sweep", { route: controlRoute(9222) });
     const gate = closeGate();
     const closeTab = vi.fn(async () => {});
     const sweep = sweepTrackedBrowserTabs({
@@ -165,136 +161,99 @@ describe("session tab registry", () => {
     await expectClosed(0, { closeTab });
   });
 
-  it.each(["lifecycle", "sweep"] as const)(
-    "preserves %s activity semantics while cleanup authority prepares",
-    async (kind) => {
-      const tab = { sessionKey, targetId: "active-tab" };
-      await track(tab.targetId, { ...tab, now: 1_000 });
-      const gate = closeGate();
-      const { prepareCurrent } = gate;
-      const cleanup =
-        kind === "lifecycle"
-          ? close({ prepareCurrent })
-          : sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1, prepareCurrent });
-      await whileClosing(gate, async () => {
-        expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
-        await touchSessionBrowserTab({ ...tab, now: 11_000 });
-      });
-      await expect(cleanup).resolves.toBe(kind === "lifecycle" ? 1 : 0);
-      expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
-        kind === "lifecycle" ? 1 : 0,
-      );
-    },
-  );
-
-  it("does not adopt a new registration while an earlier selected tab closes", async () => {
-    const next = { sessionKey, targetId: "next-tab" };
-    await track("first-tab", { now: 1_000 });
-    await track(next.targetId, { ...next, now: 1_000 });
+  it.each(["lifecycle", "sweep"] as const)("keeps %s activity semantics", async (kind) => {
+    const tab = await track("active-tab");
     const gate = closeGate();
-    const closeTab = vi.fn(async ({ targetId }: { targetId: string }) => {
-      if (targetId === "first-tab") {
-        await gate.wait();
-      }
-    });
-    const cleanup = close({ closeTab });
+    const { prepareCurrent } = gate;
+    const cleanup =
+      kind === "lifecycle"
+        ? close({ prepareCurrent })
+        : sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1, prepareCurrent });
     await whileClosing(gate, async () => {
-      await untrackSessionBrowserTab(next);
-      await track(next.targetId, { ...next, now: 1_000 });
+      expect(closeClient).not.toHaveBeenCalled();
+      await touchSessionBrowserTab({ ...tab, now: 11_000 });
     });
-    await expect(cleanup).resolves.toBe(1);
-    expect(closeTab).toHaveBeenCalledOnce();
-    await expectClosed(1, { closeTab });
-    expect(closeTab).toHaveBeenLastCalledWith(expect.objectContaining({ targetId: "next-tab" }));
+    await expect(cleanup).resolves.toBe(kind === "lifecycle" ? 1 : 0);
+    expect(closeClient).toHaveBeenCalledTimes(kind === "lifecycle" ? 1 : 0);
   });
 
-  it.each(["during-prepare", "before-dispatch", "during-close"] as const)(
-    "preserves a registration replaced %s without dispatching against it",
-    async (replacementPhase) => {
-      const tab = { sessionKey, targetId: "replaced-tab" };
-      await track(tab.targetId, { ...tab, now: 1_000 });
+  it.each(["prepare", "dispatch", "close", "earlier-close"] as const)(
+    "preserves a replaced registration (%s)",
+    async (phase) => {
+      if (phase === "earlier-close") {
+        await track("first-tab");
+      }
+      const tab = await track("replaced-tab");
       const { entered, release, wait } = closeGate();
       let replaced = false;
-      const closeTab = vi.fn(async () => {
-        expect.soft(replaced).toBe(false);
-        await wait();
+      const closeTab = vi.fn(async ({ targetId }: { targetId: string }) => {
+        if (phase !== "earlier-close") {
+          expect.soft(replaced).toBe(false);
+        }
+        if (phase !== "earlier-close" || targetId === "first-tab") {
+          await wait();
+        }
       });
       const cleanup = close({
-        closeTab: replacementPhase === "during-prepare" ? undefined : closeTab,
-        ...(replacementPhase === "during-prepare"
-          ? {
-              prepareCurrent: async () => {
+        closeTab: phase === "prepare" ? undefined : closeTab,
+        prepareCurrent:
+          phase === "prepare"
+            ? async () => {
                 await release.promise;
                 return true;
-              },
-            }
-          : {}),
+              }
+            : undefined,
       });
       try {
-        if (replacementPhase === "during-close") {
+        if (phase === "close" || phase === "earlier-close") {
           await entered.promise;
         }
         replaced = true;
         await untrackSessionBrowserTab(tab);
-        await track(tab.targetId, { ...tab, now: 1_000 });
+        await track(tab.targetId, tab);
       } finally {
         release.resolve();
       }
-      await expect(cleanup).resolves.toBe(replacementPhase === "during-close" ? 1 : 0);
-      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
-      const freshClose = vi.fn(async () => {});
+      const admitted = phase === "close" || phase === "earlier-close";
+      await expect(cleanup).resolves.toBe(admitted ? 1 : 0);
+      expect(closeTab).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      expect(closeClient).not.toHaveBeenCalled();
+      const freshClose = phase === "earlier-close" ? closeTab : vi.fn(async () => {});
       await expectClosed(1, { closeTab: freshClose });
-      expect(freshClose).toHaveBeenCalledOnce();
+      expect(freshClose).toHaveBeenCalledTimes(phase === "earlier-close" ? 2 : 1);
+      expect(freshClose).toHaveBeenLastCalledWith(
+        expect.objectContaining({ targetId: tab.targetId }),
+      );
     },
   );
 
-  it.each([false, true])(
-    "retires only acquired cross-session registrations (replace=%s)",
-    async (replace) => {
-      const first = { sessionKey: "agent:main:first", targetId: "shared-target" };
-      const second = { sessionKey: "agent:main:second", targetId: "shared-target" };
-      await track(first.targetId, { ...first, now: 1_000 });
-      await track(second.targetId, { ...second, now: 1_000 });
-      const gate = closeGate();
-      const closeTab = vi.fn(gate.wait);
-      const cleanup = close({
-        sessionKeys: [first.sessionKey],
-        closeTab,
-      });
-      await whileClosing(gate, async () => {
-        if (replace) {
-          await untrackSessionBrowserTab(second);
-          await track(second.targetId, { ...second, now: 1_000 });
-        }
-      });
-      await expect(cleanup).resolves.toBe(1);
-      const freshClose = vi.fn(async () => {});
-      await expectClosed(replace ? 1 : 0, {
-        sessionKeys: [second.sessionKey],
-        closeTab: freshClose,
-      });
-      expect(freshClose).toHaveBeenCalledTimes(replace ? 1 : 0);
-    },
-  );
+  it.each([false, true])("retires only acquired registrations (replace=%s)", async (replace) => {
+    const first = await track("shared-target", { sessionKey: "agent:main:first" });
+    const second = await track("shared-target", { sessionKey: "agent:main:second" });
+    const gate = closeGate();
+    const closeTab = vi.fn(gate.wait);
+    const cleanup = close({ sessionKeys: [first.sessionKey], closeTab });
+    await whileClosing(gate, async () => {
+      if (replace) {
+        await untrackSessionBrowserTab(second);
+        await track(second.targetId, second);
+      }
+    });
+    await expect(cleanup).resolves.toBe(1);
+    const freshClose = vi.fn(async () => {});
+    await expectClosed(replace ? 1 : 0, {
+      sessionKeys: [second.sessionKey],
+      closeTab: freshClose,
+    });
+    expect(freshClose).toHaveBeenCalledTimes(replace ? 1 : 0);
+  });
 
   it("isolates volatile aliases by browser surface", async () => {
-    await track("RAW-A", {
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9001" },
-      profile: "openclaw",
-      aliases: ["shared"],
-      now: 1_000,
-    });
-    await track("RAW-B", {
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9002" },
-      profile: "openclaw",
-      aliases: ["shared"],
-      now: 1_000,
-    });
+    const first = await track("RAW-A", { ...surface(9001), aliases: ["shared"] });
+    await track("RAW-B", { ...surface(9002), aliases: ["shared"] });
     await touchSessionBrowserTab({
-      sessionKey,
+      ...first,
       targetId: "shared",
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9001" },
-      profile: "openclaw",
       now: 9_000,
     });
     const closeTab = vi.fn(async () => {});
@@ -335,15 +294,10 @@ describe("session tab registry", () => {
   });
 
   it("caps each session by least-recently-used order and honors session filters", async () => {
-    vi.setSystemTime(1_000);
     await track("tab-a");
-    vi.setSystemTime(2_000);
-    await track("tab-b");
-    vi.setSystemTime(3_000);
-    await track("tab-c");
-    await track("child-tab", {
-      sessionKey: "agent:main:subagent:child",
-    });
+    await track("tab-b", { now: 2_000 });
+    await track("tab-c", { now: 3_000 });
+    await track("child-tab", { sessionKey: "agent:main:subagent:child", now: 3_000 });
     const closeTab = vi.fn(async () => {});
 
     await expect(
@@ -359,24 +313,19 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    await expectClosed(1, {
-      sessionKeys: ["agent:main:subagent:child"],
-      closeTab: async () => {},
-    });
+    await expectClosed(1, { sessionKeys: ["agent:main:subagent:child"], closeTab: async () => {} });
   });
 });
 
-const processStateSymbols = [
-  "openclaw.browser.session-tabs.volatile",
-  "openclaw.browser.session-tabs.volatile-cleanup",
-  "openclaw.browser.session-tabs.volatile-aliases",
-  "openclaw.browser.session-tabs.exact-volatile-aliases",
-  "openclaw.browser.session-tabs.deferred-diagnostics",
-];
-
 function clearProcessLocalTabState(): void {
   const state = globalThis as Record<symbol, unknown>;
-  for (const name of processStateSymbols) {
+  for (const name of [
+    "openclaw.browser.session-tabs.volatile",
+    "openclaw.browser.session-tabs.volatile-cleanup",
+    "openclaw.browser.session-tabs.volatile-aliases",
+    "openclaw.browser.session-tabs.exact-volatile-aliases",
+    "openclaw.browser.session-tabs.deferred-diagnostics",
+  ]) {
     delete state[Symbol.for(name)];
   }
 }
@@ -384,12 +333,18 @@ function clearProcessLocalTabState(): void {
 describe("volatile session tab cleanup across Browser plugin bundles", () => {
   let freshModuleCounter = 0;
 
-  async function freshRegistry(label: string): Promise<RegistryModule> {
+  async function freshRegistry(label: string) {
     freshModuleCounter += 1;
-    return await importFreshModule<RegistryModule>(
+    const registry = await importFreshModule<typeof import("./session-tab-registry.js")>(
       import.meta.url,
       `./session-tab-registry.js?concurrent=${label}-${freshModuleCounter}`,
     );
+    return {
+      ...registry,
+      track: () => registry.trackSessionBrowserTab(bundleTab),
+      close: (params: CloseOptions = {}) =>
+        registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], ...params }),
+    };
   }
 
   beforeEach(clearProcessLocalTabState);
@@ -400,64 +355,40 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
     await registry.trackSessionBrowserTab({
       sessionKey,
       targetId: "unpaired-tab",
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
+      route: controlRoute(9999),
     });
     const closeTab = vi.fn<CloseTab>(async () => {});
     const onWarn = vi.fn();
+    const unpaired = { sessionKeys: [sessionKey], sessionEntryCurrent: {}, closeTab, onWarn };
     await expect(
-      Reflect.apply(registry.closeTrackedBrowserTabsForSessions.bind(registry), undefined, [
-        {
-          sessionKeys: [sessionKey],
-          sessionEntryCurrent: {
-            source: {
-              agentId: "main",
-              path: "/synthetic/agent.sqlite",
-              sessionKey,
-              databaseIdentity: "synthetic-source",
-            },
-            assertCurrent: vi.fn(),
-          },
-          closeTab,
-          onWarn,
-        },
-      ]),
+      Reflect.apply(registry.closeTrackedBrowserTabsForSessions, registry, [unpaired]),
     ).resolves.toBe(0);
     expect(closeTab).not.toHaveBeenCalled();
     expect(onWarn).toHaveBeenCalledExactlyOnceWith(
       "browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent",
     );
-    await expect(
-      registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab }),
-    ).resolves.toBe(1);
+    await expect(registry.close({ closeTab })).resolves.toBe(1);
     expect(closeTab).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement registration when a waiting cleanup caller becomes stale", async () => {
     const first = await freshRegistry("first-owner");
     const follower = await freshRegistry("waiting-owner");
-    const tab = {
-      sessionKey,
-      targetId: "bridge-tab",
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" } as const,
-      profile: "remote",
-    };
-    await first.trackSessionBrowserTab(tab);
+    await first.track();
     const { entered: started, release: finish, wait } = closeGate();
     const closeTab = vi.fn<CloseTab>(wait);
     let current = true;
-    const params = { sessionKeys: [tab.sessionKey], closeTab, isCurrent: () => current };
-    const closing = first.closeTrackedBrowserTabsForSessions(params);
+    const params = { closeTab, isCurrent: () => current };
+    const closing = first.close(params);
     await started.promise;
-    await follower.trackSessionBrowserTab(tab);
-    const waiting = follower.closeTrackedBrowserTabsForSessions(params);
+    await follower.track();
+    const waiting = follower.close(params);
     try {
       current = false;
       finish.resolve();
       await expect(Promise.all([closing, waiting])).resolves.toEqual([1, 0]);
       expect(closeTab).toHaveBeenCalledOnce();
-      await expect(
-        follower.closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab }),
-      ).resolves.toBe(1);
+      await expect(follower.close({ closeTab })).resolves.toBe(1);
       expect(closeTab).toHaveBeenCalledTimes(2);
     } finally {
       finish.resolve();
@@ -468,23 +399,12 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
   it("shares one close attempt and releases a failed reservation for retry", async () => {
     const first = await freshRegistry("first");
     const duplicate = await freshRegistry("duplicate");
-    await first.trackSessionBrowserTab({
-      sessionKey,
-      targetId: "bridge-tab",
-      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
-      profile: "remote",
-    });
+    await first.track();
 
     const failedClose = createDeferred<void>();
     const closeTab = vi.fn<CloseTab>(async () => await failedClose.promise);
     const onWarn = vi.fn();
-    const firstAttempts = [first, duplicate].map((registry) =>
-      registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: [sessionKey],
-        closeTab,
-        onWarn,
-      }),
-    );
+    const firstAttempts = [first, duplicate].map((reg) => reg.close({ closeTab, onWarn }));
     failedClose.reject(new Error("network down"));
     await expect(Promise.all(firstAttempts)).resolves.toEqual([0, 0]);
     expect(closeTab).toHaveBeenCalledOnce();
@@ -492,12 +412,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
 
     const retryGate = createDeferred<void>();
     const retry = vi.fn<CloseTab>(async () => await retryGate.promise);
-    const retries = [duplicate, first].map((registry) =>
-      registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: [sessionKey],
-        closeTab: retry,
-      }),
-    );
+    const retries = [duplicate, first].map((registry) => registry.close({ closeTab: retry }));
     retryGate.resolve();
     const retryResults = await Promise.all(retries);
 
