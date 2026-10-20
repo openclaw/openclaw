@@ -1,6 +1,4 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
@@ -9,17 +7,16 @@ import {
   sessionResponseCase,
   splitColumns,
 } from "./chat-layout-fixtures.test-support.ts";
+import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Swarm history freshness" });
 
 suite.define(() => {
   it("keeps a completed Swarm outcome when compaction finishes in an unfocused pane", async () => {
-    const proofDir = createControlUiE2eArtifactDir("swarm-history-freshness");
     await suite.withPage({ viewport: { width: 1800, height: 1000 } }, async ({ page }) => {
       const parentKey = "agent:main:research";
       const otherKey = "agent:main:notes";
-      const groupId = `swarm:${parentKey}:research-run`;
       const child = {
         key: "agent:main:subagent:research-worker",
         sessionId: "research-worker-session",
@@ -27,7 +24,7 @@ suite.define(() => {
         label: "Research worker",
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
-        swarmGroupId: groupId,
+        swarmGroupId: `swarm:${parentKey}:research-run`,
         status: "done",
         updatedAt: 3,
       };
@@ -39,20 +36,7 @@ suite.define(() => {
         status: "done",
         hasActiveRun: false,
         updatedAt: 3,
-        swarm: {
-          groups: [
-            {
-              groupId,
-              createdAt: 1,
-              queued: 0,
-              running: 0,
-              done: 1,
-              failed: 0,
-              children: [{ sessionKey: child.key, status: "done" }],
-            },
-          ],
-          otherActiveGroups: 0,
-        },
+        swarm: swarmSnapshot(child.swarmGroupId, 1, [child]),
       };
       const other = { key: otherKey, kind: "direct", label: "Notes", updatedAt: 3 };
       await seedChatSettings(page, suite.server.baseUrl, {
@@ -115,7 +99,6 @@ suite.define(() => {
       );
       await gateway.resolveDeferred("sessions.compact", { ok: true, compacted: true });
       await research.getByText("Refreshed research results.", { exact: true }).waitFor();
-      await page.screenshot({ path: path.join(proofDir, "refreshed.png"), animations: "disabled" });
       await expect.poll(() => outcome.isVisible()).toBe(true);
     });
   });

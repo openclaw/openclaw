@@ -1,16 +1,10 @@
 import { expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Swarm descriptor request volume" });
-
-type SwarmSessionRow = GatewaySessionRow & {
-  kind: string;
-  label: string;
-  updatedAt: number;
-};
 
 suite.define(() => {
   it("uses delivered swarm rows through frequent child updates and a new member", async () => {
@@ -26,17 +20,25 @@ suite.define(() => {
         archived: false,
       };
       const clock = (step = 0) => ({ updatedAt: startedAt + step, snapshotAt: startedAt + step });
-      let children: SwarmSessionRow[] = Array.from({ length: 4 }, (_, index) => ({
+      const childRow = (
+        index: number,
+        label = `Worker ${index + 1}`,
+        step = 0,
+        status = "running",
+      ) => ({
         ...active,
-        ...clock(),
+        ...clock(step),
         key: `agent:main:subagent:describe-worker-${index}`,
         sessionId: `describe-worker-${index}`,
-        label: `Worker ${index + 1}`,
+        label,
+        status,
+        hasActiveRun: status === "running",
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
         swarmGroupId: groupId,
-      }));
-      const parentRow = (time: number): SwarmSessionRow => ({
+      });
+      let children = Array.from({ length: 4 }, (_, index) => childRow(index));
+      const parentRow = (time: number) => ({
         ...active,
         key: parentKey,
         sessionId: "describe-parent",
@@ -44,23 +46,7 @@ suite.define(() => {
         updatedAt: time,
         snapshotAt: time,
         childSessions: children.map((child) => child.key),
-        swarm: {
-          groups: [
-            {
-              groupId,
-              createdAt: startedAt,
-              queued: 0,
-              running: children.filter((child) => child.status === "running").length,
-              done: children.filter((child) => child.status === "done").length,
-              failed: 0,
-              children: children.map((child) => ({
-                sessionKey: child.key,
-                status: child.status === "done" ? "done" : "running",
-              })),
-            },
-          ],
-          otherActiveGroups: 0,
-        },
+        swarm: swarmSnapshot(groupId, startedAt, children),
       });
       const gateway = await installMockGateway(page, {
         sessionKey: parentKey,
@@ -77,7 +63,7 @@ suite.define(() => {
       });
       const initialDescribes = (await gateway.getRequests("sessions.describe")).length;
 
-      const publish = async (child: SwarmSessionRow, step: number, reason: string) => {
+      const publish = async (child: ReturnType<typeof childRow>, step: number, reason: string) => {
         const parent = parentRow(startedAt + step);
         await gateway.setMethodResponse("sessions.describe", { session: parent });
         await gateway.setMethodResponse(
@@ -101,13 +87,7 @@ suite.define(() => {
       for (let step = 1; step <= 12; step += 1) {
         const index = (step - 1) % 4;
         const status = Math.floor((step - 1) / 4) % 2 === 0 ? "done" : "running";
-        const child = {
-          ...children[index]!,
-          label: `Worker ${index + 1}, update ${step}`,
-          status,
-          hasActiveRun: status === "running",
-          ...clock(step),
-        } satisfies GatewaySessionRow;
+        const child = childRow(index, `Worker ${index + 1}, update ${step}`, step, status);
         children = children.map((entry, offset) => (offset === index ? child : entry));
         await publish(child, step, "run");
       }
@@ -119,15 +99,7 @@ suite.define(() => {
       expect.soft(updateDescribes).toBe(0);
       expect(await tasks.count()).toBe(4);
 
-      const added = {
-        ...children[0]!,
-        key: "agent:main:subagent:describe-worker-4",
-        sessionId: "describe-worker-4",
-        label: "Worker 5, newly launched",
-        status: "running",
-        hasActiveRun: true,
-        ...clock(13),
-      } satisfies GatewaySessionRow;
+      const added = childRow(4, "Worker 5, newly launched", 13);
       children = [...children, added];
       const beforeMember = (await gateway.getRequests("sessions.describe")).length;
       await publish(added, 13, "create");
@@ -135,10 +107,8 @@ suite.define(() => {
       const memberDescribes =
         (await gateway.getRequests("sessions.describe")).length - beforeMember;
       expect(memberDescribes).toBeLessThanOrEqual(1);
-      expect(
-        (await taskNames.allTextContents()).toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(
-        children.map((child) => child.label).toSorted((left, right) => left.localeCompare(right)),
+      expect((await taskNames.allTextContents()).toSorted()).toEqual(
+        children.map((child) => child.label).toSorted(),
       );
     });
   });
