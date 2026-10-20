@@ -20,6 +20,12 @@ describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies generic resource-exhausted codes as rate_limit", () => {
     expectKind({ provider: "openai", code: "RESOURCE_EXHAUSTED", message: "" }).toBe("rate_limit");
   });
+  it.each(["EACCES", "EPERM", "EROFS", "EIO"])(
+    "does not classify a provider transport %s as Gateway storage",
+    (code) => {
+      expectKind({ code, message: `connect ${code} /synthetic/model.sock` }).toBe("unclassified");
+    },
+  );
   it("classifies missing scope failures", () => {
     expectKind({
       provider: "openai",

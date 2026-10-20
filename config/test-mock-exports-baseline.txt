@@ -3633,7 +3633,6 @@
 ["src/cli/gateway-cli/run.option-collisions.test.ts","../../gateway/auth.js","b554f88e8fef6dfae67d09f5c5c3d94c3ace841a6425210948c0319f31070f84",1]
 ["src/cli/gateway-cli/run.option-collisions.test.ts","../../infra/dotenv-global.js","e92bee9535629f228c7008eb40e6ca4d04298fdb691c2b37fc3658566c1c626a",1]
 ["src/cli/gateway-cli/run.option-collisions.test.ts","../../infra/ports-format.js","9e1d1d8e64149a704fe70997690aab42a096fb6ea7e186dff73cdc24ecc96342",1]
-["src/cli/gateway-cli/run.option-collisions.test.ts","../../infra/ports-inspect.js","5d597fab261fbd211a4ebc191868cc1f5633fe093fb4cdd08980256d49880931",1]
 ["src/cli/gateway-cli/run.option-collisions.test.ts","../../logging/subsystem.js","4edca2e29b0387d89c15ecb7f76760e29be2e322e55b686d5d25fa9053166c9b",1]
 ["src/cli/gateway-cli/run.option-collisions.test.ts","../command-format.js","3f88f4821d1084b6a4a3883f943207ea69700c08382054a7f561fa165444231d",1]
 ["src/cli/gateway-cli/run.supervised-lock.test.ts","../../infra/tls/gateway.js","374e009583fcd8c04d96db6cb0fb89fd6faaa69bbfb55a24df8ea93b4511cd80",1]
