@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as downloads from "../../lib/download.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageJsonExport } from "./types.ts";
@@ -9,8 +8,8 @@ import {
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWeight,
-  createPage,
-  preloadUsage,
+  loadUsagePage,
+  usageCalls,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -66,8 +65,7 @@ it.each<[string, string[], string, string[], number]>([
     return { providers: [], points: [], logs: [] };
   });
   const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
-  const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
-  await preloadUsage(page);
+  const { page } = await loadUsagePage(request);
   const settled = async () => {
     await vi.waitFor(() => expect(page.usageLoading).toBe(false));
     await page.updateComplete;
@@ -102,7 +100,7 @@ it.each<[string, string[], string, string[], number]>([
   for (const [index, value] of ["sessions-csv", "json", "daily-csv"].entries()) {
     await selectUsageExport(menu, value);
     await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(index + 1));
-    const sent = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1];
+    const sent = usageCalls(request).at(-1)?.[1];
     expect(sent).toMatchObject(
       value === "daily-csv"
         ? { projection: "overview", limit: 50 }
@@ -115,22 +113,14 @@ it.each<[string, string[], string, string[], number]>([
   const csv = download.mock.calls.find(([filename]) => filename.endsWith(".csv"))![1];
   const [header, ...rows] = csv.split("\n").map((row) => row.split(","));
   const keys = sortedKeys(expected);
-  const rowKeys = rows.map(([key]) => {
-    if (key === undefined) {
-      throw new Error("Exported CSV row is missing its session key");
-    }
-    return key;
-  });
-  expect.soft(rowKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(keys);
+  expect.soft(rows.map(([key]) => key).toSorted()).toEqual(keys);
   expect
     .soft(rows.reduce((sum, row) => sum + Number(row[header!.indexOf("totalTokens")]), 0))
     .toBe(tokens);
   const payload = JSON.parse(
     download.mock.calls.find(([filename]) => filename.endsWith(".json"))![1],
   ) as UsageJsonExport;
-  expect
-    .soft(payload.sessions.map((session) => session.key).toSorted((a, b) => a.localeCompare(b)))
-    .toEqual(keys);
+  expect.soft(payload.sessions.map((session) => session.key).toSorted()).toEqual(keys);
   expect(payload.totals?.totalTokens).toBe(tokens);
   expect(payload.daily.reduce((sum, day) => sum + day.totalTokens, 0)).toBe(tokens);
   expect
