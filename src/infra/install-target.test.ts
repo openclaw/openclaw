@@ -1,4 +1,3 @@
-// Covers install target canonicalization and occupied-directory checks.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,23 +24,32 @@ beforeEach(() => {
   assertCanonicalPathWithinBaseMock.mockReset();
 });
 
+const withInstallDir = (run: (baseDir: string) => Promise<void>) =>
+  withTestDir({ prefix: "openclaw-install-target-" }, run);
+const resolveTarget = (baseDir: string, id = "demo") =>
+  resolveCanonicalInstallTarget({
+    baseDir,
+    id,
+    invalidNameMessage: "bad id",
+    boundaryLabel: "plugin dir",
+  });
+const available = (mode: "install" | "update") =>
+  ensureInstallTargetAvailable({
+    mode,
+    targetDir: "/tmp/demo",
+    alreadyExistsError: "already there",
+  });
+
 describe("resolveCanonicalInstallTarget", () => {
   it("creates the base dir and returns early for invalid install ids", async () => {
-    await withTestDir({ prefix: "openclaw-install-target-" }, async (root) => {
+    await withInstallDir(async (root) => {
       const baseDir = path.join(root, "plugins");
-      resolveSafeInstallDirMock.mockReturnValueOnce({
+      resolveSafeInstallDirMock.mockReturnValueOnce({ ok: false, error: "bad id" });
+
+      await expect(resolveTarget(baseDir, "../oops")).resolves.toEqual({
         ok: false,
         error: "bad id",
       });
-
-      await expect(
-        resolveCanonicalInstallTarget({
-          baseDir,
-          id: "../oops",
-          invalidNameMessage: "bad id",
-          boundaryLabel: "plugin dir",
-        }),
-      ).resolves.toEqual({ ok: false, error: "bad id" });
 
       const baseDirStat = await fs.stat(baseDir);
       expect(baseDirStat.isDirectory()).toBe(true);
@@ -50,51 +58,23 @@ describe("resolveCanonicalInstallTarget", () => {
   });
 
   it("returns canonical boundary errors for Error and non-Error throws", async () => {
-    await withTestDir({ prefix: "openclaw-install-target-" }, async (baseDir) => {
+    await withInstallDir(async (baseDir) => {
       const targetDir = path.join(baseDir, "demo");
-      resolveSafeInstallDirMock.mockReturnValue({
-        ok: true,
-        path: targetDir,
-      });
+      resolveSafeInstallDirMock.mockReturnValue({ ok: true, path: targetDir });
       assertCanonicalPathWithinBaseMock.mockRejectedValueOnce(new Error("escaped"));
       assertCanonicalPathWithinBaseMock.mockRejectedValueOnce("boom");
 
-      await expect(
-        resolveCanonicalInstallTarget({
-          baseDir,
-          id: "demo",
-          invalidNameMessage: "bad id",
-          boundaryLabel: "plugin dir",
-        }),
-      ).resolves.toEqual({ ok: false, error: "escaped" });
-
-      await expect(
-        resolveCanonicalInstallTarget({
-          baseDir,
-          id: "demo",
-          invalidNameMessage: "bad id",
-          boundaryLabel: "plugin dir",
-        }),
-      ).resolves.toEqual({ ok: false, error: "boom" });
+      await expect(resolveTarget(baseDir)).resolves.toEqual({ ok: false, error: "escaped" });
+      await expect(resolveTarget(baseDir)).resolves.toEqual({ ok: false, error: "boom" });
     });
   });
 
   it("returns the resolved target path on success", async () => {
-    await withTestDir({ prefix: "openclaw-install-target-" }, async (baseDir) => {
+    await withInstallDir(async (baseDir) => {
       const targetDir = path.join(baseDir, "demo");
-      resolveSafeInstallDirMock.mockReturnValueOnce({
-        ok: true,
-        path: targetDir,
-      });
+      resolveSafeInstallDirMock.mockReturnValueOnce({ ok: true, path: targetDir });
 
-      await expect(
-        resolveCanonicalInstallTarget({
-          baseDir,
-          id: "demo",
-          invalidNameMessage: "bad id",
-          boundaryLabel: "plugin dir",
-        }),
-      ).resolves.toEqual({ ok: true, targetDir });
+      await expect(resolveTarget(baseDir)).resolves.toEqual({ ok: true, targetDir });
     });
   });
 });
@@ -104,28 +84,8 @@ describe("ensureInstallTargetAvailable", () => {
     pathExistsMock.mockResolvedValueOnce(true);
     pathExistsMock.mockResolvedValueOnce(false);
 
-    await expect(
-      ensureInstallTargetAvailable({
-        mode: "install",
-        targetDir: "/tmp/demo",
-        alreadyExistsError: "already there",
-      }),
-    ).resolves.toEqual({ ok: false, error: "already there" });
-
-    await expect(
-      ensureInstallTargetAvailable({
-        mode: "update",
-        targetDir: "/tmp/demo",
-        alreadyExistsError: "already there",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    await expect(
-      ensureInstallTargetAvailable({
-        mode: "install",
-        targetDir: "/tmp/demo",
-        alreadyExistsError: "already there",
-      }),
-    ).resolves.toEqual({ ok: true });
+    await expect(available("install")).resolves.toEqual({ ok: false, error: "already there" });
+    await expect(available("update")).resolves.toEqual({ ok: true });
+    await expect(available("install")).resolves.toEqual({ ok: true });
   });
 });
