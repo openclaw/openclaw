@@ -2,7 +2,7 @@ import { expect, it, vi, type Mock } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
+import { classifyEmbeddedAgentRunResultForModelFallback as classifyFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import { FailoverError } from "../failover-error.js";
 import { INTER_SESSION_REPLY_POLICY_CASES } from "./attempt-execution.announce.test-support.js";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./attempt-execution.cli.test-support.js";
 import type { runAgentAttempt } from "./attempt-execution.js";
 
-async function runPreparedCommandCliAttempt(params: RunCliAgentParams) {
+async function runPreparedAttempt(params: RunCliAgentParams) {
   const { runPreparedCliAgent } =
     await vi.importActual<typeof import("../cli-runner.js")>("../cli-runner.js");
   const context = buildPreparedCliRunContext({
@@ -19,8 +19,7 @@ async function runPreparedCommandCliAttempt(params: RunCliAgentParams) {
     model: params.model,
     backend: { sessionMode: "none" },
   });
-  // Replace only backend preparation and I/O; command policy reaches the real
-  // required-reply enforcement, recovery, and settlement owners unchanged.
+  // Stub backend I/O, preserving real reply enforcement, recovery, and settlement.
   context.params = {
     ...params,
     admittedRunContext: context.params.admittedRunContext,
@@ -31,9 +30,9 @@ async function runPreparedCommandCliAttempt(params: RunCliAgentParams) {
 export function registerCommandReplyPolicyTests({
   runStoredAttempt,
   seedSessionStore,
-  runEmbeddedAgentMock,
-  runCliAgentMock,
-  executePreparedCliRunMock,
+  runEmbeddedAgentMock: embeddedRunner,
+  runCliAgentMock: cliRunner,
+  executePreparedCliRunMock: execute,
 }: {
   runStoredAttempt: (
     overrides: Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">,
@@ -43,14 +42,14 @@ export function registerCommandReplyPolicyTests({
     entry: SessionEntry,
   ) => Promise<Record<string, SessionEntry>>;
   runEmbeddedAgentMock: ReturnType<typeof vi.fn>;
-  runCliAgentMock: Mock<typeof runPreparedCommandCliAttempt>;
+  runCliAgentMock: Mock<typeof runPreparedAttempt>;
   executePreparedCliRunMock: ReturnType<typeof vi.fn>;
 }) {
   it.each(["openai", "claude-cli"])(
     "applies %s inter-session reply policy to internal, direct, and group sessions",
-    async (providerOverride) => {
-      const cli = providerOverride === "claude-cli";
-      const selectedRunner = cli ? runCliAgentMock : runEmbeddedAgentMock;
+    async (provider) => {
+      const cli = provider === "claude-cli";
+      const runner = cli ? cliRunner : embeddedRunner;
       for (const [
         sessionKey,
         messageChannel,
@@ -69,18 +68,15 @@ export function registerCommandReplyPolicyTests({
               : (replyExpectation ?? (allowSilence ? "optional" : "required"));
         const resultRequired = expectation === "result-required";
         if (cli) {
-          runCliAgentMock.mockImplementationOnce(runPreparedCommandCliAttempt);
-          executePreparedCliRunMock.mockResolvedValueOnce({
-            text: "NO_REPLY",
-            rawText: "NO_REPLY",
-          });
+          cliRunner.mockImplementationOnce(runPreparedAttempt);
+          execute.mockResolvedValueOnce({ text: "NO_REPLY", rawText: "NO_REPLY" });
         } else {
-          selectedRunner.mockResolvedValueOnce({ meta: { durationMs: 1 } });
+          runner.mockResolvedValueOnce({ meta: { durationMs: 1 } });
         }
 
         const attempt = runStoredAttempt({
-          providerOverride,
-          modelOverride: providerOverride === "openai" ? "gpt-5.4" : "opus",
+          providerOverride: provider,
+          modelOverride: provider === "openai" ? "gpt-5.4" : "opus",
           sessionEntry,
           sessionKey,
           sessionStore,
@@ -99,21 +95,14 @@ export function registerCommandReplyPolicyTests({
         } else {
           const result = await attempt;
           if (cli) {
-            expect(result.payloads).toBeUndefined();
+            expect([result.payloads, result.meta.error]).toEqual([undefined, undefined]);
             expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
             expect(result.meta.finalAssistantRawText).toBe("NO_REPLY");
-            expect(result.meta.error).toBeUndefined();
-            expect(
-              classifyEmbeddedAgentRunResultForModelFallback({
-                result,
-                provider: providerOverride,
-                model: "opus",
-              }),
-            ).toBeNull();
+            expect(classifyFallback({ result, provider, model: "opus" })).toBeNull();
           }
         }
 
-        expect(selectedRunner.mock.calls.at(-1)?.[0]).toMatchObject({
+        expect(runner.mock.calls.at(-1)?.[0]).toMatchObject({
           terminalReplyExpectation: expectation,
           silentReplyPromptMode: resultRequired ? "none" : undefined,
         });
@@ -125,8 +114,8 @@ export function registerCommandReplyPolicyTests({
     const sessionKey = "agent:main:direct:failed-private-completion";
     const sessionEntry = makeSessionEntry("failed-private-completion");
     const failure = new FailoverError("backend unavailable", { reason: "server_error" });
-    runCliAgentMock.mockImplementationOnce(runPreparedCommandCliAttempt);
-    executePreparedCliRunMock.mockRejectedValueOnce(failure);
+    cliRunner.mockImplementationOnce(runPreparedAttempt);
+    execute.mockRejectedValueOnce(failure);
 
     await expect(
       runStoredAttempt({
@@ -143,6 +132,6 @@ export function registerCommandReplyPolicyTests({
         },
       }),
     ).rejects.toBe(failure);
-    expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledOnce();
   });
 }

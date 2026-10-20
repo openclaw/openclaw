@@ -42,22 +42,22 @@ function formatClaudeCliFallbackPrelude(
   mocks.readClaudeCliFallbackSeed.mockReturnValue(seed);
   return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session", ...options });
 }
+const turn = (role: "user" | "assistant", content: unknown) => ({ role, content });
+const summaryPrelude = (summaryText: string, charBudget: number) =>
+  formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] }, { charBudget });
 
-describe("resolveFallbackRetryPrompt", () => {
+it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
-
-  it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
-    const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
-    const result = resolveFallbackRetryPrompt({
-      body: originalBody,
-      isFallbackRetry: true,
-      sessionHasHistory: false,
-      priorContextPrelude: prelude,
-    });
-    expect(result).toBe(
-      `${prelude}\n\n[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`,
-    );
+  const prelude = "## Prior session context (from claude-cli)\nuser: prior question";
+  const result = resolveFallbackRetryPrompt({
+    body: originalBody,
+    isFallbackRetry: true,
+    sessionHasHistory: false,
+    priorContextPrelude: prelude,
   });
+  expect(result).toBe(
+    `${prelude}\n\n[Retry after the previous model attempt failed or timed out]\n\n${originalBody}`,
+  );
 });
 
 describe("formatClaudeCliFallbackPrelude", () => {
@@ -65,61 +65,49 @@ describe("formatClaudeCliFallbackPrelude", () => {
     const out = await formatClaudeCliFallbackPrelude({
       summaryText: "Earlier summary",
       recentTurns: [
-        { role: "user", content: "Earlier user question" },
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Earlier assistant reply" },
-            { type: "toolcall", name: "Bash" },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: "toolu_x", content: "Earlier tool output" },
-          ],
-        },
+        turn("user", "Earlier user question"),
+        turn("assistant", [
+          { type: "text", text: "Earlier assistant reply" },
+          { type: "toolcall", name: "Bash" },
+        ]),
+        turn("user", [
+          { type: "tool_result", tool_use_id: "toolu_x", content: "Earlier tool output" },
+        ]),
       ],
     });
-    expect(out).toContain("## Prior session context (from claude-cli)");
-    expect(out).toContain("Summary of earlier conversation:\nEarlier summary");
-    expect(out).toContain("Recent turns:");
-    expect(out).toContain("user: Earlier user question");
-    expect(out).toContain("assistant: Earlier assistant reply");
-    expect(out).toContain("(tool call: Bash)");
-    expect(out).toContain("(tool result: Earlier tool output)");
+    for (const fragment of [
+      "## Prior session context (from claude-cli)",
+      "Summary of earlier conversation:\nEarlier summary",
+      "Recent turns:",
+      "user: Earlier user question",
+      "assistant: Earlier assistant reply",
+      "(tool call: Bash)",
+      "(tool result: Earlier tool output)",
+    ]) {
+      expect(out).toContain(fragment);
+    }
   });
 
   it("truncates an oversized summary instead of dropping it silently", async () => {
     const huge = "x ".repeat(10_000).trim();
-    const out = await formatClaudeCliFallbackPrelude(
-      { summaryText: huge, recentTurns: [] },
-      { charBudget: 600 },
-    );
+    const out = await summaryPrelude(huge, 600);
     expect(out).toContain("Summary of earlier conversation (truncated):");
     expect(out.length).toBeLessThan(800);
     expect(out).toMatch(/…$/);
   });
 
-  it.each([["a surrogate boundary", `${"x".repeat(21)}😀${"y".repeat(100)}`, "x".repeat(21)]])(
-    "preserves %s when truncating an oversized summary",
-    async (_label, summaryText, expected) => {
-      const out = await formatClaudeCliFallbackPrelude(
-        { summaryText, recentTurns: [] },
-        { charBudget: 128 },
-      );
-
-      expect(out).toContain(`Summary of earlier conversation (truncated):\n${expected} …`);
-    },
-  );
+  it("preserves a surrogate boundary when truncating an oversized summary", async () => {
+    const out = await summaryPrelude(`${"x".repeat(21)}😀${"y".repeat(100)}`, 128);
+    expect(out).toContain(`Summary of earlier conversation (truncated):\n${"x".repeat(21)} …`);
+  });
 
   it("keeps the recent turn window contiguous when an adjacent turn is oversized", async () => {
     const out = await formatClaudeCliFallbackPrelude(
       {
         recentTurns: [
-          { role: "user", content: "older small turn" },
-          { role: "assistant", content: `oversized adjacent turn ${"x".repeat(500)}` },
-          { role: "user", content: "newest small turn" },
+          turn("user", "older small turn"),
+          turn("assistant", `oversized adjacent turn ${"x".repeat(500)}`),
+          turn("user", "newest small turn"),
         ],
       },
       { charBudget: 260 },
@@ -131,36 +119,20 @@ describe("formatClaudeCliFallbackPrelude", () => {
   });
 });
 
-describe("buildClaudeCliFallbackContextPrelude", () => {
-  beforeEach(() => {
-    mocks.readClaudeCliFallbackSeed.mockReset();
-  });
-
-  it("returns empty string when the Claude session loader finds no seed", async () => {
-    mocks.readClaudeCliFallbackSeed.mockReturnValue(undefined);
-
-    expect(
-      await buildClaudeCliFallbackContextPrelude({
-        cliSessionId: "missing-session",
-        homeDir: "/tmp/test-home",
-      }),
-    ).toBe("");
-    expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith({
-      cliSessionId: "missing-session",
-      homeDir: "/tmp/test-home",
-    });
-  });
+it("returns empty string when the Claude session loader finds no seed", async () => {
+  mocks.readClaudeCliFallbackSeed.mockReset();
+  const params = {
+    cliSessionId: "missing-session",
+    homeDir: "/tmp/test-home",
+  };
+  expect(await buildClaudeCliFallbackContextPrelude(params)).toBe("");
+  expect(mocks.readClaudeCliFallbackSeed).toHaveBeenCalledWith(params);
 });
 
 describe("sessionTranscriptHasContent", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "oc-transcript-probe-");
   let tmpDir: string;
-  let target: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  };
+  let target: NonNullable<Parameters<typeof sessionTranscriptHasContent>[0]>;
 
   beforeEach(async () => {
     tmpDir = sessionDirs.make();
@@ -358,19 +330,13 @@ describe("Claude CLI transcript probes", () => {
 });
 
 describe("createAcpVisibleTextAccumulator", () => {
+  const visible = (text: string, delta = text) => ({ text, delta });
   it.each(["snapshot", "delta"])("preserves %s text containing an attached sentinel", (mode) => {
     const acc = createAcpVisibleTextAccumulator();
-
-    expect(acc.consume("NO_REPLYThe user")).toEqual({
-      text: "NO_REPLYThe user",
-      delta: "NO_REPLYThe user",
-    });
-
-    expect(acc.consume(mode === "snapshot" ? "NO_REPLYThe user is saying" : " is saying")).toEqual({
-      text: "NO_REPLYThe user is saying",
-      delta: " is saying",
-    });
-
+    expect(acc.consume("NO_REPLYThe user")).toEqual(visible("NO_REPLYThe user"));
+    expect(acc.consume(mode === "snapshot" ? "NO_REPLYThe user is saying" : " is saying")).toEqual(
+      visible("NO_REPLYThe user is saying", " is saying"),
+    );
     expect(acc.finalize()).toBe("NO_REPLYThe user is saying");
     expect(acc.finalizeRaw()).toBe("NO_REPLYThe user is saying");
     expect(acc.finalizeReplySnapshot()).toEqual({
@@ -388,10 +354,7 @@ describe("createAcpVisibleTextAccumulator", () => {
       expect(acc.consume(token.slice(0, 3))).toBeNull();
       expect(acc.consume(token.slice(0, 5))).toBeNull();
       expect(acc.consume(token)).toBeNull();
-      expect(acc.consume("\nActual answer")).toEqual({
-        text: "Actual answer",
-        delta: "Actual answer",
-      });
+      expect(acc.consume("\nActual answer")).toEqual(visible("Actual answer"));
     },
   );
 
