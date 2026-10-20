@@ -105,11 +105,11 @@ describe("resolveStatusTtsSnapshot", () => {
 
   it("uses provider metadata for local provider prefs overrides", () => {
     const prefsPath = writePrefs({ auto: "always", provider: "edge" });
+    vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
     expectStatus(
       {
         auto: undefined,
         provider: "openai",
-        prefsPath,
         providers: {
           microsoft: { voice: "en-US-AvaMultilingualNeural" },
           openai: { model: "gpt-4o-mini-tts", voice: "coral" },

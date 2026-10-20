@@ -336,7 +336,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const query = <T extends Element = HTMLElement>(
         selector: string,
         root: ParentNode | null = document,
-      ) => root?.querySelector<T>(selector) ?? null;
+      ): T | null => root?.querySelector<T>(selector) ?? null;
       const queryAll = (selector: string) => [...document.querySelectorAll(selector)];
       const app = query("openclaw-app");
       const shell = query("openclaw-app-shell");

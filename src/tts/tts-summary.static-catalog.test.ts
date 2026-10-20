@@ -60,36 +60,45 @@ it.each([
       },
       async (state) => {
         const requests: string[] = [];
-        const server = createServer(async (request, response) => {
-          const { model } = JSON.parse(await readRequestText(request)) as { model: string };
-          requests.push(model);
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          const message = {
-            id: "kimi-summary",
-            type: "message",
-            role: "assistant",
-            model,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 1, output_tokens: 0 },
-          };
-          response.end(
-            [
-              sse("message_start", { message }),
-              sse("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
-              sse("content_block_delta", {
-                index: 0,
-                delta: { type: "text_delta", text: `Summary from ${model}.` },
-              }),
-              sse("content_block_stop", { index: 0 }),
-              sse("message_delta", {
-                delta: { stop_reason: "end_turn", stop_sequence: null },
-                usage: { output_tokens: 6 },
-              }),
-              sse("message_stop"),
-            ].join(""),
-          );
+        const server = createServer((request, response) => {
+          void readRequestText(request)
+            .then((body) => {
+              const { model } = JSON.parse(body) as { model: string };
+              requests.push(model);
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              const message = {
+                id: "kimi-summary",
+                type: "message",
+                role: "assistant",
+                model,
+                content: [],
+                stop_reason: null,
+                stop_sequence: null,
+                usage: { input_tokens: 1, output_tokens: 0 },
+              };
+              response.end(
+                [
+                  sse("message_start", { message }),
+                  sse("content_block_start", {
+                    index: 0,
+                    content_block: { type: "text", text: "" },
+                  }),
+                  sse("content_block_delta", {
+                    index: 0,
+                    delta: { type: "text_delta", text: `Summary from ${model}.` },
+                  }),
+                  sse("content_block_stop", { index: 0 }),
+                  sse("message_delta", {
+                    delta: { stop_reason: "end_turn", stop_sequence: null },
+                    usage: { output_tokens: 6 },
+                  }),
+                  sse("message_stop"),
+                ].join(""),
+              );
+            })
+            .catch((error: unknown) => {
+              response.destroy(error instanceof Error ? error : new Error(String(error)));
+            });
         });
         const baseUrl = await listenLoopback(server);
         try {

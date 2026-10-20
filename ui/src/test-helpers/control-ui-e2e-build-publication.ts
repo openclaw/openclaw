@@ -24,7 +24,7 @@ export function createControlUiE2eBuildPublication(outDir: string): {
             if (response.destroyed) {
               return;
             }
-            const completion = createDeferredCore<void>();
+            const completion = createDeferredCore();
             active.add(completion.promise);
             const sources = new Set<Readable>();
             let finished = false;

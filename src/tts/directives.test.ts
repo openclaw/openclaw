@@ -6,7 +6,7 @@ import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import { speechProvider } from "./speech-provider.test-support.js";
 
 const speed: NonNullable<SpeechProviderPlugin["parseDirectiveToken"]> = ({ key, value }) =>
-  key === "speed" ? { handled: true, overrides: { speed: Number(value) } } : undefined;
+  key === "speed" ? { handled: true, overrides: { speed: Number(value) } } : { handled: false };
 const elevenlabs = speechProvider("elevenlabs", {
   autoSelectOrder: 10,
   parseDirectiveToken: (ctx) =>
