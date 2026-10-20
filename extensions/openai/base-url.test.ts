@@ -1,4 +1,3 @@
-// Openai tests cover base url plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeCodexResponsesBaseUrl,
@@ -10,96 +9,85 @@ import {
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 
+function expectUrls<T>(read: (url?: string) => T, expected: T, urls: (string | undefined)[]) {
+  for (const url of urls) {
+    expect(read(url), String(url)).toBe(expected);
+  }
+}
+const platform = "https://api.openai.com";
+const chatgpt = "https://chatgpt.com/backend-api";
+const nativePlatformUrls = ["/v1", ":443/v1", "./v1"].map((path) => platform + path);
+
 describe("openai base URL helpers", () => {
   it("recognizes direct OpenAI API routes", () => {
     expect(isOpenAIApiBaseUrl("http://api.openai.com/v1")).toBe(false);
-    expect(isOpenAIApiBaseUrl("https://api.openai.com")).toBe(true);
-    expect(isOpenAIApiBaseUrl("https://api.openai.com/v1")).toBe(true);
-    expect(isOpenAIApiBaseUrl("https://api.openai.com/v1/")).toBe(true);
-    expect(isOpenAIApiBaseUrl("https://api.openai.com:443/v1")).toBe(true);
-    expect(isOpenAIApiBaseUrl("https://api.openai.com./v1")).toBe(true);
+    expectUrls(isOpenAIApiBaseUrl, true, [platform, platform + "/v1/", ...nativePlatformUrls]);
   });
 
   it("rejects proxy or unrelated API routes", () => {
-    expect(isOpenAIApiBaseUrl("ftp://api.openai.com/v1")).toBe(false);
-    expect(isOpenAIApiBaseUrl("https://proxy.example.com/v1")).toBe(false);
-    expect(isOpenAIApiBaseUrl("https://chatgpt.com/backend-api")).toBe(false);
-    expect(isOpenAIApiBaseUrl(undefined)).toBe(false);
+    expectUrls(isOpenAIApiBaseUrl, false, [
+      "ftp://api.openai.com/v1",
+      "https://proxy.example.com/v1",
+      "https://chatgpt.com/backend-api",
+      undefined,
+    ]);
   });
 
   it("classifies exact HTTPS native endpoints as official", () => {
     expect(classifyOpenAIBaseUrl(undefined)).toBe("unresolved");
-    expect(classifyOpenAIBaseUrl("https://api.openai.com/v1")).toBe("platform");
-    expect(classifyOpenAIBaseUrl("https://api.openai.com:443/v1")).toBe("platform");
-    expect(classifyOpenAIBaseUrl("https://api.openai.com./v1")).toBe("platform");
-    expect(classifyOpenAIBaseUrl("https://chatgpt.com/backend-api/codex/responses")).toBe(
-      "chatgpt",
-    );
+    expectUrls(classifyOpenAIBaseUrl, "platform", nativePlatformUrls);
+    expect(classifyOpenAIBaseUrl(chatgpt + "/codex/responses")).toBe("chatgpt");
     expect(classifyOpenAIBaseUrl("https://proxy.example.test/v1?tenant=one")).toBe("custom");
-    for (const invalid of [
+    expectUrls(classifyOpenAIBaseUrl, "invalid", [
       "ftp://api.openai.com/v1",
       "http://api.openai.com/v1",
       "http://chatgpt.com/backend-api/codex",
-      "https://api.openai.com:8443/v1",
+      platform + ":8443/v1",
       "http://api.openai.com:443/v1",
       "https://user@api.openai.com/v1",
-      "https://api.openai.com/v1/models",
-      "https://api.openai.com/v1?proxy=1",
-      "https://chatgpt.com/backend-api/codex#fragment",
+      platform + "/v1/models",
+      platform + "/v1?proxy=1",
+      chatgpt + "/codex#fragment",
       "not a URL",
-    ]) {
-      expect(classifyOpenAIBaseUrl(invalid)).toBe("invalid");
-    }
+    ]);
   });
 
   it("recognizes Codex ChatGPT backend routes", () => {
-    // New canonical form (includes /codex segment; OpenAI removed the
-    // /backend-api/responses alias server-side on 2026-04).
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex")).toBe(true);
     expect(isOpenAICodexBaseUrl("http://chatgpt.com/backend-api/codex")).toBe(false);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v1")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v1/")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/responses")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com:443/backend-api/codex")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com./backend-api/codex")).toBe(true);
-    // Legacy form still recognized as a Codex baseURL for backward
-    // compatibility with existing user configs.
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v1")).toBe(true);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v1/")).toBe(true);
+    expectUrls(isOpenAICodexBaseUrl, true, [
+      ...["/codex", "/codex/", "/codex/v1", "/codex/v1/", "/codex/responses"].map(
+        (path) => chatgpt + path,
+      ),
+      "https://chatgpt.com:443/backend-api/codex",
+      "https://chatgpt.com./backend-api/codex",
+      ...["", "/", "/v1", "/v1/"].map((path) => chatgpt + path),
+    ]);
   });
 
   it("rejects non-Codex backend routes", () => {
-    expect(isOpenAICodexBaseUrl("ftp://chatgpt.com/backend-api/codex")).toBe(false);
-    expect(isOpenAICodexBaseUrl("https://api.openai.com/v1")).toBe(false);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com")).toBe(false);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v2")).toBe(false);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v2")).toBe(false);
-    expect(isOpenAICodexBaseUrl(undefined)).toBe(false);
+    expectUrls(isOpenAICodexBaseUrl, false, [
+      "ftp://chatgpt.com/backend-api/codex",
+      "https://api.openai.com/v1",
+      "https://chatgpt.com",
+      chatgpt + "/v2",
+      chatgpt + "/codex/v2",
+      undefined,
+    ]);
   });
 
   it("canonicalizes legacy Codex Responses base URLs", () => {
-    expect(canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api")).toBe(
+    expectUrls(
+      canonicalizeCodexResponsesBaseUrl,
       OPENAI_CODEX_RESPONSES_BASE_URL,
+      ["", "/v1", "/codex/v1", "/codex/responses"].map((path) => chatgpt + path),
     );
-    expect(canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api/v1")).toBe(
-      OPENAI_CODEX_RESPONSES_BASE_URL,
-    );
-    expect(canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api/codex/v1")).toBe(
-      OPENAI_CODEX_RESPONSES_BASE_URL,
-    );
-    expect(
-      canonicalizeCodexResponsesBaseUrl("https://chatgpt.com/backend-api/codex/responses"),
-    ).toBe(OPENAI_CODEX_RESPONSES_BASE_URL);
-    expect(canonicalizeCodexResponsesBaseUrl("http://chatgpt.com/backend-api/codex")).toBe(
+    for (const url of [
       "http://chatgpt.com/backend-api/codex",
-    );
-    expect(canonicalizeCodexResponsesBaseUrl("https://proxy.example.com/v1")).toBe(
       "https://proxy.example.com/v1",
-    );
-    expect(canonicalizeCodexResponsesBaseUrl(undefined)).toBeUndefined();
+      undefined,
+    ]) {
+      expect(canonicalizeCodexResponsesBaseUrl(url)).toBe(url);
+    }
   });
 
   it("resolves default API base URL from OPENAI_BASE_URL", () => {

@@ -100,12 +100,44 @@ function context(extra: Partial<DecisionProviderContextV2> = {}): DecisionProvid
   };
 }
 
+function evaluate(extra: Partial<DecisionProviderContextV2> = {}, input = batch) {
+  return buildOpenAIDecisionProvider().evaluate(input, context(extra));
+}
+
+function unavailable(reason: string) {
+  return { status: "unavailable", reason };
+}
+
+function requestBody() {
+  return JSON.parse(mocks.fetch.mock.calls[0]![1].body);
+}
+
+function replaceAnswer(index: number, overrides: Record<string, unknown>) {
+  const answers = response().answers;
+  Object.assign(answers[index]!, overrides);
+  return { answers };
+}
+
+function reply(overrides: Record<string, unknown> = {}) {
+  mocks.fetch.mockResolvedValue(Response.json({ ...response(), ...overrides }));
+}
+
+function expectDispatch(outcome: Awaited<ReturnType<typeof evaluate>>, allowed: boolean) {
+  if (allowed) {
+    expect(outcome.status).toBe("ok");
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+  } else {
+    expect(outcome).toEqual(unavailable("unsupported-input"));
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  }
+}
+
 describe("OpenAI Decisions API", () => {
   beforeEach(() => {
     mocks.fetch.mockReset();
     mocks.release.mockReset();
     vi.stubEnv("OPENAI_BASE_URL", "");
-    mocks.fetch.mockResolvedValue(Response.json(response()));
+    reply();
   });
 
   afterEach(() => {
@@ -114,8 +146,7 @@ describe("OpenAI Decisions API", () => {
   });
 
   it("translates all questions and preserves lossless V1 estimates from prepared auth", async () => {
-    const provider = buildOpenAIDecisionProvider();
-    const outcome = await provider.evaluate(batch, context({ agentId: "work" }));
+    const outcome = await evaluate({ agentId: "work" });
     expect(outcome).toEqual({
       status: "ok",
       result: {
@@ -180,15 +211,15 @@ describe("OpenAI Decisions API", () => {
   });
 
   it("uses the prepared custom endpoint and headers", async () => {
-    await buildOpenAIDecisionProvider().evaluate(
-      { state: { type: "text", text: "literal evidence" }, questions: { q: { type: "boolean" } } },
-      context({
+    await evaluate(
+      {
         model: {
           ...context().model,
           baseUrl: "https://proxy.example/v1",
           headers: { "X-Project": "test" },
         },
-      }),
+      },
+      { state: { type: "text", text: "literal evidence" }, questions: { q: { type: "boolean" } } },
     );
     const [url, init] = mocks.fetch.mock.calls[0]!;
     expect(url).toBe("https://proxy.example/v1/decisions");
@@ -201,7 +232,7 @@ describe("OpenAI Decisions API", () => {
       { ...context().model, headers: { "X-Credential": "synthetic-override" } },
       { auth: { mode: "header", headerName: "X-Credential", value: "synthetic-override" } },
     );
-    await buildOpenAIDecisionProvider().evaluate(batch, context({ model }));
+    await evaluate({ model });
     const headers = new Headers(mocks.fetch.mock.calls[0]![1].headers);
     expect(headers.has("authorization")).toBe(false);
     expect(headers.get("x-credential")).toBe("synthetic-override");
@@ -210,15 +241,15 @@ describe("OpenAI Decisions API", () => {
   it.each(["image/png", "image/jpeg", "image/webp"])(
     "encodes inline %s without fetching evidence",
     async (mime) => {
-      await buildOpenAIDecisionProvider().evaluate(
+      await evaluate(
+        {},
         {
           ...batch,
           state: { type: "image", dataUri: `data:${mime};base64,AA==`, text: "inspect this" },
         },
-        context(),
       );
       expect(mocks.fetch).toHaveBeenCalledOnce();
-      expect(JSON.parse(mocks.fetch.mock.calls[0]![1].body).input).toEqual([
+      expect(requestBody().input).toEqual([
         {
           role: "user",
           content: [
@@ -233,25 +264,18 @@ describe("OpenAI Decisions API", () => {
   it.each(["literal", 7, true, null])(
     "keeps explicit JSON scalar %j encoded as JSON",
     async (value) => {
-      await buildOpenAIDecisionProvider().evaluate(
-        { ...batch, state: { type: "json", value } },
-        context(),
-      );
-      expect(JSON.parse(mocks.fetch.mock.calls[0]![1].body).input).toBe(JSON.stringify(value));
+      await evaluate({}, { ...batch, state: { type: "json", value } });
+      expect(requestBody().input).toBe(JSON.stringify(value));
     },
   );
 
   it.each([undefined, "auto", "on", "off"] as const)(
     "preserves only the supported reasoning mode %s",
     async (reasoning) => {
-      const outcome = await buildOpenAIDecisionProvider().evaluate(batch, context({ reasoning }));
-      if (reasoning === undefined || reasoning === "auto") {
-        expect(outcome.status).toBe("ok");
-        expect(mocks.fetch).toHaveBeenCalledOnce();
-        expect(JSON.parse(mocks.fetch.mock.calls[0]![1].body)).not.toHaveProperty("reasoning");
-      } else {
-        expect(outcome).toEqual({ status: "unavailable", reason: "unsupported-input" });
-        expect(mocks.fetch).not.toHaveBeenCalled();
+      const outcome = await evaluate({ reasoning });
+      expectDispatch(outcome, reasoning === undefined || reasoning === "auto");
+      if (outcome.status === "ok") {
+        expect(requestBody()).not.toHaveProperty("reasoning");
       }
     },
   );
@@ -260,80 +284,51 @@ describe("OpenAI Decisions API", () => {
     const questions = Object.fromEntries(
       Array.from({ length: count }, (_, index) => [`q${index}`, { type: "boolean" as const }]),
     );
-    mocks.fetch.mockResolvedValue(
-      Response.json({
-        ...response(),
-        answers: Object.keys(questions).map((name) => ({
-          name,
-          type: "predicate",
-          probability: 0.5,
-        })),
-      }),
-    );
-    const result = await buildOpenAIDecisionProvider().evaluate(
-      { state: { type: "text", text: "Evidence" }, questions },
-      context(),
-    );
-    if (count === 200) {
-      expect(result.status).toBe("ok");
-      expect(mocks.fetch).toHaveBeenCalledOnce();
-    } else {
-      expect(result).toEqual({ status: "unavailable", reason: "unsupported-input" });
-      expect(mocks.fetch).not.toHaveBeenCalled();
-    }
+    reply({
+      answers: Object.keys(questions).map((name) => ({
+        name,
+        type: "predicate",
+        probability: 0.5,
+      })),
+    });
+    const result = await evaluate({}, { state: { type: "text", text: "Evidence" }, questions });
+    expectDispatch(result, count === 200);
   });
 
   it.each([255, 256])("enforces the %i-choice boundary before HTTP", async (count) => {
     const criteria = Object.fromEntries(
       Array.from({ length: count }, (_, index) => [`option${index}`, `Alternative ${index}`]),
     );
-    mocks.fetch.mockResolvedValue(
-      Response.json({
-        ...response(),
-        answers: [
-          {
-            name: "route",
-            type: "choice",
-            choice: "option0",
-            confidence: 1,
-            probabilities: Object.keys(criteria).map((value, index) => ({
-              value,
-              probability: index === 0 ? 1 : 0,
-            })),
-          },
-        ],
-      }),
-    );
-    const result = await buildOpenAIDecisionProvider().evaluate(
+    reply({
+      answers: [
+        {
+          name: "route",
+          type: "choice",
+          choice: "option0",
+          confidence: 1,
+          probabilities: Object.keys(criteria).map((value, index) => ({
+            value,
+            probability: index === 0 ? 1 : 0,
+          })),
+        },
+      ],
+    });
+    const result = await evaluate(
+      {},
       {
         state: { type: "text", text: "Evidence" },
         questions: { route: { type: "choice", criteria } },
       },
-      context(),
     );
-    if (count === 255) {
-      expect(result.status).toBe("ok");
-      expect(mocks.fetch).toHaveBeenCalledOnce();
-    } else {
-      expect(result).toEqual({ status: "unavailable", reason: "unsupported-input" });
-      expect(mocks.fetch).not.toHaveBeenCalled();
-    }
+    expectDispatch(result, count === 255);
   });
 
   it.each(["oauth", "token"] as const)(
     "does not send %s subscription credentials",
     async (mode) => {
-      expect(
-        await buildOpenAIDecisionProvider().evaluate(
-          batch,
-          context({
-            auth: { apiKey: "synthetic-subscription", mode },
-          }),
-        ),
-      ).toEqual({
-        status: "unavailable",
-        reason: "credentials-unavailable",
-      });
+      expect(await evaluate({ auth: { apiKey: "synthetic-subscription", mode } })).toEqual(
+        unavailable("credentials-unavailable"),
+      );
       expect(mocks.fetch).not.toHaveBeenCalled();
     },
   );
@@ -341,13 +336,9 @@ describe("OpenAI Decisions API", () => {
   it.each(["https://chatgpt.com/backend-api/codex", "http://api.openai.com/v1"])(
     "rejects unsupported endpoint %s before HTTP",
     async (baseUrl) => {
-      const provider = buildOpenAIDecisionProvider();
-      expect(
-        await provider.evaluate(batch, context({ model: { ...context().model, baseUrl } })),
-      ).toEqual({
-        status: "unavailable",
-        reason: "unsupported-input",
-      });
+      expect(await evaluate({ model: { ...context().model, baseUrl } })).toEqual(
+        unavailable("unsupported-input"),
+      );
       expect(mocks.fetch).not.toHaveBeenCalled();
     },
   );
@@ -356,12 +347,9 @@ describe("OpenAI Decisions API", () => {
     [401, "authentication"],
     [400, "unsupported-input"],
     [500, "transport"],
-  ])("maps HTTP %s without exposing the body or retrying", async (status, reason) => {
+  ] as const)("maps HTTP %s without exposing the body or retrying", async (status, reason) => {
     mocks.fetch.mockResolvedValue(new Response("private reflected evidence", { status }));
-    expect(await buildOpenAIDecisionProvider().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      reason,
-    });
+    expect(await evaluate()).toEqual(unavailable(reason));
     expect(mocks.fetch).toHaveBeenCalledOnce();
     expect(mocks.release).toHaveBeenCalledOnce();
   });
@@ -370,22 +358,16 @@ describe("OpenAI Decisions API", () => {
     mocks.fetch.mockResolvedValue(
       new Response(null, { status: 429, headers: { "Retry-After": "2" } }),
     );
-    expect(await buildOpenAIDecisionProvider().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      reason: "rate-limited",
+    expect(await evaluate()).toEqual({
+      ...unavailable("rate-limited"),
       retryAfterMs: 2000,
     });
   });
 
   it("preserves successful siblings of a per-question refusal", async () => {
     const payload = response();
-    mocks.fetch.mockResolvedValue(
-      Response.json({
-        ...payload,
-        answers: [{ name: "damaged", type: "refusal" }, ...payload.answers.slice(1)],
-      }),
-    );
-    const outcome = await buildOpenAIDecisionProvider().evaluate(batch, context());
+    reply({ answers: [{ name: "damaged", type: "refusal" }, ...payload.answers.slice(1)] });
+    const outcome = await evaluate();
     expect(outcome).toMatchObject({
       status: "ok",
       result: {
@@ -405,71 +387,35 @@ describe("OpenAI Decisions API", () => {
     { answers: [] },
     { model: "synthetic-decision-credential" },
     { usage: { input_tokens: -1, output_tokens: 0 } },
-    {
-      answers: [
-        { name: "wrong", type: "predicate", probability: 0.5 },
-        ...response().answers.slice(1),
+    replaceAnswer(0, { name: "wrong", probability: 0.5 }),
+    replaceAnswer(0, { probability: 2 }),
+    replaceAnswer(1, {
+      probabilities: [
+        { value: "support", probability: 0.5 },
+        { value: "support", probability: 0.5 },
       ],
-    },
-    {
-      answers: [
-        { name: "damaged", type: "predicate", probability: 2 },
-        ...response().answers.slice(1),
+    }),
+    replaceAnswer(2, {
+      score: 1,
+      probabilities: [
+        { label: "0", value: 1, probability: 0.3 },
+        { label: "1", value: 0, probability: 0.4 },
+        { label: "2", value: 2, probability: 0.3 },
       ],
-    },
-    {
-      answers: [
-        response().answers[0],
-        {
-          name: "route",
-          type: "choice",
-          choice: "support",
-          confidence: 0.8,
-          probabilities: [
-            { value: "support", probability: 0.5 },
-            { value: "support", probability: 0.5 },
-          ],
-        },
-        response().answers[2],
-      ],
-    },
-    {
-      answers: [
-        ...response().answers.slice(0, 2),
-        {
-          name: "urgency",
-          type: "score",
-          score: 1,
-          confidence: 0.7,
-          probabilities: [
-            { label: "0", value: 1, probability: 0.3 },
-            { label: "1", value: 0, probability: 0.4 },
-            { label: "2", value: 2, probability: 0.3 },
-          ],
-        },
-      ],
-    },
+    }),
   ])("rejects malformed or credential-reflecting answers %#", async (overrides) => {
-    mocks.fetch.mockResolvedValue(Response.json({ ...response(), ...overrides }));
-    expect(await buildOpenAIDecisionProvider().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      reason: "invalid-response",
-    });
+    reply(overrides);
+    expect(await evaluate()).toEqual(unavailable("invalid-response"));
   });
 
   it("rejects malformed JSON and releases the transport", async () => {
     mocks.fetch.mockResolvedValue(new Response("not json"));
-    expect(await buildOpenAIDecisionProvider().evaluate(batch, context())).toEqual({
-      status: "unavailable",
-      reason: "invalid-response",
-    });
+    expect(await evaluate()).toEqual(unavailable("invalid-response"));
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
   it("checks the prepared owner immediately before dispatch", async () => {
-    expect(
-      await buildOpenAIDecisionProvider().evaluate(batch, context({ isAdmissible: () => false })),
-    ).toEqual({ status: "unavailable", reason: "transport" });
+    expect(await evaluate({ isAdmissible: () => false })).toEqual(unavailable("transport"));
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
@@ -477,19 +423,14 @@ describe("OpenAI Decisions API", () => {
     const controller = new AbortController();
     const reason = new Error("caller cancelled");
     controller.abort(reason);
-    await expect(
-      buildOpenAIDecisionProvider().evaluate(batch, context({ signal: controller.signal })),
-    ).rejects.toBe(reason);
+    await expect(evaluate({ signal: controller.signal })).rejects.toBe(reason);
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it("does not dispatch after the monotonic deadline", async () => {
-    expect(
-      await buildOpenAIDecisionProvider().evaluate(
-        batch,
-        context({ deadlineMonotonicMs: performance.now() - 1 }),
-      ),
-    ).toEqual({ status: "unavailable", reason: "transport" });
+    expect(await evaluate({ deadlineMonotonicMs: performance.now() - 1 })).toEqual(
+      unavailable("transport"),
+    );
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 });

@@ -16,13 +16,12 @@ async function requestAudio(
   baseUrl: string,
   options: { timeoutMs?: number; mediaMaxMb?: number } = {},
 ) {
-  const budget =
-    options.mediaMaxMb === undefined
-      ? {}
-      : { agents: { defaults: { mediaMaxMb: options.mediaMaxMb } } };
-  const result = await buildOpenAISpeechProvider().synthesize({
+  const { audioBuffer } = await buildOpenAISpeechProvider().synthesize({
     text: "local binary acceptance",
-    cfg: budget,
+    cfg:
+      options.mediaMaxMb === undefined
+        ? {}
+        : { agents: { defaults: { mediaMaxMb: options.mediaMaxMb } } },
     providerConfig: {
       apiKey: "local-test-key",
       baseUrl: `${baseUrl}/v1`,
@@ -32,7 +31,7 @@ async function requestAudio(
     target: "audio-file",
     timeoutMs: options.timeoutMs ?? 5_000,
   });
-  return result.audioBuffer;
+  return audioBuffer;
 }
 
 describe("production OpenAI binary transport", () => {
@@ -89,11 +88,9 @@ describe("production OpenAI binary transport", () => {
             mediaMaxMb: 0.001,
             timeoutMs: stalled ? 300 : 5_000,
           });
-          if (stalled) {
-            await expect(result).rejects.toThrow(/timed out|aborted/i);
-          } else {
-            await expect(result).rejects.toThrow("OpenAI TTS audio response exceeds");
-          }
+          await expect(result).rejects.toThrow(
+            stalled ? /timed out|aborted/i : "OpenAI TTS audio response exceeds",
+          );
           await vi.waitFor(() => expect(closed).toBe(true));
         },
       );

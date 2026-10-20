@@ -1,4 +1,3 @@
-// Openai tests cover openai chatgpt device code plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,12 +11,37 @@ function createJwt(payload: Record<string, unknown>): string {
 }
 
 function createJsonResponse(body: unknown, init?: { status?: number }) {
-  return new Response(JSON.stringify(body), {
-    status: init?.status ?? 200,
-    headers: {
-      "Content-Type": "application/json",
-    },
+  return Response.json(body, { status: init?.status ?? 200 });
+}
+
+function startLogin(
+  fetchFn: typeof fetch,
+  options: Partial<Parameters<typeof loginOpenAICodexDeviceCode>[0]> = {},
+) {
+  return loginOpenAICodexDeviceCode({ fetchFn, onVerification: async () => {}, ...options });
+}
+
+function accessToken() {
+  return createJwt({
+    exp: Math.floor(Date.now() / 1000) + 600,
+    "https://api.openai.com/auth": { chatgpt_account_id: "acct_123" },
   });
+}
+
+function tokenResponse(access_token = accessToken(), extra: Record<string, unknown> = {}) {
+  return createJsonResponse({ access_token, refresh_token: "refresh-token-123", ...extra });
+}
+
+function successfulFetch(token: Response, interval: string | number = "0") {
+  return vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(createDeviceCodeResponse(interval))
+    .mockResolvedValueOnce(createAuthorizationResponse())
+    .mockResolvedValueOnce(token);
+}
+
+function pollFetch() {
+  return vi.fn<typeof fetch>().mockResolvedValueOnce(createDeviceCodeResponse());
 }
 
 function createDeviceCodeResponse(interval: string | number = "0") {
@@ -41,6 +65,25 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: num
     throw new Error(`expected fetch call ${index}`);
   }
   return call;
+}
+
+function expectPost(
+  call: ReturnType<typeof fetchCall>,
+  path: string,
+  contentType: string,
+  body?: string,
+) {
+  expect(call[0]).toBe(`https://auth.openai.com${path}`);
+  expect(call[1]).toMatchObject({ method: "POST", signal: expect.any(AbortSignal) });
+  if (body !== undefined) {
+    expect(call[1]?.body).toBe(body);
+  }
+  expect(call[1]?.headers).toEqual({
+    "Content-Type": contentType,
+    originator: "openclaw",
+    version: "2026.3.22",
+    "User-Agent": "openclaw/2026.3.22",
+  });
 }
 
 function waitForFetchAbort(init?: RequestInit): Promise<Response> {
@@ -90,15 +133,12 @@ describe("loginOpenAICodexDeviceCode", () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn<typeof fetch>((_input, init) => waitForFetchAbort(init));
 
-    const login = loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock,
-      onVerification: async () => {},
-    });
+    const pending = startLogin(fetchMock);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchCall(fetchMock, 0)[1]?.signal).toBeInstanceOf(AbortSignal);
-    const rejected = expect(login).rejects.toThrow(
+    const rejected = expect(pending).rejects.toThrow(
       "OpenAI device code user code request timed out after 30000ms",
     );
     await vi.advanceTimersByTimeAsync(30_000);
@@ -111,15 +151,14 @@ describe("loginOpenAICodexDeviceCode", () => {
       createBodyThatStallsUntilAbort(init),
     );
 
-    const login = loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock,
-      onVerification: async () => {},
-    });
+    const pending = startLogin(fetchMock);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledOnce();
     await Promise.all([
-      expect(login).rejects.toThrow("OpenAI device code user code request timed out after 30000ms"),
+      expect(pending).rejects.toThrow(
+        "OpenAI device code user code request timed out after 30000ms",
+      ),
       vi.advanceTimersByTimeAsync(30_000),
     ]);
   });
@@ -128,15 +167,11 @@ describe("loginOpenAICodexDeviceCode", () => {
     const callerController = new AbortController();
     const fetchMock = vi.fn<typeof fetch>((_input, init) => waitForFetchAbort(init));
 
-    const login = loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock,
-      onVerification: async () => {},
-      signal: callerController.signal,
-    });
+    const pending = startLogin(fetchMock, { signal: callerController.signal });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
 
     callerController.abort(new Error("cancelled by caller"));
-    await expect(login).rejects.toThrow("cancelled by caller");
+    await expect(pending).rejects.toThrow("cancelled by caller");
   });
 
   it.each(["verification", "authorization response"] as const)(
@@ -195,163 +230,118 @@ describe("loginOpenAICodexDeviceCode", () => {
     },
   );
 
-  it("routes device-code auth through a configured HTTPS proxy", async () => {
-    vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
-    vi.stubEnv("no_proxy", "");
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-
-    await expect(
-      loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock,
-        onVerification: async () => {},
-      }),
-    ).rejects.toThrow("OpenAI device code request failed: HTTP 503");
-
-    const requestInit = fetchCall(fetchMock, 0)[1] as
-      | (RequestInit & { dispatcher?: { constructor?: { name?: string } } })
-      | undefined;
-    expect(requestInit?.dispatcher?.constructor?.name).toContain("EnvHttpProxyAgent");
-  });
-
-  it("keeps strict guarded fetch when NO_PROXY bypasses OpenAI auth", async () => {
-    vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
-    vi.stubEnv("no_proxy", "auth.openai.com");
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
-
-    await expect(
-      loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock,
-        onVerification: async () => {},
-      }),
-    ).rejects.toThrow("OpenAI device code request failed: HTTP 503");
-
-    const requestInit = fetchCall(fetchMock, 0)[1] as
-      | (RequestInit & { dispatcher?: unknown })
-      | undefined;
-    expect(requestInit?.dispatcher).toBeUndefined();
-  });
+  it.each(["", "auth.openai.com"])(
+    "uses the guarded auth proxy route with NO_PROXY=%s",
+    async (noProxy) => {
+      vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
+      vi.stubEnv("no_proxy", noProxy);
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(null, { status: 503 }));
+      await expect(startLogin(fetchMock)).rejects.toThrow(
+        "OpenAI device code request failed: HTTP 503",
+      );
+      const requestInit = fetchCall(fetchMock, 0)[1] as
+        | (RequestInit & { dispatcher?: { constructor?: { name?: string } } })
+        | undefined;
+      if (noProxy) {
+        expect(requestInit?.dispatcher).toBeUndefined();
+      } else {
+        expect(requestInit?.dispatcher?.constructor?.name).toContain("EnvHttpProxyAgent");
+      }
+    },
+  );
 
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
     vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    try {
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(createDeviceCodeResponse())
-        .mockResolvedValueOnce(new Response(null, { status: 404 }))
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            authorization_code: "authorization-code-123",
-            code_challenge: "ignored",
-            code_verifier: "code-verifier-123",
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(createDeviceCodeResponse())
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          authorization_code: "authorization-code-123",
+          code_challenge: "ignored",
+          code_verifier: "code-verifier-123",
+        }),
+      )
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          access_token: createJwt({
+            exp: Math.floor(Date.now() / 1000) + 600,
+            "https://api.openai.com/auth": {
+              chatgpt_account_id: "acct_123",
+            },
+            "https://api.openai.com/profile": {
+              email: "codex@example.com",
+            },
           }),
-        )
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            access_token: createJwt({
-              exp: Math.floor(Date.now() / 1000) + 600,
-              "https://api.openai.com/auth": {
-                chatgpt_account_id: "acct_123",
-              },
-              "https://api.openai.com/profile": {
-                email: "codex@example.com",
-              },
-            }),
-            refresh_token: "refresh-token-123",
-            id_token: createJwt({
-              "https://api.openai.com/auth": {
-                chatgpt_account_id: "acct_123",
-              },
-            }),
-            expires_in: 600,
+          refresh_token: "refresh-token-123",
+          id_token: createJwt({
+            "https://api.openai.com/auth": {
+              chatgpt_account_id: "acct_123",
+            },
           }),
-        );
-      const onVerification = vi.fn(async () => {});
-      const onProgress = vi.fn();
-
-      const credentialsPromise = loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock as typeof fetch,
-        onVerification,
-        onProgress,
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      const credentials = await credentialsPromise;
-
-      const userCodeRequest = fetchCall(fetchMock, 0);
-      expect(userCodeRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
-      expect(userCodeRequest[1]?.method).toBe("POST");
-      expect(userCodeRequest[1]?.body).toBe('{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann"}');
-      expect(userCodeRequest[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(userCodeRequest[1]?.headers).toEqual({
-        "Content-Type": "application/json",
-        originator: "openclaw",
-        version: "2026.3.22",
-        "User-Agent": "openclaw/2026.3.22",
-      });
-
-      const deviceTokenRequest = fetchCall(fetchMock, 1);
-      expect(deviceTokenRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
-      expect(deviceTokenRequest[1]?.method).toBe("POST");
-      expect(deviceTokenRequest[1]?.body).toBe(
-        '{"device_auth_id":"device-auth-123","user_code":"CODE-12345"}',
+          expires_in: 600,
+        }),
       );
-      expect(deviceTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(deviceTokenRequest[1]?.headers).toEqual({
-        "Content-Type": "application/json",
-        originator: "openclaw",
-        version: "2026.3.22",
-        "User-Agent": "openclaw/2026.3.22",
-      });
+    const onVerification = vi.fn(async () => {});
+    const onProgress = vi.fn();
 
-      const oauthTokenRequest = fetchCall(fetchMock, 3);
-      expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
-      expect(oauthTokenRequest[1]?.method).toBe("POST");
-      expect(
-        Object.fromEntries(
-          new URLSearchParams(await new Response(oauthTokenRequest[1]?.body).text()),
-        ),
-      ).toEqual({
-        grant_type: "authorization_code",
-        code: "authorization-code-123",
-        redirect_uri: "https://auth.openai.com/deviceauth/callback",
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        code_verifier: "code-verifier-123",
-      });
-      expect(oauthTokenRequest[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(oauthTokenRequest[1]?.headers).toEqual({
-        "Content-Type": "application/x-www-form-urlencoded",
-        originator: "openclaw",
-        version: "2026.3.22",
-        "User-Agent": "openclaw/2026.3.22",
-      });
-      expect(onVerification).toHaveBeenCalledWith({
-        verificationUrl: "https://auth.openai.com/codex/device",
-        userCode: "CODE-12345",
-        expiresInMs: 900_000,
-      });
-      expect(onProgress).toHaveBeenNthCalledWith(1, "Requesting device code…");
-      expect(onProgress).toHaveBeenNthCalledWith(2, "Waiting for device authorization…");
-      expect(onProgress).toHaveBeenNthCalledWith(3, "Exchanging device code…");
-      expect(typeof credentials.access).toBe("string");
-      expect(credentials.access.length).toBeGreaterThan(0);
-      expect(credentials.refresh).toBe("refresh-token-123");
-      expect(credentials).not.toHaveProperty("accountId");
-      expect(credentials.expires).toBe(Date.now() + 600_000);
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
-    }
+    const credentialsPromise = startLogin(fetchMock, { onVerification, onProgress });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    const credentials = await credentialsPromise;
+
+    expectPost(
+      fetchCall(fetchMock, 0),
+      "/api/accounts/deviceauth/usercode",
+      "application/json",
+      '{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann"}',
+    );
+    expectPost(
+      fetchCall(fetchMock, 1),
+      "/api/accounts/deviceauth/token",
+      "application/json",
+      '{"device_auth_id":"device-auth-123","user_code":"CODE-12345"}',
+    );
+    const oauthTokenRequest = fetchCall(fetchMock, 3);
+    expectPost(oauthTokenRequest, "/oauth/token", "application/x-www-form-urlencoded");
+    expect(
+      Object.fromEntries(
+        new URLSearchParams(await new Response(oauthTokenRequest[1]?.body).text()),
+      ),
+    ).toEqual({
+      grant_type: "authorization_code",
+      code: "authorization-code-123",
+      redirect_uri: "https://auth.openai.com/deviceauth/callback",
+      client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      code_verifier: "code-verifier-123",
+    });
+    expect(onVerification).toHaveBeenCalledWith({
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "CODE-12345",
+      expiresInMs: 900_000,
+    });
+    expect(onProgress.mock.calls).toEqual([
+      ["Requesting device code…"],
+      ["Waiting for device authorization…"],
+      ["Exchanging device code…"],
+    ]);
+    expect(typeof credentials.access).toBe("string");
+    expect(credentials.access.length).toBeGreaterThan(0);
+    expect(credentials.refresh).toBe("refresh-token-123");
+    expect(credentials).not.toHaveProperty("accountId");
+    expect(credentials.expires).toBe(Date.now() + 600_000);
   });
 
   it("retries a timed-out authorization poll within the overall device deadline", async () => {
     vi.useFakeTimers();
-    const accessToken = createJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-    });
+    const token = createJwt({ exp: Math.floor(Date.now() / 1000) + 600 });
     let pollAttempts = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -359,26 +349,15 @@ describe("loginOpenAICodexDeviceCode", () => {
         return createDeviceCodeResponse();
       }
       if (url.endsWith("/api/accounts/deviceauth/token")) {
-        pollAttempts += 1;
-        if (pollAttempts === 1) {
-          return await waitForFetchAbort(init);
-        }
-        return createAuthorizationResponse();
+        return ++pollAttempts === 1 ? waitForFetchAbort(init) : createAuthorizationResponse();
       }
       if (url.endsWith("/oauth/token")) {
-        return createJsonResponse({
-          access_token: accessToken,
-          refresh_token: "refresh-token-123",
-          expires_in: 600,
-        });
+        return tokenResponse(token, { expires_in: 600 });
       }
       throw new Error(`unexpected OpenAI device-code URL: ${url}`);
     });
 
-    const login = loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock,
-      onVerification: async () => {},
-    });
+    const login = startLogin(fetchMock);
     await vi.advanceTimersByTimeAsync(0);
     expect(pollAttempts).toBe(1);
 
@@ -391,59 +370,38 @@ describe("loginOpenAICodexDeviceCode", () => {
 
   it("retries a transient authorization poll network failure after the poll delay", async () => {
     vi.useFakeTimers();
-    try {
-      const accessToken = createJwt({
-        exp: Math.floor(Date.now() / 1000) + 600,
-      });
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(createDeviceCodeResponse("2"))
-        .mockRejectedValueOnce(
-          new TypeError("fetch failed", {
-            cause: Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
-              code: "ENOTFOUND",
-            }),
+    const token = createJwt({ exp: Math.floor(Date.now() / 1000) + 600 });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(createDeviceCodeResponse("2"))
+      .mockRejectedValueOnce(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
+            code: "ENOTFOUND",
           }),
-        )
-        .mockResolvedValueOnce(createAuthorizationResponse())
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            access_token: accessToken,
-            refresh_token: "refresh-token-123",
-            expires_in: 600,
-          }),
-        );
+        }),
+      )
+      .mockResolvedValueOnce(createAuthorizationResponse())
+      .mockResolvedValueOnce(tokenResponse(token, { expires_in: 600 }));
 
-      const login = loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock,
-        onVerification: async () => {},
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+    const login = startLogin(fetchMock);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
 
-      const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
-      await vi.advanceTimersByTimeAsync(1_999);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      await resolved;
-      expect(fetchMock).toHaveBeenCalledTimes(4);
-    } finally {
-      vi.useRealTimers();
-    }
+    const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await resolved;
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("still surfaces local authorization poll errors that are not transport failures", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(createDeviceCodeResponse())
-      .mockRejectedValueOnce(new TypeError("undefined is not a function"));
+    const fetchMock = pollFetch().mockRejectedValueOnce(
+      new TypeError("undefined is not a function"),
+    );
 
-    await expect(
-      loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock,
-        onVerification: async () => {},
-      }),
-    ).rejects.toThrow("undefined is not a function");
+    await expect(startLogin(fetchMock)).rejects.toThrow("undefined is not a function");
   });
 
   it.each(["abort", "authority"] as const)(
@@ -491,28 +449,11 @@ describe("loginOpenAICodexDeviceCode", () => {
   );
 
   it("treats JWT-derived expiry fallback as an absolute timestamp", async () => {
-    const accessToken = createJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_123",
-      },
-    });
-    const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(createDeviceCodeResponse())
-      .mockResolvedValueOnce(createAuthorizationResponse())
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          access_token: accessToken,
-          refresh_token: "refresh-token-123",
-        }),
-      );
+    const token = accessToken();
+    const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(token);
+    const fetchMock = successfulFetch(tokenResponse(token));
 
-    const credentials = await loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock as typeof fetch,
-      onVerification: async () => {},
-    });
+    const credentials = await startLogin(fetchMock);
 
     if (expectedExpiry === undefined) {
       throw new Error("expected device-code expiry to be calculated");
@@ -521,73 +462,37 @@ describe("loginOpenAICodexDeviceCode", () => {
   });
 
   it("accepts token exchange JSON above the diagnostic preview limit", async () => {
-    const accessToken = createJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/auth": {
-        chatgpt_account_id: "acct_123",
-      },
-    });
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(createDeviceCodeResponse())
-      .mockResolvedValueOnce(createAuthorizationResponse())
-      .mockResolvedValueOnce(
-        createJsonResponse({
-          access_token: accessToken,
-          refresh_token: "refresh-token-123",
-          id_token: "x".repeat(10_000),
-        }),
-      );
+    const token = accessToken();
+    const fetchMock = successfulFetch(tokenResponse(token, { id_token: "x".repeat(10_000) }));
 
-    const credentials = await loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock as typeof fetch,
-      onVerification: async () => {},
-    });
+    const credentials = await startLogin(fetchMock);
 
     expect(credentials.refresh).toBe("refresh-token-123");
   });
 
   it("falls back when device-code intervals and token lifetimes overflow safe milliseconds", async () => {
     vi.useFakeTimers();
-    try {
-      const accessToken = createJwt({
-        exp: Math.floor(Date.now() / 1000) + 600,
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct_123",
-        },
-      });
-      const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(accessToken);
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(createDeviceCodeResponse(Number.MAX_SAFE_INTEGER))
-        .mockResolvedValueOnce(new Response(null, { status: 404 }))
-        .mockResolvedValueOnce(createAuthorizationResponse())
-        .mockResolvedValueOnce(
-          createJsonResponse({
-            access_token: accessToken,
-            refresh_token: "refresh-token-123",
-            expires_in: Number.MAX_SAFE_INTEGER,
-          }),
-        );
+    const token = accessToken();
+    const expectedExpiry = resolveOpenAICodexAccessTokenExpiry(token);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(createDeviceCodeResponse(Number.MAX_SAFE_INTEGER))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(createAuthorizationResponse())
+      .mockResolvedValueOnce(tokenResponse(token, { expires_in: Number.MAX_SAFE_INTEGER }));
 
-      const credentialsPromise = loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock as typeof fetch,
-        onVerification: async () => {},
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      const credentials = await credentialsPromise;
+    const credentialsPromise = startLogin(fetchMock);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    const credentials = await credentialsPromise;
 
-      if (expectedExpiry === undefined) {
-        throw new Error("expected device-code expiry to be calculated");
-      }
-      expect(credentials.expires).toBe(expectedExpiry);
-    } finally {
-      vi.useRealTimers();
+    if (expectedExpiry === undefined) {
+      throw new Error("expected device-code expiry to be calculated");
     }
+    expect(credentials.expires).toBe(expectedExpiry);
   });
 
   it("surfaces user-code request failures", async () => {
@@ -597,12 +502,9 @@ describe("loginOpenAICodexDeviceCode", () => {
       }),
     );
 
-    await expect(
-      loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock as typeof fetch,
-        onVerification: async () => {},
-      }),
-    ).rejects.toThrow("OpenAI device code request failed: HTTP 503 down now");
+    await expect(startLogin(fetchMock)).rejects.toThrow(
+      "OpenAI device code request failed: HTTP 503 down now",
+    );
   });
 
   it("bounds user-code error bodies without using response.text()", async () => {
@@ -613,10 +515,7 @@ describe("loginOpenAICodexDeviceCode", () => {
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetchMock = vi.fn().mockResolvedValueOnce(tracked.response);
 
-    const error = await loginOpenAICodexDeviceCode({
-      fetchFn: fetchMock as typeof fetch,
-      onVerification: async () => {},
-    }).catch((cause: unknown) => cause);
+    const error = await startLogin(fetchMock).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(
@@ -627,53 +526,24 @@ describe("loginOpenAICodexDeviceCode", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it("surfaces device authorization failures with sanitized payload details", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(createDeviceCodeResponse())
-      .mockResolvedValueOnce(
-        createJsonResponse(
-          {
-            error: "authorization_declined\r\n\u001B[31mspoofed\u001B[0m",
-            error_description: "Denied\r\nnext line",
-          },
-          { status: 401 },
-        ),
+  it.each([
+    ["C0/ANSI", "authorization_declined\r\n\u001B[31mspoofed\u001B[0m", "Denied\r\nnext line"],
+    [
+      "C1",
+      `authorization_declined${String.fromCharCode(0x9b)}spoofed`,
+      `Denied${String.fromCharCode(0x9d)}next line`,
+    ],
+  ])(
+    "sanitizes %s controls in device authorization failures",
+    async (_label, error, error_description) => {
+      const fetchMock = pollFetch().mockResolvedValueOnce(
+        createJsonResponse({ error, error_description }, { status: 401 }),
       );
-
-    await expect(
-      loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock as typeof fetch,
-        onVerification: async () => {},
-      }),
-    ).rejects.toThrow(
-      "OpenAI device authorization failed: authorization_declined spoofed (Denied next line)",
-    );
-  });
-
-  it("strips C1 terminal controls from reflected device-code errors", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(createDeviceCodeResponse())
-      .mockResolvedValueOnce(
-        createJsonResponse(
-          {
-            error: `authorization_declined${String.fromCharCode(0x9b)}spoofed`,
-            error_description: `Denied${String.fromCharCode(0x9d)}next line`,
-          },
-          { status: 401 },
-        ),
+      await expect(startLogin(fetchMock)).rejects.toThrow(
+        "OpenAI device authorization failed: authorization_declined spoofed (Denied next line)",
       );
-
-    await expect(
-      loginOpenAICodexDeviceCode({
-        fetchFn: fetchMock as typeof fetch,
-        onVerification: async () => {},
-      }),
-    ).rejects.toThrow(
-      "OpenAI device authorization failed: authorization_declined spoofed (Denied next line)",
-    );
-  });
+    },
+  );
 
   it.each([
     { clockStepMs: -30 * 60_000, response: "blocked headers" },
