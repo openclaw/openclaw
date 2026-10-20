@@ -35,7 +35,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       ).toMatchObject({ totalMessages: 2, events: [expect.anything(), expect.anything()] });
     }
     let inMaterialization = false;
-    let materializationTranscriptReads = 0;
+    let materializationReads = 0;
     let describeInFlight = false;
     let describeMaterializations = 0;
     const readInputs = rowInputs.readSessionRowInputs;
@@ -50,33 +50,20 @@ it("serves describe during a 2,048-session drain without transcript reads in row
         inMaterialization = false;
       }
     });
-    const readPage = transcripts.readSessionTranscriptMessageEventPage;
-    vi.spyOn(transcripts, "readSessionTranscriptMessageEventPage").mockImplementation((...args) => {
-      if (inMaterialization) {
-        materializationTranscriptReads++;
-      }
-      return readPage(...args);
-    });
-    let materializationUsageReads = 0;
-    const readUsage = activeEvents.readRecentSessionTranscriptMessageEvents;
-    vi.spyOn(activeEvents, "readRecentSessionTranscriptMessageEvents").mockImplementation(
-      (...args) => {
+    const observeRead =
+      <Args extends unknown[], Result>(read: (...args: Args) => Result) =>
+      (...args: Args): Result => {
         if (inMaterialization) {
-          materializationUsageReads++;
+          materializationReads++;
         }
-        return readUsage(...args);
-      },
-    );
-    let materializationBoundedReads = 0;
-    const readBounded = activeEvents.readSessionTranscriptBoundedMessageTailPage;
-    vi.spyOn(activeEvents, "readSessionTranscriptBoundedMessageTailPage").mockImplementation(
-      (...args) => {
-        if (inMaterialization) {
-          materializationBoundedReads++;
-        }
-        return readBounded(...args);
-      },
-    );
+        return read(...args);
+      };
+    const page = observeRead(transcripts.readSessionTranscriptMessageEventPage);
+    const recent = observeRead(activeEvents.readRecentSessionTranscriptMessageEvents);
+    const tail = observeRead(activeEvents.readSessionTranscriptBoundedMessageTailPage);
+    vi.spyOn(transcripts, "readSessionTranscriptMessageEventPage").mockImplementation(page);
+    vi.spyOn(activeEvents, "readRecentSessionTranscriptMessageEvents").mockImplementation(recent);
+    vi.spyOn(activeEvents, "readSessionTranscriptBoundedMessageTailPage").mockImplementation(tail);
     const context = requestContext(cfg);
     const indexBuilds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
     const initializing = createSessionRowProjection({ cfg });
@@ -116,9 +103,7 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       expect(indexBuilds).toHaveBeenCalledTimes(1);
       sessionChanges.emit({ all: true, scope: "config" });
       const dirtyDrain = await describe("dirty-drain");
-      expect(materializationTranscriptReads).toBe(0);
-      expect(materializationUsageReads).toBe(0);
-      expect(materializationBoundedReads).toBe(0);
+      expect(materializationReads).toBe(0);
       // A response must not depend on completion of unrelated resident rows.
       expect(underDrain.remainingAtResponse).toBeGreaterThan(0);
       expect(dirtyDrain.remainingAtResponse).toBeGreaterThan(0);

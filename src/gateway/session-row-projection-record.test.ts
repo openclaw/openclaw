@@ -15,19 +15,12 @@ const cfg = { agents: { entries: { main: {} } } };
 const noop = () => {};
 const archive = { demote: (row: Row) => row, forget: noop };
 
-function entry(index = 0): SessionEntry {
+function entry(): SessionEntry {
   return {
-    sessionId: `session-${index}`,
-    updatedAt: 1_750_000_000_000 + index,
+    sessionId: "session",
+    updatedAt: 1_750_000_000_000,
     lifecycleRevision: "generation-1",
-    label: `Synthetic session ${index}`,
-    chatType: "direct",
-    visibility: "shared",
-    modelProvider: "unit-test",
-    model: "model",
-    inputTokens: index * 100,
-    outputTokens: index * 10,
-    totalTokens: index * 110,
+    label: "Synthetic session",
     createdActor: { type: "human", source: "profile", id: "profile", label: "Synthetic user" },
   };
 }

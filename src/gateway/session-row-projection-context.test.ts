@@ -38,6 +38,9 @@ const runContext = {
   sessionId: "child",
   projectSessionActive: true,
 };
+const subagent = (runId: string) =>
+  createSubagentRunRecord({ runId, childSessionKey: child, requesterSessionKey: parent });
+const noop = () => {};
 
 function fixture() {
   const context = createSessionRowProjectionContext(
@@ -49,7 +52,7 @@ function fixture() {
       epoch,
       {},
       () => [],
-      () => {},
+      noop,
       () => undefined,
     );
   prepare(0);
@@ -58,14 +61,7 @@ function fixture() {
 
 it("retains active-run facts through unrelated row epochs without sharing independent indexes", () => {
   registerAgentRunContext("run", runContext);
-  subagentRuns.set(
-    "subagent",
-    createSubagentRunRecord({
-      runId: "subagent",
-      childSessionKey: child,
-      requesterSessionKey: parent,
-    }),
-  );
+  subagentRuns.set("subagent", subagent("subagent"));
   const { context, prepare } = fixture();
   const initial = context.current;
   registerAgentRunContext("run", { lastActiveAt: Date.now(), projectSessionMessages: false });
@@ -86,12 +82,8 @@ it("retains active-run facts through unrelated row epochs without sharing indepe
 
 it("refreshes both run and ancestor facts at the same epoch after owner publications", () => {
   registerAgentRunContext("run", runContext);
-  const subagent = createSubagentRunRecord({
-    runId: "subagent",
-    childSessionKey: child,
-    requesterSessionKey: parent,
-  });
-  subagentRuns.set(subagent.runId, subagent);
+  const run = subagent("subagent");
+  subagentRuns.set(run.runId, run);
   const { context, prepare } = fixture();
   const current = () => {
     expect(context.readPrepared(0)).toBeUndefined();
@@ -126,7 +118,7 @@ it("refreshes both run and ancestor facts at the same epoch after owner publicat
   releaseWait();
   expect(current().projectedAgentRuns?.sessionKeys.get(`main\0${child}`)).toBe("running");
   const runsBeforeMove = context.current.projectedAgentRuns;
-  subagentRuns.set(subagent.runId, { ...subagent, requesterSessionKey: "agent:main:next" });
+  subagentRuns.set(run.runId, { ...run, requesterSessionKey: "agent:main:next" });
   publishSubagentRunChanges([child]);
   expect([...current().projectedSubagentActivity!]).toEqual(["agent:main:next"]);
   expect(context.current.projectedAgentRuns).toBe(runsBeforeMove);
@@ -200,11 +192,7 @@ it("refreshes time-sensitive subagent reads while retaining unchanged ancestor m
 });
 
 it("patches list facts after keyed publications without rebuilding for progress-only updates", () => {
-  let run = createSubagentRunRecord({
-    runId: "changed",
-    childSessionKey: child,
-    requesterSessionKey: parent,
-  });
+  let run = subagent("changed");
   subagentRuns.set(run.runId, run);
   const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
   const { context, prepare } = fixture();
