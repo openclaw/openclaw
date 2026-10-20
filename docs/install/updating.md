@@ -678,10 +678,20 @@ Cancellation may use up to the same allowance to settle accepted work before
 releasing its ownership.
 Update-history writes retry a timed-out commit admission at most three times,
 releasing the SQLite writer between attempts. Ordinary progress that still cannot
-be recorded produces a warning and validation continues. Required recovery and
+be recorded, including a worker queue-capacity refusal before dispatch, produces
+a warning and validation continues. Snapshot progress keeps one write in flight
+and coalesces pending observations to the latest progress. Required recovery and
 terminal records report a failure instead of retrying forever. These limits apply
 when the newer installed updater runs; staging it cannot change an older driver's
 already-running progress writer.
+
+If the `2026.10.4` updater stops with `candidate-snapshot-failed` and
+`SQLite worker queue capacity reached`, staging a newer candidate does not replace
+that progress writer. Preserve a verified state backup and follow the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+to install a release containing the fix, stopping and starting the Gateway through
+its actual service owner. Keep the same account, installation prefix, profile,
+and state paths; do not delete databases or disable consistency checks.
 
 Runtime retention looks for hoisted dependencies within the package manager's
 owning installation. Missing optional peers do not cause it to copy unrelated
