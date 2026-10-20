@@ -99,7 +99,7 @@ describe("appendUsageLine", () => {
     ).toBeUndefined();
   });
 
-  it("preserves reply payload metadata when appending usage text", () => {
+  it("decorates a completed source reply and keeps its private final separate", () => {
     const payload = setReplyPayloadMetadata(
       { text: "message tool reply" },
       {
@@ -112,10 +112,17 @@ describe("appendUsageLine", () => {
         },
       },
     );
+    const privateFinal = { text: "private final" };
 
-    const [updated] = appendUsageLine([payload], "Usage: 12 in / 3 out");
+    const [updated, untouchedPrivateFinal] = appendUsageLine(
+      [payload, privateFinal],
+      "Usage: 12 in / 3 out",
+      { completedSourceReply: true },
+    );
 
     expect(updated).toEqual({ text: "message tool reply\nUsage: 12 in / 3 out" });
+    expect(untouchedPrivateFinal).toBe(privateFinal);
+    expect(getReplyPayloadMetadata(privateFinal)).toBeUndefined();
     expect(getReplyPayloadMetadata(expectDefined(updated, "updated test invariant"))).toMatchObject(
       {
         deliverDespiteSourceReplySuppression: true,
@@ -126,5 +133,21 @@ describe("appendUsageLine", () => {
         },
       },
     );
+  });
+
+  it("emits a suppression-authorized footer when no captured source payload exists", () => {
+    const result = appendUsageLine([{ text: "private final" }], "Usage: 12 in / 3 out", {
+      completedSourceReply: true,
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ text: "private final" });
+    expect(result[1]).toMatchObject({ text: "Usage: 12 in / 3 out", isStatusNotice: true });
+    expect(
+      getReplyPayloadMetadata(expectDefined(result[1], "completed source footer")),
+    ).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      responseUsageLine: "Usage: 12 in / 3 out",
+    });
   });
 });
