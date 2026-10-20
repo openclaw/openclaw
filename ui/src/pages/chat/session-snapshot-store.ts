@@ -154,10 +154,10 @@ async function parseSnapshotRecord(
   if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
     return null;
   }
-  // Board validation belongs to its provider, independently of transcript receipts.
-  onBoard?.(parsed.snapshot.board);
   const historyState = parsed.snapshot.historyState;
   if (historyState !== undefined) {
+    // Do not hold board restoration behind the lazy transcript validator.
+    onBoard?.(parsed.snapshot.board);
     const { isChatHistoryState } =
       await import("../../lib/protocol-validators.generated/history-state.js");
     if (!isChatHistoryState(historyState)) {

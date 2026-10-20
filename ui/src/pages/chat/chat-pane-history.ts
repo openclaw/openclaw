@@ -74,6 +74,7 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
@@ -110,7 +111,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       this.ownsChatSnapshot(target) &&
       areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
       resolveChatSnapshotKey(state, target) === cacheKey;
-    const reading = this.sessionSnapshotStore.read(cacheKey, (storedBoard) => {
+    const restoreBoard = (storedBoard: ChatSessionSnapshot["board"]) => {
       if (!isCurrent()) {
         return;
       }
@@ -120,7 +121,8 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         this.resolveBoardProvider();
         this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
       }
-    });
+    };
+    const reading = this.sessionSnapshotStore.read(cacheKey, restoreBoard);
     const hydration: InitialChatSnapshotHydration = {
       titlePending: true,
       sessionKey,
@@ -131,14 +133,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             return hydration.complete?.();
           }
           const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-          if (requests.acceptedHistory) {
+          restoreBoard(snapshot?.board);
+          if (requests.acceptedHistory || !snapshot) {
             return hydration.complete?.();
           }
           // A sibling can fill the shared cache while this pane still needs its
           // own transcript. Adopt those messages before revalidating their cursor.
-          if (!snapshot) {
-            return hydration.complete?.();
-          }
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
           cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);

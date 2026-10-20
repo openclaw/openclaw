@@ -924,11 +924,13 @@ try {
       );
     }
     const trace = rawTrace.map(prepareColdLoadTraceEvent);
-    const screenshots = trace.flatMap((event) =>
-      event.name === "Screenshot" && event.args?.snapshot
-        ? [{ ts: event.ts, data: event.args.snapshot }]
-        : [],
-    );
+    const screenshots = trace
+      .flatMap((event) =>
+        event.name === "Screenshot" && event.args?.snapshot
+          ? [{ ts: event.ts, data: event.args.snapshot }]
+          : [],
+      )
+      .sort((a, b) => a.ts - b.ts);
     const navigationStartUs = trace.find(
       (event) => event.name === "navigationStart" && event.args?.data?.isLoadingMainFrame === true,
     )?.ts;

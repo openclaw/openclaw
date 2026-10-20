@@ -171,9 +171,7 @@ describe("persistent chat session snapshots", () => {
       },
     };
     await persist(writer, sessionKey, value);
-    const presentBoard = vi.fn();
-    expect(await new SessionSnapshotStore().read(sessionKey, presentBoard)).toEqual(value);
-    expect(presentBoard).toHaveBeenCalledExactlyOnceWith(value.board);
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
     await deleteStoredChatSnapshot(sessionKey);
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
   });
@@ -182,6 +180,7 @@ describe("persistent chat session snapshots", () => {
     const sessionKey = key("agent:main:retired-dashboard");
     await persist(writer, sessionKey, {
       ...snapshot("retired conversation"),
+      historyState: { stateRevision: {}, commands: [], models: [] },
       board: {
         snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
         receivedAtMs: 100,
