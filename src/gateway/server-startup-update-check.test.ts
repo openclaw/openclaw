@@ -147,10 +147,11 @@ it.each(["background", "early manual"])(
           .map((client) => client.connId),
       );
     const createGatewayUpdateCheck = mocks.createGatewayUpdateCheck;
+    // Broadcast assertions do not time the first module load; retain the lazy factory boundary.
+    await import("../infra/update-startup.js");
 
     const ready = createDeferred();
     const result = await startUpdateCheck({
-      createUpdateCheck: mocks.createGatewayUpdateCheck,
       ...(source === "early manual" ? { waitForPostReadyWork: () => ready.promise } : {}),
       broadcastToConnIds,
       getClientConnIds,
