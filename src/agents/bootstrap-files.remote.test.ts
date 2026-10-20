@@ -18,11 +18,10 @@ import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
-const memoryRuntimeMocks = vi.hoisted(() => ({ classifyWorkspacePaths: vi.fn() }));
+const { classify } = vi.hoisted(() => ({ classify: vi.fn() }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
-  classifyActiveMemoryWorkspacePaths: (...args: unknown[]) =>
-    memoryRuntimeMocks.classifyWorkspacePaths(...args),
+  classifyActiveMemoryWorkspacePaths: classify,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -51,6 +50,11 @@ function createRemoteBridge() {
 
 const resolveFiles = (params: Partial<Parameters<typeof resolveBootstrapFilesForRun>[0]> = {}) =>
   resolveBootstrapFilesForRun({ workspaceDir, ...params });
+const profileDir = (root: string, id: string) => path.join(root, "users", id);
+const agentClassification = {
+  status: "classified",
+  classifications: [{ relativePath: "USER.md", originClass: "agent" }],
+};
 
 describe.runIf(process.platform !== "win32")("remote bootstrap read provenance", () => {
   beforeEach(async () => {
@@ -59,7 +63,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     workspaceDir = tempDirs.make("bootstrap-gateway-");
     remoteDir = tempDirs.make("bootstrap-remote-");
     resetLegacyWorkspaceStateCheckForTest();
-    memoryRuntimeMocks.classifyWorkspacePaths.mockReset();
+    classify.mockReset().mockResolvedValue(agentClassification);
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-remote-bootstrap-state-",
@@ -79,17 +83,14 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     for (const root of [workspaceDir, remoteDir]) {
-      await fs.mkdir(path.join(root, "users", alice.id), { recursive: true });
+      const dir = profileDir(root, alice.id);
+      await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(
-        path.join(root, "users", alice.id, "USER.md"),
+        path.join(dir, "USER.md"),
         root === remoteDir ? "Remote Alice" : "Local decoy",
       );
     }
-    await fs.symlink(
-      path.join(remoteDir, "users", alice.id),
-      path.join(remoteDir, "users", bob.id),
-      "junction",
-    );
+    await fs.symlink(profileDir(remoteDir, alice.id), profileDir(remoteDir, bob.id), "junction");
     bindRemote();
     const files = await resolveFiles({ bootstrapUserProfileId: alice.id });
     expect(files.filter((file) => file.name === "USER.md").map((file) => file.content)).toEqual([
@@ -130,7 +131,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       };
     };
     bindRemote(bridge);
-    memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(
+    classify.mockImplementation(
       async ({ readSources }: Parameters<typeof classifyActiveMemoryWorkspacePaths>[0]) => ({
         status: "classified",
         classifications: (readSources ?? []).map((source) => ({
@@ -155,16 +156,12 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
   it.each(["classification", "hook"])("rejects remote context revoked during %s", async (stage) => {
     await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
     const revoke = bindRemote();
-    memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(async () => {
-      if (stage === "classification") {
+    if (stage === "classification") {
+      classify.mockImplementationOnce(async () => {
         revoke();
-      }
-      return {
-        status: "classified",
-        classifications: [{ relativePath: "USER.md", originClass: "agent" }],
-      };
-    });
-    if (stage === "hook") {
+        return agentClassification;
+      });
+    } else {
       registerInternalHook("agent:bootstrap", async () => {
         await Promise.resolve();
         revoke();

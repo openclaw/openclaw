@@ -20,19 +20,14 @@ vi.mock("./isolated-completion.js", () => ({ runIsolatedCompletion: complete }))
 const cfg: OpenClawConfig = {
   agents: { defaults: { model: { primary: "ollama/qwen3:4b-instruct" } } },
 };
+const overlay = '<path d="M1 1L2 2"/>';
 const design = {
   version: 1,
   id: "garden-keeper",
   name: "Garden Keeper",
   description: "A gardener with a sprout.",
   palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: {
-    back: "",
-    left_prop: "",
-    right_prop: "",
-    shell_overlay: '<path d="M35 49 L85 49 L80 85 L40 85 Z" fill="#f1e4c4"/>',
-    accessory: "",
-  },
+  layers: { back: "", left_prop: "", right_prop: "", shell_overlay: overlay, accessory: "" },
 };
 const operatorAuthority = {} as AdmittedRunOperatorAuthority;
 const input = {
@@ -49,8 +44,6 @@ beforeEach(() => {
     agentId: "garden",
     provider: "ollama",
     model: "qwen3:4b-instruct",
-    thinkLevel: "off",
-    outputTextPolicy: "strict-visible",
   });
   provider.mockReset().mockReturnValue({ provider: "ollama" });
   route.mockReset().mockResolvedValue({ selection: { selectedHarnessId: "openclaw" } });
@@ -60,11 +53,7 @@ beforeEach(() => {
 
 it("uses the agent's selected text model without tools or ClawHub", async () => {
   const result = await generateBlobsterForAgent(input);
-  expect(prepare).toHaveBeenCalledWith({
-    cfg,
-    agentId: "garden",
-    useUtilityModel: false,
-  });
+  expect(prepare).toHaveBeenCalledWith({ cfg, agentId: "garden", useUtilityModel: false });
   expect(complete).toHaveBeenCalledWith(
     expect.objectContaining({
       provider: "ollama",
@@ -76,7 +65,7 @@ it("uses the agent's selected text model without tools or ClawHub", async () => 
     }),
   );
   expect(result.name).toBe("Garden Keeper");
-  expect(result.svg).toContain('<path d="M35 49 L85 49 L80 85 L40 85 Z"');
+  expect(result.svg).toContain('<path d="M1 1L2 2"');
   expect(result.svg).toContain('<circle cx="45" cy="32" r="5.5"');
 });
 
@@ -91,23 +80,19 @@ it("rejects active model markup even when the model returns valid JSON", async (
   expect(complete).toHaveBeenCalledTimes(2);
 });
 
-it("retries once when the model returns an invalid design", async () => {
-  complete.mockResolvedValueOnce({ text: "not JSON" }).mockResolvedValueOnce({
-    text: JSON.stringify(design),
+it.each([
+  ["invalid JSON", "not JSON"],
+  ["empty description", JSON.stringify({ ...design, description: "" })],
+])("retries an invalid design (%s)", async (_name, text) => {
+  complete.mockResolvedValueOnce({ text });
+  await expect(generateBlobsterForAgent(input)).resolves.toMatchObject({
+    name: "Garden Keeper",
+    description: design.description,
   });
-  const result = await generateBlobsterForAgent(input);
-  expect(result.name).toBe("Garden Keeper");
   expect(complete).toHaveBeenCalledTimes(2);
   expect(complete.mock.calls[1]?.[0]?.systemPrompt).toContain(
     "previous design could not be rendered",
   );
-});
-
-it("retries a design with an empty description before returning a preview", async () => {
-  complete.mockResolvedValueOnce({ text: JSON.stringify({ ...design, description: "" }) });
-  const result = await generateBlobsterForAgent(input);
-  expect(result.description).toBe(design.description);
-  expect(complete).toHaveBeenCalledTimes(2);
 });
 
 it("passes model-policy denials through the typed completion authorization mapper", async () => {

@@ -1,171 +1,134 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import * as workspaceFiles from "./workspace-file-read.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
+
 vi.mock("../plugins/memory-runtime.js", () => ({
   classifyActiveMemoryWorkspacePaths: vi.fn(async () => ({ status: "unavailable" })),
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let state: OpenClawTestState;
-async function writeUser(dir: string, content: string) {
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "USER.md"), content);
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let workspaceDir: string;
+let alice: string;
+const profile = (name: string) => ensureProfileForEmail(`${name}@example.test`).id;
+const userPath = (id?: string) => path.join(workspaceDir, ...(id ? ["users", id] : []), "USER.md");
+async function writeUser(content: string, id?: string) {
+  await fs.mkdir(path.dirname(userPath(id)), { recursive: true });
+  await fs.writeFile(userPath(id), content);
+}
+function load(
+  id?: string,
+  options: Partial<Parameters<typeof resolveBootstrapContextForRun>[0]> = {},
+) {
+  const params = { workspaceDir, bootstrapUserProfileId: id, ...options };
+  return resolveBootstrapContextForRun(params).then(({ contextFiles }) => contextFiles);
 }
 beforeEach(async () => {
-  state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "bootstrap-people-state-",
-  });
+  state = await createOpenClawTestState({ layout: "state-only", prefix: "personal-" });
+  workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
+  alice = profile("alice");
 });
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await state.cleanup();
 });
-describe("personal bootstrap", () => {
-  it("rejects a retired profile's overlay after worker preparation and a merge during the file read", async () => {
-    const workspaceDir = tempDirs.make("bootstrap-profile-retired-");
-    const alice = ensureProfileForEmail("alice@example.test");
-    const bob = ensureProfileForEmail("bob@example.test");
-    ensureProfileForEmail("third@example.test");
-    const personalDir = path.join(workspaceDir, "users", alice.id);
-    await writeUser(personalDir, "Alice private preferences");
-    const read = workspaceFiles.readWorkspaceFileWithGuards;
-    const intercepted = vi
-      .spyOn(workspaceFiles, "readWorkspaceFileWithGuards")
-      .mockImplementationOnce(async (params) => {
-        const loaded = await read(params);
-        linkEmail("alice@example.test", bob.id);
-        return loaded;
-      });
-    try {
-      expect(await loadPersonalUserBootstrapFile(workspaceDir, alice.id)).toBeUndefined();
-      expect(intercepted).toHaveBeenCalledOnce();
-    } finally {
-      intercepted.mockRestore();
+
+it("rejects a retired profile's overlay after a merge during the file read", async () => {
+  const bob = profile("bob");
+  profile("third");
+  await writeUser("Alice private preferences", alice);
+  const read = workspaceFiles.readWorkspaceFileWithGuards;
+  const intercepted = vi
+    .spyOn(workspaceFiles, "readWorkspaceFileWithGuards")
+    .mockImplementationOnce(async (params) => {
+      const loaded = await read(params);
+      linkEmail("alice@example.test", bob);
+      return loaded;
+    });
+  try {
+    expect(await loadPersonalUserBootstrapFile(workspaceDir, alice)).toBeUndefined();
+    expect(intercepted).toHaveBeenCalledOnce();
+  } finally {
+    intercepted.mockRestore();
+  }
+});
+
+it("refreshes the selected overlay without retaining a previous selection", async () => {
+  const bob = profile("bob");
+  await writeUser("Shared defaults");
+  await writeUser("Alice preferences", alice);
+  await writeUser("Bob preferences", bob);
+  expect((await loadPersonalUserBootstrapFile(workspaceDir, alice))?.origin).toEqual({
+    kind: "personal",
+    rootPath: path.dirname(userPath(alice)),
+  });
+  const users = async (id?: string) =>
+    (await load(id, { sessionKey: "agent:main:shared" })).filter((file) =>
+      file.path.endsWith("USER.md"),
+    );
+  const contents = async (id?: string) => (await users(id)).map((file) => file.content);
+  expect(await users(alice)).toEqual([
+    { path: userPath(), content: "Shared defaults" },
+    { path: userPath(alice), content: "Alice preferences", personalUser: true },
+  ]);
+  expect(await contents(bob)).toEqual(["Shared defaults", "Bob preferences"]);
+  for (const id of [undefined, "unknown", "../" + alice]) {
+    expect(await contents(id)).toEqual(["Shared defaults"]);
+  }
+  await writeUser("Updated Alice preferences", alice);
+  expect((await users(alice)).at(-1)?.content).toBe("Updated Alice preferences");
+  profile("third");
+  linkEmail("alice@example.test", bob);
+  expect(await contents(alice)).toEqual(["Shared defaults", "Bob preferences"]);
+  await fs.unlink(userPath(bob));
+  expect(await contents(bob)).toEqual(["Shared defaults"]);
+});
+
+it("retains the shared USER budget when the workspace resembles a personal directory", async () => {
+  await writeUser("Shared preferences. ".repeat(300));
+  const warn = vi.fn();
+  const users = (await load(alice, { warn })).filter((file) => file.path.endsWith("USER.md"));
+  expect(users).toHaveLength(1);
+  expect(users[0]?.content).toContain("Shared preferences.");
+  expect(users[0]?.content).toContain("read USER.md for full content");
+  expect(users[0]?.personalUser).toBeUndefined();
+  expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Personal USER.md"));
+});
+
+it.each(["file", "parent", "hardlink"] as const)(
+  "rejects cross-profile %s aliases",
+  async (alias) => {
+    const bob = profile("bob");
+    await writeUser("Bob preferences", bob);
+    const aliceDir = path.dirname(userPath(alice));
+    if (alias === "parent") {
+      await fs.symlink(path.dirname(userPath(bob)), aliceDir, "junction");
+    } else {
+      await fs.mkdir(aliceDir);
+      await (alias === "hardlink" ? fs.link : fs.symlink)(userPath(bob), userPath(alice));
     }
+    expect((await load(alice)).some((file) => file.content.includes("Bob preferences"))).toBe(
+      false,
+    );
+  },
+);
+
+it.each([
+  ["budget", "personal".repeat(600)],
+  ["read-budget", "personal".repeat(300_000)],
+  ["subagent", "personal preferences"],
+])("preserves the %s boundary for personal instructions", async (boundary, content) => {
+  profile("bob");
+  await writeUser(content, alice);
+  const files = await load(alice, {
+    sessionKey: boundary === "subagent" ? "agent:main:subagent:child" : "agent:main:shared",
   });
-
-  it("refreshes the selected overlay without retaining a previous selection", async () => {
-    const workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
-    const alice = ensureProfileForEmail("alice@example.test");
-    const bob = ensureProfileForEmail("bob@example.test");
-    const writePersonal = (id: string, content: string) =>
-      writeUser(path.join(workspaceDir, "users", id), content);
-    await writeUser(workspaceDir, "Shared defaults");
-    await writePersonal(alice.id, "Alice preferences");
-    await writePersonal(bob.id, "Bob preferences");
-    expect((await loadPersonalUserBootstrapFile(workspaceDir, alice.id))?.origin).toEqual({
-      kind: "personal",
-      rootPath: path.join(workspaceDir, "users", alice.id),
-    });
-    const load = async (bootstrapUserProfileId?: string) => {
-      const context = await resolveBootstrapContextForRun({
-        workspaceDir,
-        sessionKey: "agent:main:shared",
-        bootstrapUserProfileId,
-      });
-      return context.contextFiles.filter((file) => file.path.endsWith("USER.md"));
-    };
-    const contents = async (id?: string) => (await load(id)).map((file) => file.content);
-    expect(await load(alice.id)).toEqual([
-      { path: path.join(workspaceDir, "USER.md"), content: "Shared defaults" },
-      {
-        path: path.join(workspaceDir, "users", alice.id, "USER.md"),
-        content: "Alice preferences",
-        personalUser: true,
-      },
-    ]);
-    expect(await contents(bob.id)).toEqual(["Shared defaults", "Bob preferences"]);
-    expect(await contents()).toEqual(["Shared defaults"]);
-    expect(await contents("unknown")).toEqual(["Shared defaults"]);
-    expect(await contents("../" + alice.id)).toEqual(["Shared defaults"]);
-    await writePersonal(alice.id, "Updated Alice preferences");
-    expect((await load(alice.id)).at(-1)?.content).toBe("Updated Alice preferences");
-    ensureProfileForEmail("third@example.test");
-    linkEmail("alice@example.test", bob.id);
-    expect(await contents(alice.id)).toEqual(["Shared defaults", "Bob preferences"]);
-    await fs.unlink(path.join(workspaceDir, "users", bob.id, "USER.md"));
-    expect(await contents(bob.id)).toEqual(["Shared defaults"]);
-  });
-
-  it("retains the shared USER budget when the workspace resembles a personal directory", async () => {
-    const workspaceDir = path.join(tempDirs.make("bootstrap-solo-"), "users", "arbitrary");
-    await writeUser(workspaceDir, "Shared preferences. ".repeat(300));
-    const alice = ensureProfileForEmail("alice@example.test");
-    const warn = vi.fn();
-    const context = await resolveBootstrapContextForRun({
-      workspaceDir,
-      bootstrapUserProfileId: alice.id,
-      warn,
-    });
-    const users = context.contextFiles.filter((file) => file.path.endsWith("USER.md"));
-    expect(users).toHaveLength(1);
-    expect(users[0]?.content).toContain("Shared preferences.");
-    expect(users[0]?.content).toContain("read USER.md for full content");
-    expect(users[0]?.personalUser).toBeUndefined();
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Personal USER.md"));
-  });
-
-  it.each(["file", "parent", "hardlink"] as const)(
-    "rejects a personal %s alias to another person's file",
-    async (alias) => {
-      const workspaceDir = tempDirs.make("bootstrap-people-alias-");
-      const alice = ensureProfileForEmail("alice@example.test");
-      const bob = ensureProfileForEmail("bob@example.test");
-      const aliceDir = path.join(workspaceDir, "users", alice.id);
-      const bobDir = path.join(workspaceDir, "users", bob.id);
-      await writeUser(bobDir, "Bob preferences");
-      if (alias === "parent") {
-        await fs.symlink(bobDir, aliceDir, "junction");
-      } else {
-        await fs.mkdir(aliceDir);
-        if (alias === "hardlink") {
-          await fs.link(path.join(bobDir, "USER.md"), path.join(aliceDir, "USER.md"));
-        } else {
-          await fs.symlink(path.join(bobDir, "USER.md"), path.join(aliceDir, "USER.md"));
-        }
-      }
-      const context = await resolveBootstrapContextForRun({
-        workspaceDir,
-        bootstrapUserProfileId: alice.id,
-      });
-      expect(context.contextFiles.some((file) => file.content.includes("Bob preferences"))).toBe(
-        false,
-      );
-    },
-  );
-
-  it.each(["budget", "read-budget", "subagent"] as const)(
-    "preserves the %s boundary for personal instructions",
-    async (boundary) => {
-      const workspaceDir = tempDirs.make("bootstrap-people-boundary-");
-      const alice = ensureProfileForEmail("alice@example.test");
-      ensureProfileForEmail("bob@example.test");
-      const personalDir = path.join(workspaceDir, "users", alice.id);
-      await writeUser(
-        personalDir,
-        boundary === "read-budget"
-          ? "personal".repeat(300_000)
-          : boundary === "budget"
-            ? "personal".repeat(600)
-            : "personal preferences",
-      );
-      const context = await resolveBootstrapContextForRun({
-        workspaceDir,
-        bootstrapUserProfileId: alice.id,
-        sessionKey: boundary === "subagent" ? "agent:main:subagent:child" : "agent:main:shared",
-      });
-      expect(context.contextFiles.some((file) => file.content.includes("personal"))).toBe(false);
-    },
-  );
+  expect(files.some((file) => file.content.includes("personal"))).toBe(false);
 });
