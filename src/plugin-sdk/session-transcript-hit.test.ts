@@ -32,26 +32,20 @@ vi.mock("../config/sessions/combined-store-gateway-read.js", () => ({
 it.each([
   ["synchronous compatibility", loadCombinedSessionStoreForGateway],
   ["async", loadCombinedSessionStoreForGatewayAsync],
-] as const)(
-  "filters incognito rows from the %s plugin cross-session view",
-  async (_label, load) => {
-    const visible = entry("visible");
-    const snapshot = {
-      storePath: "(multiple)",
-      store: {
-        "agent:main:dashboard:visible": visible,
-        "agent:main:dashboard:incognito-private": entry("private", {
-          incognito: true,
-          updatedAt: 2,
-        }),
-      },
-    };
-    loadGatewaySessionStore.mockReturnValue(snapshot);
-    loadGatewaySessionStoreAsync.mockResolvedValue(snapshot);
+] as const)("filters incognito rows (%s)", async (_label, load) => {
+  const visible = entry("visible");
+  const snapshot = {
+    storePath: "(multiple)",
+    store: {
+      "agent:main:dashboard:visible": visible,
+      "agent:main:dashboard:incognito-private": entry("private", { incognito: true }),
+    },
+  };
+  loadGatewaySessionStore.mockReturnValue(snapshot);
+  loadGatewaySessionStoreAsync.mockResolvedValue(snapshot);
 
-    expect((await load({})).store).toEqual({ "agent:main:dashboard:visible": visible });
-  },
-);
+  expect((await load({})).store).toEqual({ "agent:main:dashboard:visible": visible });
+});
 
 it("extracts builtin live and archived transcript identities", () => {
   expect(extractStem("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
@@ -86,11 +80,11 @@ it("falls back to archived owner metadata after the live row is removed", () => 
 it.each([
   ["session:legacy", "session%3Alegacy"],
   ["my-plugin:task/1", "my-plugin%3Atask%2F1"],
-])("resolves encoded identity %s independently of transcript filenames", (sessionId, encoded) => {
+])("resolves identity %s", (sessionId, encoded) => {
   const key = formatKey({ agentId: "main", sessionId });
   const store: Record<string, SessionEntry> = {
     "agent:main:discord:direct:42": entry(sessionId, {
-      sessionFile: "/tmp/not-the-identity.jsonl",
+      sessionFile: "/tmp/other.jsonl",
       updatedAt: 10,
     }),
   };

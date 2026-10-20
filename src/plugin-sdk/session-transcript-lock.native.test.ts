@@ -25,6 +25,10 @@ const message = (content: string) => ({ role: "assistant", content });
 const fail = async (error: Error): Promise<never> => {
   throw error;
 };
+const prepared = <T>(value: T, prepare: (message: T) => Promise<T | undefined>) => ({
+  message: value,
+  prepareMessageAfterIdempotencyCheckAsync: prepare,
+});
 async function seed(env: NodeJS.ProcessEnv) {
   await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionId: "locked", sessionKey: "agent:main:locked", env };
@@ -32,9 +36,7 @@ async function seed(env: NodeJS.ProcessEnv) {
   return { ...scope, storePath: openOpenClawAgentDatabase(scope).path };
 }
 
-it("drains accepted operations after callback failure and seals the native context", async ({
-  signal,
-}) => {
+it("drains writes and seals a failed callback", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const scope = await seed(env);
     const entered = createDeferred();
@@ -46,14 +48,13 @@ it("drains accepted operations after callback failure and seals the native conte
     const writing = withTranscriptWriteLock(scope, (locked) => {
       retained = locked;
       accepted.push(
-        locked.appendMessage({
-          message: message("rejected"),
-          prepareMessageAfterIdempotencyCheckAsync: async () => {
+        locked.appendMessage(
+          prepared(message("rejected"), async () => {
             entered.resolve();
             await release.promise;
             return fail(preparationFailure);
-          },
-        }),
+          }),
+        ),
         locked.appendMessageWithMessageSequence({
           eventId: "accepted",
           message: message("settled"),
@@ -77,17 +78,12 @@ it("drains accepted operations after callback failure and seals the native conte
       expect(await accepted[2]).toEqual(
         expect.arrayContaining([expect.objectContaining({ id: "accepted" })]),
       );
-      await expect(
-        withTranscriptWriteLock(scope, async (locked) => {
-          await expect(
-            locked.appendMessage({
-              message: message("handled refusal"),
-              prepareMessageAfterIdempotencyCheckAsync: () => fail(preparationFailure),
-            }),
-          ).rejects.toBe(preparationFailure);
-          return "recovered";
-        }),
-      ).resolves.toBe("recovered");
+      const recovery = await withTranscriptWriteLock(scope, async (locked) => {
+        const refusal = prepared(message("handled refusal"), () => fail(preparationFailure));
+        await expect(locked.appendMessage(refusal)).rejects.toBe(preparationFailure);
+        return "recovered";
+      });
+      expect(recovery).toBe("recovered");
     } finally {
       release.resolve();
       await Promise.allSettled([writing, ...accepted]);
@@ -99,10 +95,11 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const scope = await seed(env);
     const database = openOpenClawAgentDatabase(scope);
-    const original: ReturnType<typeof message> & {
+    type Original = ReturnType<typeof message> & {
       idempotencyKey: string;
       custom?: { toJSON(): never };
-    } = {
+    };
+    const original: Original = {
       ...message("original"),
       idempotencyKey: "original",
       custom: {
@@ -116,43 +113,36 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
     await append({
       eventId: "original",
       message: original,
-      prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...prepared }) => {
+      prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...clean }) => {
         expect(database.db.isTransaction).toBe(true);
-        return prepared;
+        return clean;
       },
     });
     const prepare = vi.fn(() => fail(new Error("Replay must not prepare")));
-    await expect(
-      append({ message: original, prepareMessageAfterIdempotencyCheckAsync: prepare }),
-    ).resolves.toMatchObject({ appended: false, messageId: "original" });
+    const replay = await append(prepared(original, prepare));
+    expect(replay).toMatchObject({ appended: false, messageId: "original" });
     expect(prepare).not.toHaveBeenCalled();
-    await expect(
-      append({
-        message: { ...original, idempotencyKey: "suppressed" },
-        prepareMessageAfterIdempotencyCheckAsync: async () => undefined,
-      }),
-    ).resolves.toBeUndefined();
+    const suppressed = { ...original, idempotencyKey: "suppressed" };
+    const suppress = async () => undefined;
+    expect(await append(prepared(suppressed, suppress))).toBeUndefined();
     await expect(append({ message: undefined })).resolves.toBeUndefined();
     await expect(
       append({
         eventId: "stale",
-        message: message("stale"),
-        prepareMessageAfterIdempotencyCheckAsync: async (prepared) => {
+        ...prepared(message("stale"), async (value) => {
           expect(database.db.isTransaction).toBe(false);
-          expect(
-            appendTranscriptMessageSync(scope, {
-              eventId: "concurrent",
-              message: message("concurrent"),
-            }).ok,
-          ).toBe(true);
-          return prepared;
-        },
+          const concurrent = appendTranscriptMessageSync(scope, {
+            eventId: "concurrent",
+            message: message("concurrent"),
+          });
+          expect(concurrent.ok).toBe(true);
+          return value;
+        }),
       }),
     ).rejects.toThrow("SQLite transcript changed while preparing rewrite");
-    expect(
-      loadTranscriptEventsSync(scope)
-        .filter(isRecord)
-        .map((event) => event.id),
-    ).toEqual([scope.sessionId, "original", "concurrent"]);
+    const ids = loadTranscriptEventsSync(scope)
+      .filter(isRecord)
+      .map((event) => event.id);
+    expect(ids).toEqual([scope.sessionId, "original", "concurrent"]);
   });
 });
