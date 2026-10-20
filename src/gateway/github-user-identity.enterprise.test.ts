@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  GIT_COAUTHOR_PREFERENCE_KEY,
+  GIT_COAUTHOR_PREFERENCE_KEY as CREDIT_KEY,
   validateUsersSelfResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -62,9 +62,10 @@ async function creditSession(env: NodeJS.ProcessEnv, id: string, participants: s
   return scope;
 }
 
-function publicationFor(scope: Awaited<ReturnType<typeof creditSession>>) {
+function publicationFor(scope: Awaited<ReturnType<typeof creditSession>>, host: string) {
   const id = scope.sessionKey.slice("agent:main:".length);
-  return {
+  return prepareGitHubPublicationContent({
+    host,
     row: {
       request_id: id,
       agent_id: "main",
@@ -78,7 +79,7 @@ function publicationFor(scope: Awaited<ReturnType<typeof creditSession>>) {
     assertCurrent: () => {},
     readCurrentEntry: () => loadSessionEntryReadOnly(scope),
     description: "Synthetic publication",
-  };
+  });
 }
 
 function userRequests(profileId: string, connId: string, sync: ReturnType<typeof enterpriseSync>) {
@@ -118,6 +119,15 @@ const publicCredit = {
   logins: ["public-ada"],
   trailers: ["Co-authored-by: public-ada <101+public-ada@users.noreply.github.com>"],
 };
+const optedIn = { [CREDIT_KEY]: true };
+const optedOut = { [CREDIT_KEY]: false };
+
+function publicProfile() {
+  return syncGitHubIdentity({
+    identity: { accountId: 101, login: "public-ada" },
+    authenticationAlias: { kind: "email", email: "public@example.test" },
+  });
+}
 
 function enterpriseAttribution(scope: Awaited<ReturnType<typeof creditSession>>) {
   return resolveGitCoauthorAttribution({
@@ -134,12 +144,9 @@ it.each(["ghe.example.test", "code.example.test"])(
       const transport = vi
         .spyOn(globalThis, "fetch")
         .mockRejectedValue(new Error("No external lookup allowed"));
-      const publicProfile = syncGitHubIdentity({
-        identity: { accountId: 101, login: "public-ada" },
-        authenticationAlias: { kind: "email", email: "public@example.test" },
-      });
+      const publicUser = publicProfile();
       const profile = ensureProfileForEmail(principal);
-      setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true });
+      setUserPreferences(profile.id, optedIn);
       const sync = enterpriseSync("ada@enterprise.example", host);
       expect((await sync()).profileId).toBe(profile.id);
       const { respond, call } = userRequests(profile.id, "enterprise-credit", sync);
@@ -169,42 +176,31 @@ it.each(["ghe.example.test", "code.example.test"])(
       });
       expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("ada@enterprise.example");
       expect((await prepareUserProfileRoleAuthority(profile.id))?.githubLogin).toBeNull();
-      expect(getUserProfileListItem(publicProfile.id).githubIdentity?.login).toBe("public-ada");
+      expect(getUserProfileListItem(publicUser.id).githubIdentity?.login).toBe("public-ada");
       const scope = await creditSession(state.env, "enterprise-credit", [
         profile.id,
-        publicProfile.id,
+        publicUser.id,
       ]);
       const params = { ...scope, config: { gateway: { github: { host } } } };
       const prepared = await prepareGitCoauthorAttribution(params);
       expect(prepared.attribution).toEqual(enterpriseCredit);
       expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toEqual(publicCredit);
-      const publication = publicationFor(scope);
-      const content = await prepareGitHubPublicationContent({
-        ...publication,
-        host,
-      });
+      const content = await publicationFor(scope, host);
       expect(content.trailers).toEqual(enterpriseCredit.trailers);
       expect(content.commitMessage).not.toContain("public-ada");
-      const publicContent = await prepareGitHubPublicationContent({
-        ...publication,
-        host: "github.com",
-      });
+      const publicContent = await publicationFor(scope, "github.com");
       expect(publicContent.trailers).toEqual(publicCredit.trailers);
-      setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+      setUserPreferences(profile.id, optedOut);
       expect(prepared.isCurrent()).toBe(false);
       expect(() => content.assertAction()).toThrow("contributor credit changed");
       expect(await resolveGitCoauthorAttribution(params)).toBeUndefined();
       await enterpriseSync("ada@enterprise.example", host)();
-      expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
-        [GIT_COAUTHOR_PREFERENCE_KEY]: false,
-      });
-      setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true });
+      expect(getUserPreferences(profile.id, [CREDIT_KEY])).toEqual(optedOut);
+      setUserPreferences(profile.id, optedIn);
       await enterpriseSync(undefined, host)();
       expect(getUserProfileListItem(profile.id).githubIdentity?.login).toBe("enterprise-ada");
       expect(await resolveGitCoauthorAttribution(params)).toBeUndefined();
-      expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
-        [GIT_COAUTHOR_PREFERENCE_KEY]: true,
-      });
+      expect(getUserPreferences(profile.id, [CREDIT_KEY])).toEqual(optedIn);
       expect(transport).not.toHaveBeenCalled();
     });
   },
@@ -236,7 +232,7 @@ it("requires fresh sign-in after historical evidence or a principal alias move w
     await enterpriseSync("ada@enterprise.example")();
     expect(getUserProfileListItem(profile.id).githubIdentity?.login).toBe("enterprise-ada");
     expect(getUserProfileListItem(profile.id).emails).not.toContain("ada@enterprise.example");
-    expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({});
+    expect(getUserPreferences(profile.id, [CREDIT_KEY])).toEqual({});
   });
 });
 
@@ -250,18 +246,14 @@ it.each([1, 2])(
         await mergeCanonicalUserProfiles(secondary.profileId, source.profileId);
         await enterpriseSync("ada@other.example", "code.example.test")();
       }
-      setUserPreferences(source.profileId, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+      setUserPreferences(source.profileId, optedOut);
       const target = ensureProfileForEmail("survivor@example.test");
       const scope = await creditSession(state.env, "merged-enterprise-credit", [source.profileId]);
       await mergeCanonicalUserProfiles(source.profileId, target.id);
-      expect(getUserPreferences(target.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
-        [GIT_COAUTHOR_PREFERENCE_KEY]: false,
-      });
+      expect(getUserPreferences(target.id, [CREDIT_KEY])).toEqual(optedOut);
       const finalTarget = ensureProfileForEmail("final-survivor@example.test");
       await mergeCanonicalUserProfiles(target.id, finalTarget.id);
-      expect(getUserPreferences(finalTarget.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
-        [GIT_COAUTHOR_PREFERENCE_KEY]: false,
-      });
+      expect(getUserPreferences(finalTarget.id, [CREDIT_KEY])).toEqual(optedOut);
       // Merging preserves consent, but never makes the transferred credit proof current.
       expect(await enterpriseAttribution(scope)).toBeUndefined();
       expect((await enterpriseSync("ada@enterprise.example")()).profileId).toBe(finalTarget.id);
@@ -273,18 +265,15 @@ it.each([1, 2])(
 it("retains a public primary identity and host-selected credit after linking an enterprise account", async () => {
   await withCreditState(async (state) => {
     const enterprise = await enterpriseSync("ada@enterprise.example")();
-    const publicProfile = syncGitHubIdentity({
-      identity: { accountId: 101, login: "public-ada" },
-      authenticationAlias: { kind: "email", email: "public@example.test" },
-    });
-    await mergeCanonicalUserProfiles(enterprise.profileId, publicProfile.id);
-    expect((await enterpriseSync("ada@enterprise.example")()).profileId).toBe(publicProfile.id);
-    expect(getUserProfileListItem(publicProfile.id).githubIdentity).toEqual({
+    const publicUser = publicProfile();
+    await mergeCanonicalUserProfiles(enterprise.profileId, publicUser.id);
+    expect((await enterpriseSync("ada@enterprise.example")()).profileId).toBe(publicUser.id);
+    expect(getUserProfileListItem(publicUser.id).githubIdentity).toEqual({
       login: "public-ada",
       profileUrl: "https://github.com/public-ada",
       avatarUrl: "https://avatars.githubusercontent.com/u/101?v=4",
     });
-    const scope = await creditSession(state.env, "mixed-enterprise-credit", [publicProfile.id]);
+    const scope = await creditSession(state.env, "mixed-enterprise-credit", [publicUser.id]);
     expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toEqual(publicCredit);
     expect(await enterpriseAttribution(scope)).toEqual(enterpriseCredit);
   });
@@ -309,34 +298,25 @@ it("keeps global consent writable without a display primary after merging two en
     expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("ada@");
 
     const scope = await creditSession(state.env, "multi-host-consent", [second.profileId]);
-    const publication = publicationFor(scope);
-    const firstContent = await prepareGitHubPublicationContent({
-      ...publication,
-      host: "ghe.example.test",
-    });
-    const secondContent = await prepareGitHubPublicationContent({
-      ...publication,
-      host: "code.example.test",
-    });
+    const firstContent = await publicationFor(scope, "ghe.example.test");
+    const secondContent = await publicationFor(scope, "code.example.test");
     expect(firstContent.trailers).toEqual(enterpriseCredit.trailers);
     expect(secondContent.trailers).toEqual(["Co-authored-by: enterprise-ada <ada@other.example>"]);
     respond.mockClear();
-    await call("users.prefs.set", { entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
+    await call("users.prefs.set", { entries: optedOut });
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { status: "ok" }, undefined);
     await enterpriseSync("ada@enterprise.example")();
     respond.mockClear();
-    await call("users.prefs.get", { keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
+    await call("users.prefs.get", { keys: [CREDIT_KEY] });
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       true,
-      { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } },
+      { status: "ok", entries: optedOut },
       undefined,
     );
     expect(() => firstContent.assertAction()).toThrow("contributor credit changed");
     expect(() => secondContent.assertAction()).toThrow("contributor credit changed");
     for (const host of ["ghe.example.test", "code.example.test"]) {
-      expect((await prepareGitHubPublicationContent({ ...publication, host })).trailers).toEqual(
-        [],
-      );
+      expect((await publicationFor(scope, host)).trailers).toEqual([]);
     }
   });
 });

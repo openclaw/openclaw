@@ -22,7 +22,7 @@ import {
   failRepositoryGitHubPublicationPreparationInDatabase,
   insertRepositoryGitHubPublicationInDatabase,
   readRepositoryGitHubPublicationInDatabase,
-  writeRepositoryGitHubPublicationInDatabase,
+  writeRepositoryGitHubPublicationInDatabase as writeRepository,
 } from "./github-repository-publication-store.worker.js";
 
 // These fixtures exercise transaction publication directly; runtime callers use worker commands.
@@ -85,51 +85,23 @@ export function claimRepositoryGitHubPublicationFixture(
   const claimed = runOpenClawStateWriteTransaction((database) =>
     claimRepositoryGitHubPublicationInDatabase(database, row, instanceId, executionId, authority),
   );
+  const interruptedStatus = row.owner_profile_id === null ? "requested" : "needs_confirmation";
+  const apply = (transition: GitHubPublicationEffectTransition) => {
+    const { values, requireAction } = githubPublicationEffectFacts(transition, interruptedStatus);
+    return runOpenClawStateWriteTransaction((database) =>
+      writeRepository(database, row, instanceId, executionId, values, requireAction, authority),
+    );
+  };
   return {
     row: claimed,
-    ...createGitHubPublicationExecutionEffects({
-      write: (values, requireAction) =>
-        runOpenClawStateWriteTransaction((database) =>
-          writeRepositoryGitHubPublicationInDatabase(
-            database,
-            row,
-            instanceId,
-            executionId,
-            values,
-            requireAction,
-            authority,
-          ),
-        ),
-      interruptedStatus: row.owner_profile_id === null ? "requested" : "needs_confirmation",
-    }),
-  };
-}
-
-/** Transaction fixtures use the same effect reducer as the worker owner. */
-function createGitHubPublicationExecutionEffects<Row>(params: {
-  write: (
-    facts: ReturnType<typeof githubPublicationEffectFacts>["values"],
-    requireAction: boolean,
-  ) => Row;
-  interruptedStatus: "requested" | "needs_confirmation";
-}) {
-  const apply = (transition: GitHubPublicationEffectTransition) => {
-    const { values, requireAction } = githubPublicationEffectFacts(
-      transition,
-      params.interruptedStatus,
-    );
-    return params.write(values, requireAction);
-  };
-  return {
-    updateHead: (headCommit: string): Row => apply({ operation: "updateHead", headCommit }),
-    complete: (result: SessionGitHubPublicationResult): Row =>
-      apply({ operation: "complete", result }),
+    updateHead: (headCommit: string) => apply({ operation: "updateHead", headCommit }),
+    complete: (result: SessionGitHubPublicationResult) => apply({ operation: "complete", result }),
     recordEffect(
       effect: "push" | "pull_request",
       observed?: { headCommit?: string; url?: string },
     ): void {
       apply({ operation: "recordEffect", effect, observed });
     },
-    interrupt: (): Row => apply({ operation: "interrupt" }),
+    interrupt: () => apply({ operation: "interrupt" }),
   };
 }
