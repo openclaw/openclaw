@@ -158,11 +158,7 @@ describe("handleSlackAction", () => {
       trustedContext,
     );
     for (const action of ["deleteMessage", "pinMessage", "unpinMessage"]) {
-      await handleSlackAction(
-        { action, channelId: "C123", messageId: "123.456" },
-        cfg,
-        trustedContext,
-      );
+      await handleSlackAction({ action, ...message }, cfg, trustedContext);
     }
     expectSlackSendCall(0, "team:T123:channel:C123", "created", {
       cfg,
@@ -199,11 +195,7 @@ describe("handleSlackAction", () => {
       cfg,
       trustedContext,
     );
-    await handleSlackAction(
-      { action: "reactions", channelId: "C123", messageId: "123.456" },
-      cfg,
-      trustedContext,
-    );
+    await handleSlackAction({ action: "reactions", ...message }, cfg, trustedContext);
     await handleSlackAction(
       { action: "downloadFile", channelId: "C123", fileId: "F123" },
       cfg,
@@ -273,14 +265,6 @@ describe("handleSlackAction", () => {
 
   function requireDetails(result: Awaited<ReturnType<typeof handleSlackAction>>) {
     return requireRecord(result.details, "action result details");
-  }
-
-  async function sendSecondMessageAndExpectNoThread(params: {
-    cfg: OpenClawConfig;
-    context: SlackActionContext;
-  }) {
-    await handleSlackAction({ ...send, content: "Second" }, params.cfg, params.context);
-    expectLastSlackSend("Second", params.cfg);
   }
 
   it("fails closed for thread-required contexts without a thread timestamp", async () => {
@@ -506,13 +490,8 @@ describe("handleSlackAction", () => {
   });
 
   it("uploads metadata and original media through the trusted workspace using a writable user token", async () => {
-    cfg = {
-      channels: {
-        slack: {
-          accounts: { default: { userToken: "xoxp-user", userTokenReadOnly: false } },
-        },
-      },
-    };
+    const defaultAccount = { userToken: "xoxp-user", userTokenReadOnly: false };
+    cfg = { channels: { slack: { accounts: { default: defaultAccount } } } };
     await handleSlackAction(
       {
         ...upload,
@@ -752,7 +731,8 @@ describe("handleSlackAction", () => {
       expectSlackSendCall(index, "channel:C123", "First", { cfg, threadTs: "1111111111.111111" });
     }
     expect(context.hasRepliedRef.value).toBe(true);
-    await sendSecondMessageAndExpectNoThread({ cfg, context });
+    await handleSlackAction({ ...send, content: "Second" }, cfg, context);
+    expectLastSlackSend("Second", cfg);
   });
 
   it("records an accepted batched Slack text chunk when the next platform post fails", async () => {
@@ -922,26 +902,17 @@ describe("handleSlackAction", () => {
 
   it("fails closed for read-like Slack actions when provider config is missing", async () => {
     cfg = {};
-
-    await expect(
-      handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg),
-    ).rejects.toThrow("Slack read target channel is not allowed.");
-    expect(readSlackMessages).not.toHaveBeenCalled();
-
-    await expect(
-      handleSlackAction({ action: "reactions", channelId: "C1", messageId: "123.456" }, cfg),
-    ).rejects.toThrow("Slack read target channel is not allowed.");
-    expect(listSlackReactions).not.toHaveBeenCalled();
-
-    await expect(
-      handleSlackAction({ action: "downloadFile", fileId: "F123", channelId: "C1" }, cfg),
-    ).rejects.toThrow("Slack read target channel is not allowed.");
-    expect(downloadSlackFile).not.toHaveBeenCalled();
-
-    await expect(handleSlackAction({ action: "listPins", channelId: "C1" }, cfg)).rejects.toThrow(
-      "Slack read target channel is not allowed.",
-    );
-    expect(listSlackPins).not.toHaveBeenCalled();
+    for (const [params, operation] of [
+      [{ action: "readMessages" }, readSlackMessages],
+      [{ action: "reactions", messageId: "123.456" }, listSlackReactions],
+      [{ action: "downloadFile", fileId: "F123" }, downloadSlackFile],
+      [{ action: "listPins" }, listSlackPins],
+    ] as const) {
+      await expect(handleSlackAction({ ...params, channelId: "C1" }, cfg)).rejects.toThrow(
+        "Slack read target channel is not allowed.",
+      );
+      expect(operation).not.toHaveBeenCalled();
+    }
   });
 
   it("does not fall back to a bot token when a user identity has no user token", async () => {

@@ -80,10 +80,7 @@ describe("Slack read actions", () => {
       {
         type: "table",
         rows: [
-          [
-            { type: "raw_text", text: "ID" },
-            { type: "raw_text", text: "Status" },
-          ],
+          ["ID", "Status"].map((text) => ({ type: "raw_text", text })),
           [
             { type: "raw_number", value: 12345 },
             { type: "raw_text", text: "enabled" },

@@ -17,15 +17,17 @@ function createClient() {
     files: { info: ReturnType<typeof vi.fn> };
   };
 }
+const fileMetadata = {
+  id: "F123",
+  name: "image.png",
+  mimetype: "image/png",
+  url_private_download: "https://files.slack-gov.com/files-pri/T1-F123/image.png",
+};
 function fileInfo(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "F123",
-    name: "image.png",
-    mimetype: "image/png",
-    url_private_download: "https://files.slack-gov.com/files-pri/T1-F123/image.png",
-    channels: ["C123"],
-    ...overrides,
-  };
+  return { ...fileMetadata, channels: ["C123"], ...overrides };
+}
+function privateShare(channel: string, ts: string, thread_ts?: string) {
+  return { shares: { private: { [channel]: [{ ts, ...(thread_ts ? { thread_ts } : {}) }] } } };
 }
 const media = {
   path: "/tmp/image.png",
@@ -77,15 +79,7 @@ describe("downloadSlackFile", () => {
       undefined,
     );
     expect(resolveSlackMedia).toHaveBeenCalledExactlyOnceWith({
-      files: [
-        {
-          id: "F123",
-          name: "image.png",
-          mimetype: "image/png",
-          url_private: undefined,
-          url_private_download: "https://files.slack-gov.com/files-pri/T1-F123/image.png",
-        },
-      ],
+      files: [{ ...fileMetadata, url_private: undefined }],
       client,
       token: "xoxb-from-cfg",
       maxBytes: 1024,
@@ -96,20 +90,16 @@ describe("downloadSlackFile", () => {
   it("reapplies channel and thread admission when download metadata is refreshed", async () => {
     const client = createClient();
     client.files.info.mockResolvedValueOnce({
-      file: fileInfo({ shares: { private: { C123: [{ ts: "111.111" }] } } }),
+      file: fileInfo(privateShare("C123", "111.111")),
     });
     await expect(download(client, { threadId: "111.111" })).resolves.toEqual(media);
     const isAllowed = resolveSlackMedia.mock.calls[0]?.[0].isRefreshedFileAllowed;
     if (!isAllowed) {
       throw new Error("Expected refreshed Slack file admission");
     }
-    expect(
-      isAllowed(
-        fileInfo({ shares: { private: { C123: [{ ts: "222.222", thread_ts: "111.111" }] } } }),
-      ),
-    ).toBe(true);
-    expect(isAllowed(fileInfo({ shares: { private: { C999: [{ ts: "111.111" }] } } }))).toBe(false);
-    expect(isAllowed(fileInfo({ shares: { private: { C123: [{ ts: "222.222" }] } } }))).toBe(false);
+    expect(isAllowed(fileInfo(privateShare("C123", "222.222", "111.111")))).toBe(true);
+    expect(isAllowed(fileInfo(privateShare("C999", "111.111")))).toBe(false);
+    expect(isAllowed(fileInfo(privateShare("C123", "222.222")))).toBe(false);
   });
 
   it.each([
@@ -117,7 +107,7 @@ describe("downloadSlackFile", () => {
     { name: "wrong channel", file: { channels: ["C999"] } },
     {
       name: "wrong thread",
-      file: { shares: { private: { C123: [{ ts: "111.111", thread_ts: "111.111" }] } } },
+      file: privateShare("C123", "111.111", "111.111"),
       threadId: "222.222",
     },
     {

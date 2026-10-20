@@ -15,18 +15,6 @@ beforeEach(() => {
 });
 afterEach(() => setSlackRuntime(null as never));
 
-function requireMockCallArgValue(
-  mock: ReturnType<typeof vi.fn>,
-  callIndex: number,
-  argIndex: number,
-): unknown {
-  return mock.mock.calls[callIndex]?.[argIndex];
-}
-
-function requireMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
-  return requireRecord(requireMockCallArgValue(mock, callIndex, argIndex), "mock call argument");
-}
-
 describe("Slack message presentation", () => {
   const cfg = { channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } } };
   it("keeps data literal and authored mentions and commands intact in mixed presentation edits", async () => {
@@ -87,7 +75,7 @@ describe("Slack message presentation", () => {
       },
     });
 
-    expect(requireMockCallArg(handleSlackActionMock, 0, 0)).toMatchObject({
+    expect(requireRecord(handleSlackActionMock.mock.calls[0]?.[0], "action")).toMatchObject({
       action: "editMessage",
       blocks: undefined,
       content: [
@@ -113,18 +101,12 @@ describe("Slack message presentation", () => {
         kind: "card",
       }),
     });
-    const outbound = slackPlugin.outbound;
-    const renderPresentation = outbound?.renderPresentation;
-    if (!renderPresentation) {
-      throw new Error("Expected Slack presentation renderer");
-    }
-
     const presentation = {
       title: "Status",
       blocks: [{ type: "divider" as const }],
     };
     const payload = { text: "Fallback", presentation };
-    const rendered = await renderPresentation({
+    const rendered = await slackPlugin.outbound!.renderPresentation!({
       payload,
       presentation,
       ctx: { cfg, to: "C123", text: payload.text, payload },
@@ -144,21 +126,22 @@ describe("Slack message presentation", () => {
       deps: { sendSlack },
     });
 
-    const to = requireMockCallArgValue(sendSlack, 0, 0);
-    const text = requireMockCallArgValue(sendSlack, 0, 1);
-    const options = requireMockCallArg(sendSlack, 0, 2);
-    expect(to).toBe("C123");
-    expect(text).toBe("Fallback\n\nStatus");
-    expect(options.blocks).toEqual([
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "Fallback", verbatim: true },
-      },
-      {
-        type: "header",
-        text: { type: "plain_text", text: "Status", emoji: true },
-      },
-      { type: "divider" },
+    expect(sendSlack.mock.calls[0]).toEqual([
+      "C123",
+      "Fallback\n\nStatus",
+      expect.objectContaining({
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Fallback", verbatim: true },
+          },
+          {
+            type: "header",
+            text: { type: "plain_text", text: "Status", emoji: true },
+          },
+          { type: "divider" },
+        ],
+      }),
     ]);
     expect(result.receipt.parts[0]?.kind).toBe("card");
   });
