@@ -1,12 +1,8 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createWorkboardCard } from "../../../extensions/workboard/browser/lib/workboard/test/index-helpers.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
+import { board as emptyBoard, seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -16,9 +12,7 @@ const suite = createControlUiE2eSuite({
 
 const sessionKey = "agent:main:dashboard:workboard-layout";
 const boardSnapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+  ...emptyBoard(sessionKey),
   widgets: [
     {
       name: "workboard-board",
@@ -43,31 +37,17 @@ const cards = statuses.map((status, index) =>
     title: `${status} card`,
     status,
     position: (index + 1) * 1_000,
-    updatedAt: 2,
     agentId: "main",
     metadata: { automation: { boardId: "platform" } },
   }),
 );
 
-async function showDashboard(page: Page): Promise<void> {
-  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-  await page.addInitScript(
-    ({ key, storageKey }) => {
-      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-      localStorage.setItem(storageKey, JSON.stringify(settings));
-    },
-    { key: sessionKey, storageKey: settingsKey },
-  );
-}
-
 suite.define(() => {
   it("keeps paged cards visible in the compact grid at desktop and mobile widths", async () => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       const cursor = { position: cards[1]!.position, createdAt: 1, id: cards[1]!.id };
+      const firstPage = { cards: cards.slice(0, 2), statuses, nextCursor: cursor };
+      const lastPage = { cards: cards.slice(2), statuses };
       await installMockGateway(page, {
         ...workboardUi,
         sessionKey,
@@ -80,22 +60,15 @@ suite.define(() => {
           "workboard.cards.list": {
             cases: [
               { match: { sessionKey }, response: { cards: [] } },
-              {
-                match: { after: cursor },
-                response: { cards: cards.slice(2), statuses },
-              },
-              {
-                response: {
-                  cards: cards.slice(0, 2),
-                  statuses,
-                  nextCursor: cursor,
-                },
-              },
+              { match: { after: cursor }, response: lastPage },
+              { response: firstPage },
             ],
           },
         },
       });
-      await showDashboard(page);
+      await seedChatSettings(page, suite.server.baseUrl, {
+        boardSessionViews: { [sessionKey]: { activeTabId: "main" } },
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
 
       const board = page.locator('[data-test-id="workboard-board-widget"] .workboard-board');

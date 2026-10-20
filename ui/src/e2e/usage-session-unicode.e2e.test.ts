@@ -7,8 +7,6 @@ import { installUsageOverviewGateway as installMockGateway } from "./usage-overv
 const suite = createControlUiE2eSuite({
   name: "Control UI usage session filter Unicode",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not available at ${executablePath}`,
 });
 
 const usageTotals = {

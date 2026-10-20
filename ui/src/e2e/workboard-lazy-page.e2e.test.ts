@@ -31,7 +31,6 @@ suite.define(() => {
               id: "ops-ready",
               title: "Review release",
               status: "ready",
-              updatedAt: 2,
               agentId: "main",
               metadata: { automation: { boardId: "ops" } },
             }),
