@@ -23,9 +23,8 @@ import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
 
-afterEach(() => {
-  clearEmbeddedSessionPromptStates([sessionId]);
-});
+afterEach(() => clearEmbeddedSessionPromptStates([sessionId]));
+const provider = { id: "fixture", label: "Fixture", auth: [] };
 
 it.each([
   { name: "transient override", api: "openai-completions", override: false, retained: false },
@@ -40,12 +39,9 @@ it.each([
       runtimeHandle: {
         provider: "fixture",
         plugin: {
-          id: "fixture",
-          label: "Fixture",
-          auth: [],
-          ...(override === undefined
-            ? {}
-            : { buildReplayPolicy: () => ({ appendOnlyRuntimeContext: override }) }),
+          ...provider,
+          buildReplayPolicy:
+            override === undefined ? undefined : () => ({ appendOnlyRuntimeContext: override }),
         },
       },
     });
@@ -87,7 +83,22 @@ it.each([
           sessionManager,
           setActiveSessionSystemPrompt: vi.fn(),
         });
-        return { session, sessionManager };
+        const submit = (text: string, runtimeOnly = false) =>
+          submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
+            activeSession: session,
+            appendOnlyRuntimeContext,
+            runtimeOnly,
+            setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
+            appendContext: undefined,
+            prependContext: undefined,
+            transcriptPrompt: text,
+            modelPrompt: text,
+            runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
+            promptActiveSession: (prompt, options) =>
+              session.prompt(prompt, { ...options, expandPromptTemplates: false }),
+          });
+        return { session, sessionManager, submit };
       };
       const first = await createPersistedSession();
       if (retained) {
@@ -96,26 +107,7 @@ it.each([
           { deliverAs: "nextTurn" },
         );
       }
-      const submit = (
-        { session, sessionManager }: typeof first,
-        text: string,
-        runtimeOnly = false,
-      ) =>
-        submitEmbeddedAttemptPrompt({
-          ...createBaseInput(),
-          activeSession: session,
-          appendOnlyRuntimeContext,
-          runtimeOnly,
-          setNextUserMessagePersistence: sessionManager.setNextUserMessagePersistence,
-          appendContext: undefined,
-          prependContext: undefined,
-          transcriptPrompt: text,
-          modelPrompt: text,
-          runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
-          promptActiveSession: (prompt, options) =>
-            session.prompt(prompt, { ...options, expandPromptTemplates: false }),
-        });
-      await submit(first, RUNTIME_EVENT_USER_PROMPT, true);
+      await first.submit(RUNTIME_EVENT_USER_PROMPT, true);
       expect(requests).toHaveLength(2);
       expect(requests[1]).toEqual(requests[0]);
       expect(requests[0]).toContainEqual(
@@ -127,7 +119,7 @@ it.each([
       first.session.dispose();
 
       const reopened = await createPersistedSession();
-      await submit(reopened, "second");
+      await reopened.submit("second");
       expect(requests).toHaveLength(3);
       if (retained) {
         // Boundary timestamp text and content before retained responses must replay byte-for-byte.
@@ -171,7 +163,7 @@ it.each([
 
       reopened.sessionManager.appendResetBoundary("new");
       const reset = await createPersistedSession();
-      await submit(reset, "after reset");
+      await reset.submit("after reset");
       expect(JSON.stringify(requests.at(-1))).not.toContain(RUNTIME_EVENT_USER_PROMPT);
       expect(JSON.stringify(requests.at(-1))).not.toContain("context for second");
       expect(JSON.stringify(requests.at(-1))).toContain("context for after reset");

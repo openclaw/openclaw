@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
@@ -37,6 +37,7 @@ vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
 
 const tempDirs = createTempDirTracker();
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
+beforeEach(() => vi.mocked(sleepWithAbort).mockClear());
 afterEach(() => tempDirs.cleanup());
 
 it.each(["ECONNREFUSED"])(
@@ -49,7 +50,6 @@ it.each(["ECONNREFUSED"])(
       replaySafe: true,
       content: [],
     } satisfies TransportDropScenario;
-    vi.mocked(sleepWithAbort).mockClear();
     const setup = await recoverAfterTransportDrop({ ...scenario, retryConnectionErrors: false });
     expect(setup.recovery.action).toBe("proceed");
     expect(sleepWithAbort).not.toHaveBeenCalled();
@@ -173,6 +173,28 @@ function terminalRecoveryInput(
     sessionPromptState: { sessionFile: "/tmp/session.jsonl" },
     usageAccumulator: createUsageAccumulator(),
   };
+}
+
+function providerError(
+  headers?: Headers | Record<string, string>,
+  message = "provider temporarily unavailable",
+  status = 429,
+  response?: { headers: Record<string, string> },
+) {
+  return headers instanceof Headers
+    ? new APIError(status, { message }, undefined, headers)
+    : Object.assign(new Error(message), { status, headers, response });
+}
+
+function promptError(error: Error): TransportDropScenario {
+  return {
+    terminal: { kind: "failed", source: "prompt", error },
+    errorBody: JSON.stringify({ headers: { "retry-after": "99" } }),
+  };
+}
+
+function retryHeaders(milliseconds: string, seconds = "7") {
+  return { "retry-after": seconds, "retry-after-ms": milliseconds };
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
@@ -302,27 +324,23 @@ describe("recoverEmbeddedRunAttempt", () => {
     "continues slow output generation without consuming the transient outage window",
     async (scenario) => {
       const startedAt = Date.now();
-      const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-      try {
-        const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
-          await recoverAfterTransportDrop(scenario);
-        expect(recovery.action).toBe("retry");
-        now.mockReturnValue(startedAt + 16 * 60_000);
+      using now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+      const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
+        await recoverAfterTransportDrop(scenario);
+      expect(recovery.action).toBe("retry");
+      now.mockReturnValue(startedAt + 16 * 60_000);
 
-        expect(await recover()).toMatchObject({ action: "proceed" });
-        expect(failoverRetryController.transientRetryCount).toBe(1);
-        expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
-        now.mockReturnValue(startedAt + 32 * 60_000);
-        await expect(
-          failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
-        ).resolves.toBe(true);
-        now.mockReturnValue(startedAt + 34 * 60_000);
-        await expect(
-          failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
-        ).resolves.toBe(false);
-      } finally {
-        now.mockRestore();
-      }
+      expect(await recover()).toMatchObject({ action: "proceed" });
+      expect(failoverRetryController.transientRetryCount).toBe(1);
+      expect(continueFromCurrentTranscript).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(startedAt + 32 * 60_000);
+      await expect(
+        failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
+      ).resolves.toBe(true);
+      now.mockReturnValue(startedAt + 34 * 60_000);
+      await expect(
+        failoverRetryController.maybeRetryTransient({ reason: "server_error" }),
+      ).resolves.toBe(false);
     },
   );
 
@@ -503,90 +521,76 @@ describe("recoverEmbeddedRunAttempt", () => {
     },
   );
 
-  it.each([
-    { errorMessage: "429 rate_limit_exceeded; Retry-After: 3600", delayMs: 3_600_000 },
-    {
-      errorMessage: "429 requests per minute exceeded. Please try again in 11.054s.",
-      delayMs: 11_054,
-    },
-    { headers: { "retry-after": "7", "retry-after-ms": "8500" }, delayMs: 8500 },
-    { headers: { "retry-after": "7", "retry-after-ms": "invalid" }, delayMs: 7000 },
-  ])("continues after respecting the provider floor of $delayMs ms", async (scenario) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    vi.mocked(sleepWithAbort).mockClear();
-    const { recovery, onAgentEvent, continueFromCurrentTranscript } =
-      await recoverAfterTransportDrop({
-        errorMessage: scenario.errorMessage ?? "429 provider rate limit",
-        errorBody: scenario.headers ? JSON.stringify({ headers: scenario.headers }) : undefined,
+  const pacingNow = Date.parse("2026-06-11T00:00:00.000Z");
+  it.each<[number, TransportDropScenario, boolean?]>([
+    [
+      3_600_000,
+      { errorMessage: "429 rate_limit_exceeded; Retry-After: 3600", diagnostics: [] },
+      true,
+    ],
+    [
+      11_054,
+      {
+        errorMessage: "429 requests per minute exceeded. Please try again in 11.054s.",
         diagnostics: [],
-      });
-    expect(recovery).toMatchObject({ action: "retry", lastRetryFailoverReason: "rate_limit" });
-    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.delayMs, undefined);
-    expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        stream: "run_status",
-        data: expect.objectContaining({
-          phase: "retrying",
-          attempt: 2,
-          maxAttempts: 10,
-          reason: "rate_limit",
-          retryAt: 1_800_000_000_000 + scenario.delayMs,
+      },
+      true,
+    ],
+    ...["8500", "invalid"].map((ms): [number, TransportDropScenario, boolean] => [
+      ms === "invalid" ? 7000 : 8500,
+      {
+        errorMessage: "429 provider rate limit",
+        errorBody: JSON.stringify({ headers: retryHeaders(ms) }),
+        diagnostics: [],
+      },
+      true,
+    ]),
+    [8500, promptError(providerError(new Headers(retryHeaders("8500"))))],
+    [
+      7000,
+      promptError(providerError({ "Retry-After": "7", "retry-after-ms": "335" }, undefined, 503)),
+    ],
+    [
+      8500,
+      promptError(
+        providerError(undefined, undefined, 429, { headers: { "retry-after-ms": "8500" } }),
+      ),
+    ],
+    [11_054, promptError(providerError(undefined, "Please try again in 11.054s."))],
+    [12_000, promptError(providerError({ "retry-after": "7" }, "Retry-After: 12"))],
+    [
+      65 * 60_000,
+      {
+        errorMessage: `429 rate_limit_exceeded; Retry-After: ${new Date(pacingNow + 65 * 60_000).toUTCString()}`,
+      },
+    ],
+    [
+      7000,
+      projectProviderError(
+        providerError(new Headers(retryHeaders("335")), "Please try again in 1s."),
+      ),
+    ],
+  ])("honors a provider retry floor of %i ms (case %#)", async (delayMs, input, observeEvent) => {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(pacingNow);
+    const fixture = await recoverAfterTransportDrop(input);
+    expect(fixture.recovery.action).toBe("retry");
+    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledOnce();
+    if (observeEvent) {
+      expect(fixture.recovery).toMatchObject({ lastRetryFailoverReason: "rate_limit" });
+      expect(fixture.onAgentEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          stream: "run_status",
+          data: expect.objectContaining({
+            phase: "retrying",
+            attempt: 2,
+            maxAttempts: 10,
+            reason: "rate_limit",
+            retryAt: pacingNow + delayMs,
+          }),
         }),
-      }),
-    );
-    now.mockRestore();
-  });
-
-  it.each([
-    {
-      status: 429,
-      headers: new Headers({ "retry-after": "7", "retry-after-ms": "8500" }),
-      delayMs: 8500,
-    },
-    { status: 503, headers: { "Retry-After": "7", "retry-after-ms": "335" }, delayMs: 7000 },
-    { status: 429, response: { headers: { "retry-after-ms": "8500" } }, delayMs: 8500 },
-    { status: 429, message: "Please try again in 11.054s.", delayMs: 11_054 },
-    { status: 429, headers: { "retry-after": "7" }, message: "Retry-After: 12", delayMs: 12_000 },
-  ])(
-    "honors prompt-exception pacing for HTTP $status with floor $delayMs",
-    async ({ status, headers, response, message, delayMs }) => {
-      vi.mocked(sleepWithAbort).mockClear();
-      const error =
-        headers instanceof Headers
-          ? new APIError(
-              status,
-              { message: "provider temporarily unavailable" },
-              undefined,
-              headers,
-            )
-          : Object.assign(new Error(message ?? "provider temporarily unavailable"), {
-              status,
-              headers,
-              response,
-            });
-      const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
-        terminal: { kind: "failed", source: "prompt", error },
-        errorBody: JSON.stringify({ headers: { "retry-after": "99" } }),
-      });
-      expect(recovery.action).toBe("retry");
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
-      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([65 * 60_000])("honors a Retry-After HTTP date %i ms ahead", async (delayMs) => {
-    const nowMs = Date.parse("2026-06-11T00:00:00.000Z");
-    const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
-    try {
-      vi.mocked(sleepWithAbort).mockClear();
-      const { recovery } = await recoverAfterTransportDrop({
-        errorMessage: `429 rate_limit_exceeded; Retry-After: ${new Date(nowMs + delayMs).toUTCString()}`,
-      });
-      expect(recovery.action).toBe("retry");
-      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
-    } finally {
-      clock.mockRestore();
+      );
     }
   });
 
@@ -611,7 +615,6 @@ describe("recoverEmbeddedRunAttempt", () => {
       20_000,
     ],
   ])("%s", async (_label, scenario, expectedSleepMs) => {
-    vi.mocked(sleepWithAbort).mockClear();
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: true,
@@ -628,21 +631,6 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(expectedSleepMs, undefined);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
     }
-  });
-
-  it("preserves the larger header floor after an SDK failure becomes an assistant message", async () => {
-    vi.mocked(sleepWithAbort).mockClear();
-    const projection = projectProviderError(
-      new APIError(
-        429,
-        { message: "Please try again in 1s." },
-        undefined,
-        new Headers({ "retry-after": "7", "retry-after-ms": "335" }),
-      ),
-    );
-    const { recovery } = await recoverAfterTransportDrop(projection);
-    expect(recovery.action).toBe("retry");
-    expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(7000, undefined);
   });
 
   it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {

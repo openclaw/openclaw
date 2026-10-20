@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import type { Context } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
@@ -21,6 +20,15 @@ vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
 }));
 beforeEach(() => vi.mocked(sleepWithAbort).mockClear());
 
+function recoverRateLimit(scenario: Parameters<typeof recoverAfterTransportDrop>[0]) {
+  return recoverAfterTransportDrop({
+    diagnostics: [],
+    content: [],
+    replaySafe: true,
+    ...scenario,
+  });
+}
+
 // Keep #147546's transport-truth 429 text, rather than hand-projecting an error.
 async function fetchRealPerDayCapErrorMessage(): Promise<string | undefined> {
   const { default: openrouterPlugin } = await loadBundledPluginFacade<{
@@ -40,9 +48,11 @@ async function fetchRealPerDayCapErrorMessage(): Promise<string | undefined> {
       provider: "openrouter",
       baseUrl: `${url}/api/v1`,
     });
-    const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
-    const options = { apiKey: ["test", "key"].join("-") };
-    const result = await streamOpenAICompletions(model, context, options).result();
+    const result = await streamOpenAICompletions(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { apiKey: ["test", "key"].join("-") },
+    ).result();
     return buildAssistantFailoverSignal(result).message;
   } finally {
     await closeHttpServer(server);
@@ -55,12 +65,9 @@ it.each(["assistant", "prompt", "coerced"] as const)(
     const message = "400 This prompt is longer than the free tier allows for a single request.";
     const code = "rate_limit_exceeded";
     const error = Object.assign(new Error(message), { status: 400, code });
-    const recovery = recoverAfterTransportDrop({
+    const recovery = recoverRateLimit({
       errorMessage: message,
       errorCode: code,
-      diagnostics: [],
-      content: [],
-      replaySafe: true,
       fallbackConfigured: true,
       terminal:
         source === "assistant"
@@ -88,12 +95,7 @@ it("routes a real HTTP per-day 429 straight to fallback with zero same-model ret
   const realErrorMessage = await fetchRealPerDayCapErrorMessage();
   expect(realErrorMessage).toContain("free-models-per-day-high-balance");
 
-  const fixture = await recoverAfterTransportDrop({
-    errorMessage: realErrorMessage,
-    diagnostics: [],
-    content: [],
-    replaySafe: true,
-  });
+  const fixture = await recoverRateLimit({ errorMessage: realErrorMessage });
 
   expect(fixture.recovery).toEqual({ action: "proceed" });
   expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
@@ -119,12 +121,7 @@ it.each<[string, "proceed" | "retry", number]>([
   ["429 请求过于频繁，请稍后重试", "retry", 1],
   ["429 请求过于频繁; please retry later", "retry", 1],
 ])("Chinese quota recovery: %s", async (errorMessage, action, retries) => {
-  const fixture = await recoverAfterTransportDrop({
-    errorMessage,
-    diagnostics: [],
-    content: [],
-    replaySafe: true,
-  });
+  const fixture = await recoverRateLimit({ errorMessage });
 
   expect(fixture.recovery.action).toBe(action);
   expect(sleepWithAbort).toHaveBeenCalledTimes(retries);
