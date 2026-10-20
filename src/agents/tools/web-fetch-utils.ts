@@ -31,20 +31,11 @@ const BLOCK_BREAK_TAGS = new Set([
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
 const MAX_RENDER_CONTEXT_DEPTH = 32;
-// A fixed sentinel plus escaped text keeps placeholder restoration in one pass. Avoid
-// repeated whole-response searches: fetched HTML is untrusted and the scanner stays forward-only.
-const PRE_MARKER_PREFIX = "\u0000openclaw-pre-";
 
 type RenderContext =
   | { kind: "root"; parts: string[] }
   | { kind: "title"; parts: string[] }
-  | {
-      kind: "anchor";
-      href: string | undefined;
-      hasText: boolean;
-      literal: boolean;
-      parts: string[];
-    }
+  | { kind: "anchor"; href: string | undefined; hasText: boolean; parts: string[] }
   | { kind: "heading"; level: number; parts: string[] }
   | { kind: "list-item"; parts: string[] }
   | { kind: "pre"; parts: string[] };
@@ -73,12 +64,8 @@ function escapePreMarkerText(value: string): string {
 
 function appendText(stack: RenderContext[], value: string): void {
   const context = stack[stack.length - 1];
-  const safeValue =
-    context?.kind === "pre" || (context?.kind === "anchor" && context.literal)
-      ? value
-      : escapePreMarkerText(value);
-  context?.parts.push(safeValue);
-  if (context?.kind === "anchor" && /\S/.test(safeValue)) {
+  context?.parts.push(context.kind === "pre" ? value : escapePreMarkerText(value));
+  if (context?.kind === "anchor" && /\S/.test(value)) {
     context.hasText = true;
   }
 }
@@ -100,53 +87,9 @@ function formatPreformattedMarkdown(value: string): string {
 }
 
 function restorePreformattedMarkdown(value: string, state: RenderState): string {
-  const parts: string[] = [];
-  let cursor = 0;
-  let scan = 0;
-  while (scan < value.length) {
-    if (value.charCodeAt(scan) !== 0) {
-      scan += 1;
-      continue;
-    }
-    if (value.charCodeAt(scan + 1) === 0) {
-      scan += 2;
-      continue;
-    }
-    if (!value.startsWith(PRE_MARKER_PREFIX, scan)) {
-      scan += 1;
-      continue;
-    }
-
-    const indexStart = scan + PRE_MARKER_PREFIX.length;
-    let end = indexStart;
-    while (end < value.length && value.charCodeAt(end) >= 48 && value.charCodeAt(end) <= 57) {
-      end += 1;
-    }
-    if (end === indexStart || value.charCodeAt(end) !== 0) {
-      // Keep malformed marker-like content as ordinary text.
-      scan += 1;
-      continue;
-    }
-    const index = Number(value.slice(indexStart, end));
-    const code = Number.isSafeInteger(index) ? state.preBlocks[index] : undefined;
-    if (code === undefined) {
-      scan += 1;
-      continue;
-    }
-
-    const preceding = value.slice(cursor, scan).replaceAll("\u0000\u0000", "\u0000").trimEnd();
-    if (preceding) {
-      parts.push(preceding, "\n\n");
-    }
-    parts.push(formatPreformattedMarkdown(code), "\n\n");
-    cursor = end + 1;
-    scan = cursor;
-  }
-  const trailing = value.slice(cursor).replaceAll("\u0000\u0000", "\u0000").trimStart();
-  if (trailing) {
-    parts.push(trailing);
-  }
-  return parts.join("").trim();
+  return value.replace(/\0(?:\0|openclaw-pre-(\d+)\0)/g, (_match, index: string | undefined) =>
+    index === undefined ? "\0" : formatPreformattedMarkdown(state.preBlocks[Number(index)]!),
+  );
 }
 
 function closeContext(context: RenderContext, parent: RenderContext, state: RenderState): void {
@@ -154,17 +97,9 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
     const code = context.parts.join("");
     if (code.trim()) {
       const index = state.preBlocks.push(code) - 1;
-      parent.parts.push(`${PRE_MARKER_PREFIX}${index}\u0000\n`);
+      parent.parts.push(`\n\n\0openclaw-pre-${index}\0\n\n`);
     } else {
       parent.parts.push("\n");
-    }
-    return;
-  }
-  if (context.kind === "anchor" && context.literal) {
-    const literal = context.parts.join("");
-    parent.parts.push(literal);
-    if (parent.kind === "anchor" && /\S/.test(literal)) {
-      parent.hasText = true;
     }
     return;
   }
@@ -286,6 +221,13 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       continue;
     }
 
+    // Within pre, tags are presentation only; their text must stay literal.
+    if (stack[stack.length - 1]?.kind === "pre" && token.name !== "pre") {
+      if (token.name === "br" && !token.closing) {
+        appendText(stack, "\n");
+      }
+      continue;
+    }
     const kind =
       token.name === "title"
         ? "title"
@@ -345,13 +287,7 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     }
     const context: Exclude<RenderContext, { kind: "root" }> =
       kind === "anchor"
-        ? {
-            kind,
-            href: readAnchorHref(token.raw),
-            hasText: false,
-            literal: stack.some((parent) => parent.kind === "pre"),
-            parts: [],
-          }
+        ? { kind, href: readAnchorHref(token.raw), hasText: false, parts: [] }
         : kind === "heading"
           ? { kind, level: Number.parseInt(token.name[1] ?? "1", 10), parts: [] }
           : { kind, parts: [] };
@@ -385,33 +321,6 @@ function readBacktickRunEnd(value: string, start: number): number {
   return end;
 }
 
-function findClosingBacktickFence(
-  markdown: string,
-  start: number,
-  fenceLength: number,
-): { start: number; end: number } | undefined {
-  let cursor = start;
-  while (cursor < markdown.length) {
-    const candidate = markdown.indexOf("`", cursor);
-    if (candidate === -1) {
-      return undefined;
-    }
-    const runEnd = readBacktickRunEnd(markdown, candidate);
-    if (runEnd - candidate >= fenceLength) {
-      const lineEnd = markdown.indexOf("\n", runEnd);
-      const lineTail = markdown.slice(runEnd, lineEnd === -1 ? markdown.length : lineEnd);
-      // A fence with trailing text is not a Markdown closing line. Consuming
-      // only the matching run also preserves adjacent fenced blocks.
-      return {
-        start: candidate,
-        end: /^[ \t\r]*$/.test(lineTail) ? runEnd : candidate + fenceLength,
-      };
-    }
-    cursor = runEnd;
-  }
-  return undefined;
-}
-
 export function markdownToText(markdown: string): string {
   const codeBlocks: string[] = [];
   let text = "";
@@ -425,7 +334,21 @@ export function markdownToText(markdown: string): string {
     text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
     const afterOpen = readBacktickRunEnd(markdown, open);
     const fenceLength = afterOpen - open;
-    const close = findClosingBacktickFence(markdown, afterOpen, fenceLength);
+    let closingStart = afterOpen;
+    let close: { start: number; end: number } | undefined;
+    while (closingStart < markdown.length) {
+      const start = markdown.indexOf("`", closingStart);
+      if (start === -1) {
+        break;
+      }
+      const end = readBacktickRunEnd(markdown, start);
+      if (end - start >= fenceLength) {
+        // Consume only the matching run, preserving adjacent blocks.
+        close = { start, end: start + fenceLength };
+        break;
+      }
+      closingStart = end;
+    }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
     if (!close) {
       const lineStart = markdown.lastIndexOf("\n", open) + 1;
