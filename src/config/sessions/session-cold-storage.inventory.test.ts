@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
@@ -47,17 +47,12 @@ beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
   fixture = await createSessionColdStorageFixture(state.statePath("shared.sqlite"));
   await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) });
-  const db = fixture.database();
-  const descriptor = db
-    .prepare(
-      "SELECT archive_name, archive_bytes FROM session_transcript_cold_archives WHERE session_id = ?",
-    )
-    .get(historicalId)!;
-  embeddedBytes = Number(descriptor.archive_bytes);
-  embeddedBlob = await fs.readFile(
-    path.join(state.stateDir, "cold", String(descriptor.archive_name)),
-  );
-  setStorage(db, "sqlite");
+  const directory = state.statePath("cold");
+  const archives = (await fs.readdir(directory)).filter((name) => name.endsWith(".jsonl.zst"));
+  expect(archives).toHaveLength(1);
+  embeddedBlob = await fs.readFile(path.join(directory, archives[0]!));
+  embeddedBytes = embeddedBlob.length;
+  setStorage(fixture.database(), "sqlite");
   await closeOpenClawAgentDatabasesAsync();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -71,42 +66,39 @@ it.each(["sqlite", "file"] as const)(
       storage === "file" ? openNodeSqliteDatabase(fixture.scope.storePath) : undefined;
     if (foreign) {
       setStorage(foreign, "file");
-    }
-    const observer = observeParentSqlite();
-    try {
-      const config = maintenanceConfig(fixture.scope.storePath);
-      if (storage === "sqlite") {
-        config.agents = {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "main" } },
-          entries: { main: {}, other: {} },
-        };
-      }
-      const result = await getSessionColdStorageStatus(config);
-      expect(result).toEqual([
-        {
-          ...emptyInventory(fixture.scope.storePath),
-          hotTranscripts: 1,
-          coldTranscripts: 1,
-          embeddedArchiveBytes: storage === "sqlite" ? embeddedBytes : 0,
-          archiveBytes: embeddedBytes,
-          databaseBytes: expect.any(Number),
-          walBytes: expect.any(Number),
-        },
-      ]);
-      expect(result[0]!.databaseBytes).toBeGreaterThan(0);
-      if (storage === "sqlite") {
-        expect(await status(missing)).toEqual([emptyInventory(missing)]);
-        await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
-      }
-      expect(observer.counts).toEqual(emptySqliteCounts());
-    } finally {
-      observer.restore();
-      if (foreign) {
+      onTestFinished(() => {
         setStorage(foreign, "sqlite");
         foreign.close();
-      }
+      });
     }
+    const observer = observeParentSqlite();
+    onTestFinished(observer.restore);
+    const config = maintenanceConfig(fixture.scope.storePath);
+    if (storage === "sqlite") {
+      config.agents = {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "main" } },
+        entries: { main: {}, other: {} },
+      };
+    }
+    const result = await getSessionColdStorageStatus(config);
+    expect(result).toEqual([
+      {
+        ...emptyInventory(fixture.scope.storePath),
+        hotTranscripts: 1,
+        coldTranscripts: 1,
+        embeddedArchiveBytes: storage === "sqlite" ? embeddedBytes : 0,
+        archiveBytes: embeddedBytes,
+        databaseBytes: expect.any(Number),
+        walBytes: expect.any(Number),
+      },
+    ]);
+    expect(result[0]!.databaseBytes).toBeGreaterThan(0);
+    if (storage === "sqlite") {
+      expect(await status(missing)).toEqual([emptyInventory(missing)]);
+      await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(observer.counts).toEqual(emptySqliteCounts());
   },
 );
 
@@ -148,10 +140,7 @@ it("propagates worker rejection without a synchronous fallback", async () => {
   const failure = new Error("inventory worker refused");
   vi.spyOn(historyLane.pool, "run").mockRejectedValueOnce(failure);
   const observer = observeParentSqlite();
-  try {
-    await expect(status()).rejects.toBe(failure);
-    expect(observer.counts).toEqual(emptySqliteCounts());
-  } finally {
-    observer.restore();
-  }
+  onTestFinished(observer.restore);
+  await expect(status()).rejects.toBe(failure);
+  expect(observer.counts).toEqual(emptySqliteCounts());
 });

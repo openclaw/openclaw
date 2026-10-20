@@ -31,6 +31,7 @@ it.aroundEach((run) =>
 );
 
 const initial = { sessionId: "original", updatedAt: 1, label: "initial" };
+const deleted = { deleted: true, archivedTranscripts: [] };
 async function fixture(shared = false) {
   const database = openOpenClawAgentDatabase({
     agentId: "main",
@@ -43,22 +44,20 @@ async function fixture(shared = false) {
     sessionId: initial.sessionId,
   };
   seed(scope, initial);
-  const expected = await read(scope);
-  expect(expected).toMatchObject(initial);
-  return { scope, expected };
+  return { scope, remove: await capture(scope, initial) };
 }
-const remove = (
-  scope: Awaited<ReturnType<typeof fixture>>["scope"],
-  expectedEntry: Awaited<ReturnType<typeof read>>,
-  options: { archiveTranscript?: boolean; commitGuard?: () => void } = {},
-) =>
-  deleteSessionEntryLifecycle({
-    ...scope,
-    target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-    archiveTranscript: false,
-    expectedEntry,
-    ...options,
-  });
+async function capture(scope: Parameters<typeof read>[0], expected: Parameters<typeof seed>[1]) {
+  const expectedEntry = await read(scope);
+  expect(expectedEntry).toMatchObject(expected);
+  return (options: { archiveTranscript?: boolean; commitGuard?: () => void } = {}) =>
+    deleteSessionEntryLifecycle({
+      ...scope,
+      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      archiveTranscript: false,
+      expectedEntry,
+      ...options,
+    });
+}
 
 it.each(["main", "other"])(
   "deletes a completed %s alias without losing shared history",
@@ -66,17 +65,13 @@ it.each(["main", "other"])(
     const { scope } = await fixture(true);
     const events = [
       { type: "session", id: scope.sessionId, version: 3 },
-      {
-        type: "message",
-        id: "retained-message",
-        message: { role: "user", content: "Retain the stable conversation." },
-      },
+      { type: "message", id: "retained", message: { role: "user", content: "keep" } },
     ];
     await replaceTranscriptEvents(scope, events);
     const alias = { ...scope, agentId, sessionKey: `agent:${agentId}:cron:job:run:completed` };
-    seed(alias, { sessionId: scope.sessionId, updatedAt: 2, label: "completed run" });
-    const expected = await read(alias);
-    expect(expected).toMatchObject({ sessionId: "original", label: "completed run" });
+    const aliasEntry = { sessionId: scope.sessionId, updatedAt: 2, label: "completed run" };
+    seed(alias, aliasEntry);
+    const remove = await capture(alias, aliasEntry);
     const facts: Array<SessionRowFacts | undefined> = [];
     const unsubscribe = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === alias.sessionKey) {
@@ -84,10 +79,7 @@ it.each(["main", "other"])(
       }
     });
     onTestFinished(unsubscribe);
-    await expect(remove(alias, expected)).resolves.toMatchObject({
-      deleted: true,
-      archivedTranscripts: [],
-    });
+    await expect(remove()).resolves.toMatchObject(deleted);
     unsubscribe();
     expect(facts).toContainEqual({
       kind: "removed",
@@ -105,10 +97,10 @@ it.each([
   { change: "metadata", sessionId: "original", label: "new metadata" },
   { change: "identity", sessionId: "replacement", label: "replacement session" },
 ])("preserves a captured entry after a $change write", async ({ sessionId, label }) => {
-  const { scope, expected } = await fixture();
+  const { scope, remove } = await fixture();
   const replacement = { sessionId, label, updatedAt: 2 };
   await replace(scope, replacement);
-  await expect(remove(scope, expected)).resolves.toMatchObject({
+  await expect(remove()).resolves.toMatchObject({
     deleted: false,
     expectedEntryMismatch: true,
   });
@@ -116,7 +108,7 @@ it.each([
 });
 
 it("rolls back deletion when cleanup authority is lost at native commit", async () => {
-  const { scope, expected } = await fixture();
+  const { scope, remove } = await fixture();
   let authorityCurrent = true;
   const createAdmission = admission.createSqliteWorkerOperationAdmission;
   const interception = vi
@@ -130,7 +122,7 @@ it("rolls back deletion when cleanup authority is lost at native commit", async 
       }, attachment),
     );
   await expect(
-    remove(scope, expected, {
+    remove({
       commitGuard() {
         if (!authorityCurrent) {
           throw new Error("cleanup lease lost");
@@ -150,12 +142,8 @@ it("deletes empty transcripts without starting an archive worker", async () => {
     const scope = { ...base, sessionKey: `agent:main:empty-${sessionId}`, sessionId };
     const entry = { sessionId, updatedAt: 1 };
     await replace(scope, entry);
-    const expected = await read(scope);
-    expect(expected).toMatchObject(entry);
-    await expect(remove(scope, expected, { archiveTranscript: true })).resolves.toMatchObject({
-      deleted: true,
-      archivedTranscripts: [],
-    });
+    const remove = await capture(scope, entry);
+    await expect(remove({ archiveTranscript: true })).resolves.toMatchObject(deleted);
     expect(await Promise.all([read(scope), transcript(scope)])).toEqual([undefined, []]);
   }
   expect(createArchiveWorker).not.toHaveBeenCalled();

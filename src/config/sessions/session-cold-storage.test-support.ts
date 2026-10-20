@@ -1,4 +1,4 @@
-import type { Compilable } from "kysely";
+import { sql } from "kysely";
 import { expect } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -17,6 +17,12 @@ import { CURRENT_SESSION_VERSION } from "./version.js";
 
 export const historicalId = "cold-history-window";
 export const currentId = "current-window";
+type EventSnapshot = Record<"session_id" | "event_json", string> &
+  Record<"seq" | "created_at" | "event_bytes", number>;
+const history = [
+  ["user", "你好 🦞\n".repeat(12_000)],
+  ["assistant", "Preserved response"],
+] as const;
 
 export async function createSessionColdStorageFixture(
   storePath: string,
@@ -28,64 +34,42 @@ export async function createSessionColdStorageFixture(
   replaceSessionEntrySync(scope, { sessionId: historicalId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: historicalId, version: CURRENT_SESSION_VERSION },
-    {
+    ...history.map(([role, text], index) => ({
       type: "message",
-      id: "history-user",
-      parentId: null,
-      timestamp: "1970-01-01T00:00:00.010Z",
-      message: { role: "user", content: [{ type: "text", text: "你好 🦞\n".repeat(12_000) }] },
-    },
-    {
-      type: "message",
-      id: "history-assistant",
-      parentId: "history-user",
-      timestamp: "1970-01-01T00:00:00.011Z",
-      message: { role: "assistant", content: [{ type: "text", text: "Preserved response" }] },
-    },
+      id: `history-${role}`,
+      parentId: index ? "history-user" : null,
+      timestamp: new Date(10 + index).toISOString(),
+      message: { role, content: [{ type: "text", text }] },
+    })),
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
   replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   await replaceTranscriptEvents({ ...scope, sessionId: currentId }, [
-    {
-      type: "session",
-      id: currentId,
-      version: CURRENT_SESSION_VERSION,
-      content: "Keep current history hot",
-    },
+    { type: "session", id: currentId, version: CURRENT_SESSION_VERSION, content: "current" },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
   replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     const db = getNodeSqliteKysely<DB>(database);
-    const write = (query: Compilable<unknown>) => executeSqliteQuerySync(database, query);
-    write(db.updateTable("session_windows").set({ previous_session_id: null }));
-    write(
-      db
-        .updateTable("session_windows")
-        .set({ updated_at: 1, transcript_updated_at: 1 })
-        .where("session_id", "=", historicalId),
-    );
+    database.exec(`UPDATE session_windows SET previous_session_id = NULL;
+      UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1
+      WHERE session_id = 'cold-history-window';`);
     // Importers preserve raw JSON spacing and identity metadata independently of event payloads.
-    write(
+    const rawHeader = `{ "type" : "session", "id" : "cold-history-window", "version" : ${CURRENT_SESSION_VERSION} }`;
+    const payload = prepareTranscriptPayload(database, rawHeader);
+    executeSqliteQuerySync(
+      database,
       db
         .updateTable("transcript_events")
-        .set({
-          ...prepareTranscriptPayload(
-            database,
-            `{ "type" : "session", "id" : "cold-history-window", "version" : ${CURRENT_SESSION_VERSION} }`,
-          ),
-          created_at: 7,
-        })
+        .set({ ...payload, created_at: 7 })
         .where("session_id", "=", historicalId)
         .where("seq", "=", 0),
     );
-    write(
-      db
-        .updateTable("transcript_event_identities")
-        .set({ message_idempotency_key: "original-idempotency-key", created_at: 8 })
-        .where("session_id", "=", historicalId)
-        .where("event_id", "=", "history-user"),
-    );
+    database
+      .prepare(`UPDATE transcript_event_identities
+      SET message_idempotency_key = 'original-idempotency-key', created_at = 8
+      WHERE session_id = ? AND event_id = 'history-user'`)
+      .run(historicalId);
   }, options);
 
   const database = () => requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
@@ -95,17 +79,10 @@ export async function createSessionColdStorageFixture(
     return {
       events: executeSqliteQuerySync(
         db,
-        getNodeSqliteKysely<DB>(db)
-          .selectFrom("transcript_events")
-          .select([
-            "session_id",
-            "seq",
-            "created_at",
-            transcriptEventJsonSql(db).as("event_json"),
-            transcriptEventReadBytesSql().as("event_bytes"),
-          ])
-          .orderBy("session_id")
-          .orderBy("seq"),
+        sql<EventSnapshot>`SELECT session_id, seq, created_at,
+          ${transcriptEventJsonSql(db)} AS event_json,
+          ${transcriptEventReadBytesSql()} AS event_bytes
+          FROM transcript_events ORDER BY session_id, seq`,
       ).rows,
       identities: rows("transcript_event_identities", "session_id, seq, event_id"),
       active: rows("session_transcript_active_events", "session_id, active_position"),
