@@ -26,9 +26,7 @@ const ownerScope = {
   agentId: "main",
   path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
 };
-afterEach(() => {
-  memorySessionActorOwners.closeDatabase(ownerScope);
-});
+afterEach(() => memorySessionActorOwners.closeDatabase(ownerScope));
 
 it("acquires an unbound memory context and ends retained iterators at the disclosure boundary", async () => {
   const target = {
@@ -39,12 +37,12 @@ it("acquires an unbound memory context and ends retained iterators at the disclo
     sessionKey: "agent:main:dashboard:incognito-context",
   };
   const owner = memorySessionActorOwners.get(ownerScope);
-  const actor = await owner.acquire(
+  const { storage } = await owner.acquire(
     { database: owner.identity, sessionKey: target.sessionKey },
     { assertCurrent() {}, assertReadable() {} },
   );
   const authority = { assertCurrent() {}, authorize() {} };
-  const storage = actor.storage!;
+  assert(storage);
   const mutate = async (command: SessionActorStorageCommand) =>
     readSessionActorStorageResult(await storage.mutate(command, authority));
   await mutate({
@@ -67,14 +65,13 @@ it("acquires an unbound memory context and ends retained iterators at the disclo
     messages: [{ role: "user", content: "Canonical context.", timestamp: 1 }],
     header: { type: "session", id: target.sessionId },
   });
-  const retained = await reader(target, (messages) => messages);
-  expect([...retained]).toEqual([]);
-  expect(() => readCodexSessionContext(target, () => undefined)).toThrow(
-    "captureCodexSessionContextReader",
-  );
-  expect(() => validateCodexSessionTranscriptContextVersion(target, undefined)).toThrow(
-    "captureCodexSessionContextReader",
-  );
+  expect([...(await reader(target, (messages) => messages))]).toEqual([]);
+  for (const read of [
+    () => readCodexSessionContext(target, () => undefined),
+    () => validateCodexSessionTranscriptContextVersion(target, undefined),
+  ]) {
+    expect(read).toThrow("captureCodexSessionContextReader");
+  }
   await expect(
     reader(target, async (messages) => {
       await Promise.resolve();

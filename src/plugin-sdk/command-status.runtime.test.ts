@@ -2,11 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildStatusReply = vi.fn(async (params: unknown) => params);
 const loadSessionEntry = vi.fn();
-const resolveSessionAgentId = vi.fn();
-const listAgentEntries = vi.fn();
-const resolveDefaultModelForAgent = vi.fn();
-const resolveDefaultModel = vi.fn();
-const createModelSelectionState = vi.fn();
 const resolveCurrentDirectiveLevels = vi.fn();
 
 vi.mock("../auto-reply/reply/commands-status.js", () => ({
@@ -24,20 +19,24 @@ vi.mock("../gateway/session-utils-store-worker.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  listAgentEntries,
-  resolveSessionAgentId,
+  listAgentEntries: () => [],
+  resolveSessionAgentId: () => "main",
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent,
+  resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));
 
 vi.mock("../auto-reply/reply/directive-handling.defaults.js", () => ({
-  resolveDefaultModel,
+  resolveDefaultModel: () => ({ defaultProvider: "openai", defaultModel: "gpt-5.4" }),
 }));
 
 vi.mock("../auto-reply/reply/model-selection.js", () => ({
-  createModelSelectionState,
+  createModelSelectionState: async () => ({
+    resolveThinkingCatalog: async () => [],
+    resolveDefaultThinkingLevel: async () => "off",
+    resolveDefaultReasoningLevel: async () => "on",
+  }),
 }));
 
 vi.mock("../auto-reply/reply/directive-handling.levels.js", () => ({
@@ -79,26 +78,12 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
   beforeEach(() => {
     buildStatusReply.mockReset();
     loadSessionEntry.mockReset();
-    resolveSessionAgentId.mockReset();
-    listAgentEntries.mockReset();
-    resolveDefaultModelForAgent.mockReset();
-    resolveDefaultModel.mockReset();
-    createModelSelectionState.mockReset();
     resolveCurrentDirectiveLevels.mockReset();
 
     buildStatusReply.mockImplementation(async (params: unknown) => params);
     loadSessionEntry.mockResolvedValue(
       loadedSession({ agents: { defaults: { reasoningDefault: "off" } } }),
     );
-    resolveSessionAgentId.mockReturnValue("main");
-    listAgentEntries.mockReturnValue([]);
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
-    resolveDefaultModel.mockReturnValue({ defaultProvider: "openai", defaultModel: "gpt-5.4" });
-    createModelSelectionState.mockResolvedValue({
-      resolveThinkingCatalog: vi.fn(async () => []),
-      resolveDefaultThinkingLevel: vi.fn(async () => "off"),
-      resolveDefaultReasoningLevel: vi.fn(async () => "on"),
-    });
     resolveCurrentDirectiveLevels.mockResolvedValue(directiveLevels("off"));
   });
 
