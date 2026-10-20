@@ -4,7 +4,7 @@ import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
   timeWorktreePreparationPhase,
-  withWorktreePreparationTiming,
+  withWorktreePreparationTiming as withTiming,
 } from "./preparation-timing.js";
 
 const observations = vi.hoisted(() => ({ log: vi.fn(), event: vi.fn() }));
@@ -30,12 +30,12 @@ it("attributes nested preparation once per owner and retains failed phase time",
   const warm = Object.freeze({ reason: "ready", backend: "btrfs", cloneBytes: 42 });
   const phases = { templateApply: 52, containerStart: 8 };
   await expect(
-    withWorktreePreparationTiming("sandbox", async () => {
+    withTiming("sandbox", async () => {
       markManagedWorktreePreparation();
       setWorktreePreparationTemplate("warm", warm);
       await timeWorktreePreparationPhase("templateApply", async () => {
         clock += 12;
-        await withWorktreePreparationTiming("managed", async () => {
+        await withTiming("managed", async () => {
           await timeWorktreePreparationPhase("checkout", async () => {
             clock += 40;
           });
@@ -84,21 +84,19 @@ it("attributes nested preparation once per owner and retains failed phase time",
 });
 
 it("omits unmanaged sandboxes and preserves results if a diagnostics sink fails", async () => {
-  await withWorktreePreparationTiming("sandbox", async () => "unmanaged");
+  await withTiming("sandbox", async () => "unmanaged");
   expect(observations.log).not.toHaveBeenCalled();
   expect(observations.event).not.toHaveBeenCalled();
   observations.log.mockImplementation(() => {
     throw new Error("log sink unavailable");
   });
-  await expect(withWorktreePreparationTiming("managed", async () => "ready")).resolves.toBe(
-    "ready",
-  );
+  await expect(withTiming("managed", async () => "ready")).resolves.toBe("ready");
 });
 
 it("reports uncovered time without double-counting overlapping phases", async () => {
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
-  await withWorktreePreparationTiming("managed", async () => {
+  await withTiming("managed", async () => {
     clock = 10;
     const finishBase = startWorktreePreparationPhase("base");
     clock = 20;

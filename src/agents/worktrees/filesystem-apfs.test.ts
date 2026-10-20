@@ -9,7 +9,7 @@ import {
   revocableAuthority,
   useCloneFixture,
 } from "./filesystem-clone.test-support.js";
-import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import { nativeWorktreeFilesystem as filesystem } from "./filesystem-native.js";
 
 describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () => {
   const { create: template, makeRoot } = useCloneFixture("apfs");
@@ -17,10 +17,9 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
   it("distinguishes empty, inheritable and unreadable directory ACLs", async () => {
     const root = makeRoot();
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-    expect(await apfsFilesystem.readDirectoryAcl(root, options)).toBe("none");
-    expect(
-      await apfsFilesystem.readDirectoryAcl(path.join(root, "missing"), options),
-    ).toBeUndefined();
+    const { readDirectoryAcl } = apfsFilesystem;
+    expect(await readDirectoryAcl(root, options)).toBe("none");
+    expect(await readDirectoryAcl(path.join(root, "missing"), options)).toBeUndefined();
     const cases = [
       ["everyone allow read", "non-inheritable"],
       ["everyone allow read,file_inherit", "inheritable"],
@@ -29,7 +28,7 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     for (const [entry, expected] of cases) {
       await promisify(execFile)("/bin/chmod", ["-N", root]);
       await promisify(execFile)("/bin/chmod", ["+a", entry, root]);
-      expect(await apfsFilesystem.readDirectoryAcl(root, options)).toBe(expected);
+      expect(await readDirectoryAcl(root, options)).toBe(expected);
     }
   });
 
@@ -49,7 +48,7 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
     expect((await fs.stat(cloned)).mode & 0o777).toBe(0o751);
     expect((await fs.stat(to("nested"))).mode & 0o777).toBe(0o750);
     expect(await fs.readlink(to("link"))).toBe("nested/.payload");
-    const [metadata] = await nativeWorktreeFilesystem.readMetadata([cloned], options);
+    const [metadata] = await filesystem.readMetadata([cloned], options);
     assert(metadata);
     const stat = await fs.lstat(cloned, { bigint: true });
     expect(metadata).toMatchObject({ ino: stat.ino, size: stat.size });
@@ -79,29 +78,25 @@ describe.skipIf(process.platform !== "darwin")("APFS worktree filesystem", () =>
       const { source, destination, from, clone } = await template();
       await fs.writeFile(from("a"), "first");
       await fs.writeFile(from("b"), "second");
-      const copy = nativeWorktreeFilesystem.copy;
+      const copy = filesystem.copy;
       const authority = revocableAuthority();
       let finished = false;
       const abort = new AbortController();
-      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(
-        async (sourcePath, targetPath) => {
-          // Model an admitted bulk operation that can no longer be interrupted.
-          const pending = copy(sourcePath, targetPath, { commitGuard: () => {} });
-          authority.revoke();
-          if (reason === "abort") {
-            abort.abort(new Error("allocation canceled"));
-          }
-          await pending;
-          finished = true;
-        },
-      );
+      vi.spyOn(filesystem, "copy").mockImplementation(async (sourcePath, targetPath) => {
+        // Model an admitted bulk operation that can no longer be interrupted.
+        const pending = copy(sourcePath, targetPath, { commitGuard: () => {} });
+        authority.revoke();
+        if (reason === "abort") {
+          abort.abort(new Error("allocation canceled"));
+        }
+        await pending;
+        finished = true;
+      });
 
-      await expect(
-        clone({
-          signal: abort.signal,
-          commitGuard: authority.commitGuard,
-        }),
-      ).rejects.toThrow(reason === "abort" ? "allocation canceled" : "allocation lease lost");
+      const guarded = { signal: abort.signal, commitGuard: authority.commitGuard };
+      await expect(clone(guarded)).rejects.toThrow(
+        reason === "abort" ? "allocation canceled" : "allocation lease lost",
+      );
       expect(finished).toBe(true);
       expect(await fs.readdir(destination)).toHaveLength(2);
       expect(await fs.readdir(source)).toHaveLength(2);

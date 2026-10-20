@@ -46,19 +46,22 @@ function migrationFixture() {
       id === "legacy" ? null : "[]",
     );
   }
+  const rewrite = {
+    id: "current",
+    fromPath: path.join(root, "current"),
+    toPath: path.join(root, "moved"),
+  };
   return {
     env,
-    rewrite: {
-      id: "current",
-      fromPath: path.join(root, "current"),
-      toPath: path.join(root, "moved"),
-    },
+    rewrite,
+    discard: (ids = ["legacy"]) => discardLegacyRegistryWorktrees(env, ids),
+    move: (rewrites = [rewrite]) => rewriteRegistryWorktreePathsForMigration(env, rewrites),
     rows: () => db.prepare("SELECT id, path FROM worktrees ORDER BY id").all(),
   };
 }
 
 it("refuses business writes when a Gateway acquires the root after schema preparation", async () => {
-  const { env, rows, rewrite } = migrationFixture();
+  const { env, rows, discard, move } = migrationFixture();
   const original = rows();
   const ready = createDeferred();
   const lockModule = resolveRuntimeWorkerUrl({
@@ -97,14 +100,10 @@ it("refuses business writes when a Gateway acquires the root after schema prepar
           once(child, "exit"),
           "Foreign Gateway owner exited before acquiring custody",
         );
-        expect(discardLegacyRegistryWorktrees(env, [])).toBe(0);
-        expect(rewriteRegistryWorktreePathsForMigration(env, [])).toBe(0);
-        expect
-          .soft(() => discardLegacyRegistryWorktrees(env, ["legacy"]))
-          .toThrow(StateSchemaMutationConflictError);
-        expect
-          .soft(() => rewriteRegistryWorktreePathsForMigration(env, [rewrite]))
-          .toThrow(StateSchemaMutationConflictError);
+        for (const mutate of [discard, move]) {
+          expect(mutate([])).toBe(0);
+          expect.soft(() => mutate()).toThrow(StateSchemaMutationConflictError);
+        }
         expect.soft(rows()).toEqual(original);
       } finally {
         child.stdin.end();
@@ -115,7 +114,7 @@ it("refuses business writes when a Gateway acquires the root after schema prepar
 });
 
 it.each(["offline", "inherited maintenance"] as const)("preserves %s migration", async (mode) => {
-  const { env, rows, rewrite } = migrationFixture();
+  const { env, rows, rewrite, discard, move } = migrationFixture();
   const facts = new Map();
   onTestFinished(
     worktreeRegistryPublication.subscribeFacts((change) => {
@@ -127,9 +126,9 @@ it.each(["offline", "inherited maintenance"] as const)("preserves %s migration",
     }),
   );
   const migrate = () => {
-    expect(discardLegacyRegistryWorktrees(env, ["legacy"])).toBe(1);
+    expect(discard()).toBe(1);
     expect(facts.get(JSON.stringify(["worktrees", "legacy"]))).toEqual({ kind: "absent" });
-    expect(rewriteRegistryWorktreePathsForMigration(env, [rewrite])).toBe(1);
+    expect(move()).toBe(1);
     expect(facts.get(JSON.stringify(["worktrees", "current"]))).toMatchObject({
       kind: "postimage",
       value: { id: "current", path: rewrite.toPath },
