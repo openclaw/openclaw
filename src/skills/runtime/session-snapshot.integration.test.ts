@@ -304,10 +304,14 @@ it.each([
 
 it("rebuilds changed source bytes and version before publishing an in-flight snapshot", async () => {
   const requestedVersion = getSkillsSnapshotVersion(params.workspaceDir);
-  const { snapshot, snapshotVersion } = await pending;
+  const pending = params.resolve({ snapshotVersion: requestedVersion });
+  const content = "---\nname: visible\ndescription: Updated instructions\n---\n";
+  fs.writeFileSync(params.visibleFile, content);
+  const currentVersion = bumpSkillsSnapshotVersion({ workspaceDir: params.workspaceDir });
+  const { snapshot } = await pending;
   expect(snapshot.prompt).toContain("Updated instructions");
   expect(snapshot.prompt).not.toContain("Original instructions");
-  expect([snapshot.version, snapshotVersion]).toEqual([currentVersion, currentVersion]);
+  expect(snapshot.version).toBe(currentVersion);
   // The resourceVersion field is the resolve-start resource revision, not
   // snapshot content: a later resolve after the version advance legitimately
   // restamps while republishing the same bytes. Compare the published

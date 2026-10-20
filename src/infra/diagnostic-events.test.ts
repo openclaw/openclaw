@@ -373,8 +373,8 @@ describe("diagnostic-events", () => {
 
   it("drops a queued skill fingerprint whose tracing bridge retires before dispatch", async () => {
     const trustedEvents: Array<{
-      event: DiagnosticEventPayload;
-      privateData: DiagnosticEventPrivateData;
+      event: Event;
+      privateData: PrivateData;
     }> = [];
     onTrusted((event, _metadata, privateData) => {
       trustedEvents.push({ event, privateData });
@@ -416,7 +416,7 @@ describe("diagnostic-events", () => {
   });
 
   it("drops a queued skill fingerprint from pending-queue inspection after its tracing bridge retires", async () => {
-    const inspected: DiagnosticEventPayload[] = [];
+    const inspected: Event[] = [];
     setEnabled(true);
     // Upstream gates queueing on an interested consumer: register one so the
     // skill.used payload actually enters the async queue for inspection.
@@ -442,7 +442,7 @@ describe("diagnostic-events", () => {
     // accounting — stays intact for the drain.
     unregisterBridge();
     expect(
-      hasPendingInternalDiagnosticEvent((event) => {
+      hasPending((event) => {
         inspected.push(event);
         return event.type === "skill.used";
       }),
