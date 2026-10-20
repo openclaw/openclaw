@@ -30,6 +30,7 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { withAuthProfileStoreAgentDir } from "./store.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -129,6 +130,41 @@ it("does not combine an explicit environment with the ambient runtime auth owner
     expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
       location: "state-db",
     });
+  });
+});
+
+it("does not combine a scoped installation with the ambient runtime auth owner", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
+    const scopedStateDir = path.join(stateDir, "installation-b", "state");
+    const scopedEnv = { ...env, OPENCLAW_STATE_DIR: scopedStateDir };
+    const scopedMainDir = resolveSharedMainAuthAgentDir(scopedEnv);
+    const scopedMainPath = resolveAuthProfileDatabasePath(scopedMainDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: scopedMainPath,
+      env: scopedEnv,
+    });
+    writeAuthProfileJsonCell(database.db, "store", "agent", {
+      version: 1,
+      profiles: { "openai:scoped": { type: "api_key", provider: "openai", key: "scoped-key" } },
+    });
+    const ambientConfig = {
+      agents: {
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+    setRuntimeConfigSnapshot(ambientConfig, ambientConfig);
+    await prepareActor(scopedEnv);
+
+    await withAuthProfileStoreAgentDir(scopedMainDir, scopedStateDir, async () => {
+      expect(
+        await updateAuthProfileStoreWithLock({ sharedStoreWrite: true, updater: () => false }),
+      ).not.toBeNull();
+    });
+
+    expect(resolveSharedAuthStoreOwnership(scopedEnv).location).toBe("legacy-main");
+    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env: scopedEnv })).toBeUndefined();
   });
 });
 

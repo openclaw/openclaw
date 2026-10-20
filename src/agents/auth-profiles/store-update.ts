@@ -567,11 +567,14 @@ export function createAuthProfileStoreUpdater(
         );
       }
       const workerWrites = getWorkerAuthProfileWrites();
+      const scopedEnv = getScopedAuthProfileEnv();
+      const selectedEnv = params.stateDir ? undefined : (scopedEnv ?? workerWrites?.env);
       const writeOptions = {
-        config: params.stateDir ? undefined : (getRuntimeConfigSnapshot() ?? undefined),
+        config:
+          params.stateDir || scopedEnv ? undefined : (getRuntimeConfigSnapshot() ?? undefined),
         sharedStoreWrite: params.sharedStoreWrite,
         stateDir: params.stateDir,
-        env: params.stateDir ? undefined : (getScopedAuthProfileEnv() ?? workerWrites?.env),
+        env: selectedEnv,
         assertEnvironment: workerWrites?.assertOwner,
       };
       // Doctor keeps maintenance custody; catalog writes stay in their admitted worker request.
