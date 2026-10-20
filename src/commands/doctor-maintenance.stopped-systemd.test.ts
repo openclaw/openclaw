@@ -90,16 +90,14 @@ it.each(["current-policy", "short-timeout", "removed-system-unit"] as const)(
       mocks.runContributions.mockReset();
       // Schema preparation belongs to beginDoctorMaintenance and runs before contributions.
       mocks.runContributions.mockImplementation(async () => {});
-      vi.spyOn(systemdExec, "execSystemctl").mockResolvedValue({
+      const exited = {
         code: 0,
-        stdout: "not-found",
         stderr: "",
-        termination: "exit",
-      });
+        termination: "exit" as const,
+      };
+      vi.spyOn(systemdExec, "execSystemctl").mockResolvedValue({ ...exited, stdout: "not-found" });
       vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue({
-        code: 0,
-        stderr: "",
-        termination: "exit",
+        ...exited,
         stdout: `LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=${scenario === "short-timeout" ? 30 : 330}s\n`,
       });
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -109,34 +107,29 @@ it.each(["current-policy", "short-timeout", "removed-system-unit"] as const)(
         expect(runtime.exit, output).not.toHaveBeenCalled();
         expect(output.includes("Gateway service inspection is unavailable")).toBe(removed);
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-        const migrated = new DatabaseSync(databasePath, { readOnly: true });
-        try {
-          expect(migrated.prepare("SELECT event_id FROM audit_events").all()).toEqual([
+        const assertEvent = (database: InstanceType<typeof DatabaseSync>) => {
+          expect(database.prepare("SELECT event_id FROM audit_events").all()).toEqual([
             { event_id: "retained-event" },
           ]);
+        };
+        {
+          using migrated = new DatabaseSync(databasePath, { readOnly: true });
+          assertEvent(migrated);
           expect(migrated.prepare("PRAGMA user_version").get()).not.toEqual({ user_version: 1 });
           expect(migrated.prepare("PRAGMA integrity_check").get()).toEqual({
             integrity_check: "ok",
           });
-        } finally {
-          migrated.close();
         }
         const backupPrefix = "Saved pre-migration SQLite backup: ";
         const backupLine = runtime.log.mock.calls
           .flat()
           .find((line) => String(line).startsWith(backupPrefix));
         expect(backupLine).toBeTypeOf("string");
-        const backup = new DatabaseSync(String(backupLine).slice(backupPrefix.length), {
+        using backup = new DatabaseSync(String(backupLine).slice(backupPrefix.length), {
           readOnly: true,
         });
-        try {
-          expect(backup.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-          expect(backup.prepare("SELECT event_id FROM audit_events").all()).toEqual([
-            { event_id: "retained-event" },
-          ]);
-        } finally {
-          backup.close();
-        }
+        expect(backup.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+        assertEvent(backup);
         if (scenario === "short-timeout") {
           expect(output).toMatch(/effective.*30000ms.*330s/);
         }

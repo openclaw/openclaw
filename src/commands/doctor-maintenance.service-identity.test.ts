@@ -13,6 +13,11 @@ import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-
 import { repairAuthProfileMigration } from "./doctor/auth-profile-repair.js";
 
 const mocks = vi.hoisted(() => ({ service: undefined as GatewayService | undefined }));
+function assertServiceUnchanged() {
+  for (const operation of ["stage", "stop", "start", "restart", "install", "uninstall"] as const) {
+    expect(mocks.service![operation]).not.toHaveBeenCalled();
+  }
+}
 vi.mock("../daemon/service.js", async (original) => ({
   ...(await original<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => mocks.service!,
@@ -32,18 +37,13 @@ afterEach(() => {
 });
 
 it.each([
-  { name: "CLI service", appOwned: false, running: false, platform: "linux" as const },
-  { name: "offline app-owned service", appOwned: true, running: false },
-  { name: "running app-owned service", appOwned: true, running: true },
-  {
-    name: "running app-owned service on Linux",
-    appOwned: true,
-    running: true,
-    platform: "linux" as const,
-  },
-])(
-  "repairs canonical state without mutating the $name",
-  async ({ appOwned, running, platform }) => {
+  ["CLI service", false, false, "linux"],
+  ["offline app-owned service", true, false, undefined],
+  ["running app-owned service", true, true, undefined],
+  ["running app-owned service on Linux", true, true, "linux"],
+] as const)(
+  "repairs canonical state without mutating the %s",
+  async (_name, appOwned, running, platform) => {
     if (platform) {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     }
@@ -74,20 +74,19 @@ it.each([
     let serviceRoot = process.cwd();
     if (appOwned) {
       serviceRoot = tempDirs.make("doctor-app-owned-runtime-");
-      fs.writeFileSync(
-        path.join(serviceRoot, "package.json"),
-        JSON.stringify({ name: "openclaw" }),
-      );
-      fs.writeFileSync(path.join(serviceRoot, "openclaw.mjs"), "");
-      fs.writeFileSync(
-        path.join(serviceRoot, "openclaw-install-owner.json"),
-        JSON.stringify({
+      const files = {
+        "package.json": { name: "openclaw" },
+        "openclaw-install-owner.json": {
           schemaVersion: 1,
           owner: "macos-app",
           displayName: "OpenClaw.app",
           updateHint: "Update OpenClaw.app to update this Gateway.",
-        }),
-      );
+        },
+      };
+      for (const [name, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(serviceRoot, name), JSON.stringify(content));
+      }
+      fs.writeFileSync(path.join(serviceRoot, "openclaw.mjs"), "");
     }
     mocks.service = createMockGatewayService({
       isLoaded: vi.fn(async () => !appOwned || running),
@@ -110,16 +109,7 @@ it.each([
     if (running) {
       await expect(begin()).rejects.toThrow("Managed by OpenClaw.app");
       expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
-      for (const operation of [
-        "stage",
-        "stop",
-        "start",
-        "restart",
-        "install",
-        "uninstall",
-      ] as const) {
-        expect(mocks.service[operation]).not.toHaveBeenCalled();
-      }
+      assertServiceUnchanged();
       return;
     }
     const maintenance = await begin();
@@ -151,15 +141,6 @@ it.each([
     } finally {
       await maintenance!.release();
     }
-    for (const operation of [
-      "stage",
-      "stop",
-      "start",
-      "restart",
-      "install",
-      "uninstall",
-    ] as const) {
-      expect(mocks.service[operation]).not.toHaveBeenCalled();
-    }
+    assertServiceUnchanged();
   },
 );
