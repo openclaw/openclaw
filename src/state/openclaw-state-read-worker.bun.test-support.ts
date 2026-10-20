@@ -1,27 +1,19 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  ensureSqliteLibrarySelected,
-  getSqliteRuntimeCapabilities,
-  initializeSqliteRuntimeCapabilities,
-} from "../infra/bun-sqlite-library.js";
+import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
-import {
-  captureOpenClawStateDatabaseReadAdmission,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "./openclaw-state-db-cache.js";
+import * as stateCache from "./openclaw-state-db-cache.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 
 const root = process.argv[2] ?? "";
 assert(root && process.versions.bun);
-ensureSqliteLibrarySelected();
+sqliteRuntime.ensureSqliteLibrarySelected();
 const { explicitSqliteCloseReleasesNativeResources: capable } =
   process.argv[3] === "admitted"
-    ? await initializeSqliteRuntimeCapabilities()
-    : getSqliteRuntimeCapabilities();
+    ? await sqliteRuntime.initializeSqliteRuntimeCapabilities()
+    : sqliteRuntime.getSqliteRuntimeCapabilities();
 const { workerCount: admissionCount, workerLifecycle: admissionWorkers } =
   getTrackedWorkerLifecycleSnapshot();
 for (const worker of admissionWorkers) {
@@ -71,7 +63,7 @@ function assertLifecycle(expected: [number, number], message: string) {
 }
 
 async function read(location = filename, checkFreshAdmission = false) {
-  const admission = captureOpenClawStateDatabaseReadAdmission(filename);
+  const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(filename);
   const transport = captureOpenClawStateReadSource().createTransport({ type: "nodeHost.config" });
   try {
     const outcome = await transport.startRead(
@@ -97,7 +89,7 @@ try {
     await read();
   }
   assertLifecycle([1, 0], "successful reads reuse");
-  await closeOpenClawStateDatabaseByPathAsync(filename);
+  await stateCache.closeOpenClawStateDatabaseByPathAsync(filename);
   assertLifecycle([1, capable ? 0 : 1], "host close joins native cleanup");
   await read();
   assertLifecycle([capable ? 1 : 2, capable ? 0 : 1], "closed reader reopens");
@@ -109,5 +101,5 @@ try {
   assertLifecycle([capable ? 1 : 3, capable ? 0 : 3], "admission close settles");
   console.log(`Bun shared-state worker reuse and native cleanup passed (capable=${capable})`);
 } finally {
-  await closeOpenClawStateDatabaseAsync();
+  await stateCache.closeOpenClawStateDatabaseAsync();
 }
