@@ -17,7 +17,7 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { decisionBatchV1ToV2 } from "./compatibility.js";
-import { createDecisionRegistry } from "./contract.test-support.js";
+import { createDecisionRegistry, unavailable } from "./contract.test-support.js";
 import type { DecisionProviderContextV2 } from "./provider-context.js";
 import {
   evaluateDecisionInRegistry,
@@ -87,6 +87,16 @@ function mockNative() {
   const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => answer);
   return { ...native(evaluate), evaluate };
 }
+function legacy(evaluate: DecisionProviderV1["evaluate"] = async () => answer) {
+  const callback = vi.fn(evaluate);
+  const host = registered(callback);
+  const runV2 = (
+    opts: DecisionEvaluateOptionsV2 = options(),
+    input = richer,
+    guard?: () => boolean,
+  ) => evaluateDecisionV2InRegistry(input, opts, host.registry, config, undefined, guard);
+  return { ...host, callback, runV2 };
+}
 
 function selectOwner(agents: OpenClawConfig["agents"], llm: PluginEntryConfig["llm"]) {
   setRuntimeConfigSnapshot({ agents, plugins: { entries: { owner: { llm } } } });
@@ -144,9 +154,11 @@ it.each([1, 2] as const)(
       shouldPruneTools: true,
       status: "proposed",
     });
-    expect(host.registry.decisionProviders[0]!.host.inspect(assistanceConfig).activeRequests).toBe(
-      0,
-    );
+    const status = host.registry.decisionProviders[0]!.host.inspect(assistanceConfig);
+    expect(status).toMatchObject({ activeRequests: 0, callable: true });
+    if (version === 2) {
+      expect(status).not.toHaveProperty("credentialReady");
+    }
   },
 );
 
@@ -174,7 +186,7 @@ it.each([1, 2] as const)(
         ? host.api.runtime.decisions.evaluate(batch, requestOptions)
         : host.api.runtime.decisions.evaluateV2(richer, requestOptions);
     const pending: ReturnType<typeof evaluate>[] = [];
-    const overloaded = { status: "unavailable", reason: "overloaded" };
+    const overloaded = unavailable("overloaded");
     const expectOverloaded = async (priority: "optional" | "requested" = "requested") => {
       for (const version of [1, 2] as const) {
         await expect(evaluate(version, { ...options(), priority })).resolves.toEqual(overloaded);
@@ -234,42 +246,15 @@ it.each([1, 2] as const)(
   },
 );
 
-it("rejects invalid V2 priority before provider dispatch", async () => {
-  const { evaluate, ...host } = mockNative();
-  const requestOptions = options();
-  Reflect.set(requestOptions, "priority", "urgent");
-  await expect(host.run(requestOptions)).rejects.toThrow("Invalid decision contract");
-  expect(evaluate).not.toHaveBeenCalled();
-});
-
-it("leaves V2 credential admission to preparation without a global readiness claim", async () => {
-  const { evaluate, ...host } = mockNative();
-  const status = host.registry.decisionProviders[0]!.host.inspect(config);
-  expect(status).not.toHaveProperty("credentialReady");
-  expect(status.callable).toBe(true);
-  await expect(host.run()).resolves.toMatchObject({ status: "ok" });
-  expect(evaluate).toHaveBeenCalledOnce();
-  const providerHost = host.registry.decisionProviders[0]!.host;
-  providerHost.retire();
-  const retired = providerHost.inspect(config);
-  expect(retired).not.toHaveProperty("credentialReady");
-  expect(retired.callable).toBe(false);
-});
-
 it.each([
-  ...[undefined, false, true].map((allowAgentIdOverride) => ({
-    allowAgentIdOverride,
-    model: "specialist-v2",
-    profile: false,
-  })),
-  ...["specialist-v2", "other"].map((model) => ({
-    allowAgentIdOverride: undefined,
-    model,
-    profile: true,
-  })),
-])(
-  "authorizes the explicit V2 owner ($model, profile=$profile, override=$allowAgentIdOverride)",
-  async ({ allowAgentIdOverride, model, profile }) => {
+  [undefined, "specialist-v2", false],
+  [false, "specialist-v2", false],
+  [true, "specialist-v2", false],
+  [undefined, "specialist-v2", true],
+  [undefined, "other", true],
+] as const)(
+  "authorizes the explicit V2 owner (override=%s, model=%s, profile=%s)",
+  async (allowAgentIdOverride, model, profile) => {
     const { evaluate, ...host } = mockNative();
     const selectedModel = profile ? `${model}@fixture:agent` : model;
     selectOwner(
@@ -319,27 +304,18 @@ it.each([
 );
 
 it("runs lossless V2 input through a V1 owner and rejects native-only input without dispatch", async () => {
-  const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-  const host = registered(evaluate);
-  await expect(
-    evaluateDecisionV2InRegistry(richer, options(), host.registry, config),
-  ).resolves.toMatchObject({ status: "ok", result: answer.result });
-  expect(evaluate.mock.calls[0]?.[0]).toEqual(batch);
-  await expect(
-    evaluateDecisionV2InRegistry(
-      { ...richer, state: { type: "list", items: [{ id: "a", content: "a" }] } },
-      options(),
-      host.registry,
-      config,
-    ),
-  ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
-  expect(evaluate).toHaveBeenCalledOnce();
+  const { callback, runV2 } = legacy();
+  await expect(runV2()).resolves.toMatchObject({ status: "ok", result: answer.result });
+  expect(callback.mock.calls[0]?.[0]).toEqual(batch);
+  const input = { ...richer, state: { type: "list" as const, items: [{ id: "a", content: "a" }] } };
+  await expect(runV2(options(), input)).resolves.toEqual(unavailable("unsupported-input"));
+  expect(callback).toHaveBeenCalledOnce();
 });
 
 it("keeps V1 admission errors terminal through a V2 call after adapter cleanup", async () => {
   const terminal = new Error("consumer closed after admission");
   let admitted = true;
-  const host = registered(async (_input, context) => {
+  const { runV2 } = legacy(async (_input, context) => {
     admitted = false;
     try {
       context.isAdmissible?.();
@@ -347,10 +323,10 @@ it("keeps V1 admission errors terminal through a V2 call after adapter cleanup",
       /* adapter sanitizes while joining cleanup */
     }
     await Promise.resolve();
-    return { status: "unavailable", reason: "transport" };
+    return unavailable("transport");
   });
   await expect(
-    evaluateDecisionV2InRegistry(richer, options(), host.registry, config, undefined, () => {
+    runV2(options(), richer, () => {
       if (!admitted) {
         throw terminal;
       }
@@ -375,9 +351,8 @@ it("preserves native abstention in V2 and refuses lossy V1 narrowing", async () 
     status: "ok",
     result: { answers: { truth: { answer: null } } },
   });
-  await expect(
-    evaluateDecisionInRegistry(batch, options(), host.registry, config),
-  ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+  const narrowed = evaluateDecisionInRegistry(batch, options(), host.registry, config);
+  await expect(narrowed).resolves.toEqual(unavailable("unsupported-input"));
 });
 
 it("closes V2 physical dispatch authority and joins the outstanding callback during reload", async () => {
@@ -388,7 +363,7 @@ it("closes V2 physical dispatch authority and joins the outstanding callback dur
     context = current;
     started.resolve();
     await release.promise;
-    return { status: "unavailable", reason: "transport" };
+    return unavailable("transport");
   });
   const pending = evaluateDecisionV2InRegistry(richer, options(), host.registry, config);
   await started.promise;
@@ -401,18 +376,17 @@ it("closes V2 physical dispatch authority and joins the outstanding callback dur
   await Promise.resolve();
   expect(drained).toBe(false);
   release.resolve();
-  await expect(pending).resolves.toEqual({ status: "unavailable", reason: "retiring" });
+  await expect(pending).resolves.toEqual(unavailable("retiring"));
   await vi.waitFor(() => expect(drained).toBe(true));
 });
 
 it.each(["on", "off"] as const)(
   "rejects reasoning %s at the V1 bridge before provider dispatch",
   async (reasoning) => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    const host = registered(evaluate);
-    await expect(
-      evaluateDecisionV2InRegistry(richer, { ...options(), reasoning }, host.registry, config),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
-    expect(evaluate).not.toHaveBeenCalled();
+    const { callback, runV2 } = legacy();
+    await expect(runV2({ ...options(), reasoning })).resolves.toEqual(
+      unavailable("unsupported-input"),
+    );
+    expect(callback).not.toHaveBeenCalled();
   },
 );

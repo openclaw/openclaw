@@ -9,7 +9,7 @@ import {
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createDecisionRegistry, waitForAbort } from "./contract.test-support.js";
+import { createDecisionRegistry, unavailable, waitForAbort } from "./contract.test-support.js";
 import { DecisionProviderHost } from "./provider-host.js";
 import { adoptRuntimeDecisionProviders } from "./registry-adoption.js";
 import {
@@ -95,13 +95,10 @@ it("shares the concurrency bound and joins provider retirement before fallback",
     return answer;
   });
   const pending = [run(), run(), runRoot(), run()];
-  expect(await runRoot()).toEqual({
-    status: "unavailable",
-    reason: "overloaded",
-  });
+  expect(await runRoot()).toEqual(unavailable("overloaded"));
   const pause = prepareDecisionProviderReload(root, new Set([record.id]));
   expect(await Promise.all(pending)).toEqual(
-    Array.from({ length: 4 }, () => ({ status: "unavailable", reason: "retiring" })),
+    Array.from({ length: 4 }, () => unavailable("retiring")),
   );
   await pause.rollback(new AbortController().signal);
   expectRootReady(root);

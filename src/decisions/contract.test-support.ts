@@ -4,7 +4,12 @@ import { createPluginRecord } from "../plugins/loader-records.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { DecisionProviderV2 } from "./types-v2.js";
-import type { DecisionProviderV1 } from "./types.js";
+import type { DecisionProviderV1, UnavailableReason } from "./types.js";
+
+export const unavailable = (reason: UnavailableReason) => ({
+  status: "unavailable" as const,
+  reason,
+});
 
 export function createDecisionRegistry(
   config: OpenClawConfig,

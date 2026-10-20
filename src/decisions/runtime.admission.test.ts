@@ -7,6 +7,7 @@ import {
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { unavailable } from "./contract.test-support.js";
 import { evaluateDecisionInRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 import type { DecisionProviderV1 } from "./types.js";
@@ -26,7 +27,7 @@ describe("registered decision consumer admission", () => {
       const host = registered(async (_batch, context) => {
         await release.promise;
         if (context.isAdmissible?.() === false) {
-          return { status: "unavailable", reason: "transport" };
+          return unavailable("transport");
         }
         return dispatch();
       });
@@ -51,10 +52,7 @@ describe("registered decision consumer admission", () => {
         }
         release.resolve();
         await expect(pending).resolves.toMatchObject({
-          details:
-            change === "unchanged"
-              ? { status: "ok" }
-              : { status: "unavailable", reason: "retiring" },
+          details: change === "unchanged" ? { status: "ok" } : unavailable("retiring"),
         });
         expect(dispatch).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
         expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
@@ -83,7 +81,7 @@ describe("registered decision consumer admission", () => {
       // A transport may sanitize its guard failure and await cleanup before returning.
       await Promise.resolve();
       expect(context.isAdmissible?.()).toBe(false);
-      return { status: "unavailable", reason: "transport" };
+      return unavailable("transport");
     });
     const host = registered(call);
     for (let i = 0; i < 3; i++) {
@@ -96,7 +94,7 @@ describe("registered decision consumer admission", () => {
           undefined,
           () => current,
         ),
-      ).toEqual({ status: "unavailable", reason: "disabled" });
+      ).toEqual(unavailable("disabled"));
     }
     expect(host.registry.decisionProviders[0]?.host.inspect(config)).toMatchObject({
       activeRequests: 0,
@@ -126,7 +124,7 @@ describe("registered decision consumer admission", () => {
           controller.abort(cancelled);
         }
         await Promise.resolve();
-        return { status: "unavailable", reason: "transport" };
+        return unavailable("transport");
       });
       const pending = evaluateDecisionInRegistry(
         batch,
