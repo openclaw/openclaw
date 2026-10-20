@@ -255,12 +255,16 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     readFileSpy.mockRestore();
     expect(
-      expectDigestPage((await expectCompiledCache(config)).digest.pages, "sources/edited.md").title,
+      (await loadMemoryWikiCompiledCache(config))?.digest.pages.find(
+        (page) => page.path === "sources/edited.md",
+      )?.title,
     ).toBe("Before");
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("# After\n");
     await compileMemoryWikiVault(config);
     expect(
-      expectDigestPage((await expectCompiledCache(config)).digest.pages, "sources/edited.md").title,
+      (await loadMemoryWikiCompiledCache(config))?.digest.pages.find(
+        (page) => page.path === "sources/edited.md",
+      )?.title,
     ).toBe("After");
   });
 
