@@ -369,6 +369,20 @@ function mountManagedAudio(
   return container;
 }
 
+function mountAssistantImage(url: string, alt: string) {
+  const container = document.createElement("div");
+  renderAssistantMessage(createAssistantImageMessage(url, alt), {}, container);
+  return container;
+}
+
+function renderImageBatch(urls: string[], label: string) {
+  renderAssistantMessage(
+    createAssistantMessage(
+      urls.map((url, index) => createMediaBlock({ url, alt: `${label} ${index + 1}` })),
+    ),
+  );
+}
+
 function applyNotice(
   host: ReturnType<typeof createHost>,
   seq: number,
@@ -2411,46 +2425,21 @@ describe("grouped chat rendering", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    renderAssistantMessage({
-      role: "assistant",
-      content: imageUrls.slice(0, 64).map((url, index) => ({
-        type: "image",
-        url,
-        alt: `Generated image ${index + 1}`,
-      })),
-      timestamp: Date.now(),
-    });
+    renderImageBatch(imageUrls.slice(0, 64), "Generated image");
     await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(64));
 
-    const recentContainer = document.createElement("div");
-    renderAssistantMessage(
-      createAssistantMessage([
-        createMediaBlock({ url: imageUrls[0], alt: "Recently viewed image" }),
-      ]),
-      {},
-      recentContainer,
-    );
+    mountAssistantImage(imageUrls[0]!, "Recently viewed image");
     expect(createObjectURL).toHaveBeenCalledTimes(64);
 
     const createsBeforeOverflow = createObjectURL.mock.calls.length;
-    const overflowContainer = document.createElement("div");
-    renderAssistantMessage(
-      createAssistantMessage([createMediaBlock({ url: imageUrls[64], alt: "Newest image" })]),
-      {},
-      overflowContainer,
-    );
+    mountAssistantImage(imageUrls[64]!, "Newest image");
     await vi.waitFor(() =>
       expect(createObjectURL.mock.calls.length).toBeGreaterThan(createsBeforeOverflow),
     );
     expect(revokeObjectURL).toHaveBeenCalled();
 
     deferEvictedRefetch = true;
-    const evictedContainer = document.createElement("div");
-    renderAssistantMessage(
-      createAssistantMessage([createMediaBlock({ url: imageUrls[1], alt: "Refetched image" })]),
-      {},
-      evictedContainer,
-    );
+    const evictedContainer = mountAssistantImage(imageUrls[1]!, "Refetched image");
     await vi.waitFor(() => expect(resolveEvictedRefetch).toBeTypeOf("function"));
 
     const createsBeforeRefetch = createObjectURL.mock.calls.length;
@@ -2466,40 +2455,18 @@ describe("grouped chat rendering", () => {
     const fetchMock = vi.fn(async () => ({ ok: false }));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    renderAssistantMessage({
-      role: "assistant",
-      content: imageUrls.slice(0, 64).map((url, index) => ({
-        type: "image",
-        url,
-        alt: `Missing image ${index + 1}`,
-      })),
-      timestamp: Date.now(),
-    });
+    renderImageBatch(imageUrls.slice(0, 64), "Missing image");
     await waitForSolid(() =>
       expect(view.querySelectorAll(".chat-image-frame--compact")).toHaveLength(64),
     );
-    const overflowContainer = document.createElement("div");
-    renderAssistantMessage(
-      createAssistantMessage([
-        createMediaBlock({ url: imageUrls[64], alt: "Newest missing image" }),
-      ]),
-      {},
-      overflowContainer,
-    );
+    const overflowContainer = mountAssistantImage(imageUrls[64]!, "Newest missing image");
     await waitForSolid(() =>
       expect(overflowContainer.querySelector(".chat-image-frame--compact")).not.toBeNull(),
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length));
     await flushAssistantAttachmentAvailabilityChecks();
 
-    const retryContainer = document.createElement("div");
-    renderAssistantMessage(
-      createAssistantMessage([
-        createMediaBlock({ url: imageUrls[0], alt: "Oldest missing image" }),
-      ]),
-      {},
-      retryContainer,
-    );
+    mountAssistantImage(imageUrls[0]!, "Oldest missing image");
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length + 1));
   });
