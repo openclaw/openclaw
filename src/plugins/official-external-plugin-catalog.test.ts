@@ -19,6 +19,8 @@ import {
   hostedCatalogFeed,
 } from "./official-external-plugin-catalog.test-support.js";
 
+const sha256 = "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9";
+
 describe("official external plugin catalog", () => {
   it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
     const entry = getOfficialExternalPluginCatalogEntryForPackage("@openclaw/fish-audio-speech");
@@ -55,9 +57,7 @@ describe("official external plugin catalog", () => {
   it("prefers feed install candidates before legacy install metadata", () => {
     expect(
       resolveOfficialExternalPluginInstall({
-        ...installableEntry("@openclaw/candidate-package", {
-          integrity: "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
-        }),
+        ...installableEntry("@openclaw/candidate-package", { integrity: sha256 }),
         name: "@legacy/plain-package",
         openclaw: {
           plugin: { id: "candidate-package" },
@@ -76,23 +76,21 @@ describe("official external plugin catalog", () => {
       minHostVersion: ">=2026.6.1",
       allowInvalidConfigRecovery: true,
     });
-    for (const [integrity, expected] of [
-      [undefined, { npmSpec: "@acme/private@4.5.6", defaultChoice: "npm" }],
-      [
-        "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
-        { npmSpec: "@acme/private@4.5.6", defaultChoice: "npm" },
-      ],
-      [
-        "sha512-abc=",
-        { npmSpec: "@acme/private@4.5.6", defaultChoice: "npm", expectedIntegrity: "sha512-abc=" },
-      ],
+    for (const [integrity, expectedIntegrity] of [
+      [undefined, undefined],
+      [sha256, undefined],
+      ["sha512-abc=", "sha512-abc="],
     ] as const) {
       expect(
         resolveOfficialExternalPluginInstall(
           installableEntry("@acme/private", { sourceRef: "acme-npm", version: "4.5.6", integrity }),
           { catalogConfig: { sources: { "acme-npm": { type: "npm" } } } },
         ),
-      ).toEqual(expected);
+      ).toEqual({
+        npmSpec: "@acme/private@4.5.6",
+        defaultChoice: "npm",
+        ...(expectedIntegrity ? { expectedIntegrity } : {}),
+      });
     }
     expect(
       resolveOfficialExternalPluginInstall(

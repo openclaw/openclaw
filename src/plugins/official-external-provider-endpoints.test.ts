@@ -1,4 +1,3 @@
-// Guards the catalog mirror of externalized provider plugin endpoint metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,33 +9,22 @@ import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-type ExtensionManifestRecord = {
-  dirName: string;
-  manifest: Record<string, unknown>;
-};
-
-function listExtensionManifests(): ExtensionManifestRecord[] {
+function listExtensionManifests() {
   const extensionsDir = path.join(repoRoot, "extensions");
-  const records: ExtensionManifestRecord[] = [];
-  for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+  return fs.readdirSync(extensionsDir, { withFileTypes: true }).flatMap((entry) => {
     if (!entry.isDirectory()) {
-      continue;
+      return [];
     }
     const manifestPath = path.join(extensionsDir, entry.name, "openclaw.plugin.json");
     if (!fs.existsSync(manifestPath)) {
-      continue;
+      return [];
     }
     const manifest = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8"));
-    if (isRecord(manifest)) {
-      records.push({ dirName: entry.name, manifest });
-    }
-  }
-  return records;
+    return isRecord(manifest) ? [{ dirName: entry.name, manifest }] : [];
+  });
 }
 
-// Dist packaging is what makes these plugins invisible to bundled discovery,
-// so the package excludes are the source of truth for which manifests must be
-// mirrored into the catalog.
+// Dist-excluded plugins are invisible to bundled discovery and need catalog mirrors.
 const distExcludedExtensionDirs = new Set(
   (rootPackageJson.files ?? []).flatMap((entry) => {
     const match = /^!dist\/extensions\/([^/*]+)\/\*\*$/.exec(entry);
@@ -62,6 +50,17 @@ function listCatalogManifestsByPluginId(): Map<string, Record<string, unknown>> 
   return byPluginId;
 }
 
+function expectEndpoints(
+  catalog: Record<string, unknown> | undefined,
+  manifest: Record<string, unknown>,
+  dirName: string,
+) {
+  expect(
+    catalog?.providerEndpoints,
+    `catalog must mirror extensions/${dirName}/openclaw.plugin.json`,
+  ).toEqual(manifest.providerEndpoints);
+}
+
 describe("official external provider endpoint catalog mirror", () => {
   const extensionManifests = listExtensionManifests();
   const catalogManifestsByPluginId = listCatalogManifestsByPluginId();
@@ -69,53 +68,33 @@ describe("official external provider endpoint catalog mirror", () => {
   it("mirrors providerEndpoints for every dist-excluded plugin manifest that declares them", () => {
     const checkedPluginIds: string[] = [];
     for (const { dirName, manifest } of extensionManifests) {
-      if (!Array.isArray(manifest.providerEndpoints)) {
-        continue;
-      }
-      if (!distExcludedExtensionDirs.has(dirName)) {
+      if (!Array.isArray(manifest.providerEndpoints) || !distExcludedExtensionDirs.has(dirName)) {
         continue;
       }
       const pluginId = typeof manifest.id === "string" ? manifest.id : undefined;
       const catalogManifest = pluginId ? catalogManifestsByPluginId.get(pluginId) : undefined;
-      expect(
-        catalogManifest,
-        `extensions/${dirName} is excluded from dist and declares providerEndpoints; ` +
-          `official-external-provider-catalog.json needs an entry for plugin "${pluginId}" ` +
-          `mirroring them, or endpoint classification breaks when the plugin is not installed`,
-      ).toBeDefined();
-      expect(
-        catalogManifest?.providerEndpoints,
-        `catalog providerEndpoints for plugin "${pluginId}" must mirror extensions/${dirName}/openclaw.plugin.json`,
-      ).toEqual(manifest.providerEndpoints);
+      expectEndpoints(catalogManifest, manifest, dirName);
       if (pluginId) {
         checkedPluginIds.push(pluginId);
       }
     }
-    // The mirror set going empty means the scan above stopped covering the
-    // externalized providers this contract exists for.
+    // Keep the scan from passing vacuously.
     expect(checkedPluginIds).toContain("qwen");
     expect(checkedPluginIds).toContain("moonshot");
   });
 
   it("keeps catalog providerEndpoints in sync with local plugin manifests", () => {
     const extensionManifestsById = new Map(
-      extensionManifests
-        .filter((record) => typeof record.manifest.id === "string")
-        .map((record) => [record.manifest.id as string, record]),
+      extensionManifests.map((record) => [record.manifest.id, record]),
     );
     for (const [pluginId, catalogManifest] of catalogManifestsByPluginId) {
       if (catalogManifest.providerEndpoints === undefined) {
         continue;
       }
       const local = extensionManifestsById.get(pluginId);
-      if (!local) {
-        // Catalog-only plugins have no in-repo manifest to compare against.
-        continue;
+      if (local) {
+        expectEndpoints(catalogManifest, local.manifest, local.dirName);
       }
-      expect(
-        catalogManifest.providerEndpoints,
-        `catalog providerEndpoints for plugin "${pluginId}" must mirror extensions/${local.dirName}/openclaw.plugin.json`,
-      ).toEqual(local.manifest.providerEndpoints);
     }
   });
 });

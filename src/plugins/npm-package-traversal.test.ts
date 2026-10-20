@@ -3,8 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listManagedNpmRootPackageNames } from "./install-managed-npm-state.js";
 import {
-  auditOpenClawPeerDependenciesInManagedNpmRoot,
-  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+  auditOpenClawPeerDependenciesInManagedNpmRoot as auditPeers,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot as repairPeers,
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -24,6 +24,18 @@ function writePackage(dir: string) {
     path.join(dir, "package.json"),
     JSON.stringify({ name: path.basename(dir), peerDependencies: { openclaw: "*" } }),
   );
+}
+
+async function expectRepair(npmRoot: string, packageNames: string[]) {
+  const before = await auditPeers({ npmRoot });
+  expect(before.issues.map((issue) => issue.packageName)).toEqual(packageNames);
+  expect(await repairPeers({ npmRoot, logger: {} })).toEqual({
+    repaired: packageNames.length,
+  });
+}
+
+async function expectEmptyAudit(npmRoot: string) {
+  expect(await auditPeers({ npmRoot })).toEqual({ issues: [] });
 }
 
 describe("managed npm package traversal", () => {
@@ -53,11 +65,7 @@ describe("managed npm package traversal", () => {
       "zeta",
     ]);
     const repairNames = ["@scope/alpha", "@scope/zeta", "alpha", "openclaw", "zeta"];
-    const before = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
-    expect(before.issues.map((issue) => issue.packageName)).toEqual(repairNames);
-    expect(await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} })).toEqual({
-      repaired: 5,
-    });
+    await expectRepair(npmRoot, repairNames);
     for (const name of repairNames) {
       expect(fs.realpathSync(path.join(modules, name, "node_modules", "openclaw"))).toBe(
         fs.realpathSync(process.cwd()),
@@ -65,9 +73,7 @@ describe("managed npm package traversal", () => {
     }
     expect(fs.existsSync(path.join(modules, ".hidden", "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(modules, ".bin", "node_modules"))).toBe(false);
-    expect(await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot })).toEqual({
-      issues: [],
-    });
+    await expectEmptyAudit(npmRoot);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -97,17 +103,9 @@ describe("managed npm package traversal", () => {
         "file-link",
         "linked",
       ]);
-      const before = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
-      expect(before.issues.map((issue) => issue.packageName)).toEqual(["@scope/real"]);
-      expect(await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} })).toEqual(
-        {
-          repaired: 1,
-        },
-      );
+      await expectRepair(npmRoot, ["@scope/real"]);
       expect(fs.existsSync(path.join(outside, "package", "node_modules"))).toBe(false);
-      expect(await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot })).toEqual({
-        issues: [],
-      });
+      await expectEmptyAudit(npmRoot);
     },
   );
 
@@ -119,52 +117,39 @@ describe("managed npm package traversal", () => {
     await expect(listManagedNpmRootPackageNames(npmRoot)).rejects.toMatchObject({
       code: "ENOTDIR",
     });
-    expect(await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot })).toEqual({
-      issues: [],
-    });
-    expect(await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} })).toEqual({
-      repaired: 0,
-    });
+    await expectRepair(npmRoot, []);
   });
 
   for (const [owner, read, empty] of [
-    ["installer", (npmRoot: string) => listManagedNpmRootPackageNames(npmRoot), new Set()],
-    [
-      "peer audit",
-      (npmRoot: string) => auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot }),
-      { issues: [] },
-    ],
-    [
-      "peer repair",
-      (npmRoot: string) => relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} }),
-      { repaired: 0 },
-    ],
+    ["installer", listManagedNpmRootPackageNames, new Set()],
+    ["peer audit", (npmRoot: string) => auditPeers({ npmRoot }), { issues: [] }],
+    ["peer repair", (npmRoot: string) => repairPeers({ npmRoot, logger: {} }), { repaired: 0 }],
   ] as const) {
-    it.each(["missing", "file"] as const)(`${owner} preserves %s root errors`, async (kind) => {
-      const npmRoot = makeRoot();
-      if (kind === "file") {
-        fs.writeFileSync(path.join(npmRoot, "node_modules"), "not a directory");
-        await expect(read(npmRoot)).rejects.toMatchObject({ code: "ENOTDIR" });
-      } else {
-        await expect(read(npmRoot)).resolves.toEqual(empty);
-      }
-    });
-    it.each(["missing", "file"] as const)(
-      `${owner} preserves %s scoped entries after enumeration`,
-      async (kind) => {
+    it.each([
+      ["missing", false],
+      ["file", false],
+      ["missing", true],
+      ["file", true],
+    ] as const)(
+      `${owner} preserves %s errors (scope replaced after enumeration: %s)`,
+      async (kind, scoped) => {
         const npmRoot = makeRoot();
         const modules = path.join(npmRoot, "node_modules");
-        const scope = path.join(modules, "@scope");
-        fs.mkdirSync(scope, { recursive: true });
-        const readdir = fs.promises.readdir;
-        vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async (dir, options) => {
-          const entries = await readdir(dir, options);
-          fs.rmdirSync(scope);
-          if (kind === "file") {
-            fs.writeFileSync(scope, "replaced after enumeration");
-          }
-          return entries;
-        });
+        if (scoped) {
+          const scope = path.join(modules, "@scope");
+          fs.mkdirSync(scope, { recursive: true });
+          const readdir = fs.promises.readdir;
+          vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async (dir, options) => {
+            const entries = await readdir(dir, options);
+            fs.rmdirSync(scope);
+            if (kind === "file") {
+              fs.writeFileSync(scope, "replaced after enumeration");
+            }
+            return entries;
+          });
+        } else if (kind === "file") {
+          fs.writeFileSync(modules, "not a directory");
+        }
         if (kind === "file") {
           await expect(read(npmRoot)).rejects.toMatchObject({ code: "ENOTDIR" });
         } else {

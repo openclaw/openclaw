@@ -21,36 +21,20 @@ afterEach(async () => {
 
 describe("OpenAI-compatible embedding HTTP errors", () => {
   it.each([
-    {
-      label: "short rate-limit",
-      padding: 0,
-      credentialPadding: 0,
-      code: "rate_limit_exceeded",
-      errorType: "rate_limit_error",
-      retryAfter: "4",
-      retryAfterMs: 4_000,
-    },
-    {
-      label: "complete long quota",
-      padding: 1_200,
-      credentialPadding: 0,
-      code: "insufficient_quota",
-      errorType: "insufficient_quota",
-      retryAfter: undefined,
-      retryAfterMs: undefined,
-    },
-    {
-      label: "byte-limited error",
-      padding: 0,
-      credentialPadding: 9 * 1024,
-      code: undefined,
-      errorType: undefined,
-      retryAfter: undefined,
-      retryAfterMs: undefined,
-    },
-  ])(
-    "preserves $label metadata while redacting reflected request credentials",
-    async ({ padding, credentialPadding, code, errorType, retryAfter, retryAfterMs }) => {
+    ["short rate-limit", 0, 0, "rate_limit_exceeded", "rate_limit_error", "4", 4_000],
+    [
+      "complete long quota",
+      1_200,
+      0,
+      "insufficient_quota",
+      "insufficient_quota",
+      undefined,
+      undefined,
+    ],
+    ["byte-limited error", 0, 9 * 1024, undefined, undefined, undefined, undefined],
+  ] as const)(
+    "preserves %s metadata while redacting reflected request credentials",
+    async (_label, padding, credentialPadding, code, errorType, retryAfter, retryAfterMs) => {
       const tokenPrefix = "secret-reflected-token";
       const token = `${tokenPrefix}${"q".repeat(credentialPadding)}`;
       const body = JSON.stringify({
