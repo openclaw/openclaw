@@ -39,6 +39,8 @@ import {
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
 import { captureBundledPluginStateOperationModules } from "./plugin-state-operation-module-loader.js";
 import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
@@ -57,27 +59,67 @@ const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsm>(
   Symbol.for("openclaw.retainedNativeEsmPluginModules"),
 );
 
+type RetainedNativeEsmTarget = Pick<
+  PluginInstanceModuleLoaderParams,
+  "origin" | "source" | "expectedSourceDigest" | "nativeRecovery" | "recoverySourceMap"
+> & { registry: PluginRegistry | undefined };
+
+function isCatalogWorkerThread(): boolean {
+  return (
+    !isMainThread &&
+    workerData !== null &&
+    typeof workerData === "object" &&
+    "sourceCaptureDirectory" in workerData
+  );
+}
+
+function retainedNativeEsmKey(target: RetainedNativeEsmTarget): string | undefined {
+  // Explicit recovery keeps its own source custody and must not join an installed entry.
+  if (target.nativeRecovery || target.recoverySourceMap) {
+    return undefined;
+  }
+  // Cold main-thread inspections (effective tool inventory, read-only prepared runtimes)
+  // otherwise evaluate another copy of an unchanged install on every request. Only
+  // immutable installs in uncached inspection registries join; live registries,
+  // workspace and config-path plugins keep their own evaluation.
+  const inspection =
+    isMainThread &&
+    target.origin === "global" &&
+    target.registry !== undefined &&
+    getPluginRegistryInspectionResources(target.registry) !== undefined;
+  if (!inspection && !isCatalogWorkerThread()) {
+    return undefined;
+  }
+  const extension = path.extname(target.source).toLowerCase();
+  if (extension !== ".mjs" && (extension !== ".js" || !isNativeEsmPackage(target.source))) {
+    return undefined;
+  }
+  const workspace = getPluginRuntimeLoadContextState(target.registry)?.workspaceDir;
+  if (!inspection) {
+    return `${fs.realpathSync(target.source)}\0${workspace ?? ""}`;
+  }
+  // A same-path reinstall changes the expected digest, so it never reuses older code.
+  return workspace === undefined
+    ? undefined
+    : `inspection\0${fs.realpathSync(target.source)}\0${workspace}\0${target.expectedSourceDigest ?? ""}`;
+}
+
+/** Whether a load would reuse an already captured and retained native ESM artifact. */
+export function hasRetainedNativeEsmArtifact(target: RetainedNativeEsmTarget): boolean {
+  const key = retainedNativeEsmKey(target);
+  return key !== undefined && retainedNativeEsmModules.get(key)?.artifact !== undefined;
+}
+
 function retainedNativeEsmFor(
   params: PluginInstanceModuleLoaderParams,
 ): RetainedNativeEsm | undefined {
-  // Explicit recovery keeps its own source custody and must not join an installed entry.
-  if (
-    params.nativeRecovery ||
-    params.recoverySourceMap ||
-    isMainThread ||
-    workerData === null ||
-    typeof workerData !== "object" ||
-    !("sourceCaptureDirectory" in workerData)
-  ) {
+  const key = retainedNativeEsmKey({
+    ...params,
+    registry: getPluginInstanceOwner(params.instance)?.registry,
+  });
+  if (key === undefined) {
     return undefined;
   }
-  const extension = path.extname(params.source).toLowerCase();
-  if (extension !== ".mjs" && (extension !== ".js" || !isNativeEsmPackage(params.source))) {
-    return undefined;
-  }
-  const owner = getPluginInstanceOwner(params.instance);
-  const workspace = getPluginRuntimeLoadContextState(owner?.registry)?.workspaceDir;
-  const key = `${fs.realpathSync(params.source)}\0${workspace ?? ""}`;
   let retained = retainedNativeEsmModules.get(key);
   if (!retained) {
     retained = {
@@ -207,8 +249,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  // Native ESM jobs cannot be unloaded. Keep their capture and compiled helpers
-  // for this worker, but let each generation own its admission and resolver hooks.
+  // Native ESM jobs cannot be unloaded. Keep their capture and compiled helpers for this
+  // worker or main-thread inspection key, but let each generation own its admission and
+  // resolver hooks.
   const retained = retainedNativeEsmFor(params);
   const sourceBuilds: SourceBuilds = retained?.builds ?? new Map();
   const { sourceForOutput, moduleSource } = createSourceOutputLookup(sourceBuilds);

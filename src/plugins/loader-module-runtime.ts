@@ -5,7 +5,10 @@ import { runPluginRegistration } from "./api-lifecycle.js";
 import { tryNativeRequireModule } from "./native-module-require.js";
 import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
+import {
+  bindPluginInstanceModuleLoader,
+  hasRetainedNativeEsmArtifact,
+} from "./plugin-instance-module-loader.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withProfile } from "./plugin-load-profile.js";
@@ -181,7 +184,21 @@ export function createPluginModuleLoader(options: {
     async prepare(modulePath: string, owner: Owner): Promise<void> {
       // Compute workers already own retained native-ESM source captures. Keep their
       // inline acquisition path so a prepared artifact cannot compete with that owner.
-      if (!isMainThread || owner.record.origin === "bundled" || getPluginInstance(owner.record)) {
+      // An inspection that joins a retained native ESM artifact binds it synchronously;
+      // acquiring another worker capture would only be discarded.
+      const retained = () =>
+        hasRetainedNativeEsmArtifact({
+          origin: owner.record.origin,
+          source: modulePath,
+          expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
+          registry: owner.registry,
+        });
+      if (
+        !isMainThread ||
+        owner.record.origin === "bundled" ||
+        getPluginInstance(owner.record) ||
+        retained()
+      ) {
         return;
       }
       await withPluginCache(cache, async () => {
@@ -197,8 +214,9 @@ export function createPluginModuleLoader(options: {
         }
         try {
           // Reentrant loading may have installed this exact owner while acquisition
-          // yielded. Never replace its module identity with a second capture.
-          if (getPluginInstance(owner.record)) {
+          // yielded, or a concurrent inspection retained the same native ESM artifact.
+          // Never replace its module identity with a second capture.
+          if (getPluginInstance(owner.record) || retained()) {
             await preparedArtifact.artifact.disposeAsync();
             return;
           }
