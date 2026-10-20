@@ -5,6 +5,7 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
 import { createChatToolIcons } from "./chat-tool-icon-controller.ts";
 
@@ -21,18 +22,10 @@ const plugins: PluginListResult = {
   diagnostics: [],
   mutationAllowed: false,
 };
-function tool(
-  id: string,
-  pluginId?: string,
-): ToolsEffectiveResult["groups"][number]["tools"][number] {
-  return {
-    id,
-    pluginId,
-    source: pluginId ? "plugin" : "core",
-    label: id,
-    description: "",
-    rawDescription: "",
-  };
+type Tool = ToolsEffectiveResult["groups"][number]["tools"][number];
+function tool(id: string, pluginId?: string): Tool {
+  const source = pluginId ? "plugin" : "core";
+  return { id, pluginId, source, label: id, description: "", rawDescription: "" };
 }
 const catalog: ToolsEffectiveResult = {
   agentId: "main",
@@ -52,9 +45,10 @@ const catalog: ToolsEffectiveResult = {
     },
   ],
 };
-const withTools = (
-  tools: ToolsEffectiveResult["groups"][number]["tools"],
-): ToolsEffectiveResult => ({ ...catalog, groups: [{ ...catalog.groups[0]!, tools }] });
+const withTools = (tools: Tool[]): ToolsEffectiveResult => ({
+  ...catalog,
+  groups: [{ ...catalog.groups[0]!, tools }],
+});
 
 function setup() {
   const client = new GatewayBrowserClient({ url: window.location.origin.replace(/^http/u, "ws") });
@@ -68,15 +62,11 @@ function setup() {
     throw new Error(`Unexpected request: ${method}`);
   });
   const snapshot: ApplicationGatewaySnapshot = {
+    ...createApplicationGateway().gateway.snapshot,
     client,
     phase: "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
   };
   const context = {
     resourceBasePath: "",
@@ -192,25 +182,42 @@ describe("chat tool icon ownership", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("shares an icon only across tools owned by its plugin and keeps failed images on the fallback", async () => {
-    const { icon, update, request, fetch, revoke } = setup();
-    update();
-    expect(request).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(icon("meeting_status")).toBeDefined());
-    expect(icon("meeting_list")?.url).toBe(icon("meeting_status")?.url);
-    expect(icon("read")).toBeUndefined();
-    expect(icon("other")).toBeUndefined();
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(fetch.mock.calls[0]?.[0]).toMatchObject({ pluginId: "meetings", tool: undefined });
-    update();
-    await Promise.resolve();
-    expect(request).toHaveBeenCalledTimes(2);
-    icon("meeting_status")?.onError();
-    flush();
-    expect(icon("meeting_status")).toBeUndefined();
-    expect(revoke).toHaveBeenCalledWith("blob:plugin-icon");
-  });
+  it.each([true, false])(
+    "shares available artwork and preserves neutral fallbacks: %s",
+    async (available) => {
+      const { icon, update, request, fetch, revoke } = setup();
+      if (!available) {
+        fetch.mockResolvedValue(null);
+      }
+      update();
+      expect(request).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      if (available) {
+        await vi.waitFor(() => expect(icon("meeting_status")).toBeDefined());
+      } else {
+        icon("meeting_status");
+        icon("other");
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+        await Promise.resolve();
+      }
+      const url = available ? "blob:plugin-icon" : undefined;
+      expect([icon("meeting_status")?.url, icon("meeting_list")?.url]).toEqual([url, url]);
+      expect([icon("read"), icon("other")]).toEqual([undefined, undefined]);
+      expect(fetch).toHaveBeenCalledOnce();
+      if (!available) {
+        expect([icon("meeting_status"), icon("meeting_list")]).toEqual([undefined, undefined]);
+        return;
+      }
+      expect(fetch.mock.calls[0]?.[0]).toMatchObject({ pluginId: "meetings", tool: undefined });
+      update();
+      await Promise.resolve();
+      expect(request).toHaveBeenCalledTimes(2);
+      icon("meeting_status")?.onError();
+      flush();
+      expect(icon("meeting_status")).toBeUndefined();
+      expect(revoke).toHaveBeenCalledWith("blob:plugin-icon");
+    },
+  );
 
   it("uses exact per-tool overrides with default artwork available", async () => {
     const { icon, update, request, fetch } = setup();
@@ -219,12 +226,7 @@ describe("chat tool icon ownership", () => {
       method === "plugins.list"
         ? {
             ...plugins,
-            plugins: plugins.plugins.map((plugin) =>
-              Object.assign({}, plugin, {
-                hasActivityIcon: true,
-                activityIconTools: [names[2]!, "browser"],
-              }),
-            ),
+            plugins: [{ ...plugins.plugins[0]!, activityIconTools: [names[2]!, "browser"] }],
           }
         : withTools(names.map((id) => tool(id, "meetings"))),
     );
@@ -243,20 +245,6 @@ describe("chat tool icon ownership", () => {
       ["meetings", names[2]],
     ]);
     expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps unavailable activity artwork on the neutral fallback without fetching the package logo", async () => {
-    const { icon, update, fetch } = setup();
-    fetch.mockResolvedValue(null);
-    update();
-    icon("meeting_status");
-    icon("other");
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-    await Promise.resolve();
-    expect(icon("meeting_status")).toBeUndefined();
-    expect(icon("meeting_list")).toBeUndefined();
-    expect(icon("other")).toBeUndefined();
-    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it.each(["session", "agent"])(

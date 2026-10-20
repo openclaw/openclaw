@@ -27,13 +27,11 @@ function renderSuggestion(overrides: Partial<ChatTaskSuggestionTrayProps> = {}) 
   const onCopyPrompt = vi.fn();
   const view: ChatTaskSuggestionTrayProps = {
     taskSuggestions: [suggestion],
-    taskSuggestionBusyIds: new Set(),
     canAcceptTaskSuggestions: true,
     canDismissTaskSuggestions: true,
     onAcceptTaskSuggestion: onAccept,
     onDismissTaskSuggestion: onDismiss,
     onCopyTaskSuggestionPrompt: onCopyPrompt,
-    taskSuggestionCopiedIds: new Set<string>(),
     ...overrides,
   };
   mountSolid(() => <ChatTaskSuggestionTray view={view} />, { container });
@@ -90,6 +88,9 @@ describe("chat task suggestions", () => {
     let activeId = suggestion.id;
     let direction: "next" | "previous" | undefined;
     let generation = 0;
+    const cardsNow = () => [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
+    const navButton = (card: HTMLElement | undefined, button: string) =>
+      card?.querySelector<HTMLButtonElement>(`[data-task-${button}]`);
     const [view, setView] = createSignal<ChatTaskSuggestionTrayProps>({});
     mountSolid(() => <ChatTaskSuggestionTray view={view()} />, { container });
     const draw = () =>
@@ -99,40 +100,35 @@ describe("chat task suggestions", () => {
         taskSuggestionSwapDirection: direction,
         taskSuggestionSwapGeneration: generation,
         onNavigateTaskSuggestion: (taskId, nextDirection) => {
-          const current = taskId === suggestion.id ? 0 : 1;
-          activeId = [suggestion, secondSuggestion][
-            (current + (nextDirection === "next" ? 1 : -1) + 2) % 2
-          ]!.id;
+          activeId = taskId === suggestion.id ? secondSuggestion.id : suggestion.id;
           direction = nextDirection;
           generation += 1;
           draw();
           queueMicrotask(() =>
-            container
-              .querySelector<HTMLElement>(
-                `.task-suggestion:not([hidden]) [data-task-${nextDirection === "next" ? "next" : "prev"}]`,
-              )
-              ?.focus(),
+            navButton(
+              cardsNow().find((card) => !card.hidden),
+              nextDirection === "next" ? "next" : "prev",
+            )?.focus(),
           );
         },
       });
     draw();
     flush();
 
-    const readCards = () => [...container.querySelectorAll<HTMLElement>(".task-suggestion")];
     const navigate = async (index: number, button = "next") => {
-      readCards()[index]?.querySelector<HTMLButtonElement>(`[data-task-${button}]`)?.click();
+      navButton(cardsNow()[index], button)?.click();
       await Promise.resolve();
       flush();
-      return readCards();
+      return cardsNow();
     };
-    let cards = readCards();
+    let cards = cardsNow();
     expect(cards.map((card) => card.hidden)).toEqual([false, true]);
     expect(cards[0]?.querySelector(".task-suggestion__position")?.textContent).toContain("1 / 2");
 
     cards = await navigate(0);
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
     expect(cards[1]?.dataset.swapDirection).toBe("next");
-    expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-next]"));
+    expect(document.activeElement).toBe(navButton(cards[1], "next"));
 
     const retainedCard = cards[1];
     const details = retainedCard!.querySelector<HTMLDetailsElement>("details")!;
@@ -140,7 +136,7 @@ describe("chat task suggestions", () => {
     // An unrelated update keeps the selected card and its manually opened disclosure.
     draw();
     flush();
-    cards = readCards();
+    cards = cardsNow();
     expect(cards.map((card) => card.hidden)).toEqual([true, false]);
     expect(cards[1]).toBe(retainedCard);
     expect(details.open).toBe(true);
@@ -156,7 +152,7 @@ describe("chat task suggestions", () => {
     expect(cards[0]?.dataset.swapDirection).toBe("next");
 
     cards = await navigate(0, "prev");
-    expect(document.activeElement).toBe(cards[1]?.querySelector("[data-task-prev]"));
+    expect(document.activeElement).toBe(navButton(cards[1], "prev"));
     container.remove();
   });
 
