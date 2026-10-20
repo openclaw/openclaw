@@ -1,5 +1,4 @@
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
-import { en } from "../locales/en.ts";
 import { registerLazyLocaleCatalog } from "./locale-catalog.ts";
 import type { TranslationMap } from "./types.ts";
 
@@ -28,12 +27,12 @@ export function createLazyLocaleCatalog(
   };
   registerLazyLocaleCatalog(base, {
     load,
-    async prepare() {
+    async prepare(english) {
       // A language change must translate already-loaded English surfaces before
       // publishing. Empty English anchors keep unopened pages lazy.
       await Promise.all(
         Object.keys(loaders)
-          .filter((namespace) => hasMissingEnglish(en[namespace], base[namespace]))
+          .filter((namespace) => hasMissingEnglish(english[namespace], base[namespace]))
           .map(load)
           .filter((request) => request !== undefined),
       );

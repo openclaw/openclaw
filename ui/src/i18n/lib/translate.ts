@@ -159,7 +159,7 @@ class I18nManager {
         }
         const lazyCatalog = getLazyLocaleCatalog(this.translations[locale]!);
         if (lazyCatalog) {
-          await lazyCatalog.prepare();
+          await lazyCatalog.prepare(this.translations[DEFAULT_LOCALE]!);
         }
       } catch (e) {
         const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
