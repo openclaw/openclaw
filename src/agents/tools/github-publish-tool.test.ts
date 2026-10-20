@@ -3,6 +3,7 @@ import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
+import { applyGatewayToolPolicy } from "../gateway-tool-policy.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -30,6 +31,20 @@ function setup(actionsAvailable = false) {
     withGatewayToolCallerIdentity(caller, () => tool.execute(id, args));
   return { callGateway, tool, execute };
 }
+
+it("applies deployment action limits when publication and operator actions are available", () => {
+  const [tool] = applyGatewayToolPolicy([createGitHubPublishTool({ actionsAvailable: true })], {
+    tools: {
+      gatewayPolicy: {
+        allow: ["github_publish"],
+        actions: { github_publish: ["publish", "inspect"] },
+      },
+    },
+  });
+  expect(tool?.parameters).toMatchObject({
+    properties: { action: { enum: ["publish", "inspect"] } },
+  });
+});
 
 function publicationSandbox(overrides: Partial<SandboxContext> = {}) {
   return createSandboxTestContext({
@@ -112,10 +127,10 @@ it.each<{
       expect(tool.description).not.toMatch(/refresh/i);
     }
     expect(Value.Check(tool.parameters, {})).toBe(true);
-    for (const action of ["edit", "ready", "request_review"]) {
+    for (const action of ["publish", "edit", "ready", "request_review"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(true);
     }
-    for (const action of ["publish", "inspect", "merge", "close"]) {
+    for (const action of ["inspect", "merge", "close"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
     }
     expect(
@@ -250,9 +265,11 @@ it.each(["responseId", "turnId"] as const)(
 it.each([undefined, false, true])(
   "preserves the draft choice %s in bounded model intent",
   async (draft) => {
-    const { callGateway, execute } = setup();
+    const { callGateway, execute, tool } = setup();
     const args = { title: "Publish the fix", ...(draft !== undefined ? { draft } : {}) };
-    await execute({ ...args }, "tool-call-1");
+    const request = { action: "publish", ...args };
+    expect(Value.Check(tool.parameters, request)).toBe(true);
+    await execute(request, "tool-call-1");
     expect(callGateway).toHaveBeenCalledWith("sessions.github.publish", {
       sessionKey: caller.sessionKey,
       idempotencyKey: "tool-call-1",

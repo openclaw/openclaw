@@ -345,7 +345,9 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
       try {
         if (!res.ok) {
           try {
-            await assertOkOrThrowProviderError(res, "Google TTS failed");
+            await assertOkOrThrowProviderError(res, "Google TTS failed", {
+              requestHeaders: headers,
+            });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (res.status >= 500 && res.status < 600) {

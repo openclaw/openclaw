@@ -139,7 +139,8 @@ describe("context cache lifecycle", () => {
     state.catalog.entries = [
       discovered("anthropic/claude-opus-4.7-20260219", 200_000, "anthropic"),
     ];
-    await context.ensureContextWindowCacheLoaded(cfg);
+    state.config = cfg;
+    await context.ensureContextWindowCacheLoaded();
     expect(state.loadOwner).toHaveBeenCalledWith({ config: cfg, readOnly: true });
     expect(state.publishedOwner).not.toHaveBeenCalled();
     expectTokens("anthropic/claude-opus-4.7-20260219", 1_000_000, sync);
@@ -212,9 +213,8 @@ describe("context cache lifecycle", () => {
   it("retires stale discovery when exact catalog loading fails", async () => {
     replaceDiscoveredContextTokenCache(new Map([["stale-model", 999_000]]));
     state.loadOwner.mockRejectedValueOnce(new Error("catalog unavailable"));
-    await context.ensureContextWindowCacheLoaded(
-      config("synthetic", model("current-model", 96_000)),
-    );
+    state.config = config("synthetic", model("current-model", 96_000));
+    await context.ensureContextWindowCacheLoaded();
     expectTokens("stale-model", undefined, { cfg: {} });
   });
 

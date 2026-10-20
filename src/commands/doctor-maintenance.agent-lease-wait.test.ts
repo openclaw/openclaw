@@ -164,7 +164,7 @@ it("fails update Doctor admission at the wait deadline, naming the lease holder"
     kind: "deferred",
     reason: "agent-database-in-use",
   });
-  const message = `Doctor could not enter maintenance. Waited 1200 s; OpenClaw process ${holder.holderPid} still has an agent database open. Stop other OpenClaw processes using this state, then retry the update.`;
+  const message = `Doctor could not enter maintenance. Waited 1200 s; database held by PID ${holder.holderPid}. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
   expect((error as Error).message).toBe(message);
   expect(collectUpdateDoctorFailureFacts(error)).toEqual([
     { check: "doctor", code: "agent-database-lease-active", message },
@@ -202,7 +202,7 @@ it("shares one deadline with the state wait, so a long first wait shortens the l
     await doctor.advanceTo(FALLBACK_DEADLINE_MS);
     const completed = await doctor.result;
     expect((completed as { error?: Error }).error?.message).toContain(
-      `Waited 1200 s; OpenClaw process ${lease.holderPid} still has an agent database open.`,
+      `Waited 1200 s; database held by PID ${lease.holderPid}.`,
     );
   } finally {
     stateHolder.release();
@@ -239,7 +239,7 @@ it.each([
         check: "doctor",
         code: "agent-database-lease-active",
         message:
-          "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
+          "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.",
       },
     ]);
     expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));

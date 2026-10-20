@@ -48,6 +48,7 @@ export type StatusScanOverviewResult = {
         | "startupMigrationWarning"
         | "modelReasoningWarning"
         | "installationReplacementWarning"
+        | "utilityModelWarnings"
         | "childRuntime"
         | "secretEgressProxy"
         | "pluginReload"
@@ -248,6 +249,7 @@ export async function collectStatusScanOverview(params: {
           startupMigrationWarning: status.startupMigrationWarning,
           modelReasoningWarning: status.modelReasoningWarning,
           installationReplacementWarning: status.installationReplacementWarning,
+          utilityModelWarnings: status.utilityModelWarnings,
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           pluginReload: status.pluginReload,

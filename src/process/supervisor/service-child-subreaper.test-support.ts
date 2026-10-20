@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { installKillGroupSeccompFilter } from "@openclaw/proc-safe/test-support";
 import { acquireLinuxChildSubreaper } from "./linux-child-subreaper.js";
 import { assertProcessGroupControl } from "./service-child-group-ownership.js";
@@ -117,6 +117,63 @@ assert.equal(realtimeOwner.drain(), true);
 assert.equal(existsSync("/proc/" + realtimePid), false);
 assert.deepEqual(await realtimeRootClosed, [0, null]);
 receipts.push({ label: "realtime-signal", signalNumber: 34, extinct: true });
+
+// A nested process owner can wait for its orphan's extinction before exiting.
+// Reap the adopted child while retaining libuv's wait ownership of the live root.
+const activeOwner = acquireLinuxChildSubreaper();
+const orphanSource =
+  'require("node:net").createServer().listen(String.fromCharCode(0) + "openclaw-active-orphan-" + process.pid, () => process.stdout.write("ready"));';
+const intermediateSource = `const { spawn } = require("node:child_process");
+  const child = spawn(process.execPath, ["-e", ${JSON.stringify(orphanSource)}], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  child.stdout.once("data", () => {
+    child.stdout.destroy();
+    process.stdout.write(String(child.pid));
+    child.unref();
+  });`;
+const activeRoot = spawn(
+  process.execPath,
+  [
+    "-e",
+    `const { spawn } = require("node:child_process");
+     const child = spawn(process.execPath, ["-e", ${JSON.stringify(intermediateSource)}], {
+       stdio: ["ignore", "pipe", "inherit"],
+     });
+     let output = "";
+     child.stdout.on("data", (chunk) => { output += chunk; });
+     child.once("close", (code) => {
+       if (code !== 0) process.exit(1);
+       process.send(Number(output));
+     });
+     process.once("message", () => process.exit(37));`,
+  ],
+  { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+);
+assert.ok(activeRoot.pid);
+activeOwner.retainSpawnedChild(activeRoot.pid, activeRoot);
+const activeRootClosed = once(activeRoot, "close");
+try {
+  const [orphanPid] = await once(activeRoot, "message");
+  assert.ok(Number.isSafeInteger(orphanPid) && orphanPid > 0);
+  const orphanStatus = readFileSync(`/proc/${orphanPid}/status`, "utf8");
+  assert.equal(Number(orphanStatus.match(/^PPid:\s+(\d+)/m)?.[1]), process.pid);
+  const orphanExited = once(process, "SIGCHLD");
+  process.kill(orphanPid, "SIGTERM");
+  await orphanExited;
+  assert.equal(activeRoot.exitCode, null);
+  assert.equal(activeRoot.signalCode, null);
+  assert.equal(
+    existsSync(`/proc/${orphanPid}`),
+    false,
+    "the adopted child must be reaped before its live root can finish",
+  );
+} finally {
+  activeRoot.send("finish");
+  assert.deepEqual(await activeRootClosed, [37, null]);
+  assert.equal(activeOwner.drain(), true);
+}
+receipts.push({ label: "active-root-orphan", code: 37, signal: null, extinct: true });
 
 const failed = await createServiceChildRelayAdapter({
   command: "/openclaw-missing-command-" + process.pid,

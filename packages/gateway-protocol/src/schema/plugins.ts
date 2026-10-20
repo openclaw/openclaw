@@ -25,6 +25,7 @@ import {
   PluginOperatorGrantsSchema,
 } from "./plugin-inspection.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
+import { PluginRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -566,6 +567,8 @@ export const PluginsInspectResultSchema = closedObject({
       }),
     ),
   ),
+  /** Live cross-session acquisition facts; emitted only for current administrators. */
+  runtimeRetention: Type.Optional(Type.Union([PluginRuntimeRetentionSchema, Type.Null()])),
   decisions: Type.Optional(Type.Array(PluginDecisionProviderStatusSchema)),
   plugin: closedObject({
     id: NonEmptyString,

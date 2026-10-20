@@ -88,7 +88,6 @@ it("reads retained widget receipts and waits only for current live presentations
       const tool = createShowWidgetTool({
         sessionId: scope.sessionId,
         agentId: "main",
-        stateDir: state.stateDir,
       });
       const result = await tool.execute("saved-widget-call", {
         title: "Saved preview",
@@ -393,7 +392,6 @@ it("reads retained widget receipts and waits only for current live presentations
       const legacyResult = await createShowWidgetTool({
         sessionId: legacyScope.sessionId,
         agentId: scope.agentId,
-        stateDir: state.stateDir,
       }).execute("legacy-widget-call", {
         title: "Retained widget",
         widget_code: "<p>Retained reset archive widget</p>",

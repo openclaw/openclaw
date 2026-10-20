@@ -44,6 +44,8 @@ setup. Authored models are retained when reconnecting to the same endpoint.
 Use Bifrost's OpenAI-compatible base, normally
 `http://localhost:8080/openai/v1`. A base ending in `/openai` is also accepted;
 setup normalizes it to `/openai/v1` so discovery and inference use the same base.
+The URL must use HTTP or HTTPS. Non-interactive setup reports an invalid gateway
+URL and exits with status 1 without saving credentials or configuration.
 
 Keep Bifrost's provider-qualified model IDs intact. For example, a gateway model
 named `ollama/qwen3:4b` becomes the OpenClaw reference

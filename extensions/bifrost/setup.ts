@@ -20,7 +20,11 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { BIFROST_BASE_URL, normalizeBifrostBaseUrl } from "./defaults.js";
+import {
+  BIFROST_BASE_URL,
+  normalizeBifrostBaseUrl,
+  tryNormalizeBifrostBaseUrl,
+} from "./defaults.js";
 import { listBifrostModels } from "./models.js";
 import { buildBifrostConnectionConfig, applyBifrostModelConfig } from "./onboard.js";
 
@@ -49,12 +53,7 @@ export async function configureBifrostInteractive(ctx: ProviderAuthContext) {
         if (!value.trim()) {
           return undefined;
         }
-        try {
-          normalizeBifrostBaseUrl(value);
-          return undefined;
-        } catch {
-          return "Enter an HTTP or HTTPS gateway URL";
-        }
+        return tryNormalizeBifrostBaseUrl(value) ? undefined : "Enter an HTTP or HTTPS gateway URL";
       },
     })) ||
       configured ||
@@ -149,7 +148,7 @@ export async function configureBifrostInteractive(ctx: ProviderAuthContext) {
 }
 
 export async function configureBifrostNonInteractive(ctx: ProviderAuthMethodNonInteractiveContext) {
-  const baseUrl = normalizeBifrostBaseUrl(
+  const baseUrl = tryNormalizeBifrostBaseUrl(
     normalizeOptionalSecretInput(ctx.opts.customBaseUrl) ||
       resolveMergedModelProviderConfig(ctx.config, "bifrost")?.baseUrl ||
       BIFROST_BASE_URL,
@@ -162,11 +161,20 @@ export async function configureBifrostNonInteractive(ctx: ProviderAuthMethodNonI
     : await ctx.resolveApiKey({
         provider: "bifrost",
         flagValue,
-        allowProfile: !existing || normalizeBifrostBaseUrl(existing.baseUrl) === baseUrl,
+        allowProfile:
+          baseUrl !== undefined &&
+          (!existing || tryNormalizeBifrostBaseUrl(existing.baseUrl) === baseUrl),
         flagName: "--bifrost-api-key",
         envVar: "BIFROST_VIRTUAL_KEY",
         required: false,
       });
+  if (!baseUrl) {
+    ctx.runtime.error(
+      `The Bifrost gateway URL must be a full http:// or https:// URL, such as ${BIFROST_BASE_URL}.`,
+    );
+    ctx.runtime.exit(1);
+    return null;
+  }
   if (!resolved && !anonymous) {
     ctx.runtime.error(
       "Bifrost requires a virtual key or --custom-no-auth for anonymous inference.",
