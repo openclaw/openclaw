@@ -10,6 +10,7 @@ import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -22,19 +23,14 @@ import {
 } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 
-const loadPluginMetadataSnapshot = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  loadPluginMetadataSnapshot.mockImplementation(actual.loadPluginMetadataSnapshot);
-  return { ...actual, loadPluginMetadataSnapshot };
-});
-
 const registry = createEmptyPluginRegistry();
+const loadMetadata = vi.spyOn(pluginMetadata, "loadPluginMetadataSnapshot");
 beforeEach(() => {
   setActivePluginRegistry(registry);
-  loadPluginMetadataSnapshot.mockClear();
+  loadMetadata.mockClear();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   clearCurrentPluginMetadataSnapshot();
   resetPluginRuntimeStateForTest();
@@ -95,6 +91,6 @@ it("cron reconciliation after a reload commit reads the published plugin invento
 
     expect(commitCacheKind).toBe("operation");
     expect(resolvedProviders).toEqual(["fixture"]);
-    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(loadMetadata).not.toHaveBeenCalled();
   });
 });

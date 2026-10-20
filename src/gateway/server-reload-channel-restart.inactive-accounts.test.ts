@@ -22,16 +22,13 @@ describe("hot channel restart with inactive account SecretRefs", () => {
     { name: "enabled unresolved", initiallyRunning: false, disabled: false },
   ])("preserves lifecycle and credential policy for a $name account", async (scenario) => {
     const unresolvedRef = { source: "file", provider: "local", id: "/audit-token" } as const;
-    const accountConfig = (enabled: boolean, resolved = false): OpenClawConfig => ({
-      channels: {
-        telegram: {
-          accounts: {
-            default: { botToken: "test-default-token" },
-            audit: { enabled, botToken: resolved ? "test-audit-token" : unresolvedRef },
-          },
-        },
-      },
-    });
+    const accountConfig = (enabled: boolean, resolved = false): OpenClawConfig => {
+      const accounts = {
+        default: { botToken: "test-default-token" },
+        audit: { enabled, botToken: resolved ? "test-audit-token" : unresolvedRef },
+      };
+      return { channels: { telegram: { accounts } } };
+    };
     let config = accountConfig(scenario.initiallyRunning, scenario.initiallyRunning);
     const firstStart = createDeferred();
     const restarted = createDeferred();
@@ -53,11 +50,9 @@ describe("hot channel restart with inactive account SecretRefs", () => {
         startAccount: async ({ accountId, abortSignal }) => {
           started.push(accountId);
           if (accountId === "default") {
-            if (started.filter((id) => id === "default").length === 1) {
-              firstStart.resolve();
-            } else {
-              restarted.resolve();
-            }
+            const signal =
+              started.filter((id) => id === "default").length === 1 ? firstStart : restarted;
+            signal.resolve();
           }
           await waitForAbort(abortSignal);
         },
