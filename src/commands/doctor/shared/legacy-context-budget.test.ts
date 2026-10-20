@@ -3,8 +3,6 @@ import { resolveContextTokensForModelFromCache } from "../../../agents/context-r
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy-context-budget.js";
 
-const noCachedValue = () => undefined;
-
 describe("legacy context-budget config migration", () => {
   it.each([true, false])("migrates provider defaults with explicit models=%s", (hasModels) => {
     const models = [
@@ -29,17 +27,19 @@ describe("legacy context-budget config migration", () => {
     expect(provider).not.toHaveProperty("contextWindow");
     if (hasModels) {
       expect(
-        resolveContextTokensForModelFromCache(
-          { cfg: config, provider: "example", model: "default" },
-          noCachedValue,
-          noCachedValue,
-        ),
+        resolveContextTokensForModelFromCache({
+          cfg: config,
+          provider: "example",
+          model: "default",
+          allowCacheLookup: false,
+        }),
       ).toBe(
-        resolveContextTokensForModelFromCache(
-          { provider: "example", model: "default", modelContextTokens: 32_000 },
-          noCachedValue,
-          noCachedValue,
-        ),
+        resolveContextTokensForModelFromCache({
+          provider: "example",
+          model: "default",
+          modelContextTokens: 32_000,
+          allowCacheLookup: false,
+        }),
       );
       expect(provider?.models).toMatchObject([
         { contextTokens: 32_000, contextWindow: 64_000 },
