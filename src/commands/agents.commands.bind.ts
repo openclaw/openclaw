@@ -7,7 +7,7 @@ import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigForWrite } from "./config-validation.js";
 
@@ -64,10 +64,7 @@ async function resolveParsedBindings(params: {
   return parsed.bindings;
 }
 
-export async function agentsBindingsCommand(
-  opts: AgentsBindingsListOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function agentsBindingsCommand(opts: AgentsBindingsListOptions) {
   const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
   if (!cfg) {
     return;
@@ -80,8 +77,7 @@ export async function agentsBindingsCommand(
     (binding) => !filterAgentId || normalizeAgentId(binding.agentId) === filterAgentId,
   );
   if (opts.json) {
-    writeRuntimeJson(
-      runtime,
+    runtime.writeJson(
       filtered.map((binding) => ({
         agentId: normalizeAgentId(binding.agentId),
         match: binding.match,
@@ -111,7 +107,6 @@ export async function agentsBindingsCommand(
 export async function agentsUpdateBindingsCommand(
   operation: "bind" | "unbind",
   opts: AgentsBindingsUpdateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {

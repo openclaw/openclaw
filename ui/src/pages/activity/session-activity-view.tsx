@@ -4,9 +4,9 @@ import { createMemo, For, Show } from "solid-js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.tsx";
 import "../../components/viewer-facepile.ts";
 import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -461,9 +461,7 @@ function IdentityHeader(props: {
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
-                  {group().entry.ip ? (
-                    <openclaw-ip-location prop:ip={group().entry.ip} />
-                  ) : undefined}
+                  {group().entry.ip ? <IpLocation ip={group().entry.ip} /> : undefined}
                   {group().entry.lastInputSeconds !== undefined ? (
                     <span>
                       {t("activityFeed.lastInput", {

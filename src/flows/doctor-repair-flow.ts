@@ -25,9 +25,6 @@ interface DoctorRepairRunResult {
   readonly warnings: readonly string[];
   readonly diffs: readonly HealthRepairDiff[];
   readonly effects: readonly HealthRepairEffect[];
-  readonly checksRun: number;
-  readonly checksRepaired: number;
-  readonly checksValidated: number;
 }
 
 export async function runDoctorHealthRepairs(
@@ -49,9 +46,6 @@ export async function runDoctorHealthRepairs(
     warnings,
     diffs,
     effects,
-    checksRun: checks.length,
-    checksRepaired: 0,
-    checksValidated: 0,
   };
 
   for (const check of checks) {
@@ -90,7 +84,6 @@ export async function runDoctorHealthRepairs(
       if (result.config !== undefined && opts.dryRun !== true) {
         outcome.config = result.config;
       }
-      outcome.checksRepaired++;
       if (opts.dryRun === true) {
         continue;
       }
@@ -105,7 +98,6 @@ export async function runDoctorHealthRepairs(
           },
         );
         remainingFindings = validationFindings;
-        outcome.checksValidated++;
         if (validationFindings.length > 0) {
           outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
         }

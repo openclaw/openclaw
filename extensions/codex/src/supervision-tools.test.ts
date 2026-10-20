@@ -12,21 +12,21 @@ import { createCodexSupervisionTools } from "./supervision-tools.js";
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
 type TestOptions = Omit<
   CodexSupervisionToolsOptions,
-  | "resolveAuthProfileId"
-  | "resolveAuthProfileIdAtEffect"
-  | "resolveRuntimeOptions"
-  | "senderIsOwner"
-> & { senderIsOwner?: boolean };
+  "resolveAuthProfileId" | "withAuthProfileIdAtEffect" | "resolveRuntimeOptions" | "senderIsOwner"
+> & {
+  senderIsOwner?: boolean;
+  withAuthProfileIdAtEffect?: CodexSupervisionToolsOptions["withAuthProfileIdAtEffect"];
+};
 
 const auth = createCodexAuthProfileSelection(providerAuth);
 
 function createTestSupervisionTools(options: TestOptions) {
   return createCodexSupervisionTools({
     senderIsOwner: true,
-    ...options,
     resolveAuthProfileId: auth.resolveCodexAppServerAuthProfileIdForAgent,
-    resolveAuthProfileIdAtEffect: auth.resolveCodexAppServerAuthProfileIdAtEffect,
+    withAuthProfileIdAtEffect: auth.withCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+    ...options,
   });
 }
 
@@ -645,6 +645,11 @@ describe("Codex supervision compatibility tools", () => {
       {
         getPluginConfig: () => agentReadConfig,
         getRuntimeConfig: () => runtimeConfig,
+        withAuthProfileIdAtEffect: async (params, consume) =>
+          consume({
+            read: () => auth.resolveCodexAppServerAuthProfileIdForAgent(params),
+            assertCurrent() {},
+          }),
       },
     );
 

@@ -1,11 +1,12 @@
 import type {
   CronJob,
   CronJobsListResult,
-  CronRunLogEntry,
   CronRunsResult,
   CronStatus,
 } from "../ui/src/api/types.ts";
 import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
+
+type CronRunLogEntry = CronRunsResult["entries"][number];
 
 const CRON_LIST_SNAPSHOT_REVISION = "control-ui-mock-cron";
 
@@ -261,7 +262,7 @@ export function buildCronMocks(
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
-      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
+      deliverySuppressionReason: "silent",
       model: "gpt-5",
       provider: "openai",
     },

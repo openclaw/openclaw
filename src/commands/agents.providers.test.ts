@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { AgentRouteBinding, OpenClawConfig } from "../config/types.js";
 import { createAccountListHelpers } from "../plugin-sdk/account-helpers.js";
@@ -6,8 +6,8 @@ import { createScopedChannelConfigBase } from "../plugin-sdk/channel-config-help
 import type { OfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { defaultRuntime } from "../runtime.js";
 import { agentsListCommand } from "./agents.commands.list.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type Plugin = ChannelPlugin<ChannelAccountSnapshot>;
 const fail = (message: string): never => {
@@ -74,13 +74,9 @@ vi.mock("../state/agent-provenance.js", () => ({
 
 async function listProviders(cfg: OpenClawConfig = {}, bindings: AgentRouteBinding[] = []) {
   mocks.config.mockResolvedValue({ ...cfg, bindings });
-  const runtime = {
-    ...createTestRuntime(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn<(value: unknown) => void>(),
-  };
-  await agentsListCommand({ bindings: true, json: true }, runtime);
-  return runtime.writeJson.mock.calls[0]?.[0];
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockReturnValue(undefined).mockClear();
+  await agentsListCommand({ bindings: true, json: true });
+  return json.mock.calls[0]?.[0];
 }
 
 const plugin = (
@@ -136,6 +132,7 @@ function configureDisplayPlugins() {
 }
 
 describe("agent provider inventories", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.plugins.mockReturnValue([]);

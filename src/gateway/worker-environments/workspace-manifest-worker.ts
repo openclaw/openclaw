@@ -113,7 +113,6 @@ function captureHashes(includeMemo = true) {
         pruneWorkspaceHashMemo(context.memo);
         if (context.metrics) {
           context.metrics.contentHashCount += result.metrics.contentHashCount;
-          context.metrics.contentHashDurationMs += result.metrics.contentHashDurationMs;
           context.metrics.memoHitCount += result.metrics.memoHitCount;
         }
       }
