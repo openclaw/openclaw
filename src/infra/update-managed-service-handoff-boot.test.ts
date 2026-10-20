@@ -14,6 +14,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const bootBytes = Buffer.from("00ff018002fe037f04fd057e06fc077d", "hex");
+const uuid = "12345678-1234-1234-1234-123456789abc";
+const timestamp = "2026-09-01T00:00:00.0000000Z";
 const serviceManagerEnv = { PATH: "/usr/bin:/bin" };
 const store = createManagedHandoffLeaseStore({
   databasePath: "/unused/managed-update-handoffs.sqlite",
@@ -24,50 +26,35 @@ beforeEach(() => spawnSyncMock.mockReset());
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  {
-    platform: "freebsd",
-    stdout: bootBytes,
-    identity: bootBytes.toString("hex"),
-    command: "/sbin/sysctl",
-    args: ["-b", "kern.boot_id"],
-    options: { maxBuffer: 16, timeout: 1000 },
-  },
-  {
-    platform: "darwin",
-    stdout: "12345678-1234-1234-1234-123456789abc\n",
-    identity: "12345678-1234-1234-1234-123456789abc",
-    command: "/usr/sbin/sysctl",
-    args: ["-n", "kern.bootsessionuuid"],
-    options: { encoding: "utf8", windowsHide: true, timeout: 1000 },
-  },
-  {
-    platform: "win32",
-    stdout: "2026-09-01T00:00:00.0000000Z\n",
-    identity: "2026-09-01T00:00:00.0000000Z",
-    command: "powershell.exe",
-    args: [
+  ["freebsd", bootBytes.toString("hex"), "/sbin/sysctl", ["-b", "kern.boot_id"]],
+  ["darwin", uuid, "/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]],
+  [
+    "win32",
+    timestamp,
+    "powershell.exe",
+    [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
       "(Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
     ],
-    options: { encoding: "utf8", windowsHide: true, timeout: 5000 },
-  },
+  ],
 ] as const)(
-  "preserves the $platform native boot query and identity",
-  async ({ platform, stdout, identity, command, args, options }) => {
-    spawnSyncMock.mockReturnValue({ status: 0, stdout });
+  "preserves the %s native boot query and identity",
+  async (platform, identity, command, args) => {
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout: platform === "freebsd" ? bootBytes : `${identity}\n`,
+    });
     await withMockedPlatform(platform, async () => {
-      expect(store.bootIdentity()).toEqual({
-        platform,
-        identity,
-      });
+      expect(store.bootIdentity()).toEqual({ platform, identity });
     });
     expect(spawnSyncMock).toHaveBeenCalledExactlyOnceWith(command, args, {
       env: serviceManagerEnv,
       killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "ignore"],
-      ...options,
+      timeout: platform === "win32" ? 5000 : 1000,
+      ...(platform === "freebsd" ? { maxBuffer: 16 } : { encoding: "utf8", windowsHide: true }),
     });
   },
 );
@@ -89,10 +76,9 @@ it.each([
 });
 
 it("keeps Linux boot IDs on their existing procfs path", async () => {
-  const identity = "12345678-1234-1234-1234-123456789abc";
-  const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${identity}\n`);
+  const read = vi.spyOn(fs, "readFileSync").mockReturnValue(`${uuid}\n`);
   await withMockedPlatform("linux", async () => {
-    expect(store.bootIdentity()).toEqual({ platform: "linux", identity });
+    expect(store.bootIdentity()).toEqual({ platform: "linux", identity: uuid });
   });
   expect(read).toHaveBeenCalledWith("/proc/sys/kernel/random/boot_id", "utf8");
   expect(spawnSyncMock).not.toHaveBeenCalled();

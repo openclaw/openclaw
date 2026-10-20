@@ -1,8 +1,5 @@
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -21,17 +18,9 @@ const { forceKillChildProcessTreeMock, resolvePreferredOpenClawTmpDirMock, spawn
   }),
 );
 
-type MockHandoffChild = EventEmitter & {
-  pid: number;
-  exitCode: null;
-  signalCode: null;
-  stdin: PassThrough;
-  stdout: PassThrough;
-  unref: ReturnType<typeof vi.fn>;
-};
-const mockedChildren = new Set<MockHandoffChild>();
+const mockedChildren = new Set<ReturnType<typeof createSpawnMock>>();
 
-export function createSpawnMock(params?: { pid?: number }): MockHandoffChild {
+export function createSpawnMock(params?: { pid?: number }) {
   const child = Object.assign(new EventEmitter(), {
     pid: params?.pid ?? process.pid,
     exitCode: null,
@@ -44,20 +33,15 @@ export function createSpawnMock(params?: { pid?: number }): MockHandoffChild {
   return child;
 }
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessModule } =
-    await import("../gateway/server-methods/node-child-process.test-support.js");
-  return mockNodeChildProcessModule({
-    spawn: spawnMock as unknown as typeof import("node:child_process").spawn,
-  });
-});
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
-vi.mock("../process/child-process-tree.js", async () => {
-  const actual = await vi.importActual<typeof import("../process/child-process-tree.js")>(
-    "../process/child-process-tree.js",
-  );
-  return { ...actual, forceKillChildProcessTree: forceKillChildProcessTreeMock };
-});
+vi.mock("../process/child-process-tree.js", async (original) => ({
+  ...(await original<typeof import("../process/child-process-tree.js")>()),
+  forceKillChildProcessTree: forceKillChildProcessTreeMock,
+}));
 
 vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
@@ -68,15 +52,13 @@ export function useManagedServiceHandoffLifecycleFixture() {
   const tempDirs = createManagedHandoffTempDirTracker();
   const managedProcessCleanups = new Set<() => Promise<void>>();
   const mockedHandoffLeaseCleanups = new Set<() => void>();
-  const mockedHandoffs = new Map<string, { handoffId: string }>();
+  const mockedHandoffs = new Map<string, string>();
 
-  beforeEach(async () => {
+  beforeEach(() => {
     // Helpers in one fixture share a coordinator without touching the operator's database.
-    const coordinatorDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
+    resolvePreferredOpenClawTmpDirMock.mockReturnValue(
+      tempDirs.make("openclaw-handoff-coordinator-"),
     );
-    tempDirs.add(coordinatorDir);
-    resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
     forceKillChildProcessTreeMock.mockReset();
     spawnMock.mockReset();
     spawnMock.mockImplementation((_command: string, args: string[]) => {
@@ -86,7 +68,7 @@ export function useManagedServiceHandoffLifecycleFixture() {
         updateLeaseKey: string;
         handoffId: string;
       };
-      mockedHandoffs.set(params.updateLeaseKey, { handoffId: params.handoffId });
+      mockedHandoffs.set(params.updateLeaseKey, params.handoffId);
       process.nextTick(() => {
         signalMockManagedUpdateHandoffReady({
           child,
@@ -112,7 +94,7 @@ export function useManagedServiceHandoffLifecycleFixture() {
       if (mockedHandoffs.size > 0) {
         const { cancelManagedServiceUpdateHandoff } =
           await import("./update-managed-service-handoff.js");
-        for (const [installRoot, { handoffId }] of mockedHandoffs) {
+        for (const [installRoot, handoffId] of mockedHandoffs) {
           // Cancellation retires the exited owner only after verifying its lease was released.
           await expect(
             cancelManagedServiceUpdateHandoff({
@@ -135,16 +117,15 @@ export function useManagedServiceHandoffLifecycleFixture() {
     }
   });
 
-  const runManagedServiceManagerBoundary = createManagedServiceManagerBoundary({
-    spawnMock,
-    tempDirs,
-    cleanups: managedProcessCleanups,
-  });
   return {
     forceKillChildProcessTreeMock,
     resolvePreferredOpenClawTmpDirMock,
     spawnMock,
     tempDirs,
-    runManagedServiceManagerBoundary,
+    runManagedServiceManagerBoundary: createManagedServiceManagerBoundary({
+      spawnMock,
+      tempDirs,
+      cleanups: managedProcessCleanups,
+    }),
   };
 }

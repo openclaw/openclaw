@@ -107,15 +107,13 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
       root,
     );
     expect
-      .soft(schedule.install?.git?.status, name)
-      .toBe(expected?.behind === 0 ? "current" : "behind");
-    expect
-      .soft(schedule.install?.git?.installedAtMs, name)
-      .toBe(
+      .soft([schedule.install?.git?.status, schedule.install?.git?.installedAtMs], name)
+      .toEqual([
+        expected?.behind === 0 ? "current" : "behind",
         receipt?.root === root && /^[0-9a-f]{7,}$/i.test(receipt.sha) && sha.startsWith(receipt.sha)
           ? 1234
           : undefined,
-      );
+      ]);
   }
   mocks.receipt.mockResolvedValue({ ...matching, upstreamRef: "refs/remotes/upstream/main" });
   await git(root, "update-ref", "-d", "refs/remotes/upstream/main");

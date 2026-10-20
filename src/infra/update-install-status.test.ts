@@ -93,7 +93,6 @@ it.each(["recover", "exhaust", "abort"] as const)(
         firstProbe.resolve();
       }
       return {
-        pid: 1,
         code: timeout ? null : 0,
         stdout: ownership ? root : "",
         stderr: "",

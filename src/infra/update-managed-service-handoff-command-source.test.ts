@@ -42,54 +42,51 @@ function createHelper(closeCode: number | null = null) {
 }
 
 it.each([
-  { operation: "/End", deadline: 2_400_000, cap: 2_400_000, elapsed: 15_000 },
-  { operation: "/Run", deadline: undefined, cap: undefined, elapsed: 15_000 },
-  { operation: "/End", deadline: 7_500, cap: undefined, elapsed: 7_500 },
-  { operation: "/Run", deadline: undefined, cap: 5_000, elapsed: 5_000 },
-  { operation: "/Run", deadline: undefined, cap: undefined, elapsed: 15_000, closeCode: 0 },
-])(
-  "bounds stalled schtasks $operation to $elapsed ms and names the operation",
-  async (scenario) => {
-    const helper = createHelper(scenario.closeCode);
+  ["/End", 2_400_000, 2_400_000, 15_000],
+  ["/Run", undefined, undefined, 15_000],
+  ["/End", 7_500, undefined, 7_500],
+  ["/Run", undefined, 5_000, 5_000],
+  ["/Run", undefined, undefined, 15_000, 0],
+  ["systemctl", 120_000, 120_000, 120_000],
+  ["launchctl", 120_000, 120_000, 120_000],
+] as const)(
+  "bounds %s to its native drain budget",
+  async (operation, deadline, cap, elapsed, closeCode) => {
+    const helper = createHelper(closeCode);
+    const scheduled = operation.startsWith("/");
     let result: CommandResult | undefined;
     const completed = helper
       .run(
-        "schtasks.exe",
-        [scenario.operation, "/TN", "Synthetic Gateway"],
+        scheduled ? "schtasks.exe" : operation,
+        scheduled ? [operation, "/TN", "Synthetic Gateway"] : ["stop", "synthetic"],
         undefined,
-        scenario.deadline,
-        scenario.cap,
+        deadline,
+        cap,
       )
       .then((value) => {
         result = value;
       });
-    helper.child.stderr.emit("data", "native diagnostic");
-
-    await vi.advanceTimersByTimeAsync(scenario.elapsed);
-
-    const detail = `schtasks ${scenario.operation} timed out after ${scenario.elapsed}ms`;
-    expect(result).toEqual({ code: 124, stdout: "", stderr: `${detail}\nnative diagnostic` });
-    expect(helper.appendLog).toHaveBeenCalledWith(detail);
+    if (scheduled) {
+      helper.child.stderr.emit("data", "native diagnostic");
+    } else {
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(result).toBeUndefined();
+    }
+    await vi.advanceTimersByTimeAsync(elapsed - (scheduled ? 0 : 15_000));
+    const detail = `schtasks ${operation} timed out after ${elapsed}ms`;
+    expect(result).toEqual({
+      code: scheduled ? 124 : 1,
+      stdout: "",
+      stderr: scheduled ? `${detail}\nnative diagnostic` : "",
+    });
+    if (scheduled) {
+      expect(helper.appendLog).toHaveBeenCalledWith(detail);
+    } else {
+      expect(helper.appendLog).not.toHaveBeenCalled();
+    }
     await completed;
   },
 );
-
-it.each(["systemctl", "launchctl"])("preserves the %s supervisor drain budget", async (command) => {
-  const helper = createHelper();
-  let result: CommandResult | undefined;
-  const completed = helper
-    .run(command, ["stop", "synthetic"], undefined, 120_000, 120_000)
-    .then((value) => {
-      result = value;
-    });
-
-  await vi.advanceTimersByTimeAsync(15_000);
-  expect(result).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(105_000);
-  expect(result).toEqual({ code: 1, stdout: "", stderr: "" });
-  expect(helper.appendLog).not.toHaveBeenCalled();
-  await completed;
-});
 
 it("does not dispatch a Scheduled Task command after its lease is lost", async () => {
   const helper = createHelper();

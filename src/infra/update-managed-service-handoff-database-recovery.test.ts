@@ -35,26 +35,17 @@ const store = () =>
     serviceManagerEnv: {},
   });
 const row = () => {
-  const db = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return db.prepare("SELECT * FROM managed_update_handoffs").all();
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(databasePath, { readOnly: true });
+  return db.prepare("SELECT * FROM managed_update_handoffs").all();
 };
-function seed(
-  payload: unknown = original(),
-  key = installKey,
-  recovery: string | null = null,
-): void {
-  const db = new DatabaseSync(databasePath);
-  try {
-    db.prepare(
-      "INSERT INTO managed_update_handoffs (install_root,owner,payload_json,updated_at,recovery_json) VALUES (?, ?, ?, ?, ?)",
-    ).run(key, "committed-owner", JSON.stringify(payload), 1, recovery);
-  } finally {
-    db.close();
-  }
+function seed(payload: unknown = original(), key = installKey, recovery: string | null = null) {
+  using db = new DatabaseSync(databasePath);
+  db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, 1, ?)").run(
+    key,
+    "committed-owner",
+    JSON.stringify(payload),
+    recovery,
+  );
 }
 function crash(): void {
   createHotSqliteRollbackJournal({
@@ -62,6 +53,7 @@ function crash(): void {
     mutationSql: "UPDATE managed_update_handoffs SET owner='uncommitted-owner'",
   });
 }
+const bytes = () => [databasePath, `${databasePath}-journal`].map((file) => fs.readFileSync(file));
 
 beforeEach(() => {
   const directory = dirs.make("managed-update-cold-recovery-");
@@ -104,7 +96,7 @@ it.each(["live", "unknown"])(
         : dead;
     seed({ ...original(), helper: actor, executor: actor });
     crash();
-    const before = [fs.readFileSync(databasePath), fs.readFileSync(`${databasePath}-journal`)];
+    const before = bytes();
     if (state === "unknown") {
       const kill = process.kill.bind(process);
       vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
@@ -115,9 +107,7 @@ it.each(["live", "unknown"])(
       });
     }
     await expect(recover()).rejects.toThrow("definitely dead original executor");
-    expect([fs.readFileSync(databasePath), fs.readFileSync(`${databasePath}-journal`)]).toEqual(
-      before,
-    );
+    expect(bytes()).toEqual(before);
   },
 );
 
@@ -161,6 +151,5 @@ it("refuses recovery after the prepared rollback journal changes", async () => {
     return prepared;
   });
   await expect(recover()).rejects.toThrow("database or journal changed");
-  expect(fs.readFileSync(databasePath)).toEqual(mainBytes);
-  expect(fs.readFileSync(`${databasePath}-journal`)).toEqual(changedJournal);
+  expect(bytes()).toEqual([mainBytes, changedJournal]);
 });

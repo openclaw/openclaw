@@ -119,14 +119,10 @@ it.for([false, true])(
         [0, null],
       ]);
       expect(observation).toEqual({ phase: "contended" });
-      const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(
-          database.prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner").all(),
-        ).toEqual([{ owner: "holder" }, { owner: "waiter" }]);
-      } finally {
-        database.close();
-      }
+      using database = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      expect(
+        database.prepare("SELECT owner FROM managed_update_handoffs ORDER BY owner").all(),
+      ).toEqual([{ owner: "holder" }, { owner: "waiter" }]);
     } finally {
       for (const writer of [holder, waiter]) {
         if (!writer) {
