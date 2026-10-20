@@ -1,4 +1,3 @@
-/** Tests native CLI continuity projection and bounded transcript-flush probing. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -47,6 +46,27 @@ function testRunResult(
   });
 }
 
+function continuityResult(context: RunResultParams["context"], kind: string) {
+  const common = { context, preparedContextAgentMeta: {}, sessionBindingDisabled: false };
+  return kind === "blocked"
+    ? buildBlockedCliRunResult({ ...common, message: "Blocked by the test policy" })
+    : kind === "delivered-failure"
+      ? buildCliDeliveredFailure({
+          ...common,
+          error: new Error("synthetic failure"),
+          evidence: { didSendViaMessagingTool: true },
+        })
+      : testRunResult(
+          context,
+          { text: "done" },
+          {
+            effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
+            bindingFlushOk: kind !== "no-native-id",
+            sessionBindingDisabled: kind === "stateless",
+          },
+        );
+}
+
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: (name: string) => name === "before_agent_reply",
@@ -56,9 +76,12 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
+  const probe = vi.fn(async () => false);
 
   beforeEach(() => {
     vi.useRealTimers();
+    probe.mockReset().mockResolvedValue(false);
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
   });
 
   afterEach(() => {
@@ -68,21 +91,14 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("returns false when no sessionId is provided", async () => {
-    const probe = vi.fn(async () => true);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
+    probe.mockResolvedValue(true);
     expect(await isCliBindingFlushed(undefined, "claude-cli")).toBe(false);
     expect(probe).not.toHaveBeenCalled();
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
     vi.useFakeTimers();
-    let calls = 0;
-    const probe = vi.fn(async () => {
-      calls += 1;
-      return calls >= 2;
-    });
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
+    probe.mockResolvedValueOnce(false).mockResolvedValue(true);
 
     const result = isCliBindingFlushed("sid-late", "claude-cli", workspaceDir);
     await vi.advanceTimersByTimeAsync(49);
@@ -95,34 +111,18 @@ describe("isCliBindingFlushed", () => {
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
     vi.useFakeTimers();
-    try {
-      // Fake timers enforce the retry contract without introducing wall-clock
-      // sleeps into this import-heavy agent test.
-      const probe = vi.fn(async () => false);
-      vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
-      const settled = vi.fn();
-      const errored = vi.fn();
-      isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir).then(settled, errored);
-
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(50);
-      await vi.advanceTimersByTimeAsync(150);
-
-      expect(settled).toHaveBeenCalledTimes(1);
-      expect(settled.mock.calls[0]?.[0]).toBe(false);
-      expect(errored).not.toHaveBeenCalled();
-      expect(probe).toHaveBeenCalledTimes(3);
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    const settled = vi.fn();
+    const errored = vi.fn();
+    isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir).then(settled, errored);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(settled.mock.calls).toEqual([[false]]);
+    expect(errored).not.toHaveBeenCalled();
+    expect(probe).toHaveBeenCalledTimes(3);
   });
 
   it("returns true without probing for non-claude-cli providers", async () => {
-    const probe = vi.fn(async () => false);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
     expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
     expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
     expect(await isCliBindingFlushed("sid-openai", "openai")).toBe(true);
@@ -130,9 +130,6 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
-    const probe = vi.fn(async () => false);
-    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
-
     expect(
       await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
         skipTranscriptProbe: true,
@@ -142,160 +139,119 @@ describe("isCliBindingFlushed", () => {
   });
 });
 
-describe("CLI empty result fallback", () => {
-  it.each(["required", "result-required", "optional"] as const)(
-    "preserves the %s reply obligation through classification",
-    (terminalReplyExpectation) => {
-      const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-      context.params.terminalReplyExpectation = terminalReplyExpectation;
-      const output = { text: "" };
-      const result = testRunResult(context, output, {
+it.each(["required", "result-required", "optional"] as const)(
+  "preserves the %s reply obligation through classification",
+  (terminalReplyExpectation) => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    context.params.terminalReplyExpectation = terminalReplyExpectation;
+    const result = testRunResult(
+      context,
+      { text: "" },
+      {
         bindingFlushOk: true,
         sessionBindingDisabled: false,
-      });
-      const classification = classifyEmbeddedAgentRunResultForModelFallback({
-        provider: "claude-cli",
-        model: "test-model",
-        result,
-      });
-      if (terminalReplyExpectation === "optional") {
-        expect(classification).toBeNull();
-      } else {
-        expect(classification).toMatchObject({ reason: "format", code: "empty_result" });
-      }
-    },
-  );
-});
-
-describe("CLI native continuity projection", () => {
-  it.each(["blocked", "no-native-id", "native", "stateless"])(
-    "projects only explicit native continuity from a %s result",
-    (kind) => {
-      const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-      context.params.modelProvider = "anthropic";
-      const result =
-        kind === "blocked"
-          ? buildBlockedCliRunResult({
-              context,
-              message: "Blocked by the test policy",
-              preparedContextAgentMeta: {},
-              sessionBindingDisabled: false,
-            })
-          : testRunResult(
-              context,
-              { text: "done" },
-              {
-                effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
-                bindingFlushOk: kind !== "no-native-id",
-                sessionBindingDisabled: kind === "stateless",
-              },
-            );
-      const entry: SessionEntry = {
-        sessionId: context.params.sessionId,
-        updatedAt: 1,
-        cliSessionBindings: { "claude-cli": { sessionId: "previous-native-session" } },
-      };
-
-      applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
-
-      expect(entry.sessionId).toBe(context.params.sessionId);
-      expect(result.meta.agentMeta?.sessionId).toBe(
-        kind === "native" ? "next-native-session" : context.params.sessionId,
-      );
-      expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe(
-        kind === "native"
-          ? "next-native-session"
-          : kind === "stateless"
-            ? undefined
-            : "previous-native-session",
-      );
-    },
-  );
-});
-
-describe.each(["anthropic", undefined])(
-  "CLI result provider (modelProvider=%s)",
-  (modelProvider) => {
-    it.each(["completed", "blocked", "delivered-failure", "hook-handled"] as const)(
-      "preserves the logical model provider and backend identity for a %s result",
-      async (kind) => {
-        const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-        if (modelProvider !== undefined) {
-          context.params.modelProvider = modelProvider;
-        }
-        const result =
-          kind === "hook-handled"
-            ? await wrapRunWithTestPreparedAdmission(runCliAgent)({
-                sessionId: context.params.sessionId,
-                sessionFile: context.params.sessionFile,
-                sessionKey: context.params.sessionKey,
-                workspaceDir: context.workspaceDir,
-                prompt: "Hook-owned reply",
-                provider: context.params.provider,
-                ...(modelProvider !== undefined ? { modelProvider } : {}),
-                model: context.modelId,
-                timeoutMs: 30_000,
-                runId: context.params.runId,
-                trigger: "user",
-              })
-            : kind === "blocked"
-              ? buildBlockedCliRunResult({
-                  context,
-                  message: "Blocked by the test policy",
-                  preparedContextAgentMeta: {},
-                  sessionBindingDisabled: false,
-                })
-              : kind === "delivered-failure"
-                ? buildCliDeliveredFailure({
-                    context,
-                    error: new Error("synthetic failure"),
-                    evidence: { didSendViaMessagingTool: true },
-                    preparedContextAgentMeta: {},
-                    sessionBindingDisabled: false,
-                  })
-                : testRunResult(
-                    context,
-                    { text: "done" },
-                    {
-                      effectiveCliSessionId: "next-native-session",
-                      bindingFlushOk: true,
-                      sessionBindingDisabled: false,
-                    },
-                  );
-
-        expect(result.meta.agentMeta?.provider).toBe(modelProvider ?? "claude-cli");
-        if (kind === "hook-handled") {
-          expect(result.meta.executionTrace).toBeUndefined();
-        } else {
-          expect(result.meta.executionTrace).toMatchObject({
-            winnerProvider: "claude-cli",
-            attempts: [expect.objectContaining({ provider: "claude-cli" })],
-          });
-        }
       },
+    );
+    const classification = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "test-model",
+      result,
+    });
+    expect(classification).toEqual(
+      terminalReplyExpectation === "optional"
+        ? null
+        : expect.objectContaining({ reason: "format", code: "empty_result" }),
+    );
+  },
+);
+it.each(["blocked", "no-native-id", "native", "stateless"])(
+  "projects only explicit native continuity from a %s result",
+  (kind) => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    context.params.modelProvider = "anthropic";
+    const result = continuityResult(context, kind);
+    const entry: SessionEntry = {
+      sessionId: context.params.sessionId,
+      updatedAt: 1,
+      cliSessionBindings: { "claude-cli": { sessionId: "previous-native-session" } },
+    };
+
+    applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
+
+    expect(entry.sessionId).toBe(context.params.sessionId);
+    expect(result.meta.agentMeta?.sessionId).toBe(
+      kind === "native" ? "next-native-session" : context.params.sessionId,
+    );
+    expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe(
+      kind === "native"
+        ? "next-native-session"
+        : kind === "stateless"
+          ? undefined
+          : "previous-native-session",
     );
   },
 );
 
-describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFails) => {
-  it.each([undefined])("rejects the thrown value %s after cleanup", async (error) => {
-    const context = buildPreparedCliRunContext();
-    const cleanup = vi.fn(async () => {
-      if (cleanupFails) {
-        throw new Error("synthetic cleanup failure");
-      }
-    });
-    context.params.cleanupCliLiveSessionOnRunEnd = true;
-    context.preparedBackend.closeLiveSession = cleanup;
+it.each(
+  ["anthropic", undefined].flatMap((modelProvider) =>
+    ["completed", "blocked", "delivered-failure", "hook-handled"].map((kind) => ({
+      modelProvider,
+      kind,
+    })),
+  ),
+)(
+  "$kind preserves model provider=$modelProvider and backend identity",
+  async ({ modelProvider, kind }) => {
+    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    if (modelProvider !== undefined) {
+      context.params.modelProvider = modelProvider;
+    }
+    const result =
+      kind === "hook-handled"
+        ? await wrapRunWithTestPreparedAdmission(runCliAgent)({
+            sessionId: context.params.sessionId,
+            sessionFile: context.params.sessionFile,
+            sessionKey: context.params.sessionKey,
+            workspaceDir: context.workspaceDir,
+            prompt: "Hook-owned reply",
+            provider: context.params.provider,
+            ...(modelProvider !== undefined ? { modelProvider } : {}),
+            model: context.modelId,
+            timeoutMs: 30_000,
+            runId: context.params.runId,
+            trigger: "user",
+          })
+        : continuityResult(context, kind === "completed" ? "native" : kind);
 
-    await expect(
-      settlePreparedCliRun({
-        context,
-        run: vi.fn().mockRejectedValue(error),
-      }),
-    ).rejects.toThrow(new Error(String(error)));
-    expect(cleanup).toHaveBeenCalledOnce();
+    expect(result.meta.agentMeta?.provider).toBe(modelProvider ?? "claude-cli");
+    if (kind === "hook-handled") {
+      expect(result.meta.executionTrace).toBeUndefined();
+    } else {
+      expect(result.meta.executionTrace).toMatchObject({
+        winnerProvider: "claude-cli",
+        attempts: [expect.objectContaining({ provider: "claude-cli" })],
+      });
+    }
+  },
+);
+
+it.each([false, true])("rejects undefined after cleanup failure=%s", async (cleanupFails) => {
+  const context = buildPreparedCliRunContext();
+  const cleanup = vi.fn(async () => {
+    if (cleanupFails) {
+      throw new Error("synthetic cleanup failure");
+    }
   });
+  context.params.cleanupCliLiveSessionOnRunEnd = true;
+  context.preparedBackend.closeLiveSession = cleanup;
+
+  await expect(
+    settlePreparedCliRun({
+      context,
+      run: vi.fn().mockRejectedValue(undefined),
+    }),
+  ).rejects.toThrow(new Error("undefined"));
+  expect(cleanup).toHaveBeenCalledOnce();
 });
 
 it.each(["progress", "ambiguous", "final"] as const)(
@@ -327,28 +283,17 @@ it.each(["progress", "ambiguous", "final"] as const)(
   },
 );
 
-it("captures only the last CLI result as the model's final message", async () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-  const output = transformCliResultText({
-    text: "Checking now\nDone",
-    textParts: ["Checking now", "Done"],
-    rawFinalText: "Done",
-  });
-  const result = testRunResult(context, output);
-  expect(result.meta.finalAssistantRawText).toBe("Checking now\nDone");
-  expect(resolveDiagnosticModelResponse(result)).toBe("Done");
-});
-
-it("captures nothing when the CLI's final message was empty after narration", async () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-  const output = transformCliResultText({ text: "Checking now", rawFinalText: "" });
-  const result = testRunResult(context, output);
-  expect(result.meta.finalAssistantRawText).toBe("Checking now");
-  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+it.each(["Done", ""])("captures only the final CLI result %j after narration", (rawFinalText) => {
+  const textParts = rawFinalText ? ["Checking now", rawFinalText] : undefined;
+  const text = textParts?.join("\n") ?? "Checking now";
+  const output = transformCliResultText({ text, textParts, rawFinalText });
+  const result = testRunResult(buildPreparedCliRunContext(), output);
+  expect(result.meta.finalAssistantRawText).toBe(text);
+  expect(resolveDiagnosticModelResponse(result)).toBe(rawFinalText || undefined);
 });
 
 it("never captures host-synthesized optional silence as model output", async () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const context = buildPreparedCliRunContext();
   context.params.terminalReplyExpectation = "optional";
   const result = testRunResult(context, { text: "" });
   expect(result.payloads).toBeUndefined();

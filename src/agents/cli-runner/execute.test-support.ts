@@ -48,26 +48,25 @@ setCliRunnerExecuteTestDeps({
         throw new Error("CLI execution fixture does not own a cleanup scope");
       }),
       spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
-        let stdoutDelivered = false;
-        let stderrDelivered = false;
-        // Replay captured output once when the fixture did not stream it.
+        const streamed = { stdout: false, stderr: false };
+        const callbacks = { stdout: params.onStdout, stderr: params.onStderr };
+        const forward = (stream: keyof typeof callbacks) => {
+          const callback = callbacks[stream];
+          return (
+            callback &&
+            ((chunk: string) => {
+              streamed[stream] = true;
+              callback(chunk);
+            })
+          );
+        };
         const wrappedParams = {
           ...params,
           ...(params.mode === "child" && params.resolveArgs
             ? { argv: [...params.argv, ...params.resolveArgs()] }
             : {}),
-          onStdout: params.onStdout
-            ? (chunk: string) => {
-                stdoutDelivered = true;
-                params.onStdout?.(chunk);
-              }
-            : undefined,
-          onStderr: params.onStderr
-            ? (chunk: string) => {
-                stderrDelivered = true;
-                params.onStderr?.(chunk);
-              }
-            : undefined,
+          onStdout: forward("stdout"),
+          onStderr: forward("stderr"),
         };
         const managedRun = await supervisorSpawnMock(wrappedParams);
         if (!managedRun) {
@@ -83,11 +82,10 @@ setCliRunnerExecuteTestDeps({
           wait: async () => {
             const exit = await wait();
             if (params.captureOutput === false) {
-              if (!stdoutDelivered && exit.stdout) {
-                params.onStdout?.(exit.stdout);
-              }
-              if (!stderrDelivered && exit.stderr) {
-                params.onStderr?.(exit.stderr);
+              for (const stream of ["stdout", "stderr"] as const) {
+                if (!streamed[stream] && exit[stream]) {
+                  callbacks[stream]?.(exit[stream]);
+                }
               }
             }
             return exit;
@@ -111,20 +109,15 @@ setCliRunnerExecuteTestDeps({
 
 type MockRunExit = Omit<RunExit, "oomScoreWrapperSelected">;
 
-type ManagedRunMock = {
-  runId: string;
+type ManagedRunMock = Awaited<ReturnType<SupervisorSpawnFn>> & {
   pid: number;
-  startedAtMs: number;
   stdin: undefined;
   wait: Mock<() => Promise<MockRunExit>>;
   cancel: Mock<() => void>;
 };
 
 /** Build a managed-run mock returned by the process supervisor test double. */
-export function createManagedRun(
-  exit: MockRunExit,
-  pid = 1234,
-): ManagedRunMock & Awaited<ReturnType<SupervisorSpawnFn>> {
+export function createManagedRun(exit: MockRunExit, pid = 1234): ManagedRunMock {
   return {
     activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: "run-supervisor",

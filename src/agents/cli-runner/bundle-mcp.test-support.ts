@@ -1,4 +1,4 @@
-/** Shared test harness for CLI runner bundle-MCP config preparation tests. */
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,38 +12,24 @@ import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
-const tempHarness = createBundleMcpTempHarness();
-let bundleProbeHomeDir = "";
-let bundleProbeWorkspaceDir = "";
-let bundleProbeServerPath = "";
 let envSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-export const cliBundleMcpHarness = {
-  tempHarness,
-  get bundleProbeHomeDir() {
-    return bundleProbeHomeDir;
-  },
-  get bundleProbeWorkspaceDir() {
-    return bundleProbeWorkspaceDir;
-  },
-  get bundleProbeServerPath() {
-    return bundleProbeServerPath;
-  },
+const harness = {
+  tempHarness: createBundleMcpTempHarness(),
+  bundleProbeHomeDir: "",
+  bundleProbeWorkspaceDir: "",
+  bundleProbeServerPath: "",
 };
+export const cliBundleMcpHarness: Readonly<typeof harness> = harness;
 
 export function requireMcpConfigPath(args: readonly string[] | undefined): string {
-  // Claude-style bundle MCP mode appends --mcp-config; callers need the generated path.
   const configFlagIndex = args?.indexOf("--mcp-config") ?? -1;
-  if (configFlagIndex < 0) {
-    throw new Error("expected --mcp-config arg");
-  }
+  assert(configFlagIndex >= 0, "expected --mcp-config arg");
   const generatedConfigPath = args?.[configFlagIndex + 1];
-  if (typeof generatedConfigPath !== "string" || generatedConfigPath.length === 0) {
-    throw new Error("expected --mcp-config path arg");
-  }
+  assert(generatedConfigPath, "expected --mcp-config path arg");
   return generatedConfigPath;
 }
 
@@ -54,16 +40,21 @@ export function setupCliBundleMcpTestHarness(): void {
   beforeAll(async () => {
     // Use an empty bundled-dir override so only temp fixture plugins participate.
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
-    bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
-    bundleProbeWorkspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+    const { tempHarness } = harness;
+    harness.bundleProbeHomeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
+    harness.bundleProbeWorkspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-workspace-",
+    );
     const emptyBundledDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-bundled-");
     setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", emptyBundledDir);
-    ({ serverPath: bundleProbeServerPath } = await createBundleProbePlugin(bundleProbeHomeDir));
+    ({ serverPath: harness.bundleProbeServerPath } = await createBundleProbePlugin(
+      harness.bundleProbeHomeDir,
+    ));
   });
 
   afterAll(async () => {
     envSnapshot?.restore();
-    await tempHarness.cleanup();
+    await cliBundleMcpHarness.tempHarness.cleanup();
   });
 }
 
@@ -90,18 +81,23 @@ lines.on("line", (line) => {
   return filePath;
 }
 
-export function cliNativeMcpPolicyContext(config: OpenClawConfig, sessionId: string) {
+export function cliNativeMcpPolicyContext(
+  config: OpenClawConfig,
+  sessionId: string,
+  workspaceDir = cliBundleMcpHarness.bundleProbeWorkspaceDir,
+) {
+  const sessionKey = `agent:main:${sessionId}`;
   return {
     sessionId,
-    sessionKey: `agent:main:${sessionId}`,
+    sessionKey,
     capabilityProfile: resolveConversationCapabilityProfile({
       config,
-      sessionKey: `agent:main:${sessionId}`,
+      sessionKey,
       sessionId,
       agentId: "main",
       modelProvider: "openai",
       modelId: "gpt-5.4-codex",
-      workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
+      workspaceDir,
     }),
   };
 }
@@ -110,21 +106,17 @@ export async function prepareBundleProbeCliConfig(params?: {
   additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
   env?: Parameters<typeof prepareCliBundleMcpConfig>[0]["env"];
 }) {
-  // Bundle discovery reads HOME for per-user plugin roots.
-  return await withEnvAsync({ HOME: bundleProbeHomeDir }, async () => {
-    return await prepareCliBundleMcpConfig({
+  const { bundleProbeHomeDir, bundleProbeWorkspaceDir } = cliBundleMcpHarness;
+  return withEnvAsync({ HOME: bundleProbeHomeDir }, () =>
+    prepareCliBundleMcpConfig({
       enabled: true,
       mode: "claude-config-file",
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs"],
-      },
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
       workspaceDir: bundleProbeWorkspaceDir,
       config: { plugins: { entries: { "bundle-probe": { enabled: true } } } },
-      additionalConfig: params?.additionalConfig,
-      env: params?.env,
-    });
-  });
+      ...params,
+    }),
+  );
 }
 
 export function prepareNativeMcpTestConfig(params: {
@@ -148,18 +140,15 @@ export function prepareNativeMcpTestConfig(params: {
       runId: sessionId,
       provider: "openai",
       modelId: "gpt-5.6-luna",
-      model: {
+      model: makeProviderModelFixture({
         id: "gpt-5.6-luna",
         name: "Test model",
         api: "openai-responses",
         provider: "openai",
         baseUrl: "http://127.0.0.1:1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 100_000,
         maxTokens: 1_000,
-      },
+      }),
       authStorage,
       authProfileStore: { version: 1, profiles: {} },
       modelRegistry: ModelRegistry.inMemory(authStorage),
