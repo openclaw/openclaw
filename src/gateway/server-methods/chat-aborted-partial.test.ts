@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -18,11 +19,12 @@ it.each([
   ["wrapped rejected partial", CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE, true, false],
   ["unrelated format failure", undefined, false, true],
 ] as const)("honors the settled producer's %s", (_name, code, wrapped, retained) =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:abort-partial",
       sessionId: "abort-session",
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
     };
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const cfg = { agents: { entries: { main: {} } } };

@@ -229,7 +229,9 @@ it("projects configured-locator admissions through preparation and queuing witho
       foreign.cleanup();
       await withinTest(
         Promise.all(
-          [...registrations, foreign].map(({ entry }) => entry?.input.settlement.promise),
+          [...registrations, foreign].flatMap(({ entry }) =>
+            entry ? [entry.input.settlement.promise] : [],
+          ),
         ),
         signal,
       );

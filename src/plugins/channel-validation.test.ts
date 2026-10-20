@@ -11,11 +11,11 @@ function createChannelRegistry(pluginId = "demo-plugin", source = "/tmp/demo/ind
   const api = builder.createApi(record, { config: {}, registrationMode: "full" });
   return {
     registry: builder.registry,
-    register(overrides: Partial<ChannelPlugin>) {
+    register: (overrides: Partial<ChannelPlugin>) => {
       api.registerChannel({ plugin: createChannelPlugin(overrides) });
       return builder.registry.channels[0]?.plugin;
     },
-    expectDiagnostic(message: string, level = "warn") {
+    expectDiagnostic: (message: string, level = "warn") => {
       expect(builder.registry.diagnostics).toEqual([{ level, pluginId, source, message }]);
     },
   };

@@ -13,8 +13,9 @@ import * as mediaStore from "../../media/store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAssistantReplyContent } from "./chat-assistant-content.js";
 
-const { run, verifyCleanup, cleanup } = createFixtureLifetime();
-afterEach(cleanup);
+const lifetime = createFixtureLifetime();
+const { run, verifyCleanup } = lifetime;
+afterEach(() => lifetime.cleanup());
 
 it("interrupts a pending remote reply attachment when its run is aborted", async ({ signal }) =>
   run(() =>
