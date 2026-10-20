@@ -1301,6 +1301,13 @@ openclaw update repair
 openclaw update status
 ```
 
+Standalone repair reports the `repairing` phase while Doctor and plugin maintenance
+run. Its `finalize:*` history steps identify the current operation.
+Before maintenance, repair marks confirmed dead drivers as abandoned while
+preserving their history. Completing maintenance is acknowledged separately, so a
+later repair failure does not leave those exited drivers recorded as running.
+Runs with retained recovery custody stay with their recovery owner.
+
 For an inactive legacy row older than 30 minutes, repair verifies that the
 running Gateway matches the installed version and build, then clears the stale
 run without maintenance or a service restart. A new explicit `openclaw update`
