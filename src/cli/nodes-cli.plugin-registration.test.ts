@@ -2,7 +2,11 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
 
-const registerPluginCliCommandsFromValidatedConfig = vi.fn(async () => ({}));
+let routed: boolean | undefined;
+const registerPluginCliCommandsFromValidatedConfig = vi.fn(async () => {
+  routed = loggingState.forceConsoleToStderr;
+  return {};
+});
 
 vi.mock("../plugins/cli.js", () => ({
   registerPluginCliCommandsFromValidatedConfig,
@@ -17,6 +21,7 @@ describe("registerNodesCli plugin registration", () => {
   beforeEach(() => {
     originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
+    routed = undefined;
     registerPluginCliCommandsFromValidatedConfig.mockClear();
   });
 
@@ -32,26 +37,6 @@ describe("registerNodesCli plugin registration", () => {
     return program;
   }
 
-  function expectLazyRegistration(program: Command) {
-    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledWith(
-      program,
-      undefined,
-      undefined,
-      { mode: "lazy", primary: "nodes" },
-    );
-  }
-
-  async function captureStderrRouting(...args: string[]) {
-    let routed: boolean | undefined;
-    registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async () => {
-      routed = loggingState.forceConsoleToStderr;
-      return {};
-    });
-    const program = await registerWithArgv(...args);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
-    return { program, routed };
-  }
-
   it("skips plugin CLI/runtime registration for built-in nodes subcommands", async () => {
     for (const subcommand of ["status", "list", "describe", "invoke", "pending", "camera"]) {
       registerPluginCliCommandsFromValidatedConfig.mockClear();
@@ -60,14 +45,22 @@ describe("registerNodesCli plugin registration", () => {
     }
   });
 
-  it("registers plugin-provided node subcommands lazily and routes their logs to stderr", async () => {
-    const { program, routed } = await captureStderrRouting("canvas", "snapshot", "--json");
-    expectLazyRegistration(program);
-    expect(routed).toBe(true);
-  });
-
-  it("surfaces plugin subcommands for bare `nodes` listing", async () => {
-    expectLazyRegistration(await registerWithArgv());
+  it.each([
+    { args: ["canvas", "snapshot", "--json"], stderr: true },
+    { args: [], stderr: false },
+    { args: ["canvas", "--", "--json"], stderr: false },
+  ])("lazily registers nodes $args with stderr routing=$stderr", async ({ args, stderr }) => {
+    const program = await registerWithArgv(...args);
+    expect(registerPluginCliCommandsFromValidatedConfig).toHaveBeenCalledWith(
+      program,
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "nodes" },
+    );
+    expect({ during: routed, after: loggingState.forceConsoleToStderr }).toEqual({
+      during: stderr,
+      after: false,
+    });
   });
 
   it("documents the supported system.which parameter shape", async () => {
@@ -84,10 +77,5 @@ describe("registerNodesCli plugin registration", () => {
 
     expect(help).toContain(`--params '{"bins":["uname"]}'`);
     expect(help).not.toContain(`--params '{"name":"uname"}'`);
-  });
-
-  it("does not route pass-through --json after the terminator", async () => {
-    const { routed } = await captureStderrRouting("canvas", "--", "--json");
-    expect(routed).toBe(false);
   });
 });
