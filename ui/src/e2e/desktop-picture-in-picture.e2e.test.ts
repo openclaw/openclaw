@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { canvasPixel } from "./desktop-panel-fixtures.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 type PiPOpener = Window & { documentPictureInPicture?: { window: Window | null } };
@@ -40,13 +41,7 @@ suite.define(() => {
       await expect.poll(() => button.isEnabled()).toBe(true);
       await peer.send([createRfbRawFrame()]);
       await expect
-        .poll(() =>
-          panel
-            .locator(".desktop-surface canvas")
-            .evaluate((canvas) => [
-              ...(canvas as HTMLCanvasElement).getContext("2d")!.getImageData(10, 10, 1, 1).data,
-            ]),
-        )
+        .poll(() => canvasPixel(panel.locator(".desktop-surface canvas"), 10))
         .toEqual([24, 180, 160, 255]);
       await page.screenshot({ path: path.join(suite.artifactDir, "desktop-before-pip.png") });
       const [pipPage] = await Promise.all([context.waitForEvent("page"), button.click()]);
@@ -83,10 +78,9 @@ suite.define(() => {
         path: path.join(suite.artifactDir, "native-pip-after-tab-switch.png"),
       });
       expect(await peer.events()).toEqual(["authenticated:1"]);
-      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
-      expect((await gateway.getRequests("desktop.observe"))[0]?.params).toMatchObject({
-        control: false,
-      });
+      expect(await gateway.getRequests("desktop.observe")).toEqual([
+        expect.objectContaining({ params: expect.objectContaining({ control: false }) }),
+      ]);
       // PiP has no remote-input listeners, even if keyboard/pointer events arrive there.
       await page.evaluate(() => {
         const pip = (window as PiPOpener).documentPictureInPicture?.window;

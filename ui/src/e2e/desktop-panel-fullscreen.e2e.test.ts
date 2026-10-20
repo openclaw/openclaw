@@ -5,6 +5,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { desktopObservation, workerDesktop } from "./desktop-panel-fixtures.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const realVncWsUrl = process.env.OPENCLAW_DESKTOP_REAL_VNC_WS_URL?.trim() || null;
@@ -44,20 +45,21 @@ function sessionsList() {
   };
 }
 
-const workerDesktopEnvironment = {
-  id: "worker-desktop-1",
-  type: "worker",
-  status: "available",
-  desktop: true,
-  worker: {
-    providerId: "crabbox",
-    state: "attached",
-    ageMs: 1_000,
-    attachedSessionIds: ["agent:main:release-operations"],
-    tunnelStatus: "connected",
-    desktopApps: ["browser", "terminal"],
-  },
-} as const;
+const workerDesktopEnvironment = workerDesktop(
+  "worker-desktop-1",
+  ["agent:main:release-operations"],
+  ["browser", "terminal"],
+);
+
+async function installDesktopGateway(page: Page) {
+  return installMockGateway(page, {
+    featureMethods: ["desktop.observe", "environments.list"],
+    methodResponses: {
+      "sessions.list": sessionsList(),
+      "environments.list": { environments: [] },
+    },
+  });
+}
 
 async function openDesktopPanel(page: Page) {
   await page.goto(`${suite.server.baseUrl}activity`);
@@ -88,20 +90,16 @@ async function captureDesktopProof(page: Page, panel: import("playwright").Locat
   if (!captureUiProof) {
     return;
   }
-  await page.screenshot({
-    animations: "disabled",
-    path: path.join(proofDir, `${proofStage}-${name}-context.png`),
-  });
-  await panel.locator(".bp-header").screenshot({
-    animations: "disabled",
-    path: path.join(proofDir, `${proofStage}-${name}-header.png`),
-  });
+  const capture = (target: Page | import("playwright").Locator, suffix: string) =>
+    target.screenshot({
+      animations: "disabled",
+      path: path.join(proofDir, `${proofStage}-${name}-${suffix}.png`),
+    });
+  await capture(page, "context");
+  await capture(panel.locator(".bp-header"), "header");
   const connectionToolbar = panel.locator(".desktop-toolbar--connection");
   if ((await connectionToolbar.count()) > 0) {
-    await connectionToolbar.screenshot({
-      animations: "disabled",
-      path: path.join(proofDir, `${proofStage}-${name}-controls.png`),
-    });
+    await capture(connectionToolbar, "controls");
   }
 }
 
@@ -124,36 +122,25 @@ suite.define(() => {
               "sessions.list": sessionsList(),
               "environments.list": { environments: [workerDesktopEnvironment] },
               "desktop.observe": {
-                cases: [
-                  {
-                    match: {
-                      source: { kind: "environment", environmentId: "worker-desktop-1" },
-                      control: false,
-                    },
-                    response: {
-                      transport: "rfb",
-                      wsPath: realVncWsUrl ?? "/desktop/observe?token=view",
-                      expiresAtMs: 60_000,
-                      control: false,
-                    },
+                cases: [false, true].map((control) => ({
+                  match: {
+                    source: { kind: "environment", environmentId: "worker-desktop-1" },
+                    control,
                   },
-                  {
-                    match: {
-                      source: { kind: "environment", environmentId: "worker-desktop-1" },
-                      control: true,
-                    },
-                    response: {
-                      transport: "rfb",
-                      wsPath: realVncWsUrl ?? "/desktop/observe?token=control",
-                      expiresAtMs: 60_000,
-                      control: true,
-                    },
-                  },
-                ],
+                  response: desktopObservation(
+                    realVncWsUrl ?? `/desktop/observe?token=${control ? "control" : "view"}`,
+                    control,
+                  ),
+                })),
               },
             },
           });
           const panel = await openDesktopPanel(page);
+          const panelButton = (name: string) => panel.getByRole("button", { name, exact: true });
+          const takeControl = panelButton("Take control");
+          const disconnect = panelButton("Disconnect");
+          const fullscreenActive = () => page.evaluate(() => document.fullscreenElement !== null);
+          const capture = (state: string) => captureDesktopProof(page, panel, `${theme}-${state}`);
           await setTheme(page, theme);
           await gateway.waitForRequest("environments.list");
           if (!realVncWsUrl) {
@@ -161,25 +148,21 @@ suite.define(() => {
             // OPENCLAW_DESKTOP_REAL_VNC_WS_URL to a genuine VNC desktop.
             await installScriptedRfbServer(page);
           }
-          await panel.getByRole("button", { name: "Connect", exact: true }).click();
+          await panelButton("Connect").click();
           const screen = panel.locator(".desktop-surface canvas");
           await screen.waitFor();
           if (realVncWsUrl) {
             await expect
               .poll(
                 () =>
-                  screen.evaluate((element) => {
-                    const canvas = element as HTMLCanvasElement;
+                  screen.evaluate((canvas: HTMLCanvasElement) => {
                     const context = canvas.getContext("2d");
                     if (!context || canvas.width === 0 || canvas.height === 0) {
                       return false;
                     }
                     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-                    for (let index = 0; index < pixels.length; index += 128) {
-                      if (
-                        (pixels[index] ?? 0) + (pixels[index + 1] ?? 0) + (pixels[index + 2] ?? 0) >
-                        0
-                      ) {
+                    for (let i = 0; i < pixels.length; i += 128) {
+                      if ((pixels[i] ?? 0) + (pixels[i + 1] ?? 0) + (pixels[i + 2] ?? 0) > 0) {
                         return true;
                       }
                     }
@@ -190,7 +173,7 @@ suite.define(() => {
               .toBe(true);
           }
 
-          await captureDesktopProof(page, panel, `${theme}-default`);
+          await capture("default");
           expect(
             await page.evaluate(() => ({
               enabled: document.fullscreenEnabled,
@@ -200,26 +183,22 @@ suite.define(() => {
           const fullscreenButton = panel.locator(".desktop-fullscreen-button");
           expect(await fullscreenButton.getAttribute("aria-label")).toBe("Enter fullscreen");
           await fullscreenButton.hover();
-          await captureDesktopProof(page, panel, `${theme}-hover`);
+          await capture("hover");
           await fullscreenButton.focus();
-          await captureDesktopProof(page, panel, `${theme}-focus`);
+          await capture("focus");
 
           const screenHandle = await screen.elementHandle();
           await fullscreenButton.press("Enter");
           await expect
             .poll(() => fullscreenButton.getAttribute("aria-label"))
             .toBe("Exit fullscreen");
-          expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+          expect(await fullscreenActive()).toBe(true);
           expect(
             await screen.evaluate((element, original) => element === original, screenHandle),
           ).toBe(true);
           expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
-          expect(
-            await panel.getByRole("button", { name: "Take control", exact: true }).isVisible(),
-          ).toBe(true);
-          expect(
-            await panel.getByRole("button", { name: "Disconnect", exact: true }).isVisible(),
-          ).toBe(true);
+          expect(await takeControl.isVisible()).toBe(true);
+          expect(await disconnect.isVisible()).toBe(true);
           const [stageBox, screenBox] = await Promise.all([
             panel.locator(".desktop-stage").boundingBox(),
             screen.boundingBox(),
@@ -227,10 +206,10 @@ suite.define(() => {
           if (!stageBox || !screenBox) {
             throw new Error("Desktop fullscreen geometry is unavailable");
           }
-          const framebuffer = await screen.evaluate((element) => {
-            const canvas = element as HTMLCanvasElement;
-            return { height: canvas.height, width: canvas.width };
-          });
+          const framebuffer = await screen.evaluate((canvas: HTMLCanvasElement) => ({
+            height: canvas.height,
+            width: canvas.width,
+          }));
           expect(framebuffer.width).toBeGreaterThan(0);
           expect(framebuffer.height).toBeGreaterThan(0);
           expect(
@@ -243,21 +222,19 @@ suite.define(() => {
           expect(
             stageBox.width - screenBox.width > 20 || stageBox.height - screenBox.height > 20,
           ).toBe(true);
-          await captureDesktopProof(page, panel, `${theme}-fullscreen`);
+          await capture("fullscreen");
 
-          await panel.getByRole("button", { name: "Take control", exact: true }).click();
+          await takeControl.click();
           await expect
             .poll(async () => (await gateway.getRequests("desktop.observe")).length)
             .toBe(2);
-          expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+          expect(await fullscreenActive()).toBe(true);
           // The authenticated handoff keeps both canvases until the replacement connects.
           await expect
             .poll(() => screenHandle?.evaluate((element) => element.isConnected))
             .toBe(false);
           await screen.waitFor();
-          await expect
-            .poll(() => panel.getByRole("button", { name: "Take control", exact: true }).count())
-            .toBe(0);
+          await expect.poll(() => takeControl.count()).toBe(0);
 
           // Escape and browser controls both exit through the fullscreenchange path.
           await page.evaluate(() => document.exitFullscreen());
@@ -270,13 +247,13 @@ suite.define(() => {
               (button) => button === (button.getRootNode() as ShadowRoot).activeElement,
             ),
           ).toBe(true);
-          await captureDesktopProof(page, panel, `${theme}-exit`);
+          await capture("exit");
 
           await fullscreenButton.click();
-          await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+          await disconnect.click();
           await panel.getByText("Desktop sources", { exact: true }).waitFor();
-          expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
-          await captureDesktopProof(page, panel, `${theme}-disconnected-fullscreen`);
+          expect(await fullscreenActive()).toBe(true);
+          await capture("disconnected-fullscreen");
           await fullscreenButton.click();
           await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
         },
@@ -294,13 +271,7 @@ suite.define(() => {
           });
         });
       }
-      await installMockGateway(page, {
-        featureMethods: ["desktop.observe", "environments.list"],
-        methodResponses: {
-          "sessions.list": sessionsList(),
-          "environments.list": { environments: [] },
-        },
-      });
+      await installDesktopGateway(page);
       const panel = await openDesktopPanel(page);
       const button = panel.locator(".desktop-fullscreen-button");
       if (mode === "denied") {
@@ -331,13 +302,7 @@ suite.define(() => {
 
   it("exits fullscreen when the desktop panel unmounts", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page, {
-        featureMethods: ["desktop.observe", "environments.list"],
-        methodResponses: {
-          "sessions.list": sessionsList(),
-          "environments.list": { environments: [] },
-        },
-      });
+      await installDesktopGateway(page);
       const panel = await openDesktopPanel(page);
       await panel.locator(".desktop-fullscreen-button").click();
       await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);

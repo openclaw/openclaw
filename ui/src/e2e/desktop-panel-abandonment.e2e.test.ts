@@ -10,6 +10,11 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  canvasPixel,
+  desktopObservation,
+  workerDesktop,
+} from "./desktop-panel-fixtures.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Desktop panel observation abandonment" });
@@ -21,20 +26,7 @@ suite.define(() => {
       const environmentId = "worker-desktop-abandonment";
       const discardedPath = `/desktop/observe?token=${"a".repeat(48)}`;
       const claimedPath = `/desktop/observe?token=${"b".repeat(48)}`;
-      const environment = {
-        id: environmentId,
-        type: "worker",
-        status: "available",
-        desktop: true,
-        worker: {
-          providerId: "crabbox",
-          state: "attached",
-          ageMs: 1_000,
-          attachedSessionIds: [],
-          tunnelStatus: "connected",
-          desktopApps: [],
-        },
-      };
+      const environment = workerDesktop(environmentId);
       const gateway = await installMockGateway(page, {
         featureMethods: [
           "desktop.observe",
@@ -46,12 +38,7 @@ suite.define(() => {
         methodResponses: {
           "environments.list": { environments: [environment] },
           "environments.status": environment,
-          "desktop.observe": {
-            transport: "rfb",
-            wsPath: discardedPath,
-            expiresAtMs: 60_000,
-            control: false,
-          },
+          "desktop.observe": desktopObservation(discardedPath),
           "desktop.release": { released: true },
         },
       });
@@ -102,26 +89,14 @@ suite.define(() => {
       expect(await rfb.events()).toEqual([]);
       await capture("02-late-observation-released.png", []);
 
-      await gateway.setMethodResponse("desktop.observe", {
-        transport: "rfb",
-        wsPath: claimedPath,
-        expiresAtMs: 60_000,
-        control: false,
-      });
+      await gateway.setMethodResponse("desktop.observe", desktopObservation(claimedPath));
       await open();
       await gateway.waitForRequest("desktop.observe", { after: 1 });
       const canvas = panel.locator(".desktop-surface canvas");
       await canvas.waitFor();
       await expect.poll(rfb.events).toEqual(["authenticated:1"]);
       await rfb.send([createRfbRawFrame()]);
-      await expect
-        .poll(() =>
-          canvas.evaluate((element: HTMLCanvasElement) => {
-            const pixel = element.getContext("2d")?.getImageData(0, 0, 1, 1).data;
-            return pixel ? [...pixel] : null;
-          }),
-        )
-        .toEqual([24, 180, 160, 255]);
+      await expect.poll(() => canvasPixel(canvas)).toEqual([24, 180, 160, 255]);
       await expect.poll(() => pending.count()).toBe(0);
       expect(await sameRequester()).toBe(true);
       expect(await rfb.connectionCount()).toBe(1);

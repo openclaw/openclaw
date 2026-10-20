@@ -1,8 +1,6 @@
-// Control UI E2E: renaming a paired device alias from the Devices page row
-// menu through the shared input dialog, against a mocked Gateway.
 import path from "node:path";
 import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -17,21 +15,13 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-// Visual proof rides the behavioral scenario so every captured state is one the
-// assertions above it already proved, at whatever SHA the lane ran.
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("device-alias-rename");
-  }
-});
 
-async function captureUiProof(page: Page, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
+function waitForPhase(page: Page, phase: string) {
+  return page.waitForFunction(
+    (expected) => window.openclawControlUi?.snapshot().gatewayPhase === expected,
+    phase,
+  );
 }
 
 const DEVICE_ID = "synthetic-office-workstation";
@@ -53,6 +43,14 @@ function pairedDevice(operatorLabel?: string) {
 suite.define(() => {
   it("retries a rejected alias rename and retains unsaved edits until client replacement", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const proofDir = captureUiProofEnabled
+        ? createControlUiE2eArtifactDir("device-alias-rename")
+        : "";
+      const capture = async (fileName: string) => {
+        if (captureUiProofEnabled) {
+          await page.screenshot({ animations: "disabled", path: path.join(proofDir, fileName) });
+        }
+      };
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "device.pair.list": { pending: [], paired: [pairedDevice()] },
@@ -73,23 +71,28 @@ suite.define(() => {
       await waitForControlUiRoute(page, { pathname: "/settings/devices", routeId: "devices" });
 
       const row = page.locator(".device-entry", { hasText: "office-workstation.example.test" });
+      const openAlias = async (entry = row) => {
+        await entry.locator(".device-entry__menu-trigger").click();
+        await entry.locator('[role="menuitem"][data-value="editAlias"]').click();
+      };
       await row.waitFor();
-      await captureUiProof(page, "01-devices-inventory.png");
+      await capture("01-devices-inventory.png");
 
-      await row.locator(".device-entry__menu-trigger").click();
-      await row.locator('[role="menuitem"][data-value="editAlias"]').click();
+      await openAlias();
       const dialog = page.locator("openclaw-modal-dialog").last();
-      await dialog.locator('input[name="value"]').waitFor();
-      await captureUiProof(page, "02-alias-dialog-open.png");
+      const input = dialog.locator('input[name="value"]');
+      const save = dialog.getByRole("button", { name: "Save" });
+      await input.waitFor();
+      await capture("02-alias-dialog-open.png");
 
-      await dialog.locator('input[name="value"]').fill("Office node");
-      await captureUiProof(page, "03-alias-dialog-filled.png");
+      await input.fill("Office node");
+      await capture("03-alias-dialog-filled.png");
 
       // Reject the first request at the transport boundary; the same dialog
       // must preserve the value and remain usable for a second attempt.
       await gateway.deferNext("device.pair.rename");
       const renamesBefore = (await gateway.getRequests("device.pair.rename")).length;
-      await dialog.getByRole("button", { name: "Save" }).click();
+      await save.click();
 
       const renameRequest = await gateway.waitForRequest("device.pair.rename", {
         after: renamesBefore,
@@ -100,13 +103,13 @@ suite.define(() => {
       const failure = dialog.getByRole("alert");
       await failure.waitFor();
       expect(await failure.textContent()).toContain("Alias change rejected");
-      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Office node");
-      expect(await dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(true);
-      await captureUiProof(page, "03b-alias-rejected-retryable.png");
+      expect(await input.inputValue()).toBe("Office node");
+      expect(await save.isEnabled()).toBe(true);
+      await capture("03b-alias-rejected-retryable.png");
 
       const retryAfter = (await gateway.getRequests("device.pair.rename")).length;
       await gateway.deferNext("device.pair.rename");
-      await dialog.getByRole("button", { name: "Save" }).click();
+      await save.click();
       const retryRequest = await gateway.waitForRequest("device.pair.rename", {
         after: retryAfter,
       });
@@ -125,36 +128,31 @@ suite.define(() => {
       await page
         .locator(".device-entry .settings-row__title", { hasText: "Office node" })
         .waitFor();
-      await captureUiProof(page, "04-alias-applied.png");
+      await capture("04-alias-applied.png");
 
       await dialog.waitFor({ state: "hidden" });
       const renamedRow = page.locator(".device-entry", { hasText: "Office node" });
-      await renamedRow.locator(".device-entry__menu-trigger").click();
-      await renamedRow.locator('[role="menuitem"][data-value="editAlias"]').click();
-      await dialog.locator('input[name="value"]').fill("Unsaved alias");
+      await openAlias(renamedRow);
+      await input.fill("Unsaved alias");
       const socketsBefore = await gateway.getSocketCount();
       const connectsBefore = await gateway.deferNext("connect");
       await gateway.closeLatest();
       await gateway.waitForRequest("connect", { after: connectsBefore });
-      await page.waitForFunction(
-        () => window.openclawControlUi?.snapshot().gatewayPhase === "reconnecting",
-      );
+      await waitForPhase(page, "reconnecting");
       expect(await dialog.isVisible()).toBe(true);
-      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Unsaved alias");
-      expect(await dialog.locator('input[name="value"]').isEditable()).toBe(true);
-      await expect.poll(() => dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(false);
+      expect(await input.inputValue()).toBe("Unsaved alias");
+      expect(await input.isEditable()).toBe(true);
+      await expect.poll(() => save.isEnabled()).toBe(false);
       expect(await renamedRow.isVisible()).toBe(true);
 
       await gateway.resolveDeferred("connect");
-      await page.waitForFunction(
-        () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
-      );
+      await waitForPhase(page, "connected");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketsBefore);
       await renamedRow.waitFor();
-      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Unsaved alias");
-      await expect.poll(() => dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(true);
+      expect(await input.inputValue()).toBe("Unsaved alias");
+      await expect.poll(() => save.isEnabled()).toBe(true);
       expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
-      await captureUiProof(page, "05-alias-after-reconnect.png");
+      await capture("05-alias-after-reconnect.png");
 
       // Restoring a suspended page replaces the logical client without changing routes.
       // Unlike the transport reconnect above, this retires identity-scoped dialogs.
@@ -164,15 +162,12 @@ suite.define(() => {
       });
       await gateway.waitForRequest("connect", { after: connectsBeforeReplacement });
       await dialog.waitFor({ state: "hidden" });
-      await page.waitForFunction(
-        () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
-      );
+      await waitForPhase(page, "connected");
       await waitForControlUiRoute(page, { pathname: "/settings/devices", routeId: "devices" });
-      await renamedRow.locator(".device-entry__menu-trigger").click();
-      await renamedRow.locator('[role="menuitem"][data-value="editAlias"]').click();
-      expect(await dialog.locator('input[name="value"]').inputValue()).toBe("Office node");
+      await openAlias(renamedRow);
+      expect(await input.inputValue()).toBe("Office node");
       expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
-      await captureUiProof(page, "06-alias-after-client-replacement.png");
+      await capture("06-alias-after-client-replacement.png");
     });
   });
 });
