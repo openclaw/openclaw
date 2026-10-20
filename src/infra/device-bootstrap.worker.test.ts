@@ -2,13 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import {
-  consumeDeviceBootstrapTokenWithSetupCompletion,
-  issueDevicePairSetupBootstrapToken,
-  issueDeviceBootstrapToken,
-  readDevicePairSetupCompletion,
-  verifyDeviceBootstrapToken,
-} from "./device-bootstrap.js";
+import * as bootstrap from "./device-bootstrap.js";
 import {
   loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords,
@@ -28,9 +22,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const node = { role: "node", scopes: [] };
 const identity = { deviceId: "device-123", publicKey: "public-key-123" };
 const verify = (baseDir: string, token: string, device = identity) =>
-  verifyDeviceBootstrapToken({ baseDir, token, ...node, ...device });
+  bootstrap.verifyDeviceBootstrapToken({ baseDir, token, ...node, ...device });
 const readCompletion = (baseDir: string, setupId: string) =>
-  readDevicePairSetupCompletion({ baseDir, setupId });
+  bootstrap.readDevicePairSetupCompletion({ baseDir, setupId });
 
 it.each(["replaced identity", "retired authority", "expired credential"] as const)(
   "refuses setup completion when consumption sees %s",
@@ -40,7 +34,7 @@ it.each(["replaced identity", "retired authority", "expired credential"] as cons
       vi.useFakeTimers({ now: new Date("2026-03-14T12:00:00Z") });
     }
     const baseDir = tempDirs.make("openclaw-device-bootstrap-worker-");
-    const issued = await issueDevicePairSetupBootstrapToken({
+    const issued = await bootstrap.issueDevicePairSetupBootstrapToken({
       baseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
@@ -70,7 +64,10 @@ it.each(["replaced identity", "retired authority", "expired credential"] as cons
       completedAtMs: expired ? Date.now() : 1_000,
     };
     const consume = (pairedDeviceMatches?: (device: PairedDevice | null) => boolean) =>
-      consumeDeviceBootstrapTokenWithSetupCompletion({ ...completion, pairedDeviceMatches });
+      bootstrap.consumeDeviceBootstrapTokenWithSetupCompletion({
+        ...completion,
+        pairedDeviceMatches,
+      });
     await expect(
       consume(
         expired
@@ -105,7 +102,7 @@ it.each(["replaced identity", "retired authority", "expired credential"] as cons
 
 it("rejecting a pending request revokes only bootstrap tokens bound to its exact identity", async () => {
   const baseDir = tempDirs.make("openclaw-device-bootstrap-reject-");
-  const issued = await issueDeviceBootstrapToken({ baseDir });
+  const issued = await bootstrap.issueDeviceBootstrapToken({ baseDir });
   const device = { deviceId: "bootstrap-reject-device", publicKey: "bootstrap-reject-public-key" };
 
   await expect(verify(baseDir, issued.token, device)).resolves.toEqual({ ok: true });

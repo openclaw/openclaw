@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,33 +6,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  hasPluginLifecycleLeaseDemand,
-  runOutsidePluginLifecycleLease,
-  withPluginLifecycleLease,
-} from "../plugins/plugin-lifecycle-lease.js";
+import * as lease from "../plugins/plugin-lifecycle-lease.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import * as stateDatabaseHandles from "../state/openclaw-state-db-handle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import * as state from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { openExistingSqliteWorkerBackend } from "../state/openclaw-state.worker.js";
-import {
-  type DeferredPluginMigration,
-  assertDeferredPluginMigrationsCurrent,
-  readDeferredPluginMigrationCompletions,
-  readDeferredPluginMigrations,
-  readDeferredPluginMigrationsAsync,
-  recordDeferredPluginMigrations,
-  formatDeferredPluginMigration,
-  withDeferredPluginMigrationsCurrent,
-} from "./deferred-plugin-migrations.js";
+import * as migrations from "./deferred-plugin-migrations.js";
+import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import * as kyselyCache from "./kysely-sync-cache-state.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -64,17 +46,25 @@ describe("deferred configured-plugin migrations", () => {
   let env: NodeJS.ProcessEnv;
   let stateDir: string;
   const receiptDefaults = { startedAt: 1, finishedAt: null, upsert: true };
-  const read = () => readDeferredPluginMigrations({ env });
-  const completions = () => readDeferredPluginMigrationCompletions({ env });
-  const record = (
-    migrations: DeferredPluginMigration[] = [pending],
-    options: Omit<Parameters<typeof recordDeferredPluginMigrations>[0], "env" | "pending"> = {},
-  ) => recordDeferredPluginMigrations({ env, pending: migrations, ...options });
+  const migration = <T extends Partial<DeferredPluginMigration>>(overrides: T) => ({
+    ...pending,
+    ...overrides,
+  });
+  const read = () => migrations.readDeferredPluginMigrations({ env });
+  const readAsync = (artifactPreservingReadOnly?: boolean) =>
+    migrations.readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly });
+  const completions = () => migrations.readDeferredPluginMigrationCompletions({ env });
+  const transaction = <T>(run: Parameters<typeof state.runOpenClawStateWriteTransaction<T>>[0]) =>
+    state.runOpenClawStateWriteTransaction(run, { env });
+  type RecordOptions = Omit<migrations.DeferredPluginMigrationRecordInput, "env" | "pending">;
+  const record = (entries: DeferredPluginMigration[] = [pending], options: RecordOptions = {}) =>
+    migrations.recordDeferredPluginMigrations({ env, pending: entries, ...options });
+  const resolve = (pluginId = pending.pluginId) => record([], { resolvedPluginIds: [pluginId] });
   const publish = <T>(run: () => T, expectedPending: DeferredPluginMigration[] = []) =>
-    withDeferredPluginMigrationsCurrent({ env, expectedPending }, run);
+    migrations.withDeferredPluginMigrationsCurrent({ env, expectedPending }, run);
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
+      state.closeOpenClawStateDatabaseForTest();
       cleanup();
     });
   });
@@ -87,30 +77,29 @@ describe("deferred configured-plugin migrations", () => {
   });
 
   function prepareHistoricalState() {
-    openOpenClawStateDatabase({ env });
-    closeOpenClawStateDatabaseForTest();
+    state.openOpenClawStateDatabase({ env });
+    state.closeOpenClawStateDatabaseForTest();
     using database = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
     database.exec("PRAGMA user_version = 7");
   }
 
-  function writeReceipt(runId: string, status: string, reportJson: string) {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => recordLegacyMigrationRun(db, { ...receiptDefaults, runId, status, reportJson }),
-      { env },
+  const writeReceipt = (
+    runId: string,
+    status: string,
+    reportJson: string,
+    finishedAt: number | null = null,
+  ) =>
+    transaction(({ db }) =>
+      recordLegacyMigrationRun(db, { ...receiptDefaults, runId, status, reportJson, finishedAt }),
     );
-  }
-  const writePending = (migration: DeferredPluginMigration) =>
-    writeReceipt(
-      `deferred-plugin-migration:${migration.pluginId}`,
-      "pending",
-      JSON.stringify(migration),
-    );
+  const writePending = (entry: DeferredPluginMigration) =>
+    writeReceipt(`deferred-plugin-migration:${entry.pluginId}`, "pending", JSON.stringify(entry));
 
   it.each([undefined, false])(
-    "keeps async inspection on its captured snapshot (preserve artifacts: %s)",
-    async (artifactPreservingReadOnly) => {
+    "pins snapshots (preserve artifacts: %s)",
+    async (preserveArtifacts) => {
       writePending(pending);
-      await closeOpenClawStateDatabaseAsync();
+      await state.closeOpenClawStateDatabaseAsync();
       using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
       const changed = { ...pending, reason: "Committed after the inspection snapshot" };
       await withOpenClawStateDatabaseReadSnapshot(
@@ -118,34 +107,26 @@ describe("deferred configured-plugin migrations", () => {
           writer
             .prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
             .run(JSON.stringify(changed), `deferred-plugin-migration:${pending.pluginId}`);
-          expect(
-            await readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly }),
-          ).toEqual([pending]);
+          expect(await readAsync(preserveArtifacts)).toEqual([pending]);
         },
         { env },
       );
-      expect(await readDeferredPluginMigrationsAsync({ env, artifactPreservingReadOnly })).toEqual([
-        changed,
-      ]);
+      expect(await readAsync(preserveArtifacts)).toEqual([changed]);
     },
   );
 
   it("excludes a detached migration writer while the plugin lease pins policy rows", async () => {
-    const leasedMigration = {
-      pluginId: "fixture",
-      reason: "Waiting for repair",
-      command: "openclaw doctor --fix",
-    };
+    const leasedMigration = migration({ pluginId: "fixture", reason: "Waiting for repair" });
     let writerSettled = false;
     let writer: Promise<unknown> | undefined;
 
-    await withPluginLifecycleLease({ env }, async () => {
-      writer = runOutsidePluginLifecycleLease(() =>
+    await lease.withPluginLifecycleLease({ env }, async () => {
+      writer = lease.runOutsidePluginLifecycleLease(() =>
         record([leasedMigration]).finally(() => {
           writerSettled = true;
         }),
       );
-      await vi.waitFor(() => expect(hasPluginLifecycleLeaseDemand()).toBe(true));
+      await vi.waitFor(() => expect(lease.hasPluginLifecycleLeaseDemand()).toBe(true));
       expect(writerSettled).toBe(false);
       expect(read()).toEqual([]);
     });
@@ -155,100 +136,92 @@ describe("deferred configured-plugin migrations", () => {
     expect(read()).toEqual([leasedMigration]);
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "rolls back deferred obligations when the requester is revoked at worker %s admission",
-    async (stage) => {
-      const revoked = new Error("Plugin repair requester revoked");
-      let current = true;
-      let observed = false;
-      await expect(
-        withPluginLifecycleLease(
-          {
-            env,
-            assertCurrent: () => {
-              if (!current) {
-                throw revoked;
-              }
-            },
+  it.each(["transaction", "commit"] as const)("rolls back revoked %s admission", async (stage) => {
+    const revoked = new Error("Plugin repair requester revoked");
+    let observed = false;
+    await expect(
+      lease.withPluginLifecycleLease(
+        {
+          env,
+          assertCurrent: () => {
+            if (observed) {
+              throw revoked;
+            }
           },
-          async () => {
-            using _ = probe.admission(workerAdmission, (request, grant, admit) => {
-              if (
-                request.stage === stage &&
-                isRecord(request.facts) &&
-                request.facts.kind === "state-lease"
-              ) {
-                observed = true;
-                current = false;
-              }
-              return admit(request, grant);
-            });
-            await record();
-          },
-        ),
-      ).rejects.toThrow("Plugin repair requester revoked");
-      expect(observed).toBe(true);
-      expect(read()).toEqual([]);
-      await record();
-      expect(read()).toEqual([pending]);
-    },
-  );
+        },
+        async () => {
+          using _ = probe.admission(workerAdmission, (request, grant, admit) => {
+            if (
+              request.stage === stage &&
+              isRecord(request.facts) &&
+              request.facts.kind === "state-lease"
+            ) {
+              observed = true;
+            }
+            return admit(request, grant);
+          });
+          await record();
+        },
+      ),
+    ).rejects.toThrow("Plugin repair requester revoked");
+    expect(observed).toBe(true);
+    expect(read()).toEqual([]);
+    await record();
+    expect(read()).toEqual([pending]);
+  });
 
-  it.each(["absent", "historical"] as const)(
-    "publishes without changing %s state when no plugin migration is pending",
-    (state) => {
-      if (state === "absent") {
-        expect(read()).toEqual([]);
-        expect(completions()).toEqual([]);
-        expect(fs.existsSync(stateDir)).toBe(false);
-      }
-      const databasePath = resolveOpenClawStateSqlitePath(env);
-      if (state === "historical") {
-        // Match the rollback rehearsal: publication does not own schema repair.
-        prepareHistoricalState();
-      }
-      const before = state === "historical" ? fs.readFileSync(databasePath) : undefined;
-      const outputPath = path.join(path.dirname(stateDir), "published.txt");
-      const probeForeignOwner = () => {
-        const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
-        const result = spawnSync(
-          process.execPath,
-          [
-            ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
-            "--input-type=module",
-            "--eval",
-            `
+  it.each(["absent", "historical"] as const)("preserves empty %s state", (kind) => {
+    if (kind === "absent") {
+      expect(read()).toEqual([]);
+      expect(completions()).toEqual([]);
+      expect(fs.existsSync(stateDir)).toBe(false);
+    }
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    if (kind === "historical") {
+      // Match the rollback rehearsal: publication does not own schema repair.
+      prepareHistoricalState();
+    }
+    const before = kind === "historical" ? fs.readFileSync(databasePath) : undefined;
+    const outputPath = path.join(path.dirname(stateDir), "published.txt");
+    const probeForeignOwner = () => {
+      const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
+      const result = spawnSync(
+        process.execPath,
+        [
+          ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `
               import { tryAcquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
               const owner = tryAcquireGatewayStateOwner(process.argv[1]);
               owner?.release();
               process.stdout.write(owner ? 'acquired' : 'refused');
             `,
-            databasePath,
-          ],
-          { encoding: "utf8", timeout: 5_000 },
-        );
-        expect(result.status, result.stderr).toBe(0);
-        return result.stdout;
-      };
-      publish(() => {
-        if (state === "historical") {
-          using contender = new DatabaseSync(databasePath);
-          contender.exec("PRAGMA busy_timeout = 0");
-          expect(() => contender.exec("BEGIN IMMEDIATE")).toThrow(/locked/i);
-        } else {
-          expect(probeForeignOwner()).toBe("refused");
-        }
-        fs.writeFileSync(outputPath, "published");
-      });
-      expect(fs.readFileSync(outputPath, "utf8")).toBe("published");
-      if (before) {
-        expect(fs.readFileSync(databasePath)).toEqual(before);
+          databasePath,
+        ],
+        { encoding: "utf8", timeout: 5_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    publish(() => {
+      if (kind === "historical") {
+        using contender = new DatabaseSync(databasePath);
+        contender.exec("PRAGMA busy_timeout = 0");
+        expect(() => contender.exec("BEGIN IMMEDIATE")).toThrow(/locked/i);
       } else {
-        expect(fs.existsSync(stateDir)).toBe(false);
-        expect(probeForeignOwner()).toBe("acquired");
+        expect(probeForeignOwner()).toBe("refused");
       }
-    },
-  );
+      fs.writeFileSync(outputPath, "published");
+    });
+    expect(fs.readFileSync(outputPath, "utf8")).toBe("published");
+    if (before) {
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+    } else {
+      expect(fs.existsSync(stateDir)).toBe(false);
+      expect(probeForeignOwner()).toBe("acquired");
+    }
+  });
 
   it("rechecks obligations created before missing-state publication acquires ownership", () => {
     const acquire = stateOwners.acquireStateDatabaseSchemaLease;
@@ -256,7 +229,7 @@ describe("deferred configured-plugin migrations", () => {
       .spyOn(stateOwners, "acquireStateDatabaseSchemaLease")
       .mockImplementationOnce((databasePath) => {
         writePending(pending);
-        closeOpenClawStateDatabaseForTest();
+        state.closeOpenClawStateDatabaseForTest();
         return acquire(databasePath);
       });
     const output = vi.fn();
@@ -290,66 +263,52 @@ describe("deferred configured-plugin migrations", () => {
     }
   });
 
-  it.each(["absent", "historical"])(
-    "rejects asynchronous publication inside %s state admission",
-    (state) => {
-      if (state === "historical") {
-        prepareHistoricalState();
-      }
-      const output = vi.fn(async () => "published");
-      expect(() => publish(output)).toThrow(/synchronous|Promise/u);
-      expect(output).toHaveBeenCalledOnce();
-    },
-  );
+  it.each(["absent", "historical"])("rejects asynchronous publication in %s state", (kind) => {
+    if (kind === "historical") {
+      prepareHistoricalState();
+    }
+    const output = vi.fn(async () => "published");
+    expect(() => publish(output)).toThrow(/synchronous|Promise/u);
+    expect(output).toHaveBeenCalledOnce();
+  });
 
   it.each(["discovery snapshot", "outer transaction"] as const)(
-    "rechecks newly claimed inputs within %s scope before publication",
+    "rechecks claims in %s",
     async (scope) => {
-      openOpenClawStateDatabase({ env });
+      state.openOpenClawStateDatabase({ env });
       const outputPath = path.join(path.dirname(stateDir), "published.txt");
       const attempt = () => {
         writePending(pending);
-        expect(() =>
-          publish(() => {
-            fs.writeFileSync(outputPath, "published");
-          }),
-        ).toThrow("Plugin migration obligations changed");
+        expect(() => publish(() => fs.writeFileSync(outputPath, "published"))).toThrow(
+          "Plugin migration obligations changed",
+        );
         expect(fs.existsSync(outputPath)).toBe(false);
       };
       if (scope === "discovery snapshot") {
         await withOpenClawStateDatabaseReadSnapshot(async () => attempt(), { env });
       } else {
-        runOpenClawStateWriteTransaction(attempt, { env });
+        transaction(attempt);
       }
     },
   );
 
-  it.each(["prior", "current"] as const)(
-    "checks the %s pending generation against its publication transaction",
-    async (generation) => {
-      const current = { ...pending, requiresStateMigration: true as const };
-      await record();
-      publish(() => {
-        writePending(current);
-        // Discovery still observes committed rows; publication must see its own writes.
-        expect(read()).toEqual([pending]);
-        const check = () =>
-          assertDeferredPluginMigrationsCurrent({
-            env,
-            expectedPending: [generation === "prior" ? pending : current],
-          });
-        if (generation === "prior") {
-          expect(check).toThrow("Plugin migration obligations changed");
-        } else {
-          expect(check).not.toThrow();
-        }
-      }, [pending]);
-      expect(read()).toEqual([current]);
-    },
-  );
+  it("accepts the current publication generation and rejects its predecessor", async () => {
+    const current = { ...pending, requiresStateMigration: true as const };
+    await record();
+    publish(() => {
+      writePending(current);
+      // Discovery still observes committed rows; publication must see its own writes.
+      expect(read()).toEqual([pending]);
+      const check = (entry: DeferredPluginMigration) => () =>
+        migrations.assertDeferredPluginMigrationsCurrent({ env, expectedPending: [entry] });
+      expect(check(current)).not.toThrow();
+      expect(check(pending)).toThrow("Plugin migration obligations changed");
+    }, [pending]);
+    expect(read()).toEqual([current]);
+  });
 
   it.each(["identical", "stronger", "additional"] as const)(
-    "resolves only the captured pending generation after an %s report",
+    "checks generation after %s report",
     async (change) => {
       await record();
       const expectedPending = read();
@@ -373,33 +332,30 @@ describe("deferred configured-plugin migrations", () => {
   );
 
   it("removes historical completion facts when work is deferred without changing other metadata", async () => {
-    const { db } = openOpenClawStateDatabase({ env });
+    const { db } = state.openOpenClawStateDatabase({ env });
     const fixtureKeys = ["state-migrations", "startup-migrations", "unrelated-metadata"];
     const readFixtureMetadata = () =>
       db.prepare("SELECT * FROM schema_meta WHERE meta_key IN (?, ?, ?)").all(...fixtureKeys);
-    runOpenClawStateWriteTransaction(
-      ({ db: writeDb }) => {
-        const insert = writeDb.prepare(
-          "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at) VALUES (?, 'global', 3, NULL, ?, 1, 1)",
-        );
-        for (const key of fixtureKeys) {
-          insert.run(key, "2026.9.3\n3\ntest-build\nconfig\ndoctor-config\nplugins");
-        }
-      },
-      { env },
-    );
+    transaction(({ db: writeDb }) => {
+      const insert = writeDb.prepare(
+        "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at) VALUES (?, 'global', 3, NULL, ?, 1, 1)",
+      );
+      for (const key of fixtureKeys) {
+        insert.run(key, "2026.9.3\n3\ntest-build\nconfig\ndoctor-config\nplugins");
+      }
+    });
     const seeded = readFixtureMetadata();
     expect(seeded.map((row) => row.meta_key).toSorted()).toEqual(fixtureKeys.toSorted());
     const unrelated = seeded.filter((row) => row.meta_key === "unrelated-metadata");
     await record();
     expect(readFixtureMetadata()).toEqual(unrelated);
-    await record([], { resolvedPluginIds: [pending.pluginId] });
+    await resolve();
     expect(readFixtureMetadata()).toEqual(unrelated);
   });
 
   it("serves the published 2026.10.1 updater's shared-state pending read after replacement", async () => {
     await record();
-    await closeOpenClawStateDatabaseAsync();
+    await state.closeOpenClawStateDatabaseAsync();
     const context = captureOpenClawStateWorkerContext({ env });
     const refuseWriter = vi
       .spyOn(stateDatabaseHandles, "openTrackedStateDatabase")
@@ -431,33 +387,28 @@ describe("deferred configured-plugin migrations", () => {
   });
 
   it("retains pending migrations across restart and resolves only the completed plugin", async () => {
-    const alpha = {
+    const alpha = migration({
       pluginId: "alpha",
-      reason: "The configured plugin is not installed.",
       command: "openclaw plugins install @example/alpha",
       configPaths: [
         ["plugins", "entries", "alpha"],
         ["session", "store"],
       ],
       validationExcludedPaths: [["session", "store"]],
-    };
-    const beta = {
+    });
+    const beta = migration({
       pluginId: "beta",
       reason: "Plugin convergence is deferred until the update parent exits.",
-      command: "openclaw doctor --fix",
-    };
+    });
 
     await record([alpha, beta]);
-    await closeOpenClawStateDatabaseAsync();
+    await state.closeOpenClawStateDatabaseAsync();
     const sharedStateDir = path.join(stateDir, "state");
     const snapshot = () =>
       Object.fromEntries(
-        fs.readdirSync(sharedStateDir).map((name) => [
-          name,
-          createHash("sha256")
-            .update(fs.readFileSync(path.join(sharedStateDir, name)))
-            .digest("hex"),
-        ]),
+        fs
+          .readdirSync(sharedStateDir)
+          .map((name) => [name, fs.readFileSync(path.join(sharedStateDir, name))]),
       );
     const beforeRead = snapshot();
     expect(read()).toEqual([alpha, beta]);
@@ -471,78 +422,54 @@ describe("deferred configured-plugin migrations", () => {
     await record([alpha]);
     expect(log.warn).not.toHaveBeenCalled();
 
-    await record([], { resolvedPluginIds: ["alpha"] });
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        for (const [runId, status] of [
-          ["deferred-plugin-migration:alpha", "completed"],
-          ["deferred-plugin-migration:failed", "failed"],
-          ["unrelated-migration", "pending"],
-        ] as const) {
-          recordLegacyMigrationRun(db, {
-            ...receiptDefaults,
-            runId,
-            finishedAt: 2,
-            status,
-            reportJson: "{",
-          });
-        }
-      },
-      { env },
-    );
-    closeOpenClawStateDatabaseForTest();
+    await resolve("alpha");
+    for (const [runId, status] of [
+      ["deferred-plugin-migration:alpha", "completed"],
+      ["deferred-plugin-migration:failed", "failed"],
+      ["unrelated-migration", "pending"],
+    ]) {
+      writeReceipt(runId, status, "{", 2);
+    }
+    state.closeOpenClawStateDatabaseForTest();
     expect(read()).toEqual([beta]);
     expect(completions()).toEqual([{ pluginId: "alpha", completedAtMs: 2 }]);
     expect(log.info).toHaveBeenCalledWith(
       'Deferred state migration completed for plugin "alpha".',
-      {
-        pluginId: "alpha",
-        status: "completed",
-      },
+      { pluginId: "alpha", status: "completed" },
     );
 
-    await record([], { resolvedPluginIds: ["beta"] });
-    closeOpenClawStateDatabaseForTest();
+    await resolve("beta");
+    state.closeOpenClawStateDatabaseForTest();
     expect(read()).toEqual([]);
   });
 
   it("preserves declared ownership when plugin metadata disappears until explicit completion", async () => {
-    const declared = {
-      pluginId: "fixture-plugin",
+    const declared = migration({
       requiresStateMigration: true as const,
       requiresDoctorInspection: true as const,
       reason: "Package convergence is pending.",
       command: "openclaw update repair",
       configPaths: [["legacyIntegration", "stateDirectory"]],
       validationExcludedPaths: [["legacyIntegration"]],
-    };
+    });
     await record([declared]);
-    const unavailable = {
-      pluginId: declared.pluginId,
+    const unavailable = migration({
       reason: "Plugin metadata is no longer available.",
       command: "openclaw plugins install @example/fixture-plugin",
-    };
+    });
     await record([unavailable]);
-    closeOpenClawStateDatabaseForTest();
+    state.closeOpenClawStateDatabaseForTest();
     expect(read()).toEqual([{ ...declared, ...unavailable }]);
 
     const additionalPath = ["plugins", "entries", "fixture-plugin", "config"];
-    await record([
-      {
-        ...unavailable,
-        configPaths: [...declared.configPaths, additionalPath],
-        validationExcludedPaths: declared.validationExcludedPaths,
-      },
-    ]);
-    expect(read()).toEqual([
-      {
-        ...declared,
-        ...unavailable,
-        configPaths: [...declared.configPaths, additionalPath],
-      },
-    ]);
+    const paths = {
+      configPaths: [...declared.configPaths, additionalPath],
+      validationExcludedPaths: declared.validationExcludedPaths,
+    };
+    await record([{ ...unavailable, ...paths }]);
+    expect(read()).toEqual([{ ...declared, ...unavailable, ...paths }]);
 
-    await record([], { resolvedPluginIds: [declared.pluginId] });
+    await resolve(declared.pluginId);
     expect(read()).toEqual([]);
     await record([unavailable]);
     expect(read()).toEqual([unavailable]);
@@ -557,48 +484,39 @@ describe("deferred configured-plugin migrations", () => {
       const writeMalformed = (status: string) =>
         writeReceipt("deferred-plugin-migration:malformed", status, reportJson);
       writeMalformed("pending");
-      closeOpenClawStateDatabaseForTest();
+      state.closeOpenClawStateDatabaseForTest();
       expect(read).toThrow(error);
       await expect(
         record([{ ...pending, pluginId: "new", reason: "Not installed" }]),
       ).rejects.toThrow(error);
       writeMalformed("completed");
-      closeOpenClawStateDatabaseForTest();
+      state.closeOpenClawStateDatabaseForTest();
       expect(read()).toEqual([]);
     },
   );
 });
 
-describe("deferred plugin migration repair guidance", () => {
-  const command = "openclaw update repair";
-  const retry = 'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.';
+const command = "openclaw update repair";
+const retry = 'Run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.';
+const waiting =
+  'Let the current update or repair finish. If this warning remains afterward, run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.';
 
-  it.each([
-    {
-      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      command,
-      next: 'Let the current update or repair finish. If this warning remains afterward, run "openclaw update repair", then "openclaw doctor --fix" to retry the upgrade.',
-    },
-    // Post-core convergence is the final migration pass, even inside an update child.
-    {
-      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
-      command,
-      next: retry,
-    },
-    { env: {}, command, next: retry },
-    {
-      env: {},
-      command: "openclaw doctor --fix",
-      next: 'Run "openclaw doctor --fix" to retry the upgrade.',
-    },
-  ])("formats repair guidance for $env / $command", ({ env, command: repairCommand, next }) => {
-    const pending = {
-      pluginId: "fixture-plugin",
-      reason: "Package repair deferred.",
-      command: repairCommand,
-    };
-    expect(formatDeferredPluginMigration(pending, env)).toBe(
-      `Plugin "fixture-plugin" data/settings upgrade is unfinished: Package repair deferred. Your existing data and settings have been kept. ${next}`,
-    );
-  });
+it.each([
+  [{ OPENCLAW_UPDATE_IN_PROGRESS: "1" }, command, waiting],
+  [
+    { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
+    command,
+    retry,
+  ],
+  [{}, command, retry],
+  [{}, "openclaw doctor --fix", 'Run "openclaw doctor --fix" to retry the upgrade.'],
+] as const)("formats repair guidance for %j / %s", (env, repairCommand, next) => {
+  const pending = {
+    pluginId: "fixture-plugin",
+    reason: "Package repair deferred.",
+    command: repairCommand,
+  };
+  expect(migrations.formatDeferredPluginMigration(pending, env)).toBe(
+    `Plugin "fixture-plugin" data/settings upgrade is unfinished: Package repair deferred. Your existing data and settings have been kept. ${next}`,
+  );
 });

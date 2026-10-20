@@ -16,22 +16,20 @@ const expectScopes = async (approvedScopes: string[]) =>
   expect((await paired())?.approvedScopes).toEqual(approvedScopes);
 const expectPending = async (requestId: string, fields: object) =>
   expect(await pending()).toContainEqual(expect.objectContaining({ requestId, ...fields }));
-
 const requestPairing = (request: Partial<Parameters<typeof requestDevicePairing>[0]>) =>
   requestDevicePairing({ ...identity, ...request }, baseDir);
 const requestOperator = (scopes: string[]) => requestPairing({ role: "operator", scopes });
 
-async function approveProxy(
+const approveProxy = (
   requestId: string,
   scopes: string[],
   approvedVia: "trusted-proxy" | "remote-ingress" | "silent" = "trusted-proxy",
-) {
-  return approveDevicePairing(
+) =>
+  approveDevicePairing(
     requestId,
     { callerScopes: scopes, approvedVia, autoApproveNewDeviceScopes: scopes },
     baseDir,
   );
-}
 
 async function setupProxyDevice(approvedVia: "trusted-proxy" | "remote-ingress" = "trusted-proxy") {
   const initial = await requestOperator(read);
