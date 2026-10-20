@@ -20,28 +20,42 @@ export function registerModelsAuthAuthorityTests(fixture: {
   setProviderAuthResult: (result: ProviderAuthResult) => void;
 }) {
   const { mocks, createRuntime, runModelsAuthLoginFlowCore } = fixture;
-  it.each(["cancelled", "revoked"] as const)(
-    "does not complete a saved login when authority is %s during a rejected refresh",
-    async (reason) => {
-      const controller = new AbortController();
-      let current = true;
-      const onModelAccessRequested = vi.fn();
-      await expect(
+  function loginAuthority() {
+    let current = true;
+    return {
+      revoke: () => {
+        current = false;
+      },
+      run: (options: Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]> = {}) =>
         runModelsAuthLoginFlowCore({
           provider: "openai",
+          credentialOnly: true,
           runtime: createRuntime(),
           prompter: mocks.createClackPrompter(),
-          signal: controller.signal,
           assertCurrent: () => {
             if (!current) {
               throw new Error("Login authority ended.");
             }
           },
+          ...options,
+        }),
+    };
+  }
+  it.each(["cancelled", "revoked"] as const)(
+    "does not complete a saved login when authority is %s during a rejected refresh",
+    async (reason) => {
+      const controller = new AbortController();
+      const authority = loginAuthority();
+      const onModelAccessRequested = vi.fn();
+      await expect(
+        authority.run({
+          credentialOnly: false,
+          signal: controller.signal,
           refreshAfterLogin: async () => {
             if (reason === "cancelled") {
               controller.abort(new Error("Login authority ended."));
             } else {
-              current = false;
+              authority.revoke();
             }
             throw new Error("Auth publication failed.");
           },
@@ -53,57 +67,33 @@ export function registerModelsAuthAuthorityTests(fixture: {
   );
 
   it("does not publish credentials when authority ends after persistence preparation", async () => {
-    let current = true;
+    const authority = loginAuthority();
     let saved = false;
     mocks.persistProviderAuthProfilesAfterLogin.mockImplementationOnce(
       async (params: PersistProviderAuthCall) => {
-        current = false;
+        authority.revoke();
         params.beforeWrite?.();
         saved = true;
         return params.profiles ?? [];
       },
     );
-    await expect(
-      runModelsAuthLoginFlowCore({
-        provider: "openai",
-        credentialOnly: true,
-        runtime: createRuntime(),
-        prompter: mocks.createClackPrompter(),
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Login authority ended.");
-          }
-        },
-      }),
-    ).rejects.toThrow("Login authority ended.");
+    await expect(authority.run()).rejects.toThrow("Login authority ended.");
     expect(saved).toBe(false);
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
   it("does not promote a saved login after requester authority ends during order preparation", async () => {
-    let current = true;
+    const authority = loginAuthority();
     let promoted = false;
     mocks.promoteAuthProfileInOrder.mockImplementationOnce(
       async (params: { assertCurrent?: () => void }) => {
-        current = false;
+        authority.revoke();
         params.assertCurrent?.();
         promoted = true;
         return { ok: true, value: { version: 1, profiles: {} } };
       },
     );
-    await expect(
-      runModelsAuthLoginFlowCore({
-        provider: "openai",
-        credentialOnly: true,
-        runtime: createRuntime(),
-        prompter: mocks.createClackPrompter(),
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Login authority ended.");
-          }
-        },
-      }),
-    ).rejects.toThrow("Login authority ended.");
+    await expect(authority.run()).rejects.toThrow("Login authority ended.");
     expect(promoted).toBe(false);
     expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
     expect(mocks.updateConfig).not.toHaveBeenCalled();
@@ -112,7 +102,7 @@ export function registerModelsAuthAuthorityTests(fixture: {
   it.each(["beforeCommit", "writeAuthority"] as const)(
     "does not publish provider config when authority ends after preparation at %s",
     async (boundary) => {
-      let current = true;
+      const authority = loginAuthority();
       let published = false;
       fixture.setProviderAuthResult({
         profiles: [
@@ -133,7 +123,7 @@ export function registerModelsAuthAuthorityTests(fixture: {
           writeOptions?: ConfigWriteOptions,
         ) => {
           const prepared = mutator({});
-          current = false;
+          authority.revoke();
           if (boundary === "beforeCommit") {
             await beforeCommit?.();
           } else {
@@ -143,19 +133,7 @@ export function registerModelsAuthAuthorityTests(fixture: {
           return prepared;
         },
       );
-      await expect(
-        runModelsAuthLoginFlowCore({
-          provider: "openai",
-          credentialOnly: true,
-          runtime: createRuntime(),
-          prompter: mocks.createClackPrompter(),
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("Login authority ended.");
-            }
-          },
-        }),
-      ).rejects.toThrow("Login authority ended.");
+      await expect(authority.run()).rejects.toThrow("Login authority ended.");
       expect(published).toBe(false);
       expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
     },

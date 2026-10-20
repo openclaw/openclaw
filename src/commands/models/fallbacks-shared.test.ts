@@ -26,15 +26,16 @@ describe.each([
     model: "openai/gpt-image-1",
   },
 ])("models $name list", (testCase) => {
+  const run = (...args: string[]) =>
+    runRegisteredCli({ register: registerModelsCli, argv: ["models", ...args] });
+  const list = (...flags: string[]) => run(testCase.name, "list", ...flags);
+  const setFallback = (model: string) =>
+    mocks.loadModelsConfig.mockResolvedValue({
+      agents: { defaults: { [testCase.key]: { fallbacks: [model] } } },
+    });
   beforeEach(() => {
     mocks.loadModelsConfig.mockReset();
-    mocks.loadModelsConfig.mockResolvedValue({
-      agents: {
-        defaults: {
-          [testCase.key]: { fallbacks: [testCase.model] },
-        },
-      },
-    });
+    setFallback(testCase.model);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -46,25 +47,20 @@ describe.each([
     ["--json", testCase.name, "list"],
     [testCase.name, "list", "--json"],
   ])("writes JSON and attributes diagnostics for %s %s %s", async (...args) => {
-    await runRegisteredCli({ register: registerModelsCli, argv: ["models", ...args] });
+    await run(...args);
 
     expect(mocks.loadModelsConfig).toHaveBeenCalledWith({
       commandName: `models ${testCase.name} list`,
       runtime: defaultRuntime,
     });
     expect(vi.mocked(defaultRuntime.writeJson).mock.calls.map(([value]) => value)).toEqual([
-      {
-        fallbacks: [testCase.model],
-      },
+      { fallbacks: [testCase.model] },
     ]);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
   });
 
   it("writes populated plain output directly to stdout", async () => {
-    await runRegisteredCli({
-      register: registerModelsCli,
-      argv: ["models", testCase.name, "list", "--plain"],
-    });
+    await list("--plain");
 
     expect(defaultRuntime.writeStdout).toHaveBeenCalledExactlyOnceWith(testCase.model);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
@@ -74,13 +70,8 @@ describe.each([
     "escapes control characters in text output (%j)",
     async ({ flags }) => {
       const model = "openai/café\u001b[2J\nforged";
-      mocks.loadModelsConfig.mockResolvedValue({
-        agents: { defaults: { [testCase.key]: { fallbacks: [model] } } },
-      });
-      await runRegisteredCli({
-        register: registerModelsCli,
-        argv: ["models", testCase.name, "list", ...flags],
-      });
+      setFallback(model);
+      await list(...flags);
       const output = [
         ...vi.mocked(defaultRuntime.log).mock.calls,
         ...vi.mocked(defaultRuntime.writeStdout).mock.calls,
@@ -89,10 +80,7 @@ describe.each([
         .join("\n");
       expect(output).toContain("openai/café\\nforged");
       expect(output).not.toContain("\u001b");
-      await runRegisteredCli({
-        register: registerModelsCli,
-        argv: ["models", testCase.name, "list", "--json"],
-      });
+      await list("--json");
       expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ fallbacks: [model] }, 2);
     },
   );
@@ -101,10 +89,7 @@ describe.each([
     if (empty) {
       mocks.loadModelsConfig.mockResolvedValue({});
     }
-    await runRegisteredCli({
-      register: registerModelsCli,
-      argv: ["models", testCase.name, "list"],
-    });
+    await list();
 
     expect(vi.mocked(defaultRuntime.log).mock.calls).toEqual([
       [`${testCase.label} (${empty ? 0 : 1}):`],

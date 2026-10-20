@@ -33,6 +33,15 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
   ],
 }));
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
+const next = (stepId?: string, value?: unknown) => ({
+  method: "wizard.next",
+  params: { sessionId: "login", ...(stepId ? { answer: { stepId, value } } : {}) },
+});
+const browserStep: WizardNextResult = {
+  done: false,
+  step: { id: "code", type: "text", externalUrl: "https://example.test/authorize" },
+};
+const done: WizardNextResult = { done: true, status: "done" };
 function gateway(results: Array<WizardNextResult | Error>) {
   const calls: Array<{ method: string; params: unknown }> = [];
   const request: GatewayRequestFunction = async <T>(
@@ -49,7 +58,10 @@ function gateway(results: Array<WizardNextResult | Error>) {
     }
     return result as T;
   };
-  return { request, calls };
+  return {
+    calls,
+    run: () => runGatewayLoginWizard(request, "login", new AbortController().signal, runtime),
+  };
 }
 afterEach(() => {
   vi.clearAllMocks();
@@ -88,31 +100,21 @@ it("renders device codes and sends selection answers on the admitted session", a
       done: false,
       step: { id: "access", type: "select", options: [{ label: "Keep", value: "keep" }] },
     },
-    { done: true, status: "done" },
+    done,
   ]);
-  await runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
+  await h.run();
   expect(prompts.note).toHaveBeenCalledWith(
     "https://github.com/login/device",
     "Open this URL to continue",
   );
   expect(prompts.note).toHaveBeenCalledWith("ABCD-1234", "Device code");
-  expect(h.calls).toEqual([
-    { method: "wizard.next", params: { sessionId: "login" } },
-    {
-      method: "wizard.next",
-      params: { sessionId: "login", answer: { stepId: "device", value: undefined } },
-    },
-    {
-      method: "wizard.next",
-      params: { sessionId: "login", answer: { stepId: "access", value: "keep" } },
-    },
-  ]);
+  expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
 });
 
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
   prompts.select.mockRejectedValueOnce(new WizardCancelledError());
   const h = gateway([{ done: false, step: { id: "choice", type: "select", options: [] } }]);
-  await runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
+  await h.run();
   expect(h.calls.at(-1)).toEqual({
     method: "wizard.cancel",
     params: { sessionId: "login", closeInput: true },
@@ -131,41 +133,18 @@ it("observes browser completion while manual input remains open and retires the 
     signal.addEventListener("abort", () => reject(new WizardCancelledError()), { once: true });
     return promise;
   });
-  const h = gateway([
-    {
-      done: false,
-      step: { id: "code", type: "text", externalUrl: "https://example.test/authorize" },
-    },
-    { done: true, status: "done" },
-  ]);
-  const finished = runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
+  const h = gateway([browserStep, done]);
+  const finished = h.run();
   await vi.advanceTimersByTimeAsync(1_000);
   await finished;
   expect(promptSignal?.aborted).toBe(true);
-  expect(h.calls).toEqual([
-    { method: "wizard.next", params: { sessionId: "login" } },
-    { method: "wizard.next", params: { sessionId: "login" } },
-  ]);
+  expect(h.calls).toEqual([next(), next()]);
   expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("confirmed"));
 });
 
 it("reconciles a browser callback that completes before the manual answer arrives", async () => {
   prompts.text.mockResolvedValueOnce("authorization-code");
-  const h = gateway([
-    {
-      done: false,
-      step: { id: "code", type: "text", externalUrl: "https://example.test/authorize" },
-    },
-    new Error("wizard not running"),
-    { done: true, status: "done" },
-  ]);
-  await runGatewayLoginWizard(h.request, "login", new AbortController().signal, runtime);
-  expect(h.calls).toEqual([
-    { method: "wizard.next", params: { sessionId: "login" } },
-    {
-      method: "wizard.next",
-      params: { sessionId: "login", answer: { stepId: "code", value: "authorization-code" } },
-    },
-    { method: "wizard.next", params: { sessionId: "login" } },
-  ]);
+  const h = gateway([browserStep, new Error("wizard not running"), done]);
+  await h.run();
+  expect(h.calls).toEqual([next(), next("code", "authorization-code"), next()]);
 });

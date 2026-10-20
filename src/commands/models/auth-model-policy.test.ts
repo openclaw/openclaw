@@ -21,6 +21,13 @@ describe("provider model access consent", () => {
     });
   const readSaved = async (): Promise<OpenClawConfig> =>
     JSON.parse(await fs.readFile(state.configPath, "utf8"));
+  const readBytes = () => fs.readFile(state.configPath, "utf8");
+  const complete = (options: Partial<Parameters<typeof completeProviderModelAccess>[0]> = {}) =>
+    completeProviderModelAccess({ prepared: prepare(), prompter, runtime, ...options });
+  async function restrictOwner() {
+    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
+    await state.writeConfig(config);
+  }
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "model-access-consent" });
@@ -33,14 +40,11 @@ describe("provider model access consent", () => {
     await state.writeConfig(config);
     vi.clearAllMocks();
   });
-  afterEach(async () => {
-    await state.cleanup();
-  });
+  afterEach(() => state.cleanup());
 
   it("widens only the consenting agent owner", async () => {
-    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-    await state.writeConfig(config);
-    const outcome = await completeProviderModelAccess({ prepared: prepare(), prompter, runtime });
+    await restrictOwner();
+    const outcome = await complete();
     expect(outcome.message).toContain("Application by the running Gateway is not confirmed");
     expect(outcome.message).toContain("openclaw gateway restart");
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("models are now visible"));
@@ -51,20 +55,18 @@ describe("provider model access consent", () => {
   });
 
   it("keeps restrictions without writing config", async () => {
-    const before = await fs.readFile(state.configPath, "utf8");
-    await completeProviderModelAccess({
-      prepared: prepare(),
-      runtime,
+    const before = await readBytes();
+    await complete({
       prompter: createWizardPrompter({ select: async ({ options }) => options[1]!.value }),
     });
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+    expect(await readBytes()).toBe(before);
   });
 
   it("preserves deferred legacy restrictions across consent and later config writes", async () => {
     delete config.agents!.defaults!.modelPolicy;
     config.agents!.defaults!.models = { "existing-model": {} };
     await state.writeConfig(config);
-    await completeProviderModelAccess({ prepared: prepare(), prompter, runtime });
+    await complete();
     await updateConfig((current) => ({ ...current, logging: { level: "debug" } }));
     const saved = await readSaved();
     expect(saved.agents?.defaults?.models).toEqual({ "existing-model": {}, "sample/*": {} });
@@ -82,7 +84,7 @@ describe("provider model access consent", () => {
   });
 
   it("rechecks login authority after the writer's asynchronous preflight", async () => {
-    const before = await fs.readFile(state.configPath, "utf8");
+    const before = await readBytes();
     let active = true;
     setRuntimeConfigSnapshotRefreshHandler({
       preflight: async () => {
@@ -92,10 +94,7 @@ describe("provider model access consent", () => {
     });
     try {
       await expect(
-        completeProviderModelAccess({
-          prepared: prepare(),
-          prompter,
-          runtime,
+        complete({
           assertCurrent: () => {
             if (!active) {
               throw new Error("Login replaced");
@@ -103,15 +102,14 @@ describe("provider model access consent", () => {
           },
         }),
       ).rejects.toThrow("Login replaced");
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+      expect(await readBytes()).toBe(before);
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }
   });
 
   it.each(["removed-owner", "late-change"])("rejects consent after %s", async (change) => {
-    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-    await state.writeConfig(config);
+    await restrictOwner();
     const prepared = prepare();
     const replace = async () => {
       if (change === "removed-owner") {
@@ -125,9 +123,8 @@ describe("provider model access consent", () => {
       await replace();
     }
     await expect(
-      completeProviderModelAccess({
+      complete({
         prepared,
-        runtime,
         prompter: createWizardPrompter({
           select: async ({ options }) => {
             if (change === "late-change") {
