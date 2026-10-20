@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "./node-version.mjs";
 
 if (isMainThread && process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "gateway") {
   // Node has already started uncached. Restore worker caching after the respawn.
@@ -53,6 +54,12 @@ export function resolveOpenClawCompileCacheRespawnEnv({
     return undefined;
   }
   if (foregroundGateway && isMainThread) {
+    if (
+      globalThis[Symbol.for("openclaw.nodeCompileCacheBase")]?.readOnlyDirectory ===
+      path.resolve(directory)
+    ) {
+      return undefined;
+    }
     return {
       ...env,
       NODE_COMPILE_CACHE: directory,
@@ -80,9 +87,26 @@ export function enableOpenClawCompileCache({
   }
   const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
   if (foregroundGateway && isMainThread) {
-    // Main-thread synchronous cache flushes stall the event loop; workers keep
-    // this cache base and flush on their own threads at their existing boundaries.
+    // Consume prewarmed bytecode without synchronous main-thread cache writes.
+    // Older Node versions and cold caches retain the uncached-main policy.
     owner.baseDirectory ??= path.resolve(directory);
+    if (
+      !process.versions.bun &&
+      isNodeVersionAtLeast(parseNodeReleaseVersion(process.versions.node), {
+        major: 26,
+        minor: 8,
+        patch: 0,
+      })
+    ) {
+      try {
+        const result = module.enableCompileCache({ directory, readOnly: true });
+        if (result.status === module.constants.compileCacheStatus.ENABLED) {
+          owner.readOnlyDirectory = path.resolve(directory);
+        }
+      } catch {
+        // A missing or unavailable cache must never prevent Gateway startup.
+      }
+    }
     void maintainOpenClawCompileCache(directory);
     return;
   }

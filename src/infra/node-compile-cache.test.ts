@@ -35,6 +35,7 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   for (const name of [
     "gateway-prewarm.mjs",
     "node-compile-cache.mjs",
+    "node-version.mjs",
     "cli-invocation.mjs",
     "cli-parent-lifetime.mjs",
     "gateway-shutdown-budget.mjs",

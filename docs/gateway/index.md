@@ -77,11 +77,12 @@ Gateway config reload watches the active config file path (resolved from profile
 
 ### Module compile cache
 
-The Gateway main thread runs without Node's on-disk module compile cache. Node
-flushes cached bytecode synchronously, which can stall the event loop during
-startup or shutdown. This trades main-thread cache reuse for responsive lifecycle
-handling. Gateway workers and child processes retain the cache and flush their
-startup and newly loaded database operation modules on their own threads.
+On Node 26.8 and later, the Gateway main thread reads existing module bytecode
+from the compile cache without writing new entries. Earlier Node versions and
+cold caches keep the main thread uncached. Read-only reuse avoids Node's
+synchronous bytecode flushes, which can stall the event loop during startup or
+shutdown. Gateway workers and child processes retain writable caching and flush
+their startup and newly loaded database operation modules on their own threads.
 
 Cache entries live outside the release directory, under the operating system's
 temporary directory by default. Set `NODE_COMPILE_CACHE` to a writable persistent
@@ -90,8 +91,8 @@ by package version and build identity; each new build starts with its own cache.
 `NODE_DISABLE_COMPILE_CACHE=1` disables caching for the Gateway and its workers.
 An unavailable cache produces a diagnostic and startup continues.
 
-An inherited active cache requires a startup respawn to leave the main thread
-uncached; platforms with `execve` preserve the serving PID. Node's permission
+An inherited active cache requires a startup respawn before OpenClaw can select
+the main-thread cache policy; platforms with `execve` preserve the serving PID. Node's permission
 model retains an already-active caller cache because it may forbid process
 replacement. One-shot commands keep caching opt-in through `NODE_COMPILE_CACHE`;
 explicit release prewarming still populates the cache. See

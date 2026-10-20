@@ -32,6 +32,46 @@ all clients connect, including partially warmed samples.
 only that module; place the baseline beside the original so relative imports
 remain valid. Swap the CPU halves for the next pair and compare paired differences.
 
+## Startup with a populated multi-agent fixture
+
+For a bounded multi-agent boot workload, use the opt-in `teamBoot` case:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case teamBoot --fixture-root /path/to/new-fixture --seed-only
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts \
+  --case teamBoot --fixture-root /path/to/new-fixture \
+  --runs 1 --warmup 0 --timeout-ms 90000 --start-at <future-epoch-ms> \
+  --output /path/to/result.json
+```
+
+This fixture has 44 synthetic startup-active plugins, eight local agents, 4,096
+shared session entries, and 128 MiB of inert synthetic shared-state payload. It
+uses the normal database and session writers and keeps clean-close seals. It
+does not provision remote workers or make model/channel calls. Actual database
+sizes and inventory are recorded in `team-boot-fixture.json` and copied into the
+result. Seed each side sequentially outside the measurement window. Payload
+writes checkpoint every 8 MiB and pause between batches; Linux generation stops
+if system dirty pages reach 2 GiB. A failed seed has no completion marker and
+must be regenerated in a new directory.
+
+Startup results include spawn-to-`/readyz` and spawn-to-first-successful
+`sessions.list` timings. The authenticated protocol handshake uses the isolated
+Gateway's loopback `auth: none` policy. Session RPC probing starts when `/healthz`
+first responds, concurrently with `/readyz`, and retries startup refusals until
+the shared deadline. A healthy HTTP endpoint without a successful session RPC
+fails the measurement. The `teamBoot` case also requires the expected seeded
+session; an empty or unrelated roster does not count. `startupTraceLines` preserves every observed startup
+trace line, including repeated spans; `startupTrace` retains the existing numeric
+summary. All benchmark Gateway ports are at least 40000.
+
+For paired comparisons, prepare separate roots from the same seed inputs and
+pass the same future `--start-at` to both controllers. Use the host's exclusive
+measurement lock, pin each side to its assigned 16-core half, swap the halves on
+the next pair, and compare each pair's candidate-minus-baseline difference.
+Build and seed outside the measurement CPU allocation. Keep every root and
+temporary directory inside the task-owned sandbox and remove them after use.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
