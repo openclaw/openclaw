@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -13,6 +13,25 @@ import { ClawProjectError, createClawProject, validateClawProject } from "./proj
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const GOLDEN_ARTIFACT_INTEGRITY =
   "sha256:10b8890c5e5b062c94ff79b1d424859c6a5572548535eec6e31ee0c6d7c08a3b";
+const goldenProject = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+
+async function replaceManifest(root: string, from: string, to: string) {
+  const path = join(root, "CLAW.md");
+  await writeFile(path, (await readFile(path, "utf8")).replace(from, to));
+}
+
+async function archiveEntries(file: string) {
+  const entries: string[] = [];
+  await tar.t({ file, onentry: (entry) => entries.push(entry.path) });
+  return entries;
+}
+
+async function expectInvalidProject(root: string, code: string) {
+  await expect(validateClawProject(root)).resolves.toMatchObject({
+    ok: false,
+    diagnostics: [expect.objectContaining({ code })],
+  });
+}
 
 async function writeRichProject(root: string): Promise<void> {
   await mkdir(join(root, "workspace"), { recursive: true });
@@ -27,19 +46,7 @@ async function writeRichProject(root: string): Promise<void> {
   );
   await writeFile(
     join(root, "CLAW.md"),
-    [
-      "---",
-      "schemaVersion: 1",
-      "agent:",
-      "  id: demo-claw",
-      "workspace:",
-      "  files:",
-      "    - source: workspace/reference.md",
-      "      path: reference.md",
-      "---",
-      "You are the demo Claw.",
-      "",
-    ].join("\n"),
+    "---\nschemaVersion: 1\nagent:\n  id: demo-claw\nworkspace:\n  files:\n    - source: workspace/reference.md\n      path: reference.md\n---\nYou are the demo Claw.\n",
   );
   await writeFile(join(root, "workspace", "reference.md"), "# Reference\n");
   await writeFile(join(root, "BOOTSTRAP.md"), "Interview the user before starting.\n");
@@ -50,22 +57,18 @@ async function writeRichProject(root: string): Promise<void> {
 describe("Claw projects", () => {
   it("matches the cross-platform golden artifact digest", async () => {
     const output = join(tempDirs.make("openclaw-claw-golden-"), "golden.tgz");
-    const result = await buildClawProject(
-      join(process.cwd(), "test", "fixtures", "claws", "project-v1"),
-      output,
-    );
+    const result = await buildClawProject(goldenProject, output);
 
     expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
 
   it("matches the golden artifact digest under a restrictive umask", () => {
     const output = join(tempDirs.make("openclaw-claw-umask-"), "golden.tgz");
-    const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
     const projectBuildUrl = resolveRuntimeWorkerUrl(clawProjectBuildEntrypoint);
     const script = [
       "process.umask(0o077);",
       `const { buildClawProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
-      `const result = await buildClawProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
+      `const result = await buildClawProject(${JSON.stringify(goldenProject)}, ${JSON.stringify(output)});`,
       "process.stdout.write(result.integrity);",
     ].join("\n");
 
@@ -120,9 +123,7 @@ describe("Claw projects", () => {
     });
     try {
       await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
-        await expect(
-          buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
-        ).rejects.toBe(closeError);
+        await expect(buildClawProject(goldenProject, output)).rejects.toBe(closeError);
       });
       expect(closeAttempts).toBe(1);
       await expect(readdir(outputDirectory)).resolves.toEqual([]);
@@ -142,11 +143,9 @@ describe("Claw projects", () => {
       version: "0.1.0",
       openclaw: { claw: "CLAW.md" },
     });
-    expect(validated.ok).toBe(true);
-    if (validated.ok) {
-      expect(validated.claw.manifest.agent.id).toBe("research-assistant");
-      expect(validated.claw.clawMarkdownBody?.toString()).toContain("purpose-built OpenClaw agent");
-    }
+    assert(validated.ok);
+    expect(validated.claw.manifest.agent.id).toBe("research-assistant");
+    expect(validated.claw.clawMarkdownBody?.toString()).toContain("purpose-built OpenClaw agent");
   });
 
   it("keeps one concurrent creator's completed project", async () => {
@@ -189,19 +188,12 @@ describe("Claw projects", () => {
     const project = tempDirs.make("openclaw-claw-package-source-");
     const output = join(tempDirs.make("openclaw-claw-package-source-output-"), "claw.tgz");
     await writeRichProject(project);
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "    - source: workspace/reference.md\n      path: reference.md",
-        "    - source: package.json\n      path: metadata.json",
-      ),
+    await replaceManifest(
+      project,
+      "    - source: workspace/reference.md\n      path: reference.md",
+      "    - source: package.json\n      path: metadata.json",
     );
-
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_invalid" })],
-    });
+    await expectInvalidProject(project, "project_invalid");
     await expect(buildClawProject(project, output)).rejects.toMatchObject({
       code: "project_invalid",
     } satisfies Partial<ClawProjectError>);
@@ -217,8 +209,7 @@ describe("Claw projects", () => {
     const first = await buildClawProject(project, firstPath);
     const second = await buildClawProject(project, secondPath);
     const validation = await validateClawProject(join(project, "workspace", "reference.md"));
-    const entries: string[] = [];
-    await tar.t({ file: firstPath, onentry: (entry) => entries.push(entry.path) });
+    const entries = await archiveEntries(firstPath);
 
     expect(await readFile(firstPath)).toEqual(await readFile(secondPath));
     expect(first.integrity).toBe(second.integrity);
@@ -268,10 +259,7 @@ describe("Claw projects", () => {
     await writeFile(join(outside, "LICENSE"), "Outside notice.\n");
     await symlink(join(outside, "LICENSE"), join(project, "LICENSE"), "file");
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_license_invalid" })],
-    });
+    await expectInvalidProject(project, "project_license_invalid");
   });
 
   it("preserves the canonical metadata-selected OpenClaw profile path", async () => {
@@ -282,19 +270,15 @@ describe("Claw projects", () => {
       join(project, "profiles", "openclaw.yml"),
       join(project, "profiles", "custom.yaml"),
     );
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "agent:\n  id: demo-claw",
-        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
-      ),
+    await replaceManifest(
+      project,
+      "agent:\n  id: demo-claw",
+      "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
     );
 
     const validation = await validateClawProject(project);
     const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+    const entries = await archiveEntries(output);
 
     expect(validation).toMatchObject({ ok: true });
     if (validation.ok) {
@@ -306,61 +290,36 @@ describe("Claw projects", () => {
     expect(entries).not.toContain("package/profiles/openclaw.yml");
   });
 
-  it("packages a leading-at workspace source as an ordinary file", async () => {
-    const project = tempDirs.make("openclaw-claw-leading-at-");
-    const output = join(tempDirs.make("openclaw-claw-leading-at-output-"), "claw.tgz");
-    await writeRichProject(project);
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", '"@notes.md"'),
-    );
-    await writeFile(join(project, "@notes.md"), "# Notes\n");
+  it.each(["@notes.md", "..notes.md"])(
+    "packages %s as an ordinary workspace source",
+    async (name) => {
+      const project = tempDirs.make("openclaw-claw-leading-punctuation-");
+      const output = join(tempDirs.make("openclaw-claw-leading-punctuation-output-"), "claw.tgz");
+      await writeRichProject(project);
+      await replaceManifest(project, "workspace/reference.md", JSON.stringify(name));
+      await writeFile(join(project, name), "# Notes\n");
 
-    const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+      const result = await buildClawProject(project, output);
+      const entries = await archiveEntries(output);
 
-    expect(result.files).toContain("@notes.md");
-    expect(entries).toContain("package/@notes.md");
-  });
-
-  it("packages a valid source whose filename begins with two dots", async () => {
-    const project = tempDirs.make("openclaw-claw-leading-dots-");
-    const output = join(tempDirs.make("openclaw-claw-leading-dots-output-"), "claw.tgz");
-    await writeRichProject(project);
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", "..notes.md"),
-    );
-    await writeFile(join(project, "..notes.md"), "# Notes\n");
-
-    const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
-
-    expect(result.files).toContain("..notes.md");
-    expect(entries).toContain("package/..notes.md");
-  });
+      expect(result.files).toContain(name);
+      expect(entries).toContain(`package/${name}`);
+    },
+  );
 
   it("normalizes accepted backslash source separators in the built package", async () => {
     const project = tempDirs.make("openclaw-claw-backslash-source-");
     const output = join(tempDirs.make("openclaw-claw-backslash-source-output-"), "claw.tgz");
     await writeRichProject(project);
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "    - source: workspace/reference.md",
-        String.raw`    - source: 'workspace\reference.md'`,
-      ),
+    await replaceManifest(
+      project,
+      "    - source: workspace/reference.md",
+      String.raw`    - source: 'workspace\reference.md'`,
     );
 
     const validation = await validateClawProject(project);
     const result = await buildClawProject(project, output);
-    const entries: string[] = [];
-    await tar.t({ file: output, onentry: (entry) => entries.push(entry.path) });
+    const entries = await archiveEntries(output);
 
     expect(validation).toMatchObject({ ok: true });
     expect(result.files).toContain("workspace/reference.md");
@@ -373,19 +332,14 @@ describe("Claw projects", () => {
     await writeRichProject(project);
     const longName = `${"a".repeat(140)}.md`;
     const longSource = `workspace/${longName}`;
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace("workspace/reference.md", longSource),
-    );
+    await replaceManifest(project, "workspace/reference.md", longSource);
     await writeFile(join(project, longSource), "# Long path\n");
 
     const firstPath = join(output, "first.tgz");
     const secondPath = join(output, "second.tgz");
     const first = await buildClawProject(project, firstPath);
     const second = await buildClawProject(project, secondPath);
-    const entries: string[] = [];
-    await tar.t({ file: firstPath, onentry: (entry) => entries.push(entry.path) });
+    const entries = await archiveEntries(firstPath);
 
     expect(await readFile(firstPath)).toEqual(await readFile(secondPath));
     expect(first.integrity).toBe(second.integrity);
@@ -439,10 +393,7 @@ describe("Claw projects", () => {
       await rename(join(project, "CLAW.md"), join(project, targetPath));
       await symlink(targetPath, join(project, "CLAW.md"), "file");
 
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_not_found" })],
-      });
+      await expectInvalidProject(project, "project_not_found");
     },
   );
 
@@ -453,10 +404,7 @@ describe("Claw projects", () => {
     await rename(join(project, "CLAW.md"), join(outside, "CLAW.md"));
     await symlink(join(outside, "CLAW.md"), join(project, "CLAW.md"), "file");
 
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_not_found" })],
-    });
+    await expectInvalidProject(project, "project_not_found");
   });
 
   it.each([".git/config", "workspace/node_modules/example/secret.md"])(
@@ -467,16 +415,8 @@ describe("Claw projects", () => {
       await writeRichProject(project);
       await mkdir(dirname(join(project, sourcePath)), { recursive: true });
       await writeFile(join(project, sourcePath), "sensitive local state\n");
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest.replace("workspace/reference.md", sourcePath),
-      );
-
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-      });
+      await replaceManifest(project, "workspace/reference.md", sourcePath);
+      await expectInvalidProject(project, "project_excluded_source");
       await expect(buildClawProject(project, output)).rejects.toMatchObject({
         code: "project_invalid",
       } satisfies Partial<ClawProjectError>);
@@ -492,19 +432,12 @@ describe("Claw projects", () => {
     );
     await mkdir(join(project, ".git"), { recursive: true });
     await writeFile(join(project, ".git", "profile.yaml"), "schemaVersion: 1\nagent: {}\n");
-    const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-    await writeFile(
-      join(project, "CLAW.md"),
-      manifest.replace(
-        "agent:\n  id: demo-claw",
-        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: .git/profile.yaml",
-      ),
+    await replaceManifest(
+      project,
+      "agent:\n  id: demo-claw",
+      "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: .git/profile.yaml",
     );
-
-    await expect(validateClawProject(project)).resolves.toMatchObject({
-      ok: false,
-      diagnostics: [expect.objectContaining({ code: "project_excluded_source" })],
-    });
+    await expectInvalidProject(project, "project_excluded_source");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -512,17 +445,9 @@ describe("Claw projects", () => {
     async () => {
       const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
       await writeRichProject(project);
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
       await writeFile(join(project, "claw.md"), "# Conflicting source\n");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest.replace("workspace/reference.md", "claw.md"),
-      );
-
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
-      });
+      await replaceManifest(project, "workspace/reference.md", "claw.md");
+      await expectInvalidProject(project, "project_path_collision");
     },
   );
 
@@ -536,21 +461,13 @@ describe("Claw projects", () => {
         join(project, "profiles", "custom.yaml"),
       );
       await writeFile(join(project, "profiles", "CUSTOM.yaml"), "schemaVersion: 1\nagent: {}\n");
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest
-          .replace(
-            "agent:\n  id: demo-claw",
-            "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
-          )
-          .replace("workspace/reference.md", "profiles/CUSTOM.yaml"),
+      await replaceManifest(
+        project,
+        "agent:\n  id: demo-claw",
+        "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
       );
-
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
-      });
+      await replaceManifest(project, "workspace/reference.md", "profiles/CUSTOM.yaml");
+      await expectInvalidProject(project, "project_path_collision");
     },
   );
 
@@ -561,26 +478,20 @@ describe("Claw projects", () => {
       await writeRichProject(project);
       const composed = "workspace/caf\u00e9.md";
       const decomposed = "workspace/cafe\u0301.md";
-      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
-      await writeFile(
-        join(project, "CLAW.md"),
-        manifest.replace(
-          "    - source: workspace/reference.md\n      path: reference.md",
-          [
-            `    - source: ${JSON.stringify(composed)}`,
-            "      path: composed.md",
-            `    - source: ${JSON.stringify(decomposed)}`,
-            "      path: decomposed.md",
-          ].join("\n"),
-        ),
+      await replaceManifest(
+        project,
+        "    - source: workspace/reference.md\n      path: reference.md",
+        [
+          `    - source: ${JSON.stringify(composed)}`,
+          "      path: composed.md",
+          `    - source: ${JSON.stringify(decomposed)}`,
+          "      path: decomposed.md",
+        ].join("\n"),
       );
       await writeFile(join(project, composed), "# Composed\n");
       await writeFile(join(project, decomposed), "# Decomposed\n");
 
-      await expect(validateClawProject(project)).resolves.toMatchObject({
-        ok: false,
-        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
-      });
+      await expectInvalidProject(project, "project_path_collision");
     },
   );
 

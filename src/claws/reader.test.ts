@@ -7,6 +7,11 @@ import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const markdown = (content: string) => `---\nschemaVersion: 1\nagent: { id: triage }\n${content}`;
+function expectReadError(result: Awaited<ReturnType<typeof readClawManifestFile>>, code: string) {
+  expect(result.ok).toBe(false);
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({ code }));
+}
 const manifestJson = JSON.stringify({
   schemaVersion: 1,
   agent: { id: "reader-agent", name: "Café" },
@@ -123,25 +128,15 @@ describe("Claw source reader", () => {
     const manifestPath = join(root, "CLAW.md");
     await writeFile(
       manifestPath,
-      [
-        "---",
-        "schemaVersion: 1",
-        "agent: { id: triage }",
-        "workspace:",
-        "  files:",
-        "    - { source: package.json, path: soul.MD/child }",
-        "---",
-        "Portable soul",
-      ].join("\n"),
+      markdown(
+        "workspace:\n  files:\n    - { source: package.json, path: soul.MD/child }\n---\nPortable soul",
+      ),
       "utf8",
     );
 
     const result = await readClawManifestFile(manifestPath);
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "claw_body_soul_conflict" }),
-    );
+    expectReadError(result, "claw_body_soul_conflict");
   });
 
   it("blocks a direct add plan when implicit SOUL.md owns an ancestor path", async () => {
@@ -184,16 +179,11 @@ describe("Claw source reader", () => {
     const root = tempDirs.make("openclaw-claw-markdown-hardlink-");
     const original = join(root, "original.md");
     const manifestPath = join(root, "CLAW.md");
-    await writeFile(
-      original,
-      "---\nschemaVersion: 1\nagent: { id: triage }\n---\nPortable soul\n",
-      "utf8",
-    );
+    await writeFile(original, markdown("---\nPortable soul\n"), "utf8");
     await link(original, manifestPath);
 
     const result = await readClawManifestFile(manifestPath);
 
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: "read_failed" }));
+    expectReadError(result, "read_failed");
   });
 });

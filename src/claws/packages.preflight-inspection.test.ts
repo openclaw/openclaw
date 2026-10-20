@@ -55,6 +55,26 @@ const inspectPluginCapabilities = vi.fn((_rootDir: string, pluginId: string) => 
   ...emptyPluginCapabilityEvidence,
   grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
 }));
+type PreflightOptions = NonNullable<Parameters<typeof preflightClawPackage>[2]>;
+const conflict = {
+  ok: false,
+  code: "plugin_version_conflict",
+  error: "Installed plugin has a different version.",
+  installedVersion: "1.0.0",
+  expectedVersion: pluginPackage.version,
+  request: {} as never,
+} as const;
+function preflight(probe: typeof installPluginFromClawHub, options: PreflightOptions = {}) {
+  return preflightClawPackage(pluginPackage, "/tmp/workspace", {
+    ...options,
+    deps: {
+      preflightPlugin: async () => ({ ok: true, action: "install", request: {} as never }),
+      probePlugin: withStagedInspection(probe),
+      inspectPluginCapabilities,
+      ...options.deps,
+    },
+  });
+}
 describe("preflightClawPackage isolated plugin inspection", () => {
   it("rejects generic agent bundles outside the Claw schema-v1 format contract", async () => {
     const probeAgentBundle = vi.fn(async () =>
@@ -68,19 +88,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
       }),
     );
 
-    await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        deps: {
-          preflightPlugin: vi.fn(async () => ({
-            ok: true as const,
-            action: "install" as const,
-            request: {} as never,
-          })),
-          probePlugin: withStagedInspection(probeAgentBundle),
-          inspectPluginCapabilities,
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(preflight(probeAgentBundle)).resolves.toEqual({
       ok: false,
       code: "plugin_artifact_format_unsupported",
       message: "Plugin @owner/audit@2.0.1 uses unsupported Claw extension format agent.",
@@ -94,19 +102,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
       error: "plugin already exists: /tmp/extensions/audit",
     }));
 
-    await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        deps: {
-          preflightPlugin: vi.fn(async () => ({
-            ok: true as const,
-            action: "install" as const,
-            request: {} as never,
-          })),
-          probePlugin: withStagedInspection(liveProbe),
-          inspectPluginCapabilities,
-        },
-      }),
-    ).resolves.toMatchObject({
+    await expect(preflight(liveProbe)).resolves.toMatchObject({
       ok: false,
       message: "plugin already exists: /tmp/extensions/audit",
     });
@@ -128,20 +124,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     );
 
     await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        deps: {
-          preflightPlugin: vi.fn(async () => ({
-            ok: false as const,
-            code: "plugin_version_conflict" as const,
-            error: "Installed plugin has a different version.",
-            installedVersion: "1.0.0",
-            expectedVersion: pluginPackage.version,
-            request: {} as never,
-          })),
-          probePlugin: withStagedInspection(probePluginConflict),
-          inspectPluginCapabilities,
-        },
-      }),
+      preflight(probePluginConflict, { deps: { preflightPlugin: async () => conflict } }),
     ).resolves.toMatchObject({
       ok: false,
       code: "plugin_version_conflict",
@@ -157,25 +140,18 @@ describe("preflightClawPackage isolated plugin inspection", () => {
 
   it("rejects a disabled installed plugin before treating a version conflict as upgradable", async () => {
     await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        config: { plugins: { entries: { audit: { enabled: false } } } },
-        deps: {
-          preflightPlugin: vi.fn(async () => ({
-            ok: false as const,
-            code: "plugin_version_conflict" as const,
-            error: "Installed plugin has a different version.",
-            installedVersion: "1.0.0",
-            expectedVersion: pluginPackage.version,
-            request: {} as never,
-          })),
-          probePlugin: withStagedInspection(async () =>
-            pluginProbe({
-              artifactInspection: { format: "openclaw", mapped: ["plugin"], unavailable: [] },
-            }),
-          ),
-          inspectPluginCapabilities,
+      preflight(
+        async () =>
+          pluginProbe({
+            artifactInspection: { format: "openclaw", mapped: ["plugin"], unavailable: [] },
+          }),
+        {
+          config: { plugins: { entries: { audit: { enabled: false } } } },
+          deps: {
+            preflightPlugin: async () => conflict,
+          },
         },
-      }),
+      ),
     ).resolves.toMatchObject({ ok: false, code: "plugin_disabled" });
   });
 
@@ -197,29 +173,18 @@ describe("preflightClawPackage isolated plugin inspection", () => {
     const isolatedProbe = vi.fn(async (params: { extensionsDir?: string }) => {
       probeDirectory = params.extensionsDir;
       expect((await lstat(probeDirectory!)).isDirectory()).toBe(true);
-      return {
-        ok: true as const,
-        pluginId: "audit",
-        packageName: "@owner/audit",
+      return pluginProbe({
         targetDir: join(probeDirectory!, "audit"),
-        extensions: [],
         artifactInspection: {
           format: "openclaw" as const,
           mapped: ["plugin"],
           unavailable: [],
         },
-        clawhub: {
-          source: "clawhub" as const,
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "@owner/audit",
-          clawhubFamily: "code-plugin" as const,
-          integrity,
-        },
-      };
+      });
     });
 
     await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+      preflight(isolatedProbe, {
         deps: {
           preflightPlugin: vi.fn(async () => ({
             ok: true as const,
@@ -230,8 +195,6 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             installedIntegrity: integrity,
             installedAt: "2026-08-06T00:00:00.000Z",
           })),
-          probePlugin: withStagedInspection(isolatedProbe),
-          inspectPluginCapabilities,
         },
       }),
     ).resolves.toMatchObject({
