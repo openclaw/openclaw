@@ -28,11 +28,7 @@ import {
 } from "./container-lifecycle.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
-import {
-  prepareSandboxMountPlan,
-  sandboxMountPlanMatchesContainer,
-  type SandboxMountPlan,
-} from "./mount-plan.js";
+import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
 import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
@@ -40,7 +36,6 @@ import {
   resolvePodmanSandboxContainerPrefix,
   resolvePodmanSandboxCreatePolicy,
   resolvePodmanSandboxRuntimeInfo,
-  type PodmanSandboxRuntimeInfo,
 } from "./podman-runtime.js";
 import {
   completeSandboxRegistryReservation,
@@ -53,7 +48,7 @@ import {
   sanitizeExplicitSandboxEnvVars,
 } from "./sanitize-env-vars.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import type { SandboxConfig, SandboxDockerConfig } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
@@ -281,80 +276,6 @@ export function buildSandboxCreateArgs(params: {
   return { argv: args, env };
 }
 
-async function createSandboxContainer(params: {
-  engine: SandboxContainerEngine;
-  name: string;
-  cfg: SandboxDockerConfig;
-  dockerTmpfsSource: SandboxConfig["dockerTmpfsSource"];
-  workspaceDir: string;
-  workspaceAccess: SandboxWorkspaceAccess;
-  agentWorkspaceDir: string;
-  scopeKey: string;
-  configHash?: string;
-  mountPlan: SandboxMountPlan;
-  podmanRuntimeInfo?: PodmanSandboxRuntimeInfo;
-  onAllocated?: (id: string) => void;
-  assertCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-}) {
-  const { engine, name, cfg, workspaceDir, scopeKey } = params;
-  const podmanPolicy =
-    engine.id === "podman" && params.podmanRuntimeInfo
-      ? resolvePodmanSandboxCreatePolicy({
-          cfg,
-          dockerTmpfsSource: params.dockerTmpfsSource,
-          workspaceDir,
-          workspaceAccess: params.workspaceAccess,
-          agentWorkspaceDir: params.agentWorkspaceDir,
-          readOnlyWorkspaceSkillMounts: params.mountPlan.readOnlyWorkspaceSkillMounts,
-          runtimeInfo: params.podmanRuntimeInfo,
-        })
-      : undefined;
-  const createCfg = podmanPolicy?.cfg ?? cfg;
-  await ensureContainerImage(engine, cfg.image);
-
-  const { argv: args, env } = buildSandboxCreateArgs({
-    name,
-    cfg: createCfg,
-    scopeKey,
-    configHash: params.configHash,
-    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
-  });
-  if (podmanPolicy) {
-    args.push(...podmanPolicy.extraCreateArgs);
-  }
-  args.push("--workdir", cfg.workdir);
-  for (const bind of params.mountPlan.skippedBinds) {
-    log.warn(
-      `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
-    );
-  }
-  for (const bind of params.mountPlan.binds) {
-    args.push("-v", bind);
-  }
-  const created = await withContainerEnvFile(env, async (envFile) => {
-    args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
-    params.assertCurrent?.();
-    return await execContainer(engine, args);
-  });
-  const containerId = created.stdout.trim();
-  if (!/^[a-f0-9]{64}$/u.test(containerId)) {
-    throw new Error("Container creation did not return an immutable container ID.");
-  }
-  params.onAllocated?.(containerId);
-  params.assertCurrent?.();
-  await execContainer(engine, ["start", containerId]);
-
-  if (cfg.setupCommand?.trim()) {
-    params.assertCurrent?.();
-    await execContainer(engine, ["exec", "-i", containerId, "/bin/sh", "-lc", cfg.setupCommand], {
-      signal: params.operatorAuthority?.signal,
-    });
-  }
-  params.assertCurrent?.();
-  return containerId;
-}
-
 type EnsureSandboxContainerParams = {
   workspaceSource?: "managed-worktree";
   assertCurrent?: () => void;
@@ -568,28 +489,69 @@ async function ensureSandboxContainerLifecycle(
     }
     let allocated = false;
     try {
-      containerId = await createSandboxContainer({
-        engine,
+      const cfg = params.cfg.docker;
+      const podmanPolicy =
+        engine.id === "podman" && podmanRuntimeInfo
+          ? resolvePodmanSandboxCreatePolicy({
+              cfg,
+              dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+              workspaceDir: params.workspaceDir,
+              workspaceAccess: params.cfg.workspaceAccess,
+              agentWorkspaceDir: params.agentWorkspaceDir,
+              readOnlyWorkspaceSkillMounts: mountPlan.readOnlyWorkspaceSkillMounts,
+              runtimeInfo: podmanRuntimeInfo,
+            })
+          : undefined;
+      const createCfg = podmanPolicy?.cfg ?? cfg;
+      await ensureContainerImage(engine, cfg.image);
+
+      const { argv: args, env } = buildSandboxCreateArgs({
         name: containerName,
-        cfg: params.cfg.docker,
-        dockerTmpfsSource: params.cfg.dockerTmpfsSource,
-        workspaceDir: params.workspaceDir,
-        workspaceAccess: params.cfg.workspaceAccess,
-        agentWorkspaceDir: params.agentWorkspaceDir,
+        cfg: createCfg,
         scopeKey: params.scopeKey,
         configHash: expectedHash,
-        mountPlan,
-        podmanRuntimeInfo,
-        onAllocated: (id) => {
-          allocated = true;
-          containerId = id;
-          if (source) {
-            bindSandboxContainerSource({ engine, name: containerName, id, owner: source });
-          }
-        },
-        assertCurrent: params.assertCurrent,
-        operatorAuthority: params.operatorAuthority,
+        bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
       });
+      if (podmanPolicy) {
+        args.push(...podmanPolicy.extraCreateArgs);
+      }
+      args.push("--workdir", cfg.workdir);
+      for (const bind of mountPlan.skippedBinds) {
+        log.warn(
+          `sandbox: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+        );
+      }
+      for (const bind of mountPlan.binds) {
+        args.push("-v", bind);
+      }
+      const created = await withContainerEnvFile(env, async (envFile) => {
+        args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
+        params.assertCurrent?.();
+        return await execContainer(engine, args);
+      });
+      const allocatedId = created.stdout.trim();
+      if (!/^[a-f0-9]{64}$/u.test(allocatedId)) {
+        throw new Error("Container creation did not return an immutable container ID.");
+      }
+      allocated = true;
+      containerId = allocatedId;
+      if (source) {
+        bindSandboxContainerSource({ engine, name: containerName, id: containerId, owner: source });
+      }
+      params.assertCurrent?.();
+      await execContainer(engine, ["start", containerId]);
+
+      if (cfg.setupCommand?.trim()) {
+        params.assertCurrent?.();
+        await execContainer(
+          engine,
+          ["exec", "-i", containerId, "/bin/sh", "-lc", cfg.setupCommand],
+          {
+            signal: params.operatorAuthority?.signal,
+          },
+        );
+      }
+      params.assertCurrent?.();
       if (needsSetupReservation) {
         await completeSandboxRegistryReservation(readyEntry);
       } else if (params.workspaceSource !== "managed-worktree") {

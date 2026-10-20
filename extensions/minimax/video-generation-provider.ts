@@ -12,7 +12,6 @@ import {
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
-  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -121,97 +120,6 @@ function resolveResolution(params: {
       ? current
       : best;
   });
-}
-
-async function downloadVideoFromUrl(params: {
-  url: string;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  maxBytes: number;
-  policy: MinimaxRequestPolicy;
-}): Promise<GeneratedVideoAsset> {
-  return await downloadGeneratedVideoAsset({
-    url: params.url,
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-    fetchFn: fetch,
-    provider: "minimax",
-    label: "MiniMax generated video download",
-    requestFailedMessage: "MiniMax generated video download failed",
-    maxBytes: params.maxBytes,
-    validateBinaryResponse: true,
-    chunkTimeoutMs: 0,
-    fetchResponse: async ({ timeoutMs }) =>
-      await fetchMinimaxResponse({
-        stage: "download",
-        url: params.url,
-        init: { method: "GET" },
-        timeoutMs,
-        requestFailedMessage: "MiniMax generated video download failed",
-        policy: params.policy,
-      }),
-  });
-}
-
-async function downloadVideoFromFileId(params: {
-  fileId: string;
-  headers: Headers;
-  timeoutMs?: ProviderOperationTimeoutMs;
-  baseUrl: string;
-  maxBytes: number;
-  policy: MinimaxRequestPolicy;
-}): Promise<GeneratedVideoAsset> {
-  const url = new URL(`${params.baseUrl}/v1/files/retrieve`);
-  url.searchParams.set("file_id", params.fileId);
-  const metadataDeadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "MiniMax generated video metadata",
-  });
-  const metadataTimeoutMs = createProviderOperationTimeoutResolver({
-    deadline: metadataDeadline,
-    defaultTimeoutMs: metadataDeadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const { response: metadataResponse, release: releaseMetadata } = await fetchMinimaxResponse({
-    stage: "download",
-    url: url.toString(),
-    init: {
-      method: "GET",
-      headers: params.headers,
-    },
-    timeoutMs: metadataTimeoutMs,
-    requestFailedMessage: "MiniMax generated video metadata request failed",
-    policy: params.policy,
-  });
-  let metadata: MinimaxFileRetrieveResponse;
-  try {
-    metadata = await readProviderJsonResponse<MinimaxFileRetrieveResponse>(
-      metadataResponse,
-      "MiniMax generated video metadata",
-      {
-        timeoutMs: metadataTimeoutMs,
-        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-          new Error(
-            `MiniMax generated video metadata timed out after ${metadataDeadline.timeoutMs ?? bodyTimeoutMs}ms`,
-          ),
-      },
-    );
-  } finally {
-    await releaseMetadata();
-  }
-  assertMinimaxBaseResp(metadata.base_resp, "MiniMax generated video metadata request failed");
-  const downloadUrl = normalizeOptionalString(metadata.file?.download_url);
-  if (!downloadUrl) {
-    throw new Error("MiniMax generated video metadata missing download_url");
-  }
-  const video = await downloadVideoFromUrl({
-    url: downloadUrl,
-    timeoutMs: params.timeoutMs,
-    maxBytes: params.maxBytes,
-    policy: params.policy,
-  });
-  return {
-    ...video,
-    fileName: normalizeOptionalString(metadata.file?.filename) || video.fileName,
-  };
 }
 
 export function buildMinimaxVideoGenerationProvider(
@@ -381,21 +289,84 @@ export function buildMinimaxVideoGenerationProvider(
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         policy: requestPolicy,
       };
-      const video = videoUrl
-        ? await downloadVideoFromUrl({
-            ...downloadOptions,
-            url: videoUrl,
-          })
-        : fileId
-          ? await downloadVideoFromFileId({
-              ...downloadOptions,
-              fileId,
-              headers,
-              baseUrl,
-            })
-          : (() => {
-              throw new Error("MiniMax video generation completed without a video URL or file_id");
-            })();
+      const downloadVideoFromUrl = (url: string) =>
+        downloadGeneratedVideoAsset({
+          url,
+          timeoutMs: downloadOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          fetchFn: fetch,
+          provider: "minimax",
+          label: "MiniMax generated video download",
+          requestFailedMessage: "MiniMax generated video download failed",
+          maxBytes: downloadOptions.maxBytes,
+          validateBinaryResponse: true,
+          chunkTimeoutMs: 0,
+          fetchResponse: async ({ timeoutMs }) =>
+            await fetchMinimaxResponse({
+              stage: "download",
+              url,
+              init: { method: "GET" },
+              timeoutMs,
+              requestFailedMessage: "MiniMax generated video download failed",
+              policy: downloadOptions.policy,
+            }),
+        });
+      let video: GeneratedVideoAsset;
+      if (videoUrl) {
+        video = await downloadVideoFromUrl(videoUrl);
+      } else if (fileId) {
+        const url = new URL(`${baseUrl}/v1/files/retrieve`);
+        url.searchParams.set("file_id", fileId);
+        const metadataDeadline = createProviderOperationDeadline({
+          timeoutMs: downloadOptions.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          label: "MiniMax generated video metadata",
+        });
+        const metadataTimeoutMs = createProviderOperationTimeoutResolver({
+          deadline: metadataDeadline,
+          defaultTimeoutMs: metadataDeadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        });
+        const { response: metadataResponse, release: releaseMetadata } = await fetchMinimaxResponse(
+          {
+            stage: "download",
+            url: url.toString(),
+            init: { method: "GET", headers },
+            timeoutMs: metadataTimeoutMs,
+            requestFailedMessage: "MiniMax generated video metadata request failed",
+            policy: downloadOptions.policy,
+          },
+        );
+        let metadata: MinimaxFileRetrieveResponse;
+        try {
+          metadata = await readProviderJsonResponse<MinimaxFileRetrieveResponse>(
+            metadataResponse,
+            "MiniMax generated video metadata",
+            {
+              timeoutMs: metadataTimeoutMs,
+              onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+                new Error(
+                  `MiniMax generated video metadata timed out after ${metadataDeadline.timeoutMs ?? bodyTimeoutMs}ms`,
+                ),
+            },
+          );
+        } finally {
+          await releaseMetadata();
+        }
+        assertMinimaxBaseResp(
+          metadata.base_resp,
+          "MiniMax generated video metadata request failed",
+        );
+        const downloadUrl = normalizeOptionalString(metadata.file?.download_url);
+        if (!downloadUrl) {
+          throw new Error("MiniMax generated video metadata missing download_url");
+        }
+        const downloaded = await downloadVideoFromUrl(downloadUrl);
+        video = {
+          ...downloaded,
+          fileName: normalizeOptionalString(metadata.file?.filename) || downloaded.fileName,
+        };
+      } else {
+        throw new Error("MiniMax video generation completed without a video URL or file_id");
+      }
       return {
         videos: [video],
         model,

@@ -14,7 +14,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { composerContextWrapper, createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
 import {

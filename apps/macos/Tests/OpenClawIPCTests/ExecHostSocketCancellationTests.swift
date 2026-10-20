@@ -19,7 +19,7 @@ struct ExecHostSocketCancellationTests {
 
     @Test
     func `normal request half-close still receives native execution result`() async throws {
-        try await self.withServer { server, root, fixture in
+        try await self.withServer(usePolicyOwner: true) { server, root, fixture in
             let client = fixture.client
             try self.send(command: ["/usr/bin/printf", "half-close-ok"], root: root, client: client)
             #expect(shutdown(client, SHUT_WR) == 0)
@@ -118,7 +118,6 @@ struct ExecHostSocketCancellationTests {
         try await TestIsolation.withIsolatedState {
             let root = try ExecApprovalsSocketTestSupport.makeRoot()
             defer { try? FileManager.default.removeItem(at: root) }
-            try await self.seed(root)
             let sentinel = root.appendingPathComponent("unexpected")
             let request = ExecHostRequest(command: ["/usr/bin/touch", sentinel.path], cwd: root.path)
             let response = await Task.detached {
@@ -134,12 +133,15 @@ struct ExecHostSocketCancellationTests {
 
     private func withServer(
         admissionDelay: Duration = .zero,
+        usePolicyOwner: Bool = false,
         _ body: (ExecApprovalsSocketServer, URL, CancellationFixture) async throws -> Void) async throws
     {
         try await TestIsolation.withIsolatedState {
             let root = try ExecApprovalsSocketTestSupport.makeRoot()
             defer { try? FileManager.default.removeItem(at: root) }
-            try await self.seed(root)
+            if usePolicyOwner {
+                try await self.seed(root)
+            }
             let fixture = try CancellationFixture(root: root)
             let server = ExecApprovalsSocketServer(
                 socketPath: root.appendingPathComponent("exec.sock").path,
@@ -147,8 +149,12 @@ struct ExecHostSocketCancellationTests {
                 onPrompt: { _ in .deny },
                 onExec: { request in
                     if admissionDelay > .zero { try? await Task.sleep(for: admissionDelay) }
-                    let response = await ExecApprovalsStore.withStateDirectory(root) {
-                        await ExecHostExecutor.handle(request)
+                    let response = if usePolicyOwner {
+                        await ExecApprovalsStore.withStateDirectory(root) {
+                            await ExecHostExecutor.handle(request)
+                        }
+                    } else {
+                        await ExecApprovalsSocketTestSupport.runApprovedCommand(request)
                     }
                     fixture.record(response)
                     return response

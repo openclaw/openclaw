@@ -314,7 +314,6 @@ export class AgentsApiClient {
   async pendingFunctionCalls(
     sessionId: string,
     signal: AbortSignal,
-    connectEnvironment?: (environmentId: string) => Promise<void>,
   ): Promise<AgentsApiFunctionCall[]> {
     const session = sessionSchema.parse(await this.session(sessionId, signal));
     if (session.status === "failed") {
@@ -330,11 +329,7 @@ export class AgentsApiClient {
         session.environment.type === "self_hosted" &&
         action.environment_id === session.environment.id
       ) {
-        if (connectEnvironment) {
-          await connectEnvironment(action.environment_id);
-          this.assertCurrent();
-        }
-        // Without a deployment callback, the operator's executor connects independently.
+        // The operator owns connecting the external executor.
         continue;
       }
       if (action.type !== "function_call") {
@@ -343,15 +338,6 @@ export class AgentsApiClient {
       calls.push(action);
     }
     return calls;
-  }
-
-  async environment(environmentId: string, signal: AbortSignal) {
-    const environment = await this.environments.retrieve(environmentId, { signal });
-    this.assertCurrent();
-    if (environment.id !== environmentId) {
-      throw new Error("Agents API returned a different environment");
-    }
-    return environment;
   }
 
   async toolResult(

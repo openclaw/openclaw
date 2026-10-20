@@ -154,7 +154,10 @@ it("limits creators to the current combined-store scope across configuration cha
         requestContext,
       );
       expect(listed[0]?.[1]).toMatchObject({ identities: expected });
-      expect(getSessionRowProjection(requestContext)!.selectEntries()).toHaveLength(2);
+      const projection = getSessionRowProjection(requestContext)!;
+      // Sharing prepares metadata only; this inventory assertion needs full row facts.
+      await projection.ensureMaterialized();
+      expect(projection.selectEntries()).toHaveLength(2);
     }
   }));
 

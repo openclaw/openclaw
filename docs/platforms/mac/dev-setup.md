@@ -285,6 +285,10 @@ dependencies local. The artifact omits UI, plugin, and sealed remote-worker outp
 It waits for the existing Linux build instead of rebuilding
 the runtime and plugins on a macOS runner. The prepared CLI remains the normal
 production launcher, including request validation, state ownership, and cleanup.
+The default suite keeps real CLI coverage in the native cwd, socket half-close,
+and skill-policy commit cases. The larger socket cancellation and Gateway trust
+matrices exercise the in-process execution boundary with prepared authorization;
+they do not launch a CLI for each setup, policy read, and repeated commit.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
 `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
 bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;

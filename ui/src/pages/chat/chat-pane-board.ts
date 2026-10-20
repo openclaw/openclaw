@@ -579,8 +579,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected pageBoardWidgetMenu(
     layout: SidebarLayout | undefined,
-    board = this.resolveBoardView(),
   ): BoardWidgetPageMenu | undefined {
+    const board = this.resolveBoardView();
     const widget = this.pageBoardWidget(layout, board);
     if (!widget) {
       return undefined;

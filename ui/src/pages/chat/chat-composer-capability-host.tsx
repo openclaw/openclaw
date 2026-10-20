@@ -236,15 +236,6 @@ export class ChatComposerCapabilityHost {
     }
   }
 
-  private closeAddDialog(): void {
-    if (this.addBusy) {
-      return;
-    }
-    this.addDialogOpen = false;
-    this.addError = null;
-    this.publish();
-  }
-
   private addServerBlockedReason(
     context: ApplicationContext,
     state: ChatPageHost,
@@ -369,12 +360,13 @@ export class ChatComposerCapabilityHost {
       error: this.addError,
       scopeBlockedReason: this.addServerBlockedReason(context, state, session, "everywhere"),
       submitBlockedReason: this.addServerBlockedReason(context, state, session, this.addScope),
-      onCancel: (event?: Event) => {
+      onCancel: () => {
         if (this.addBusy) {
-          event?.preventDefault();
           return;
         }
-        this.closeAddDialog();
+        this.addDialogOpen = false;
+        this.addError = null;
+        this.publish();
       },
       onScopeChange: (scope: ComposerMcpServerScope) => {
         this.addScope = scope;

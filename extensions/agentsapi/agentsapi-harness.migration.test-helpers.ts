@@ -9,7 +9,7 @@ import { expect, it, vi } from "vitest";
 import type { StoredBinding } from "./agentsapi-binding-record.js";
 import {
   createAttempt,
-  executorFixture,
+  externalSessionFixture,
   mockClient,
   registerHarness,
   reopenState,
@@ -255,7 +255,7 @@ export function registerMigrationTests(
     "settles unmigratable legacy work before %s with current agent authentication",
     (operation) =>
       withOpenClawTestState({ label: "agentsapi-upgrade-cleanup" }, async (state) => {
-        const { params, ...fixture } = await executorFixture(state);
+        const { params, ...fixture } = await externalSessionFixture(state);
         const store = migrationStore(state.env);
         await store.register(params.sessionId, legacy);
         await reopenState();
@@ -291,7 +291,7 @@ export function registerMigrationTests(
           );
           const cancelledIds = fixture.cancel.mock.calls.map(([id]) => id);
           expect(cancelledIds).toEqual([legacy.sessionId, legacy.sessionId]);
-          expectNoCalls(fixture.controller.retire, fixture.create);
+          expectNoCalls(fixture.create);
         } finally {
           await harness.dispose();
         }

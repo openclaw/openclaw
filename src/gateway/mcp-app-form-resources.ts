@@ -261,34 +261,35 @@ export async function executeMcpAppFormResource(
     throw new Error("MCP form resource request limit reached");
   }
   form.operations += 1;
-  const caller = readGatewayRequestMutationAuthority(options);
-  const read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
-  const authorized = prepareQuestionAuthorization(
-    options,
-    observation,
-    record.id,
-    parsed.action === "upload" ? "mutate" : "read",
-  );
-  const assertCurrent = () => {
-    caller.assertCurrent();
-    options.sessionMutationAuthorization?.assertCurrent();
-    read?.assertCurrent();
-    owner.assertCurrent();
-    if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
-      throw new Error("MCP App runtime is unavailable");
-    }
-    if (
-      manager.get(record.id) !== record ||
-      !observation.isCurrent() ||
-      record.status !== "pending" ||
-      resolveMcpAppRequesterId(options.client) !== form.origin.requesterId ||
-      owner.pending.get(record.id)?.record !== record
-    ) {
-      throw new Error("Question resource authority expired");
-    }
-  };
   form.activeOperations += 1;
+  let read: Awaited<ReturnType<typeof retainSessionScopedRead>>;
   try {
+    const caller = readGatewayRequestMutationAuthority(options);
+    read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
+    const authorized = prepareQuestionAuthorization(
+      options,
+      observation,
+      record.id,
+      parsed.action === "upload" ? "mutate" : "read",
+    );
+    const assertCurrent = () => {
+      caller.assertCurrent();
+      options.sessionMutationAuthorization?.assertCurrent();
+      read?.assertCurrent();
+      owner.assertCurrent();
+      if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
+        throw new Error("MCP App runtime is unavailable");
+      }
+      if (
+        manager.get(record.id) !== record ||
+        !observation.isCurrent() ||
+        record.status !== "pending" ||
+        resolveMcpAppRequesterId(options.client) !== form.origin.requesterId ||
+        owner.pending.get(record.id)?.record !== record
+      ) {
+        throw new Error("Question resource authority expired");
+      }
+    };
     await withPreparedQuestionSessions(
       options,
       [authorized.target],

@@ -9,7 +9,6 @@ ui/src/components/confirm-dialog-view.tsx	1
 ui/src/components/input-dialog-view.tsx	1
 ui/src/components/panel-tab-strip-solid.tsx	1
 ui/src/components/select-picker-view.tsx	2
-ui/src/components/sidebar-agent-roster.tsx	1
 ui/src/components/sidebar-outbox-item.tsx	1
 ui/src/components/solid/mcp-app-panel.tsx	2
 ui/src/components/solid/menu.tsx	2
