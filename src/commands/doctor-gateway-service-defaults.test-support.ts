@@ -1,17 +1,9 @@
-import { expect, it, type Mock } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { mocks as nativeMocks } from "./doctor-gateway-services.native.test-support.js";
 
 type ServiceDefaultsTestContext = {
-  mocks: {
-    readCommand: Mock;
-    buildGatewayInstallPlan: Mock;
-    auditGatewayServiceConfig: Mock;
-    resolveGatewayPort: Mock;
-    install: Mock;
-    stage: Mock;
-    restart: Mock;
-    note: Mock;
-  };
+  mocks: typeof nativeMocks;
   gatewayProgramArguments: string[];
   runRepair: (config: OpenClawConfig) => Promise<void>;
   mockProcessPlatform: (platform: NodeJS.Platform) => void;

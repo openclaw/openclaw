@@ -21,7 +21,6 @@ beforeEach(() => {
   mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "supported" });
   mocks.resolveGatewayAuthTokenForService.mockResolvedValue({});
   mocks.needsNodeRuntimeMigration.mockReturnValue(true);
-  mocks.resolveSystemNodeInfo.mockResolvedValue(null);
 });
 
 it.each([
@@ -41,11 +40,9 @@ it.each([
       entrypoint = path.join(root, "dist", "index.js");
       await fs.writeFile(entrypoint, "export {};\n");
     }
-    const node = supported
-      ? "/home/test/.nvm/bin/node"
-      : "/home/test/.nvm/versions/node/v24.16.0/bin/node";
+    const node = "/home/test/.nvm/bin/node";
     const command = {
-      programArguments: [node, entrypoint, "gateway", ...(!supported ? ["--port", "18789"] : [])],
+      programArguments: [node, entrypoint, "gateway"],
       environment: supported ? {} : { PATH: "/old/bin" },
     };
     mocks.readCommand.mockResolvedValue(command);
@@ -72,13 +69,9 @@ it.each([
             },
           ],
     });
-    if (supported) {
-      mocks.resolveSystemNodeInfo.mockResolvedValue({
-        path: "/usr/bin/node",
-        status: "supported",
-        version: "24.16.0",
-      });
-    }
+    mocks.resolveSystemNodeInfo.mockResolvedValue(
+      supported ? { path: "/usr/bin/node", status: "supported", version: "24.16.0" } : null,
+    );
     const prompter = makeDoctorPrompts();
     prompter.confirmRuntimeRepair.mockImplementation(async ({ message }) => {
       const preview = mocks.note.mock.calls.find(

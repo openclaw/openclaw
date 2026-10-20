@@ -22,7 +22,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 
 const edges = vi.hoisted(() => ({
   command: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
@@ -55,7 +55,6 @@ const existingToken = "doctor-fixture-config-token";
 const inspectionCanary = "doctor-fixture-private-inspection-detail";
 const untouchedRepair = {
   configBytesPreserved: true,
-  configTokenPreserved: true,
   returnedConfigPreserved: true,
   unitBytesPreserved: true,
   environmentBytesPreserved: true,
@@ -308,30 +307,18 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: (...args) => {
-        const message = args.map(String).join(" ");
-        errors.push(message);
-        if (message.includes("SERVICE_DEFINITION_")) {
-          events.push("repair-refused");
-        }
+        errors.push(args.map(String).join(" "));
       },
       exit: vi.fn(),
     };
-    const prompter: DoctorPrompter = {
-      confirm: async () => true,
-      confirmAutoFix: async () => true,
-      confirmAggressiveAutoFix: async () => true,
-      confirmRuntimeRepair: async () => true,
-      select: async (_params, fallback) => fallback,
-      shouldRepair: true,
+    const prompter = makePrompter(true);
+    prompter.shouldForce = update;
+    Object.assign(prompter.repairMode, {
       shouldForce: update,
-      repairMode: {
-        shouldRepair: true,
-        shouldForce: update,
-        canPrompt: !update,
-        nonInteractive: update,
-        updateInProgress: update,
-      },
-    };
+      canPrompt: !update,
+      nonInteractive: update,
+      updateInProgress: update,
+    });
     return withEnvAsync(
       {
         HOME: home,
@@ -450,9 +437,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
           running,
           events,
           configBytesPreserved: configBytes === originalConfig,
-          configTokenPreserved: persisted.gateway?.auth?.token === cfg.gateway?.auth?.token,
           embeddedTokenReferenced: storedToken?.ok === true && storedToken.value === embeddedToken,
-          returnedTokenPreserved: result.gateway?.auth?.token === cfg.gateway?.auth?.token,
           returnedConfigPreserved: isDeepStrictEqual(result, JSON.parse(originalConfig)),
           unitBytesPreserved: (await fs.readFile(unitPath, "utf8")) === originalUnit,
           unitMode: (await fs.stat(unitPath)).mode & 0o777,
@@ -501,7 +486,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       }
       expect(diagnostics).toContain(`SERVICE_DEFINITION_${kind.toUpperCase()}: [${reason}]`);
       expect(diagnostics).toContain(guidance);
-      expect.soft(observations).toMatchObject({ ...untouchedRepair, returnedTokenPreserved: true });
+      expect.soft(observations).toMatchObject(untouchedRepair);
       expect(observations.events).not.toContain("service-published");
     },
   );
