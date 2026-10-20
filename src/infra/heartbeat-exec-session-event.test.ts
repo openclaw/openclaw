@@ -40,6 +40,7 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
+import { bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { seedHeartbeatScratchForTest } from "./heartbeat-runner.test-utils.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
@@ -180,13 +181,13 @@ it.for(["none", "alerts-disabled", "visible"] as const)(
         });
         let completion: ReturnType<typeof sessionEvents.enqueueSessionEventForHost> | undefined;
         try {
+          bindHeartbeatSend("telegram", sendHeartbeat);
           const periodic = await runHeartbeatOnce({
             cfg: config,
             agentId: "main",
             source: "interval",
             intent: "scheduled",
             reason: "interval",
-            deps: { telegram: sendHeartbeat },
           });
           expect(periodic).toMatchObject({ status: "ran" });
           completion = await withinTest(completionCreated.promise, signal);

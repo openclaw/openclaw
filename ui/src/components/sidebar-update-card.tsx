@@ -17,7 +17,6 @@ import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
   isUpdateActionable,
-  getUpdateGitRevisions,
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -28,8 +27,8 @@ import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import { SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { UpdateGitRevisions } from "./solid/update-git-revisions.tsx";
 import "./tooltip.ts";
-import "../styles/update-git-revisions.css";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
@@ -550,9 +549,13 @@ export function SidebarUpdateCard(
               {t("updates.reviewUpdate")}
             </button>
           </Show>
-          {actionable() && !busy() && !checking() && !targetCheckFailed()
-            ? renderUpdateGitRevisions(props.updateSchedule, props.updateAvailable)
-            : null}
+          <Show when={actionable() && !busy() && !checking() && !targetCheckFailed()}>
+            <UpdateGitRevisions
+              schedule={props.updateSchedule}
+              updateAvailable={props.updateAvailable}
+              compareLinkRef={sidebarAttentionFocusRef()}
+            />
+          </Show>
         </div>
       </Show>
     );
@@ -590,38 +593,5 @@ export function SidebarUpdateCard(
         <CompactCard />
       </Show>
     </openclaw-sidebar-update-card>
-  );
-}
-
-function renderUpdateGitRevisions(
-  schedule: UpdateScheduleState | null | undefined,
-  updateAvailable: UpdateAvailable | null | undefined,
-) {
-  const revisions = getUpdateGitRevisions(schedule, updateAvailable);
-  if (!revisions) {
-    return null;
-  }
-  return (
-    <div class="update-git-revisions">
-      <span class="update-git-revisions__range" dir="ltr">
-        {revisions.currentSha ? (
-          <>
-            <code title={revisions.currentSha}>{revisions.currentSha.slice(0, 8)}</code>
-            <span aria-hidden="true">→</span>
-          </>
-        ) : null}
-        <code title={revisions.targetSha}>{revisions.targetSha.slice(0, 8)}</code>
-      </span>
-      {revisions.compareUrl ? (
-        <a
-          ref={sidebarAttentionFocusRef()}
-          href={revisions.compareUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {t("updates.target.viewChanges")} <span aria-hidden="true">↗</span>
-        </a>
-      ) : null}
-    </div>
   );
 }

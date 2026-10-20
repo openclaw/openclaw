@@ -44,7 +44,7 @@ import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
-import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
@@ -210,7 +210,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       await reach(aborted.promise, "deletion did not abort its run");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
       expect(operation.result).toMatchObject({ kind: "aborted" });
-      expect(resolveSessionRunProgressState(session.sessionId)).toBeUndefined();
       expect(getActiveNativeAttempt(session.sessionId)).toBe(handle);
       expect(ownerSettled).toBe(false);
       await refuseLatePatch("before-run-settlement");
@@ -501,7 +500,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   );
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
                   expect(operation.result).toMatchObject({ kind: "aborted" });
-                  expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
                   expect(getActiveNativeAttempt(sessionId)).toBe(handle);
                   expect(ownerSettled).toBe(false);
                   const relocatedWorkspace = state.path("workspace-relocated");
@@ -534,7 +532,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
-                expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
+                expect(isSessionRunActive(sessionId)).toBe(false);
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                 await expect(operations.session("gone")).rejects.toThrow();
                 await expectDeletedStorage(state, agentId, workspace, databasePath);
@@ -553,7 +551,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     message,
                   });
                 }
-                expect(resolveSessionRunProgressState(recreatedSession.sessionId)).toBeUndefined();
+                expect(isSessionRunActive(recreatedSession.sessionId)).toBe(false);
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {

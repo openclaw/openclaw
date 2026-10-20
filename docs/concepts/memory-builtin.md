@@ -362,7 +362,7 @@ Builtin now covers most QMD use cases with:
 - hybrid BM25 and vector retrieval by default, followed by temporal decay,
   importance, and project affinity before MMR diversity,
 - bounded lexical query expansion for conversational searches,
-- string or `{ path, pattern }` entries in `memory.search.extraPaths`, and
+- string or `{ path, pattern, evergreen }` entries in `memory.search.extraPaths`, and
 - optional image and audio indexing under `extraPaths` only.
 
 QMD query mode's learned cross-encoder reranking and HyDE generation are not

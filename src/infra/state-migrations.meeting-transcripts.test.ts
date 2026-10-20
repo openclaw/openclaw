@@ -412,7 +412,6 @@ describe("meeting transcript Doctor migration", () => {
         expect(interrupted.changes.join("\n")).toContain("modified meeting transcript export");
       }
       const pending = h.detect();
-      expect(pending.pendingImportCount).toBe(1);
       if (stage === "archive") {
         expect(pending.hasLegacy).toBe(true);
       }
@@ -576,7 +575,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     const before = h.snapshot();
     await expectMissing(h.root);
     expect(detectLegacyMeetingTranscripts({ stateDir: h.stateDir }).hasLegacy).toBe(false);
-    expect(h.detect()).toMatchObject({ hasLegacy: true, pendingImportCount: 0 });
+    expect(h.detect()).toMatchObject({ hasLegacy: true });
     expect(h.snapshot()).toEqual(before);
 
     const result = await h.migrate();
@@ -661,7 +660,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     expect(after.sessions.find((row) => row.session_id === sessionId)?.session_slug).toBe(
       safeTranscriptPathSegment(sessionId),
     );
-    expect(h.detect()).toMatchObject({ hasLegacy: true, pendingImportCount: 1 });
+    expect(h.detect()).toMatchObject({ hasLegacy: true });
     expect((await h.migrate()).changes).toEqual([]);
     expect(h.snapshot()).toEqual(after);
   });

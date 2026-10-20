@@ -1,6 +1,7 @@
 import { EventEmitter, once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 import { ImapFlow } from "imapflow";
+import { authenticate } from "mailauth";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
@@ -13,6 +14,11 @@ import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
 import { createImapAuthResult, createImapTestRuntime } from "./imap-test-support.js";
 import type { ImapCursor } from "./state.js";
 import { ImapAccountWatcher } from "./watcher.js";
+
+vi.mock("mailauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("mailauth")>();
+  return { ...actual, authenticate: vi.fn(actual.authenticate) };
+});
 
 type MailFixture = { uid: number; raw: string };
 
@@ -204,6 +210,7 @@ afterEach(async () => {
   await Promise.all(activeWatchers.splice(0).map((watcher) => watcher.stop()));
   await Promise.all(activeServers.splice(0).map((server) => server.close()));
   vi.restoreAllMocks();
+  vi.mocked(authenticate).mockReset();
 });
 
 async function startWatcher(
@@ -290,14 +297,13 @@ async function startWatcher(
     },
     serviceHealth: { clearFailure: vi.fn(), reportFailure: vi.fn(resolveFailure) },
   };
-  const authenticator = vi.fn(async () => createImapAuthResult("pass"));
+  const authenticator = vi.mocked(authenticate).mockResolvedValue(createImapAuthResult("pass"));
   const watcher = new ImapAccountWatcher({
     accountId: "inbox",
     account,
     runtime,
     state,
     context,
-    authenticator,
     // Exercise real reconnects without waiting through production backoff intervals.
     reconnectBaseMs: 5,
   });
