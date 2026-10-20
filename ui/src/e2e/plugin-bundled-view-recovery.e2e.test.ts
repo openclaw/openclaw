@@ -1,6 +1,5 @@
-// Source-blind browser proof for bundled plugin lazy-view recovery.
-import path from "node:path";
 import { expect, it } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiE2eBuiltModuleRequest,
@@ -10,6 +9,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI bundled plugin lazy-view recovery",
@@ -20,26 +20,18 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("stops automatic reloads after one failed recovery and keeps manual Reload", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const capture = (name: string) =>
-        page.screenshot({
-          fullPage: true,
-          path: path.join(suite.artifactDir, name + ".png"),
-        });
       const gateway = await installMockGateway(page, {
         controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
         methodResponses: {
           "logbook.days": { days: [] },
           "logbook.status": {
-            analysisIntervalMinutes: 15,
             analysisRunning: false,
             captureEnabled: true,
             captureIntervalSeconds: 30,
             capturePaused: false,
             pendingFrames: 0,
-            retentionDays: 30,
             timeZone: "UTC",
             today: "2026-08-12",
-            todayCards: 0,
             visionModelSource: "missing",
           },
           "logbook.timeline": {
@@ -53,12 +45,7 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}plugin?plugin=missing&id=missing`);
       expect(response?.status()).toBe(200);
       await page.getByText("Plugin panel unavailable").waitFor();
-      await capture("before");
-
-      let markDocumentReachable!: () => void;
-      const documentReachable = new Promise<void>((resolve) => {
-        markDocumentReachable = resolve;
-      });
+      const documentReachable = createDeferredCore();
       let documentProbes = 0;
       await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
         if (route.request().method() !== "HEAD") {
@@ -66,7 +53,7 @@ suite.define(() => {
           return;
         }
         documentProbes += 1;
-        await documentReachable;
+        await documentReachable.promise;
         await route.fulfill({ status: 200 });
       });
       const failure = await failControlUiModuleForDocuments(
@@ -74,15 +61,8 @@ suite.define(() => {
         controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.tsx"),
         2,
       );
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar
-        .locator(".sidebar-rail")
-        .getByRole("button", { name: "Pages", exact: true })
-        .click();
-      await sidebar
-        .locator(".sidebar-pages")
-        .getByRole("link", { name: "Logbook", exact: true })
-        .click();
+      const pages = await openSidebarPages(page);
+      await pages.getByRole("link", { name: "Logbook", exact: true }).click();
       await expect.poll(failure.documentCount).toBe(1);
 
       const alert = page.getByRole("alert");
@@ -91,7 +71,6 @@ suite.define(() => {
       expect(await alert.textContent()).not.toContain("updated in the background");
       expect(await alert.textContent()).toContain("Failed to fetch dynamically imported module");
       await alert.getByRole("button", { name: "Reload" }).waitFor();
-      await capture("failure");
 
       let documentRequestCount = 0;
       page.on("request", (request) => {
@@ -99,13 +78,11 @@ suite.define(() => {
           documentRequestCount += 1;
         }
       });
-      markDocumentReachable();
+      documentReachable.resolve();
 
       await expect.poll(failure.documentCount).toBe(2);
       await alert.waitFor();
-      expect(documentProbes).toBe(1);
-      expect(await alert.count()).toBe(1);
-      expect(documentRequestCount).toBe(1);
+      expect([documentProbes, await alert.count(), documentRequestCount]).toEqual([1, 1, 1]);
 
       await alert.getByRole("button", { name: "Reload" }).click();
       await page.locator(".logbook").waitFor();
@@ -114,7 +91,6 @@ suite.define(() => {
       expect(documentRequestCount).toBe(2);
       expect(documentProbes).toBe(2);
       await gateway.waitForRequest("logbook.status");
-      await capture("recovered");
       expect(new URL(page.url()).pathname).toBe("/plugin");
     });
   });

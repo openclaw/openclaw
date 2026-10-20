@@ -14,6 +14,9 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1280, height: 1000 }, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
+        const initialConfig = { channels: { nostr: { enabled: true } } };
+        const snapshot = (revision: number) =>
+          configSnapshot(initialConfig, `nostr-config-${revision}`);
         const errors: string[] = [],
           assets: Array<{ url: string; status: number }> = [];
         page.on("pageerror", (error) => errors.push(error.message));
@@ -22,22 +25,13 @@ suite.define(() => {
             assets.push({ url: new URL(response.url()).pathname, status: response.status() });
           }
         });
-        const writes: Array<{ method: string; path: string; body: unknown }> = [];
+        const writes: Array<[method: string, path: string, body: unknown]> = [];
         await page.route("**/api/channels/nostr/**", async (route) => {
           const request = route.request();
-          writes.push({
-            method: request.method(),
-            path: new URL(request.url()).pathname,
-            body: request.postDataJSON(),
-          });
-          await route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            body: JSON.stringify({ ok: true, persisted: true }),
-          });
+          writes.push([request.method(), new URL(request.url()).pathname, request.postDataJSON()]);
+          await route.fulfill({ json: { ok: true, persisted: true } });
         });
         const gateway = await installMockGateway(page, {
-          communityInvite: false,
           methodResponses: {
             "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
             "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
@@ -59,16 +53,7 @@ suite.define(() => {
               },
               channelDefaultAccountId: { nostr: "main/account" },
             },
-            "channels.pairing.list": {
-              accounts: [],
-              requests: [],
-              commandOwnerConfigured: true,
-              limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-            },
-            "config.get": configSnapshot(
-              { channels: { nostr: { enabled: true } } },
-              "nostr-config-1",
-            ),
+            "config.get": snapshot(1),
             "config.schema": configSchema(
               objectSchema("", {
                 channels: objectSchema("", {
@@ -92,9 +77,7 @@ suite.define(() => {
         const detail = page.locator(".channels-detail");
         await expect(detail.getByRole("heading", { name: "Nostr", exact: true })).toBeVisible();
         await expect(detail).toContainText("Decentralized DMs via Nostr relays (NIP-04).");
-        expect(assets.some((asset) => asset.url.endsWith(".js") && asset.status === 200)).toBe(
-          true,
-        );
+        expect(assets.some((asset) => asset.url.endsWith(".js"))).toBe(true);
         expect(assets.every((asset) => asset.status === 200)).toBe(true);
         await expect(detail.locator(".settings-group").first()).toHaveCSS(
           "border-top-style",
@@ -109,21 +92,18 @@ suite.define(() => {
         await expect(detail.locator("#nostr-profile-name")).toHaveValue("Alice Updated");
         await detail.getByRole("button", { name: "Save & Publish", exact: true }).click();
         await expect(detail).toContainText("Profile published to relays.");
+        const emptyProfile = Object.fromEntries(
+          ["displayName", "about", "picture", "banner", "website", "nip05", "lud16"].map((key) => [
+            key,
+            "",
+          ]),
+        );
         expect(writes).toEqual([
-          {
-            method: "PUT",
-            path: "/api/channels/nostr/main%2Faccount/profile",
-            body: {
-              name: "Alice Updated",
-              displayName: "",
-              about: "",
-              picture: "",
-              banner: "",
-              website: "",
-              nip05: "",
-              lud16: "",
-            },
-          },
+          [
+            "PUT",
+            "/api/channels/nostr/main%2Faccount/profile",
+            { name: "Alice Updated", ...emptyProfile },
+          ],
         ]);
         const enabled = detail.getByRole("switch", { name: "Enabled" });
         await expect(enabled).toBeChecked();
@@ -150,10 +130,7 @@ suite.define(() => {
             channels: { nostr: { enabled: false } },
           });
         }, true);
-        await gateway.setMethodResponse(
-          "config.get",
-          configSnapshot({ channels: { nostr: { enabled: true } } }, "nostr-config-2"),
-        );
+        await gateway.setMethodResponse("config.get", snapshot(2));
         const beforeReload = (await gateway.getRequests("config.get")).length;
         await refreshAfter(async () => {
           await detail.getByRole("button", { name: "Reload", exact: true }).click();

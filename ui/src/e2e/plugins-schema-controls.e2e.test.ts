@@ -1,4 +1,3 @@
-import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { JsonSchema } from "../components/config-form.shared.ts";
@@ -59,18 +58,9 @@ suite.define(() => {
     },
   ])(
     "edits and reloads a $name without splitting its value",
-    async ({ name, schema, before, after, json }) => {
+    async ({ schema, before, after, json }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const saved = pluginConfig(before);
-        const capture = async (stage: string) => {
-          if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `${name.replaceAll(" ", "-")}-${stage}.png`),
-              animations: "disabled",
-              caret: "hide",
-            });
-          }
-        };
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.read", "operator.admin"],
           methodResponses: {
@@ -105,7 +95,6 @@ suite.define(() => {
           exact: true,
         });
         await editor.first().waitFor();
-        await capture("initial");
         if (json) {
           const input = editor.locator("textarea");
           await input.waitFor();
@@ -128,7 +117,6 @@ suite.define(() => {
         } else {
           await expect.poll(() => choice.isChecked()).toBe(true);
         }
-        await capture("saved");
       });
     },
   );

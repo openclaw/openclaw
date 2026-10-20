@@ -1,9 +1,7 @@
-import path from "node:path";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  captureUiProofEnabled,
+  chatMessage,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -58,18 +56,9 @@ suite.define(() => {
               id: "alice",
               name: "Alice",
               identity: actor.identity,
-              deviceFamily: "Mac",
-              platform: "macOS",
-              onlineSince: now - 3_600_000,
-              lastActivityAt: now - 600_000,
             },
           ],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Ready for the design review." }],
-            },
-          ],
+          historyMessages: [chatMessage("assistant", "Ready for the design review.")],
           methodResponses: {
             "sessions.list": {
               cases: [{ match: { involvingMe: true }, response: filtered }, { response: all }],
@@ -81,7 +70,6 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const sessionList = sidebar.locator(".sidebar-session-content");
         const personalRow = sessionList.locator(`[data-session-key="${personal}"]`);
-        // My sessions belongs to Viewer, not to the people whose cards we inspect.
         await expectBrowser(personalRow).toHaveCount(0);
         await selectAllSidebarSessions(page);
         await expectBrowser(personalRow).toBeVisible();
@@ -96,19 +84,10 @@ suite.define(() => {
         const card = page.getByRole("dialog", { name: "Activity for Alice" });
         await expectBrowser(card).toBeVisible();
         await expectBrowser(card.getByRole("link", { name: /Shared design review/ })).toBeVisible();
-        if (captureUiProofEnabled) {
-          const directory = createControlUiE2eArtifactDir("person-card-filters");
-          await page.screenshot({
-            path: path.join(directory, "involving-me.png"),
-            animations: "disabled",
-          });
-        }
         const releaseLink = card.getByRole("link", { name: /Release checklist/ });
         await expectBrowser(releaseLink).toBeVisible();
         await releaseLink.click();
         await expect.poll(() => new URL(page.url()).pathname).toContain("release-checklist");
-        // Online is a separate view. Returning to Sessions must restore the
-        // involvement filter, rather than proving absence in an unmounted list.
         await sidebar.locator('[data-navigation-view="sessions"]').click();
         await expectBrowser(sidebar.locator("#sidebar-session-owner-title")).toHaveText(
           "Involving me",
