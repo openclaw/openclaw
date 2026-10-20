@@ -16,28 +16,30 @@ describe.runIf(browserMode)("Review header layout", () => {
   it("uses available width before truncating and preserves keyboard access to sync actions", async () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);
-    let panel!: HTMLElementTagNameMap["openclaw-session-diff"];
-    mountSolid(() =>
+    const mounted = mountSolid(() =>
       createComponent(SessionDiffPanel, {
-        ref: (element) => {
-          panel = element;
-        },
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          root,
+          branch,
+          baseRef: "main",
+          additions: 700,
+          deletions: 120,
+          files: [
+            { path: "added.ts", status: "added", additions: 600, deletions: 0 },
+            { path: "removed.ts", status: "deleted", additions: 0, deletions: 20 },
+            { path: "changed.ts", status: "modified", additions: 100, deletions: 100 },
+          ],
+        }),
       }),
     );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
     panel.style.cssText = "display:block;width:1100px;padding:8px";
-    panel.loader = async () => ({
-      sessionKey: "main",
-      root,
-      branch,
-      baseRef: "main",
-      additions: 700,
-      deletions: 120,
-      files: [
-        { path: "added.ts", status: "added", additions: 600, deletions: 0 },
-        { path: "removed.ts", status: "deleted", additions: 0, deletions: 20 },
-        { path: "changed.ts", status: "modified", additions: 100, deletions: 100 },
-      ],
-    });
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff__branch-label")?.textContent).toBe(
         `main → ${branch}`,

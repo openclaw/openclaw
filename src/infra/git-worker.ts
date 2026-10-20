@@ -480,6 +480,9 @@ async function executeOperation(
     }
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    if (options.diffTiming) {
+      options.diffTiming.revisionUnavailableReason = reply.revisionUnavailableReason;
+    }
     outcome = "returned";
     return reply.value;
   } finally {

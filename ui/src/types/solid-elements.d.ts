@@ -45,6 +45,7 @@ declare module "@solidjs/web" {
         attribution?: "created" | "owned" | "archived";
       };
       "openclaw-elapsed-time": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-tool-output": HTMLAttributes<HTMLElement>;
       "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
       "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
       "openclaw-chat-summary-automations": HTMLAttributes<HTMLElement>;
@@ -111,9 +112,6 @@ declare module "@solidjs/web" {
         };
       "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
         compact?: boolean;
-        placement?: "bottom-start" | "bottom-end";
-        "prop:activeEmoji"?: ReadonlySet<string>;
-        "prop:onSelect"?: (emoji: string, remove: boolean) => void;
       };
       "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
         "prop:recommendation"?: ClawHubRecommendation;

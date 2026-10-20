@@ -288,7 +288,6 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(fragment.sql);
   admitPostgresPhysicalFacts({
-    anchor: db.anchor,
     db,
     namespace: facts.namespace,
     storeId: facts.storeId,
