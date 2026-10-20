@@ -84,8 +84,6 @@ function fail(error: Error, auditOnly = false) {
   emitAcpLifecycleError({ runId, toolTracker, error, auditOnly });
 }
 
-const toolIdentity = { toolCallId: "call", toolName: "acp_read" };
-
 beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
@@ -170,8 +168,8 @@ it("emits metadata-only tool lifecycle events without ACP text or title", () => 
   emitTool(event, identity);
   emitTool({ ...event, tag: "tool_call_update", status: "completed" }, identity);
   expect(capturedTools).toMatchObject([
-    toolEvent("started", { runId, ...identity, ...toolIdentity }),
-    toolEvent("completed", { runId, ...identity, ...toolIdentity }),
+    toolEvent("started", { runId, ...identity, toolName: "acp_read" }),
+    toolEvent("completed", { runId, ...identity, toolName: "acp_read" }),
   ]);
   expect(JSON.stringify(capturedTools)).not.toContain(event.text);
 });
@@ -198,7 +196,6 @@ it("deduplicates repeated terminal tool updates until the ACP run ends", () => {
   end();
   update();
   expectCompletedTools(2);
-  end();
 });
 
 it("fails closed without evicting terminal identities at the tracking bound", () => {
@@ -219,7 +216,6 @@ it("fails closed without evicting terminal identities at the tracking bound", ()
   end();
   update("completed", "call-overflow");
   expectCompletedTools(8194);
-  end();
 });
 
 it("waits for terminal evidence before recording a tool without a call id", () => {

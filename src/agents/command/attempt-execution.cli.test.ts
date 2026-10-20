@@ -209,6 +209,37 @@ function firstEmbeddedAgentArg(callIndex = 0) {
   return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
 }
 
+function cliRetry(run: RunCliAgentParams, sessionId: string, fork = false) {
+  return expectDefined(
+    fork ? run.onBeforeForkedCliSessionRetry : run.onBeforeFreshCliSessionRetry,
+    fork ? "fork recovery" : "fresh recovery",
+  )({ provider: "claude-cli", reason: "timeout", sessionId });
+}
+
+async function persistFork(run: RunCliAgentParams, sessionId: string) {
+  await expectDefined(run.claimCliSessionFork, "fork claim")();
+  await expectDefined(run.persistCliSessionForkSuccessor, "fork persistence")(sessionId);
+}
+
+function settledCliResult(
+  context: Parameters<typeof buildCliRunResult>[0]["context"],
+  output: Parameters<typeof buildCliRunResult>[0]["output"],
+  effectiveCliSessionId: string,
+  bindingFlushOk = true,
+) {
+  return buildCliRunResult({
+    context,
+    output,
+    preparedReply: prepareCliRunTerminalReply(context, output),
+    effectiveCliSessionId,
+    bindingFlushOk,
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: false,
+    preparedContextAgentMeta: {},
+  });
+}
+
 describe("CLI attempt execution", () => {
   const fixtureRoot = createSuiteTempRootTracker({ prefix: "openclaw-cli-attempt-suite-" });
   let suiteRoot: string;
@@ -383,14 +414,17 @@ describe("CLI attempt execution", () => {
     await fixtureRoot.cleanup();
   });
 
-  async function createCliSession(sessionKey: string, sessionEntry: SessionEntry) {
+  async function createCliSession(
+    sessionKey: string,
+    sessionEntry = makeSessionEntry(`session-${sessionKey.split(":").at(-1)}`),
+  ) {
     const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
     let attemptNumber = 0;
     const runCli = (
-      params: {
-        body?: string;
-        runId?: string;
-        sessionEntry?: SessionEntry;
+      params: Omit<
+        Partial<RunAgentAttemptOverrides>,
+        "agentDir" | "workspaceDir" | "sessionKey" | "storePath"
+      > & {
         cwd?: string;
         abortSignal?: AbortSignal;
         onExecutionStarted?: () => void;
@@ -398,7 +432,7 @@ describe("CLI attempt execution", () => {
         classifyResult?: RunAgentAttemptParams["classifyResult"];
       } = {},
     ) => {
-      const { abortSignal, onExecutionStarted, ...attempt } = params;
+      const { abortSignal, onExecutionStarted, opts, ...attempt } = params;
       return runStoredAttempt({
         providerOverride: "claude-cli",
         modelOverride: "opus",
@@ -407,11 +441,11 @@ describe("CLI attempt execution", () => {
         sessionEntry,
         sessionKey,
         sessionStore,
-        opts: { onExecutionStarted, abortSignal },
+        opts: { onExecutionStarted, abortSignal, ...opts },
         ...attempt,
       });
     };
-    return { sessionStore, runCli };
+    return { sessionEntry, sessionStore, runCli };
   }
 
   async function createBoundSession(
@@ -951,17 +985,7 @@ describe("CLI attempt execution", () => {
       runId,
       workspaceDir: tmpDir,
     });
-    const cliResult = buildCliRunResult({
-      context,
-      output,
-      preparedReply: prepareCliRunTerminalReply(context, output),
-      effectiveCliSessionId: output.sessionId,
-      bindingFlushOk: false,
-      usedHistoryPrompt: false,
-      userTurnHandled: true,
-      sessionBindingDisabled: false,
-      preparedContextAgentMeta: {},
-    });
+    const cliResult = settledCliResult(context, output, output.sessionId, false);
     const provider: Parameters<typeof installSessionPlacementAdmissionProvider>[0] = {
       assertCompactionSuccessorAllowed: () => {},
       executeLocalTurn: async (_claim, runLocal) => await runLocal(),
@@ -1094,17 +1118,11 @@ describe("CLI attempt execution", () => {
           workspaceDir: tmpDir,
         });
         context.reusableCliSession = { mode: "reuse", sessionId: cliSessionId };
-        return buildCliRunResult({
+        return settledCliResult(
           context,
-          output: { text: "partial reply", terminalInterruption: { reason } },
-          preparedReply: prepareCliRunTerminalReply(context, { text: "partial reply" }),
-          effectiveCliSessionId: replacement ? successorCliSessionId : cliSessionId,
-          bindingFlushOk: true,
-          usedHistoryPrompt: false,
-          userTurnHandled: true,
-          sessionBindingDisabled: false,
-          preparedContextAgentMeta: {},
-        });
+          { text: "partial reply", terminalInterruption: { reason } },
+          replacement ? successorCliSessionId : cliSessionId,
+        );
       });
 
       await runCli({
@@ -1161,10 +1179,7 @@ describe("CLI attempt execution", () => {
     });
     let retryAllowed: boolean | undefined;
     runCliAgentMock.mockImplementationOnce(async (runArgs: RunCliAgentParams) => {
-      const retry = expectDefined(
-        runArgs.onBeforeFreshCliSessionRetry,
-        "fresh recovery",
-      )({ provider: "claude-cli", reason: "timeout", sessionId: cliSessionId });
+      const retry = cliRetry(runArgs, cliSessionId);
       // The real session read yields after the initial media check.
       registerGeneratedMediaTaskActivity("tool:image_generate:retry-read", sessionKey);
       retryAllowed = await retry;
@@ -1196,24 +1211,11 @@ describe("CLI attempt execution", () => {
           expect(runArgs.onBeforeForkedCliSessionRetry).toBeUndefined();
           expect(runArgs.onBeforeFreshCliSessionRetry).toBeTypeOf("function");
         }
-        await expectDefined(runArgs.claimCliSessionFork, "fork claim")();
-        await expectDefined(
-          runArgs.persistCliSessionForkSuccessor,
-          "fork persistence",
-        )(forkedCliSessionId);
+        await persistFork(runArgs, forkedCliSessionId);
         if (!recover) {
           throw finalizationError;
         }
-        await expect(
-          expectDefined(
-            runArgs.onBeforeFreshCliSessionRetry,
-            "fresh recovery",
-          )({
-            provider: "claude-cli",
-            reason: "timeout",
-            sessionId: forkedCliSessionId,
-          }),
-        ).resolves.toBe(true);
+        await expect(cliRetry(runArgs, forkedCliSessionId)).resolves.toBe(true);
         expect(claudeBinding(sessionStore[sessionKey])).toBeUndefined();
         return makeCliResult("hello after fork timeout");
       });
@@ -1290,19 +1292,8 @@ describe("CLI attempt execution", () => {
       name: "AbortError",
     });
     runCliAgentMock.mockImplementationOnce(async (runArgs: RunCliAgentParams) => {
-      await expectDefined(
-        runArgs.onBeforeForkedCliSessionRetry,
-        "fork recovery",
-      )({
-        provider: "claude-cli",
-        reason: "timeout",
-        sessionId: cliSessionId,
-      });
-      await expectDefined(runArgs.claimCliSessionFork, "fork claim")();
-      await expectDefined(
-        runArgs.persistCliSessionForkSuccessor,
-        "fork successor persistence",
-      )(forkedCliSessionId);
+      await cliRetry(runArgs, cliSessionId, true);
+      await persistFork(runArgs, forkedCliSessionId);
 
       const concurrentEntry = makeClaudeCliSessionEntry(
         sessionEntry.sessionId,
@@ -1310,18 +1301,8 @@ describe("CLI attempt execution", () => {
       );
       await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
       sessionStore[sessionKey] = concurrentEntry;
-      const clearBeforeFreshRetry = runArgs.onBeforeFreshCliSessionRetry;
-      expect(clearBeforeFreshRetry).toBeTypeOf("function");
-      await expect(
-        expectDefined(
-          clearBeforeFreshRetry,
-          "fresh recovery",
-        )({
-          provider: "claude-cli",
-          reason: "timeout",
-          sessionId: forkedCliSessionId,
-        }),
-      ).resolves.toBe(false);
+      expect(runArgs.onBeforeFreshCliSessionRetry).toBeTypeOf("function");
+      await expect(cliRetry(runArgs, forkedCliSessionId)).resolves.toBe(false);
       throw recoveryError;
     });
 
@@ -1376,23 +1357,18 @@ describe("CLI attempt execution", () => {
     // The persisted binding is cleared so no later turn can blindly --resume the
     // phantom session, but the candidate id still rides along to runCliAgent so
     // prepare can re-detect the missing transcript and arm raw-transcript reseed.
-    expect(firstRunCliAgentArg().cliSessionId).toBe("phantom-claude-session");
-    expect(firstRunCliAgentArg().cliSessionBinding).toEqual({
-      sessionId: "phantom-claude-session",
-      authProfileId: "anthropic:claude-cli",
+    expectMockArgFields(runCliAgentMock, {
+      cliSessionId: "phantom-claude-session",
+      cliSessionBinding: {
+        sessionId: "phantom-claude-session",
+        authProfileId: "anthropic:claude-cli",
+      },
     });
-    expect(claudeBinding(sessionStore[sessionKey])).toEqual({
-      sessionId: "session-cli",
-    });
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
-
-    const persisted = readSessionStore();
-    expect(claudeBinding(persisted[sessionKey])).toEqual({
-      sessionId: "session-cli",
-    });
-    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    for (const entry of [sessionStore[sessionKey], readSessionStore()[sessionKey]]) {
+      expect(claudeBinding(entry)).toEqual({ sessionId: "session-cli" });
+      expect(entry?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
+      expect(entry?.claudeCliSessionId).toBeUndefined();
+    }
   });
 
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
@@ -1844,17 +1820,10 @@ describe("CLI attempt execution", () => {
   });
 
   it("merges the collector result transport into a restricted CLI toolsAllow", async () => {
-    const sessionKey = "agent:main:direct:claude-collector-tools-allow";
-    const sessionEntry = makeSessionEntry("openclaw-session-cli-collector-allow");
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
+    const { runCli } = await createCliSession("agent:main:direct:claude-collector-tools-allow");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted collector cli"));
 
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
+    await runCli({
       body: "collect this",
       runId: "run-cli-collector-tools-allow",
       opts: {
@@ -1863,7 +1832,6 @@ describe("CLI attempt execution", () => {
         swarmOutputSchema: { type: "object", properties: { answer: { type: "string" } } },
       },
       messageChannel: "discord",
-      sessionStore,
     });
 
     expectMockArgFields(runCliAgentMock, {
@@ -1932,57 +1900,36 @@ describe("CLI attempt execution", () => {
   });
 
   it.each([
-    {
-      label: "a fallback completion report",
-      isFallbackRetry: true,
-      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-      expected: "report_only",
-    },
-    {
-      label: "a fallback answering ordinary user input",
-      isFallbackRetry: true,
-      inputProvenance: { kind: "external_user" },
-      expected: undefined,
-    },
-    {
-      label: "a primary completion report",
-      isFallbackRetry: false,
-      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-      expected: undefined,
-    },
-  ])(
-    "stamps the command-fallback CLI grant delegation capability for $label",
-    async ({ isFallbackRetry, inputProvenance, expected }) => {
+    ["a fallback completion report", true, "inter_session", "report_only"],
+    ["a fallback answering ordinary user input", true, "external_user", undefined],
+    ["a primary completion report", false, "inter_session", undefined],
+  ] as const)(
+    "stamps the command-fallback CLI grant delegation capability for %s",
+    async (_label, isFallbackRetry, kind, expected) => {
       const runId = `run-command-fallback-delegation-${String(isFallbackRetry)}-${expected}`;
       const sessionKey = `agent:main:direct:${runId}`;
-      const sessionEntry: SessionEntry = {
-        sessionId: `session-${runId}`,
-        updatedAt: Date.now(),
-      };
+      const { runCli } = await createCliSession(sessionKey, makeSessionEntry(`session-${runId}`));
       const cfg: OpenClawConfig = {
         session: { store: storePath },
         ...cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
       };
-      await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
       runCliAgentMock.mockResolvedValueOnce(makeCliResult("delegation gate"));
 
-      await runStoredAttempt({
+      await runCli({
         providerOverride: "anthropic",
         originalProvider: "anthropic",
         modelOverride: "claude-opus-4-7",
         cfg,
-        sessionEntry,
-        sessionKey,
         sessionFile: path.join(tmpDir, `${runId}.jsonl`),
         body: "report the completion",
         isFallbackRetry,
         runId,
         opts: {
           message: "report the completion",
-          inputProvenance,
+          inputProvenance:
+            kind === "inter_session" ? { kind, sourceTool: "subagent_announce" } : { kind },
         } as RunAgentAttemptParams["opts"],
         messageChannel: "telegram",
-        sessionStore: { [sessionKey]: sessionEntry },
       });
 
       // The command loop is a second fallback entry point; its CLI grant must
@@ -2034,21 +1981,18 @@ describe("CLI attempt execution", () => {
     "routes canonical Anthropic models through CLI with %s bootstrap context",
     async (bootstrapContextMode) => {
       const sessionKey = "agent:main:direct:canonical-claude-cli";
-      const sessionEntry = makeSessionEntry("openclaw-session-canonical-cli");
+      const { runCli } = await createCliSession(sessionKey);
       runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
       const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
       const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
 
-      await runStoredAttempt({
+      await runCli({
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",
         cfg: cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
-        sessionEntry,
-        sessionKey,
         body: "route this",
         isFallbackRetry: true,
         opts: { images, imageOrder: ["inline"], bootstrapContextMode },
-        sessionStore: await seedSessionStore(sessionKey, sessionEntry),
         fallbackRuntimeState,
       });
 
@@ -2074,9 +2018,7 @@ describe("CLI attempt execution", () => {
   );
 
   it("publishes logical cancellation before an embedded-to-CLI fallback starts", async () => {
-    const sessionKey = "agent:main:direct:cli-lifecycle-handoff";
-    const sessionEntry = makeSessionEntry("openclaw-session-cli-lifecycle-handoff");
-    const sessionStore = await seedSessionStore(sessionKey, sessionEntry);
+    const { runCli } = await createCliSession("agent:main:direct:cli-lifecycle-handoff");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("fallback complete"));
     const controller = new AbortController();
     const handoffToCli = vi.fn();
@@ -2089,17 +2031,14 @@ describe("CLI attempt execution", () => {
       complete: vi.fn(async () => undefined),
     };
 
-    await runStoredAttempt({
+    await runCli({
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-7",
       cfg: cliRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
-      sessionEntry,
-      sessionKey,
       body: "continue after overload",
       isFallbackRetry: true,
       runId: "run-cli-lifecycle-handoff",
       messageChannel: "telegram",
-      sessionStore,
       deferredLifecycle,
     });
 

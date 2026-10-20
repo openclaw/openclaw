@@ -85,9 +85,7 @@ export function registerCommandReplyPolicyTests({
           opts: {
             privateCompletion: privateCompletion || undefined,
             replyExpectation,
-            inputProvenance: sourceTool
-              ? { kind: "inter_session", sourceTool }
-              : { kind: "external_user" },
+            inputProvenance: { kind: "inter_session", sourceTool },
           },
         });
         if (cli && resultRequired) {

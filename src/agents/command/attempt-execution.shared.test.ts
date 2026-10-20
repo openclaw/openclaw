@@ -45,15 +45,14 @@ it.each([false, true])(
     if (existing) {
       await seed(entry);
     }
-    const creation = {
-      via: "run" as const,
-      actor: { type: "human" as const, source: "profile" as const, id: "sandbox-creator" },
-      sandbox: "required" as const,
-    };
     const sql = observeHostDataSql();
     const persisted = await write({
       shouldPersist: () => true,
-      creation,
+      creation: {
+        via: "run",
+        actor: { type: "human", source: "profile", id: "sandbox-creator" },
+        sandbox: "required",
+      },
     }).finally(sql.restore);
     expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     const stored = read();

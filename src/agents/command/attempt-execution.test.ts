@@ -146,9 +146,7 @@ describe("sessionTranscriptHasContent", () => {
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   const assistantMessage = () =>
     buildAssistantMessage({

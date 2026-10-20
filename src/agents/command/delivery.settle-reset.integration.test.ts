@@ -143,18 +143,17 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
       .finally(() => admission.release());
     await entered.promise;
 
+    const drained = reset
+      ? interruptSessionControllerEffects({
+          scope: target.storePath,
+          identities: [key, entry.sessionId],
+        })
+      : undefined;
+    release.resolve();
+    expect(await delivery).toBe(!reset);
     if (reset) {
-      const drained = interruptSessionControllerEffects({
-        scope: target.storePath,
-        identities: [key, entry.sessionId],
-      });
-      release.resolve();
-      expect(await delivery).toBe(false);
       expect(await drained).toBe(true);
       await replaceSessionEntry(target, { ...entry, lifecycleRevision: "after-reset" });
-    } else {
-      release.resolve();
-      expect(await delivery).toBe(true);
     }
     expect(writes).toEqual(reset ? [] : ["Uptime: 14 days"]);
 
