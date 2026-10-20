@@ -43,32 +43,33 @@ function fixture() {
   const env = { XDG_CACHE_HOME: directory };
   const command = path.join(directory, "openclaw/bun/test-pin/linux-x64/bin/bun");
   const stamp = path.join(path.dirname(path.dirname(command)), "verified.json");
-  return { deps, env, command, stamp, directory, readFileSync, stage, stderr };
+  const resolve = (extraEnv: NodeJS.ProcessEnv = {}, extraDeps: Partial<typeof deps> = {}) =>
+    resolvePinnedBun({ ...env, ...extraEnv }, { ...deps, ...extraDeps });
+  return { deps, resolve, command, stamp, directory, readFileSync, stage, stderr };
 }
 
 describe("pinned Bun resolution", () => {
   it.each([undefined, "1"])("uses an explicit executable with CI=%s without staging", (CI) => {
-    const { env, deps, directory, stage, readFileSync } = fixture();
+    const { resolve, directory, stage, readFileSync } = fixture();
     const command = path.join(directory, "custom-bun");
     fs.writeFileSync(command, bytes, { mode: 0o755 });
-    expect(resolvePinnedBun({ ...env, CI, OPENCLAW_BUN_PATH: command }, deps)).toEqual({ command });
+    expect(resolve({ CI, OPENCLAW_BUN_PATH: command })).toEqual({ command });
     expect(stage).not.toHaveBeenCalled();
     expect(readFileSync).not.toHaveBeenCalled();
-    expect(
-      resolvePinnedBun({ ...env, CI, OPENCLAW_BUN_PATH: `${command}-missing` }, deps).reason,
-    ).toContain("OPENCLAW_BUN_PATH is not executable");
+    expect(resolve({ CI, OPENCLAW_BUN_PATH: `${command}-missing` }).reason).toContain(
+      "OPENCLAW_BUN_PATH is not executable",
+    );
     expect(stage).not.toHaveBeenCalled();
   });
 
   it.each(["1", "true", "custom", "0"])("uses workflow-provisioned Bun with CI=%s", (CI) => {
-    const { env, deps, stage, readFileSync, stderr } = fixture();
+    const { resolve, stage, readFileSync, stderr } = fixture();
     const ciEnv = {
-      ...env,
       CI,
       OPENCLAW_VITEST_RUNTIME: "bun",
       PATH: "/workflow/bun/bin:/usr/bin",
     };
-    expect(resolvePinnedBun(ciEnv, deps)).toEqual({ command: "bun" });
+    expect(resolve(ciEnv)).toEqual({ command: "bun" });
     expect(pinnedBunEnv("bun", ciEnv)).toEqual({ PATH: ciEnv.PATH });
     expect(stage).not.toHaveBeenCalled();
     expect(readFileSync).not.toHaveBeenCalled();
@@ -78,9 +79,8 @@ describe("pinned Bun resolution", () => {
   it.each([undefined, "", "false"])(
     "stages once with CI=%s, then silently reuses the cache",
     (CI) => {
-      const { env, deps, command, stamp, stage, readFileSync, stderr } = fixture();
-      const localEnv = { ...env, CI };
-      expect(resolvePinnedBun(localEnv, deps)).toEqual({ command });
+      const { resolve, command, stamp, stage, readFileSync, stderr } = fixture();
+      expect(resolve({ CI })).toEqual({ command });
       expect(stage).toHaveBeenCalledOnce();
       expect(stderr).toHaveBeenCalledExactlyOnceWith(
         "[openclaw] Staging pinned Bun fork test-pin (one-time download)…",
@@ -91,7 +91,7 @@ describe("pinned Bun resolution", () => {
         size: Buffer.byteLength(bytes),
       });
       readFileSync.mockClear();
-      expect(resolvePinnedBun(localEnv, deps)).toEqual({ command });
+      expect(resolve({ CI })).toEqual({ command });
       expect(stage).toHaveBeenCalledOnce();
       expect(stderr).toHaveBeenCalledOnce();
       expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(false);
@@ -99,8 +99,8 @@ describe("pinned Bun resolution", () => {
   );
 
   it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the cache", (kind) => {
-    const { env, deps, command, stamp, stage, readFileSync } = fixture();
-    resolvePinnedBun(env, deps);
+    const { resolve, command, stamp, stage, readFileSync } = fixture();
+    resolve();
     if (kind === "missing") {
       fs.unlinkSync(stamp);
     } else {
@@ -113,7 +113,7 @@ describe("pinned Bun resolution", () => {
       fs.writeFileSync(stamp, JSON.stringify(metadata));
     }
     readFileSync.mockClear();
-    expect(resolvePinnedBun(env, deps)).toEqual({ command });
+    expect(resolve()).toEqual({ command });
     expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(true);
     expect(stage).toHaveBeenCalledOnce();
     expect(JSON.parse(fs.readFileSync(stamp, "utf8"))).toMatchObject({
@@ -123,10 +123,10 @@ describe("pinned Bun resolution", () => {
   });
 
   it("replaces damaged cached bytes through the stager", () => {
-    const { env, deps, command, stage } = fixture();
-    resolvePinnedBun(env, deps);
+    const { resolve, command, stage } = fixture();
+    resolve();
     fs.writeFileSync(command, "damaged");
-    expect(resolvePinnedBun(env, deps)).toEqual({ command });
+    expect(resolve()).toEqual({ command });
     expect(stage).toHaveBeenCalledTimes(2);
     expect(fs.readFileSync(command, "utf8")).toBe(bytes);
   });
@@ -135,11 +135,11 @@ describe("pinned Bun resolution", () => {
     { failure: new Error("checksum mismatch\nadditional details"), cause: "checksum mismatch" },
     { failure: new Error("permission denied\r\nadditional details"), cause: "permission denied" },
   ])("reports stage failure ($cause) on one line and cleans up", ({ failure, cause }) => {
-    const { env, deps, command, stage } = fixture();
+    const { resolve, command, stage } = fixture();
     stage.mockImplementation(() => {
       throw failure;
     });
-    expect(resolvePinnedBun(env, deps)).toEqual({
+    expect(resolve()).toEqual({
       reason: `could not stage the pinned fork: ${cause}`,
     });
     expect(fs.existsSync(command)).toBe(false);
@@ -150,10 +150,8 @@ describe("pinned Bun resolution", () => {
     { platform: "win32", arch: "x64" },
     { platform: "linux", arch: "s390x" },
   ])("does not stage unsupported $platform-$arch", (platform) => {
-    const { env, deps, stage } = fixture();
-    expect(resolvePinnedBun(env, { ...deps, ...platform }).reason).toMatch(
-      /unsupported platform|no pinned artifact/u,
-    );
+    const { resolve, stage } = fixture();
+    expect(resolve({}, platform).reason).toMatch(/unsupported platform|no pinned artifact/u);
     expect(stage).not.toHaveBeenCalled();
   });
 

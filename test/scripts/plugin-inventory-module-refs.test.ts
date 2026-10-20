@@ -10,6 +10,7 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "../../src/plugins/plugin-cache.js";
+import { createPluginManifestRecordFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { getPluginSetupModuleLoader } from "../../src/plugins/plugin-setup-module.js";
 import configs from "../../tsdown.config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -138,8 +139,10 @@ it.each([
           channelPlugin: { id: string };
           runtimeSelectedExport: string;
         };
-        expect(publicCompanion.runtimeSelectedExport).toBe("retained");
-        expect(publicCompanion.channelPlugin.id).toBe("fixture");
+        expect(publicCompanion).toMatchObject({
+          runtimeSelectedExport: "retained",
+          channelPlugin: { id: "fixture" },
+        });
       } else {
         expect(privateChunks.length).toBeGreaterThan(0);
         expect(privateChunks.some((chunk) => chunk.exports.includes("runtimeSelectedExport"))).toBe(
@@ -155,18 +158,12 @@ it.each([
         );
       }
       const rootDir = path.dirname(setup);
-      const record = {
+      const record = createPluginManifestRecordFixture({
         id: "fixture",
         origin,
         rootDir,
         source: setup,
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        hooks: [],
-        skills: [],
-      };
+      });
       const setupEntry = withPluginCache(cache, () => {
         const loader = getPluginSetupModuleLoader(record, setup, rootDir);
         const module = loader(setup) as {

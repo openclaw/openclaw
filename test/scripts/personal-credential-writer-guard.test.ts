@@ -78,6 +78,11 @@ it.each([
   "export const writers = await import('./state/user-model-accounts.js');",
   "export * from './state/user-model-accounts.js';",
   "export * as accounts from './state/user-model-accounts.js';",
+  "const accounts = await import('./state/user-model-accounts.js'); export const escaped = accounts;",
+  "export const [accounts] = await Promise.all([import('./state/user-model-accounts.js')]);",
+  "const { ...accounts } = await import('./state/user-model-accounts.js'); consume(accounts);",
+  "const accounts = await import('./state/user-model-accounts.js'); accounts[unknownKey]();",
+  "const { [unknownKey]: writer } = await import('./state/user-model-accounts.js'); writer();",
 ])("rejects an unowned reference: %s", (consumer) => {
   expect(inspect({ "src/consumer.ts": consumer })).toEqual(
     expect.arrayContaining([
@@ -107,20 +112,6 @@ it.each([
   expect(selected("connectUserModelAccount")).toEqual([
     expect.stringContaining("unreviewed personal credential writer reference"),
   ]);
-});
-
-it.each([
-  "const accounts = await import('./state/user-model-accounts.js'); export const escaped = accounts;",
-  "export const [accounts] = await Promise.all([import('./state/user-model-accounts.js')]);",
-  "const { ...accounts } = await import('./state/user-model-accounts.js'); consume(accounts);",
-  "const accounts = await import('./state/user-model-accounts.js'); accounts[unknownKey]();",
-  "const { [unknownKey]: writer } = await import('./state/user-model-accounts.js'); writer();",
-])("rejects an unbounded dynamic namespace or export: %s", (consumer) => {
-  expect(inspect({ "src/consumer.ts": consumer })).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("unreviewed personal credential writer reference"),
-    ]),
-  );
 });
 
 it("does not mistake worker naming or a sibling Doctor function for an approved entry", () => {
@@ -667,30 +658,31 @@ it("closes raw-store and worker-kernel entries while preserving the named update
   });
 });
 
+function machineStateConsumer(consumer: string) {
+  return {
+    "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
+    "src/new-writer.worker.ts": `
+        import { writeConfigMachineState } from './state/config-machine-state-write.js';
+        ${consumer}
+      `,
+  };
+}
+
 it.each([
   "writeConfigMachineState('authProfiles.store', {});",
   "const key = ' authProfiles.store '; writeConfigMachineState(key, {});",
   "writeConfigMachineState(command.input.key, {});",
   "export const write = writeConfigMachineState;",
 ])("rejects a generic machine-state entry with credential access: %s", (consumer) => {
-  expectDenied({
-    "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
-    "src/new-writer.worker.ts": `
-        import { writeConfigMachineState } from './state/config-machine-state-write.js';
-        ${consumer}
-      `,
-  });
+  expectDenied(machineStateConsumer(consumer));
 });
 
 it("permits fixed noncredential generic writer keys without granting a caller exemption", () => {
-  expectAllowed({
-    "src/state/config-machine-state-write.ts": `export function writeConfigMachineState() {}`,
-    "src/new-writer.worker.ts": `
-        import { writeConfigMachineState } from './state/config-machine-state-write.js';
-        const stateKey = 'authProfiles.state';
-        writeConfigMachineState(stateKey, {});
-      `,
-  });
+  expectAllowed(
+    machineStateConsumer(
+      "const stateKey = 'authProfiles.state';\n        writeConfigMachineState(stateKey, {});",
+    ),
+  );
 });
 
 it.each([
