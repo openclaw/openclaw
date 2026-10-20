@@ -26,6 +26,12 @@ import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabaseOwnerId,
 } from "../agents/auth-profiles/sqlite.js";
+import {
+  resolveLegacyInheritedAuthAgentDir,
+  resolveLegacyInheritedAuthAgentId,
+} from "../agents/legacy-inherited-auth-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -455,25 +461,102 @@ async function cleanupSourceRows(params: {
   }
 }
 
+/** Legacy stores a relocation may carry: main's, plus a configured non-main inheritance owner's. */
+function resolveSharedAuthStoreMigrationSources(
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): { mainPath: string; owner?: { ownerId: string; sourcePath: string } } {
+  const mainPath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+  const ownerId = config && normalizeAgentId(resolveLegacyInheritedAuthAgentId(config));
+  if (!ownerId || ownerId === LEGACY_IMPLICIT_AGENT_ID) {
+    return { mainPath };
+  }
+  const sourcePath = path.join(
+    resolveLegacyInheritedAuthAgentDir(config, env),
+    "openclaw-agent.sqlite",
+  );
+  // An owner whose agentDir is main's directory reads the same store.
+  return path.resolve(sourcePath) === path.resolve(mainPath)
+    ? { mainPath }
+    : { mainPath, owner: { ownerId, sourcePath } };
+}
+
+/** Every legacy store a relocation may read, for copied-planning boundary checks. */
+export function listSharedAuthStoreMigrationSourcePaths(
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const { mainPath, owner } = resolveSharedAuthStoreMigrationSources(config, env);
+  return owner ? [mainPath, owner.sourcePath] : [mainPath];
+}
+
+function hasStoredCredentials(rows: AuthRows): boolean {
+  if (!rows.store) {
+    return false;
+  }
+  const profiles = safeParseJsonRecord(rows.store.store_json)?.profiles;
+  // An unreadable payload may still hold the only credential; never treat it as empty.
+  return !isRecord(profiles) || Object.keys(profiles).length > 0;
+}
+
+/**
+ * Peers read a non-main owner's store instead of main's until relocation. Carry the owner
+ * when main holds no credentials, keep main's relocation when the owner holds none, and
+ * refuse to choose when both do: a single-source copy would drop one side for its readers.
+ */
+function selectSharedAuthStoreMigrationSource(
+  env: NodeJS.ProcessEnv,
+  sources: ReturnType<typeof resolveSharedAuthStoreMigrationSources>,
+  behavior: { artifactPreservingReadOnly?: boolean },
+): Omit<SharedAuthStoreMigrationDetection, "hasLegacy"> {
+  const main = { sourcePath: sources.mainPath };
+  const owner = sources.owner;
+  if (!owner) {
+    return main;
+  }
+  if (hasPendingSharedAuthCleanup(env, owner.sourcePath, behavior)) {
+    return owner;
+  }
+  const ownership = behavior.artifactPreservingReadOnly
+    ? inspectSharedAuthStoreOwnership(env)
+    : resolveSharedAuthStoreOwnership(env);
+  if (
+    ownership.location !== "legacy-main" ||
+    !hasStoredCredentials(inspectSharedAuthLegacyRowsReadOnly(owner.sourcePath, behavior))
+  ) {
+    return main;
+  }
+  return hasStoredCredentials(inspectSharedAuthLegacyRowsReadOnly(main.sourcePath, behavior))
+    ? { ...owner, conflictingSourcePath: main.sourcePath }
+    : owner;
+}
+
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
 export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
+  /** Doctor's resolved locators; they name the legacy inheritance owner. */
+  config?: OpenClawConfig;
   doctorOnlyStateMigrations?: boolean;
   artifactPreservingReadOnly?: boolean;
 }): SharedAuthStoreMigrationDetection {
   const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  const sourcePath = path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite");
+  const sources = resolveSharedAuthStoreMigrationSources(params.config, env);
   if (params.doctorOnlyStateMigrations !== true) {
-    return { sourcePath, hasLegacy: false };
+    return { sourcePath: sources.mainPath, hasLegacy: false };
   }
+  const source = selectSharedAuthStoreMigrationSource(env, sources, params);
+  const { sourcePath } = source;
   if (
     fs.existsSync(sourcePath) &&
     withArtifactPreservingStateReads(() =>
-      createRetainedAgentDatabaseMatcher(env, () => [])(sourcePath, "main"),
+      createRetainedAgentDatabaseMatcher(env, () => [])(
+        sourcePath,
+        source.ownerId ?? LEGACY_IMPLICIT_AGENT_ID,
+      ),
     )
   ) {
-    return { sourcePath, hasLegacy: true, held: true };
+    return { ...source, hasLegacy: true, held: true };
   }
   const ownership = params.artifactPreservingReadOnly
     ? inspectSharedAuthStoreOwnership(env)
@@ -485,7 +568,7 @@ export function detectSharedAuthStoreMigration(params: {
     // Only the ownership marker or a pending receipt authorizes inspecting them as migration input.
     inspectSharedAuthLegacyRowsReadOnly(sourcePath, params);
   }
-  return { sourcePath, hasLegacy };
+  return { ...source, hasLegacy };
 }
 
 /** Converge copy, ownership, and cleanup while excluding live Gateway writers. */
@@ -499,11 +582,21 @@ export async function migrateSharedAuthStore(params: {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
   }
+  if (params.detected.conflictingSourcePath) {
+    return {
+      changes: [],
+      warnings: [
+        `Shared auth migration skipped: agents.defaults.authInheritance names agent ${params.detected.ownerId}, whose credentials other agents inherit from ${sanitizeForLog(params.detected.sourcePath)}, but ${sanitizeForLog(params.detected.conflictingSourcePath)} also stores credentials. Keep the credentials agents should share in one of these stores, then run openclaw doctor --fix.`,
+      ],
+      outcome: "skipped",
+      warningDisposition: "recoverable",
+    };
+  }
   if (params.detected.held) {
     return {
       changes: [],
       warnings: [
-        `Shared auth migration skipped: store held for agent main at ${sanitizeForLog(params.detected.sourcePath)}; run openclaw doctor --fix after restoring the agent.`,
+        `Shared auth migration skipped: store held for agent ${params.detected.ownerId ?? LEGACY_IMPLICIT_AGENT_ID} at ${sanitizeForLog(params.detected.sourcePath)}; run openclaw doctor --fix after restoring the agent.`,
       ],
       outcome: "skipped",
       warningDisposition: "recoverable",
@@ -559,7 +652,8 @@ export async function migrateSharedAuthStore(params: {
             : []),
         ],
         warnings: [],
-        ...(ownershipFlipped && rows.store !== null
+        // A non-main owner stays bound by agents.defaults.authInheritance after relocation.
+        ...(ownershipFlipped && rows.store !== null && params.detected.ownerId === undefined
           ? {
               notices: ["The main agent no longer owns shared credentials and can now be deleted."],
             }

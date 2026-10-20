@@ -288,6 +288,33 @@ describe("legacy state migration read-only refusals", () => {
     },
   );
 
+  it("refuses a configured inheritance owner whose store is outside the snapshot", async () => {
+    const fixture = await makeFixture();
+    const ownerDir = path.join(fixture.homeDir, "ops-agent");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: ownerDir } },
+      },
+    };
+    fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
+
+    const plan = await planLegacyStateMigrationsReadOnly({
+      mode: "doctor",
+      candidate: candidateAt(fixture.root),
+      snapshot: createCallerModeSnapshot(fixture),
+      env: fixture.env,
+    });
+
+    expect(plan.refusal?.code).toBe("shared-auth-source-outside-snapshot");
+    expect(plan.steps.find((step) => step.id === "migration-detection")?.source).toEqual(
+      expect.arrayContaining([
+        { kind: "sqlite", path: path.join(ownerDir, "openclaw-agent.sqlite") },
+      ]),
+    );
+  });
+
   it("preserves a snapshot-bound OAuth directory in the read-only plan", async () => {
     const fixture = await makeFixture();
     const oauthDir = path.join(fixture.stateDir, "operator-credentials");

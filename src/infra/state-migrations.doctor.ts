@@ -5,7 +5,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   rewriteRegistryWorktreePathsForMigration,
@@ -171,6 +170,7 @@ import {
 } from "./state-migrations.session-store.js";
 import {
   detectSharedAuthStoreMigration,
+  listSharedAuthStoreMigrationSourcePaths,
   migrateSharedAuthStore,
 } from "./state-migrations.shared-auth-store.js";
 import {
@@ -399,6 +399,7 @@ export async function detectLegacyStateMigrations(params: {
   const sharedAuthStore = detectSharedAuthStoreMigration({
     stateDir,
     env,
+    config: params.sourceConfigBeforeMigrations ?? params.cfg,
     doctorOnlyStateMigrations:
       stateSchemaMigrations.length === 0 && params.doctorOnlyStateMigrations === true,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
@@ -1668,12 +1669,10 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   const outsideSharedAuthSources =
     params.mode === "doctor"
       ? listMigrationEndpointsOutsideRoot(
-          [
-            {
-              kind: "sqlite",
-              path: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
-            },
-          ],
+          listSharedAuthStoreMigrationSourcePaths(configBefore.config, env).map((source) => ({
+            kind: "sqlite" as const,
+            path: source,
+          })),
           snapshot.stateDir,
         )
       : [];

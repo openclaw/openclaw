@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import * as ownership from "../agents/auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profiles/path-resolve.native.js";
 import * as persisted from "../agents/auth-profiles/persisted.js";
@@ -48,9 +49,13 @@ function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
   });
 }
 
-function detectLegacy(env: NodeJS.ProcessEnv, homedir?: () => string) {
+function detectLegacy(
+  env: NodeJS.ProcessEnv,
+  homedir?: () => string,
+  cfg: Parameters<typeof doctor.detectLegacyStateMigrations>[0]["cfg"] = {},
+) {
   return doctor.detectLegacyStateMigrations({
-    cfg: { plugins: { enabled: false } },
+    cfg: { ...cfg, plugins: { enabled: false } },
     env,
     homedir,
     doctorOnlyStateMigrations: true,
@@ -338,6 +343,141 @@ it("moves exact rows, preserves every effective agent store, and records receipt
       "shared-auth-store-state-db",
     ),
   ).toEqual({ count: 2 });
+});
+
+async function createInheritanceOwnerFixture(layout: "standard" | "custom" = "standard") {
+  const fixture = await createEmptyFixture(false);
+  const opsAgentDir =
+    layout === "custom"
+      ? tempDirs.make("openclaw-shared-auth-owner-")
+      : path.join(fixture.stateDir, "agents", "ops", "agent");
+  const peerAgentDir = path.join(fixture.stateDir, "agents", "dev", "agent");
+  const cfg = {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { ops: layout === "custom" ? { agentDir: opsAgentDir } : {}, dev: {} },
+    },
+  };
+  // The Gateway registers configured directories before writing their databases.
+  resolveAgentDir(cfg, "ops", fixture.env);
+  const peerStore = makeStore("openai:dev-private", "dev-key");
+  sqlite.writePersistedAuthProfileStoreRaw(peerStore, peerAgentDir);
+  const peerProfiles = () =>
+    Object.keys(loadAuthProfileStoreWithoutExternalProfiles(peerAgentDir).profiles).toSorted();
+  return { ...fixture, cfg, opsAgentDir, peerAgentDir, peerStore, peerProfiles };
+}
+
+it.each(["standard", "custom"] as const)(
+  "relocates a configured non-main inheritance owner's credentials for its peers (%s agentDir)",
+  async (layout) => {
+    const fixture = await createInheritanceOwnerFixture(layout);
+    const opsStore = makeStore("openai:ops", "ops-key");
+    sqlite.writePersistedAuthProfileStoreRaw(opsStore, fixture.opsAgentDir);
+
+    const detected = await detectLegacy(fixture.env, undefined, fixture.cfg);
+    expect.soft(detected.sharedAuthStore).toEqual({
+      sourcePath: sqlite.resolveAuthProfileDatabasePath(fixture.opsAgentDir),
+      hasLegacy: true,
+      ownerId: "ops",
+    });
+    const result = await migration.migrateSharedAuthStore({
+      detected: detected.sharedAuthStore,
+      stateDir: detected.stateDir,
+      env: fixture.env,
+    });
+
+    expect.soft(result).toEqual({
+      changes: ["Relocated shared auth profiles into shared SQLite state."],
+      warnings: [],
+    });
+    expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+      location: "state-db",
+    });
+    expect.soft(sharedAuth(fixture.env)).toEqual({ store: opsStore, state: null });
+    expect.soft(localAuth(fixture.opsAgentDir)).toEqual({ store: null, state: null });
+    expect(localAuth(fixture.peerAgentDir)).toEqual({ store: fixture.peerStore, state: null });
+    expect(fixture.peerProfiles()).toEqual(["openai:dev-private", "openai:ops"]);
+  },
+);
+
+it("relocates a configured owner even when OPENCLAW_AGENT_DIR relocates main", async () => {
+  const fixture = await createInheritanceOwnerFixture();
+  const opsStore = makeStore("openai:ops", "ops-key");
+  sqlite.writePersistedAuthProfileStoreRaw(opsStore, fixture.opsAgentDir);
+  // Peers inherit from the owner's agentDir, which OPENCLAW_AGENT_DIR does not relocate.
+  const env = {
+    ...fixture.env,
+    OPENCLAW_AGENT_DIR: tempDirs.make("openclaw-shared-auth-relocated-"),
+  };
+
+  const detected = await detectLegacy(env, undefined, fixture.cfg);
+  expect(detected.sharedAuthStore).toEqual({
+    sourcePath: sqlite.resolveAuthProfileDatabasePath(fixture.opsAgentDir),
+    hasLegacy: true,
+    ownerId: "ops",
+  });
+});
+
+it("keeps legacy ownership when main and a non-main inheritance owner both hold credentials", async () => {
+  const fixture = await createInheritanceOwnerFixture();
+  const opsStore = makeStore("openai:ops", "ops-key");
+  const mainStore = makeStore("openai:main", "main-key");
+  sqlite.writePersistedAuthProfileStoreRaw(opsStore, fixture.opsAgentDir);
+  sqlite.writePersistedAuthProfileStoreRaw(mainStore, path.dirname(fixture.sourcePath));
+
+  const detected = await detectLegacy(fixture.env, undefined, fixture.cfg);
+  const result = await migration.migrateSharedAuthStore({
+    detected: detected.sharedAuthStore,
+    stateDir: detected.stateDir,
+    env: fixture.env,
+  });
+
+  expect(result).toMatchObject({
+    changes: [],
+    warnings: [expect.stringContaining("names agent ops")],
+    outcome: "skipped",
+  });
+  expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+    location: "legacy-main",
+  });
+  expect(localAuth(fixture.opsAgentDir)).toEqual({ store: opsStore, state: null });
+  expect(localAuth(path.dirname(fixture.sourcePath))).toEqual({ store: mainStore, state: null });
+  expect(sharedAuth(fixture.env)).toEqual(localAuth(path.dirname(fixture.sourcePath)));
+});
+
+it("treats an inheritance owner stored in main's directory as main", async () => {
+  const fixture = await createEmptyFixture(false);
+  const mainAgentDir = path.dirname(fixture.sourcePath);
+  const cfg = {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { ops: { agentDir: mainAgentDir } },
+    },
+  };
+  sqlite.writePersistedAuthProfileStoreRaw(makeStore("openai:ops", "ops-key"), mainAgentDir);
+
+  const detected = await detectLegacy(fixture.env, undefined, cfg);
+  expect(detected.sharedAuthStore).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+});
+
+it("relocates main's credentials when a non-main inheritance owner holds none", async () => {
+  const fixture = await createInheritanceOwnerFixture();
+  const mainStore = makeStore("openai:main", "main-key");
+  sqlite.writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, fixture.opsAgentDir);
+  sqlite.writePersistedAuthProfileStoreRaw(mainStore, path.dirname(fixture.sourcePath));
+
+  const detected = await detectLegacy(fixture.env, undefined, fixture.cfg);
+  expect(detected.sharedAuthStore).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
+  await migration.migrateSharedAuthStore({
+    detected: detected.sharedAuthStore,
+    stateDir: detected.stateDir,
+    env: fixture.env,
+  });
+
+  expect(sharedAuth(fixture.env)).toEqual({ store: mainStore, state: null });
+  expect(fixture.peerProfiles()).toEqual(["openai:dev-private", "openai:main"]);
 });
 
 it.each(["order state", "credential override"] as const)(
