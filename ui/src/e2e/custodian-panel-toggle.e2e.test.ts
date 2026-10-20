@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -22,8 +21,6 @@ const contextOptions = {
   serviceWorkers: "block",
   viewport: { height: 900, width: 1280 },
 } as const;
-const capture = (page: Page, name: string) =>
-  page.screenshot({ animations: "disabled", path: path.join(suite.artifactDir, name + ".png") });
 
 async function openHome(page: Page, scenario: ControlUiMockGatewayScenario) {
   const gateway = await installMockGateway(page, { sessionKey: WORK_SESSION_KEY, ...scenario });
@@ -75,59 +72,45 @@ suite.define(() => {
         0,
       );
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-      await capture(page, "00-home-without-openclaw-tab");
     });
   });
 
   it("opens OpenClaw from Home and the palette and reuses the persisted session id", async () => {
-    await suite.withPage(
-      {
-        ...contextOptions,
-        recordVideo: { dir: suite.artifactDir, size: contextOptions.viewport },
-      },
-      async ({ page }) => {
-        const { gateway, panel } = await openHome(page, custodianGatewayScenario());
-        const openClawTab = panel.getByRole("button", { name: "Ask OpenClaw", exact: true });
-        await openClawTab.waitFor();
-        await capture(page, "01-home-dock");
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const { gateway, panel } = await openHome(page, custodianGatewayScenario());
+      const openClawTab = panel.getByRole("button", { name: "Ask OpenClaw", exact: true });
+      await openClawTab.waitFor();
 
-        // Opening the panel renders the durable machine-wide history from the Gateway.
-        await openClawTab.click();
-        await panel.getByText("Channel repaired.").waitFor();
-        const chatRequest = await gateway.waitForRequest("openclaw.chat");
-        const firstSessionId = (chatRequest.params as { sessionId?: string }).sessionId;
-        expect(typeof firstSessionId).toBe("string");
-        await capture(page, "02-panel-open-history");
+      await openClawTab.click();
+      await panel.getByText("Channel repaired.").waitFor();
+      const chatRequest = await gateway.waitForRequest("openclaw.chat");
+      const firstSessionId = (chatRequest.params as { sessionId?: string }).sessionId;
+      expect(typeof firstSessionId).toBe("string");
 
-        await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-        await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
+      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
+      await panel.getByText("Channel repaired.").waitFor({ state: "hidden" });
 
-        // The command palette opens the same conversation directly.
-        await page.locator(".sidebar-brand__search").click();
-        await page
-          .locator("openclaw-command-palette")
-          .getByPlaceholder("Search or start a task…")
-          .fill("Ask OpenClaw");
-        const paletteItem = page.getByRole("option", { name: "Ask OpenClaw", exact: true });
-        await paletteItem.waitFor();
-        await capture(page, "03-palette-item");
-        await paletteItem.click();
-        await panel.getByText("Channel repaired.").waitFor();
+      await page.locator(".sidebar-brand__search").click();
+      await page
+        .locator("openclaw-command-palette")
+        .getByPlaceholder("Search or start a task…")
+        .fill("Ask OpenClaw");
+      const paletteItem = page.getByRole("option", { name: "Ask OpenClaw", exact: true });
+      await paletteItem.waitFor();
+      await paletteItem.click();
+      await panel.getByText("Channel repaired.").waitFor();
 
-        // The server-confirmed session id persists and is reused after a full reload.
-        const storedSessionId = await page.evaluate(
-          (key) => window.localStorage.getItem(key),
-          CUSTODIAN_SESSION_STORAGE_KEY,
-        );
-        expect(storedSessionId).toBe(MOCK_SESSION_ID);
+      const storedSessionId = await page.evaluate(
+        (key) => window.localStorage.getItem(key),
+        CUSTODIAN_SESSION_STORAGE_KEY,
+      );
+      expect(storedSessionId).toBe(MOCK_SESSION_ID);
 
-        // Reload resets the request ring; this wait sees only post-reload traffic.
-        await page.reload();
-        await page.locator("openclaw-assistant-panel").getByText("Channel repaired.").waitFor();
-        const reloadedRequest = await gateway.waitForRequest("openclaw.chat");
-        expect((reloadedRequest.params as { sessionId?: string }).sessionId).toBe(MOCK_SESSION_ID);
-        await capture(page, "04-after-reload-same-session");
-      },
-    );
+      // Reload resets the request ring; this wait sees only post-reload traffic.
+      await page.reload();
+      await page.locator("openclaw-assistant-panel").getByText("Channel repaired.").waitFor();
+      const reloadedRequest = await gateway.waitForRequest("openclaw.chat");
+      expect((reloadedRequest.params as { sessionId?: string }).sessionId).toBe(MOCK_SESSION_ID);
+    });
   });
 });

@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -17,11 +14,11 @@ import {
 const suite = createSessionManagementE2eSuite();
 const expectFocus = (target: Locator) =>
   expect.poll(() => target.evaluate((element) => element === document.activeElement)).toBe(true);
-suite.define(() => {
+suite.define(() =>
   it.each([1280, 390])(
     "validates, cancels, applies, and reuses custom snoozes at width %s",
-    async (width) => {
-      await suite.withPage(
+    (width) =>
+      suite.withPage(
         {
           viewport: { width, height: 900 },
           colorScheme: "dark",
@@ -36,9 +33,6 @@ suite.define(() => {
               sessionRow(key, "Prepare release notes", Date.now()),
               sessionRow(otherKey, "Review documentation", Date.now() - 1000),
             ],
-            historyMessages: [
-              { role: "assistant", content: "Release notes are ready for review." },
-            ],
           });
           await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
@@ -49,24 +43,9 @@ suite.define(() => {
               .click();
             await waitForMobileSidebarDrawerOpen(page);
           }
-          const capture = async (name: string) => {
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-              return;
-            }
-            const { png } = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".shell"),
-              [page.getByRole("menuitem", { name: "Choose another time", exact: true })],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(suite.artifactDir, `${name}-${width}.png`), png);
-          };
           const openSnooze = async (sessionKey: string) => {
-            await page
-              .locator(
-                `.sidebar-session-content [data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
-              )
-              .click({ button: "right" });
+            const selector = `.sidebar-session-content [data-session-key="${sessionKey}"] .sidebar-recent-session__link`;
+            await page.locator(selector).click({ button: "right" });
             if (width === 390) {
               await page.getByRole("menuitem", { name: "Snooze", exact: true }).click();
             } else {
@@ -76,7 +55,6 @@ suite.define(() => {
           await openSnooze(key);
           const chooser = page.getByRole("menuitem", { name: "Choose another time", exact: true });
           await chooser.waitFor();
-          await capture("after-snooze");
           await chooser.click();
           const picker = page.getByRole("dialog", { name: "Choose another time", exact: true });
           const field = picker.getByLabel("Date and time", { exact: true });
@@ -106,16 +84,17 @@ suite.define(() => {
               timestamp: date.getTime(),
             };
           });
+          const waitForSnooze = (sessionKey: string) =>
+            waitForPatch(
+              gateway,
+              (p) => p.key === sessionKey && p.snoozedUntil === value.timestamp,
+            );
           await field.fill(value.input);
-          await capture("after-picker");
           await field.press("Tab");
           await expectFocus(picker.getByRole("button", { name: "Cancel", exact: true }));
           await page.keyboard.press("Tab");
           await page.keyboard.press("Enter");
-          const patch = await waitForPatch(
-            gateway,
-            (p) => p.key === key && p.snoozedUntil === value.timestamp,
-          );
+          const patch = await waitForSnooze(key);
           expect(patch.params).toMatchObject({
             key,
             agentId: "main",
@@ -137,14 +116,9 @@ suite.define(() => {
           ]);
           expect(menuRows.filter((label) => label?.startsWith("Custom · "))).toHaveLength(1);
           expect(await custom.textContent()).toContain("10:30 AM");
-          await capture("after-reusable");
           await custom.click();
-          await waitForPatch(
-            gateway,
-            (p) => p.key === otherKey && p.snoozedUntil === value.timestamp,
-          );
+          await waitForSnooze(otherKey);
         },
-      );
-    },
-  );
-});
+      ),
+  ),
+);

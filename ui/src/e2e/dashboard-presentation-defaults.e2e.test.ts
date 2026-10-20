@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -26,8 +25,6 @@ const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
 const withDesktop = (run: Parameters<typeof suite.withPage>[1]) =>
   suite.withPage({ viewport: { width: 1440, height: 1000 } }, run);
-const capture = (page: Page, name: string) =>
-  page.screenshot({ path: path.join(suite.artifactDir, name + ".png") });
 
 async function expectDefaultStatus(page: Page) {
   const status = (await openLayoutMenu(page)).locator(defaultStatus);
@@ -168,14 +165,12 @@ suite.define(() => {
       await chat.waitFor({ state: "hidden" });
       const menu = await openLayoutMenu(page);
       await menu.locator(`${defaultAction}, ${defaultStatus}`).waitFor({ state: "visible" });
-      await capture(page, "07-unset-opening-view-menu");
       expect(await menu.locator(defaultStatus).count()).toBe(0);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await saveDefault(page, gateway, true);
       await expect.poll(() => sidebarLink.getAttribute("href")).toContain("/dashboard/main/");
       const savedMenu = await openLayoutMenu(page);
       await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });
-      await capture(page, "08-opening-default-saved");
       await closeChatLayoutMenu(page);
       // This fixture can read Sessions but does not advertise Home or session creation.
       await page.locator('[data-navigation-view="pages"]').click();
@@ -207,7 +202,6 @@ suite.define(() => {
         await expectLayout(reader, "expanded");
         expect(await presentationOverride(reader)).toBeUndefined();
         expect(await readerGateway.getRequests("sessions.patch")).toHaveLength(0);
-        await capture(reader, "09-fresh-sidebar-open");
       });
     });
   });
@@ -262,7 +256,6 @@ suite.define(() => {
         "Used when anyone opens this dashboard. Personal layout choices still apply.",
       );
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      await capture(page, "00-current-default-menu");
       await closeChatLayoutMenu(page);
 
       await focusChatSidePanel(page);
@@ -270,11 +263,9 @@ suite.define(() => {
       const action = await openDefaultAction(page);
       expect(await action.textContent()).toContain("Use current view as default");
       expect(await page.locator(defaultStatus).count()).toBe(0);
-      await capture(page, "01-different-default-menu");
       await saveDefault(page, gateway);
       await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
       await expectDefaultStatus(page);
-      await capture(page, "02-default-saved");
       await closeChatLayoutMenu(page);
 
       await withDesktop(async ({ page: reader }) => {
@@ -286,7 +277,6 @@ suite.define(() => {
         await expectLayout(reader, "expanded");
         await expectDefaultStatus(reader);
         expect(await reader.locator(defaultAction).count()).toBe(0);
-        await capture(reader, "03-new-viewer-inherits");
         await closeChatLayoutMenu(reader);
         await selectChatLayoutAction(reader, "Restore split");
         await readerChat.waitFor({ state: "visible" });
@@ -299,7 +289,6 @@ suite.define(() => {
         await reader.reload();
         await expectLayout(reader, "split");
         expect(await presentationOverride(reader)).toBe("split");
-        await capture(reader, "04-reader-override-reloaded");
       });
 
       await selectChatLayoutAction(page, "Restore split");
@@ -327,14 +316,12 @@ suite.define(() => {
       await page.locator(".sidebar-region__primary").waitFor({ state: "hidden" });
       expect(await presentationOverride(page)).toBeUndefined();
       await openDefaultAction(page);
-      await capture(page, "05-compact-default-menu");
       const savedMessage = await saveDefault(page, gateway);
       const savedToast = page.getByRole("status").filter({ has: savedMessage });
       await savedToast.getByRole("button", { name: "Dismiss", exact: true }).click();
       await savedToast.waitFor({ state: "hidden" });
       await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
       await expectDefaultStatus(page);
-      await capture(page, "06-compact-default-saved");
       expect(await presentationOverride(page)).toBeUndefined();
     });
   });

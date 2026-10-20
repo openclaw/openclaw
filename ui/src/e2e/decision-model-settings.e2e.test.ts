@@ -1,5 +1,3 @@
-import path from "node:path";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -18,12 +16,10 @@ const decisionModels = [
   { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
   { provider: "typesafe", id: "jev-preview", name: "Jev Preview", pluginId: "typesafe" },
 ];
-const capture = (page: Page, name: string) =>
-  page.screenshot({ path: path.join(suite.artifactDir, name + ".png") });
 
-suite.define(() => {
-  it("saves global decisions without a chat model and preserves per-agent inheritance, disable, and override", async () => {
-    await suite.withPage(
+suite.define(() =>
+  it("saves global decisions without a chat model and preserves per-agent inheritance, disable, and override", () =>
+    suite.withPage(
       { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
         let config: unknown = {
@@ -54,7 +50,6 @@ suite.define(() => {
               scope: "per-sender",
             },
             "models.list": { models: [], decisionModels },
-            "models.authStatus": { ts: 1, providers: [] },
             "config.get": snapshot(),
             "usage.status": { updatedAt: 1, providers: [] },
             "sessions.usage": { aggregates: { byProvider: [] } },
@@ -72,10 +67,8 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const global = page.locator("openclaw-select-picker:has(#model-providers-decision-model)");
         await expect.poll(() => pickerValue(global)).toBe("");
-        await capture(page, "global-disabled");
         await global.locator("button").first().click();
         await global.getByRole("option", { name: "Jev", exact: true }).waitFor();
-        await capture(page, "global-decision-options");
         await page.keyboard.press("Escape");
         for (const value of ["typesafe/jev-latest", "", "typesafe/jev-latest"]) {
           const before = (await gateway.getRequests("config.patch")).length;
@@ -89,17 +82,15 @@ suite.define(() => {
           await expect.poll(() => pickerValue(global)).toBe(value);
         }
         expect(JSON.stringify(config)).not.toContain('"model":');
-        await capture(page, "global-jev-saved");
 
         await page.goto(`${suite.server.baseUrl}settings/agents/scout/overview`);
         const agent = page.locator("openclaw-select-picker:has(#agent-decision-model)");
         await expect.poll(() => pickerValue(agent)).toBe("__openclaw_inherit_decision__");
         expect(await agent.textContent()).toContain("Use global default · Jev");
-        await capture(page, "agent-inherited");
-        for (const [value, expected, proof] of [
-          ["", "", "agent-disabled"],
-          ["typesafe/jev-preview", "typesafe/jev-preview", "agent-override"],
-          ["__openclaw_inherit_decision__", undefined, "agent-inheritance-restored"],
+        for (const [value, expected] of [
+          ["", ""],
+          ["typesafe/jev-preview", "typesafe/jev-preview"],
+          ["__openclaw_inherit_decision__", undefined],
         ] as const) {
           await selectPickerValue(agent, value);
           const before = (await gateway.getRequests("config.set")).length;
@@ -123,7 +114,6 @@ suite.define(() => {
           }
           await commitConfig("config.set");
           await expect.poll(() => pickerValue(agent)).toBe(value);
-          await capture(page, proof);
         }
         await gateway.setMethodResponse("models.list", {
           models: [{ id: "chat", provider: "fixture", name: "Chat" }],
@@ -137,14 +127,11 @@ suite.define(() => {
         ).toBe(1);
         expect(await global.locator('[role="option"][data-value="fixture/chat"]').count()).toBe(0);
         await page.keyboard.press("Escape");
-        await capture(page, "global-with-chat-catalog");
         await page.setViewportSize({ width: 520, height: 900 });
         await global.scrollIntoViewIfNeeded();
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);
-        await capture(page, "global-narrow");
       },
-    );
-  });
-});
+    )),
+);
