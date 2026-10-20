@@ -8,7 +8,10 @@ import { showToast } from "../../lib/toast.ts";
 import { createContext } from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { ClawCreatorFlow } from "./creator-flow.ts";
 
-vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn(() => true) }));
+vi.mock("../../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
+  showToast: vi.fn(() => true),
+}));
 
 const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
 const scope = {

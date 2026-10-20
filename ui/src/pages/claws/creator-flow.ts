@@ -26,6 +26,22 @@ type Target = {
   client: GatewayBrowserClient;
 };
 
+function hasCompleteScope(content: string) {
+  const document: unknown = JSON.parse(content);
+  if (typeof document !== "object" || document === null || !("scope" in document)) {
+    return false;
+  }
+  const scope = document.scope;
+  return (
+    typeof scope === "object" &&
+    scope !== null &&
+    ["input", "job", "output", "authority"].every((key) => {
+      const value = Reflect.get(scope, key);
+      return typeof value === "string" && value.trim().length > 0;
+    })
+  );
+}
+
 /** Connection-scoped presentation; the Gateway owns draft bytes and publication authority. */
 export class ClawCreatorFlow {
   private readonly listeners = new Set<() => void>();
@@ -211,11 +227,7 @@ export class ClawCreatorFlow {
           this.reviewCurrent = false;
         }
         this.seenRevision = draft.revision;
-        const document = JSON.parse(draft.content) as { scope?: Record<string, string> };
-        if (
-          document.scope &&
-          ["input", "job", "output", "authority"].every((key) => document.scope?.[key]?.trim())
-        ) {
+        if (hasCompleteScope(draft.content)) {
           await this.refreshReview(target, generation);
         }
       }
