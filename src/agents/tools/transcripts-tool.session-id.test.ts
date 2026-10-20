@@ -9,7 +9,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { deriveMeetingTranscriptSessionColumns } from "../../transcripts/store-columns.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
@@ -24,19 +23,14 @@ const note = "Keep the captured notes.";
 function createHarness() {
   const { stateDir, store } = testState();
   const databaseOptions = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-  const provider: TranscriptSourceProvider = {
+  registerTranscriptTestProvider({
     id: "room-audio",
     name: "Room Audio",
     sourceKinds: ["live-audio", "posthoc-transcript"],
     importTranscript: async () => [{ text: note }],
-  };
-  registerTranscriptTestProvider(provider);
+  });
   const tool = createTranscriptsTool({ caller: { kind: "operator", source: "local" } });
-  return {
-    databaseOptions,
-    store,
-    tool,
-  };
+  return { databaseOptions, store, tool };
 }
 
 async function importTranscript(harness: ReturnType<typeof createHarness>, sessionId: string) {
@@ -47,11 +41,8 @@ async function importTranscript(harness: ReturnType<typeof createHarness>, sessi
     transcript: note,
   });
   const handle = asOptionalRecord(result.details)?.sessionId;
-  if (typeof handle !== "string") {
-    throw new Error("Expected a transcript session handle");
-  }
+  expect(typeof handle).toBe("string");
   expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
-  return handle;
 }
 
 describe("transcripts bounded export names", () => {
@@ -70,10 +61,8 @@ describe("transcripts bounded export names", () => {
     );
     for (const entry of entries) {
       const artifacts = await harness.store.materializeSessionArtifacts(entry.selector, "all");
-      expect(
-        JSON.parse(await fs.readFile(artifacts.metadataPath, "utf8")).sessionId ===
-          entry.session.sessionId,
-      ).toBe(true);
+      const metadata = JSON.parse(await fs.readFile(artifacts.metadataPath, "utf8"));
+      expect(metadata.sessionId).toBe(entry.session.sessionId);
     }
   });
 
@@ -133,11 +122,13 @@ describe("transcripts bounded export names", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entry = await store.readSessionEntry(sessionId);
-    expect(entry?.session.sessionId === sessionId).toBe(true);
-    expect(entry?.session.startedAt).toBe(session.startedAt);
-    expect(entry?.session.stoppedAt).toBe("2026-07-01T11:00:00.000Z");
+    expect(entry?.session).toMatchObject({
+      sessionId,
+      startedAt: session.startedAt,
+      stoppedAt: "2026-07-01T11:00:00.000Z",
+    });
     expect(entry!.selector).toBe(`2026-07-01/${path.basename(entry!.sessionDir)}`);
-    expect((await store.readSession(entry!.selector))?.sessionId === sessionId).toBe(true);
+    expect((await store.readSession(entry!.selector))?.sessionId).toBe(sessionId);
     expect(await store.readSummary(session)).toEqual({ summary, markdown });
     expect(
       (await store.readUtterancesForSession(session)).map((utterance) => utterance.text),

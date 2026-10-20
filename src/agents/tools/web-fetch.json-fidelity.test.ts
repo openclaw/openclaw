@@ -24,68 +24,47 @@ const NUMERIC_PATTERNS = [
   /"empty"\s*:\s*null\b/u,
 ];
 
+function response(
+  path: string,
+  body: string,
+  patterns: RegExp[],
+  contentType = "application/json",
+  extractor = "json",
+) {
+  return { path, body, patterns, contentType, extractor };
+}
+
 const RESPONSES = [
-  {
-    path: "/ordinary",
-    contentType: "application/json",
-    body: '{"name":"example","count":42,"enabled":true,"items":[1,2]}',
-    extractor: "json",
-    patterns: [
-      /\{\n {2}"name": "example",\n {2}"count": 42,\n {2}"enabled": true,\n {2}"items": \[\n {4}1,\n {4}2\n {2}\]\n\}/u,
-    ],
-  },
-  {
-    path: "/oversized",
-    contentType: "application/json",
-    body: JSON.stringify({
+  response("/ordinary", '{"name":"example","count":42,"enabled":true,"items":[1,2]}', [
+    /\{\n {2}"name": "example",\n {2}"count": 42,\n {2}"enabled": true,\n {2}"items": \[\n {4}1,\n {4}2\n {2}\]\n\}/u,
+  ]),
+  response(
+    "/oversized",
+    JSON.stringify({
       items: Array.from({ length: 2_000 }, (_, id) => ({ id, name: "ordinary value" })),
     }),
-    extractor: "json",
-    patterns: [/\{\n {2}"items": \[\n {4}\{\n {6}"id": 0,\n {6}"name": "ordinary value"/u],
-  },
-  {
-    path: "/json",
-    contentType: "application/json",
-    body: NUMERIC_DOCUMENT,
-    extractor: "json",
-    patterns: NUMERIC_PATTERNS,
-  },
-  {
-    path: "/vendor-json",
-    contentType: "application/vnd.example+json; charset=utf-8",
-    body: NUMERIC_DOCUMENT,
-    extractor: "json",
-    patterns: NUMERIC_PATTERNS,
-  },
-  {
-    path: "/scalar",
-    contentType: "application/json",
-    body: "9007199254740993",
-    extractor: "json",
-    patterns: [/(?:^|\n)9007199254740993(?:\n|$)/u],
-  },
-  {
-    path: "/array",
-    contentType: "application/json",
-    body: "[9007199254740993,-0,1e400]",
-    extractor: "json",
-    patterns: [/\[\s*9007199254740993\s*,\s*-0\s*,\s*1e400\s*\]/u],
-  },
-  {
-    path: "/invalid",
-    contentType: "application/json",
-    body: '{"id":9007199254740993',
-    extractor: "raw",
-    patterns: [/"id":9007199254740993/u],
-  },
-  {
-    path: "/text",
-    contentType: "text/plain",
-    body: "record 9007199254740993",
-    extractor: "raw",
-    patterns: [/record 9007199254740993/u],
-  },
-] as const;
+    [/\{\n {2}"items": \[\n {4}\{\n {6}"id": 0,\n {6}"name": "ordinary value"/u],
+  ),
+  response("/json", NUMERIC_DOCUMENT, NUMERIC_PATTERNS),
+  response(
+    "/vendor-json",
+    NUMERIC_DOCUMENT,
+    NUMERIC_PATTERNS,
+    "application/vnd.example+json; charset=utf-8",
+  ),
+  response("/scalar", "9007199254740993", [/(?:^|\n)9007199254740993(?:\n|$)/u]),
+  response("/array", "[9007199254740993,-0,1e400]", [
+    /\[\s*9007199254740993\s*,\s*-0\s*,\s*1e400\s*\]/u,
+  ]),
+  response(
+    "/invalid",
+    '{"id":9007199254740993',
+    [/"id":9007199254740993/u],
+    "application/json",
+    "raw",
+  ),
+  response("/text", "record 9007199254740993", [/record 9007199254740993/u], "text/plain", "raw"),
+];
 
 describe("web_fetch JSON document fidelity over HTTP", () => {
   let reservation: Awaited<ReturnType<typeof reserveTestPortListener<Server>>> | undefined;
@@ -96,15 +75,15 @@ describe("web_fetch JSON document fidelity over HTTP", () => {
     reservation = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
-        createServer((request, response) => {
+        createServer((request, reply) => {
           const fixture = RESPONSES.find(({ path }) => path === request.url);
           if (!fixture) {
-            response.writeHead(404);
-            response.end();
+            reply.writeHead(404);
+            reply.end();
             return;
           }
-          response.writeHead(200, { "content-type": fixture.contentType });
-          response.end(fixture.body);
+          reply.writeHead(200, { "content-type": fixture.contentType });
+          reply.end(fixture.body);
         }),
     });
     baseUrl = `http://127.0.0.1:${reservation.claim.port}`;
@@ -125,17 +104,11 @@ describe("web_fetch JSON document fidelity over HTTP", () => {
   it.each(RESPONSES)(
     "preserves source literals from $path",
     async ({ path, body, extractor, patterns }) => {
+      const fetch = { cacheTtlMinutes: 0, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } };
       const tool = createWebFetchTool({
         config: {
           plugins: { enabled: false },
-          tools: {
-            web: {
-              fetch: {
-                cacheTtlMinutes: 0,
-                ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-              },
-            },
-          },
+          tools: { web: { fetch } },
         },
       });
       if (!tool) {

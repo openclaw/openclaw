@@ -1,6 +1,5 @@
 import type { Server } from "node:http";
 import { createServer } from "node:http";
-// Exercise basic extraction over HTTP; sanitizer cases live in web-fetch-visibility.test.ts.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createWebFetchTool } from "./web-fetch.js";
 
@@ -70,19 +69,12 @@ describe("web_fetch visibility through the real tool execute path", () => {
     path: string,
     extractMode: "markdown" | "text" = "markdown",
   ): Promise<string> {
+    const fetch = { cacheTtlMinutes: 0, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } };
     const tool = createWebFetchTool({
       config: {
-        // The visibility sanitizer runs on the basic-extraction fallback path
-        // (no plugin content extractors); this proof exercises that path.
+        // Force basic extraction through the real tool, without plugin extractors.
         plugins: { enabled: false },
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 0,
-              ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-            },
-          },
-        },
+        tools: { web: { fetch } },
       },
     });
     if (!tool) {
@@ -93,6 +85,12 @@ describe("web_fetch visibility through the real tool execute path", () => {
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n");
+  }
+
+  async function extractMarkdown(path: string, mode: "markdown" | "text") {
+    const result = JSON.parse(await extract(path, mode)) as { extractor: string; text: string };
+    expect(result.extractor).toBe("cf-markdown");
+    return result.text;
   }
 
   it.each(["/implicit-nested-siblings", "/unmatched-container"])(
@@ -115,12 +113,7 @@ describe("web_fetch visibility through the real tool execute path", () => {
   it.each(["text", "markdown"] as const)(
     "preserves code examples through HTTP Markdown extraction in %s mode",
     async (mode) => {
-      const result = JSON.parse(await extract("/markdown-code", mode)) as {
-        extractor: string;
-        text: string;
-      };
-      expect(result.extractor).toBe("cf-markdown");
-      expect(result.text).toContain(
+      expect(await extractMarkdown("/markdown-code", mode)).toContain(
         mode === "markdown"
           ? MARKDOWN_CODE
           : 'Example\n\nRead the guide.\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
@@ -135,8 +128,6 @@ describe("web_fetch visibility through the real tool execute path", () => {
     ],
     ["/markdown-inline-fence-prose", "Use ``` to start a code block.\nNext paragraph."],
   ])("preserves Markdown content through HTTP text extraction for %s", async (path, expected) => {
-    const result = JSON.parse(await extract(path, "text")) as { extractor: string; text: string };
-    expect(result.extractor).toBe("cf-markdown");
-    expect(result.text).toContain(expected);
+    expect(await extractMarkdown(path, "text")).toContain(expected);
   });
 });

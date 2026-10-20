@@ -15,6 +15,32 @@ vi.mock("../../web-fetch/content-extractors.runtime.js", () => ({
   extractReadableContent: vi.fn(async () => null),
 }));
 
+function createTool(readability = true) {
+  return createWebFetchTool({
+    config: { tools: { web: { fetch: { cacheTtlMinutes: 1, readability } } } },
+  })!;
+}
+
+function stubProvider(
+  execute: WebFetchProviderToolDefinition["execute"] = vi.fn(async () => ({
+    text: "fresh provider body",
+  })),
+) {
+  resolveWebFetchDefinition.mockReturnValue({
+    provider: { id: "test-fetch" },
+    definition: { execute },
+  });
+  return execute;
+}
+
+function stubDirectFetch() {
+  const fetch = vi.fn(
+    async () => new Response("fresh direct body", { headers: { "content-type": "text/plain" } }),
+  );
+  vi.stubGlobal("fetch", withFetchPreconnect(fetch));
+  return fetch;
+}
+
 describe("web_fetch provider cancellation", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -55,19 +81,8 @@ describe("web_fetch provider cancellation", () => {
           return pending.promise;
         })
         .mockResolvedValue({ text: "fresh provider body" });
-      resolveWebFetchDefinition.mockReturnValue({
-        provider: { id: "test-fetch" },
-        definition: { execute },
-      });
-      const tool = createWebFetchTool({
-        config: {
-          tools: {
-            web: {
-              fetch: { cacheTtlMinutes: 1, readability: fallback !== "disabled-readability" },
-            },
-          },
-        },
-      })!;
+      stubProvider(execute);
+      const tool = createTool(fallback !== "disabled-readability");
       const args = { url: `https://example.com/cancel-provider-${fallback}-${completion}` };
       const outcome = Promise.allSettled([tool.execute("cancelled", args, controller.signal)]);
       await started.promise;
@@ -102,18 +117,9 @@ describe("web_fetch provider cancellation", () => {
   );
 
   it("rejects a pre-aborted cache hit without invalidating it", async () => {
-    const fetch = vi.fn(async () => {
-      return new Response("fresh direct body", { headers: { "content-type": "text/plain" } });
-    });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetch));
-    const execute = vi.fn(async () => ({ text: "fresh provider body" }));
-    resolveWebFetchDefinition.mockReturnValue({
-      provider: { id: "test-fetch" },
-      definition: { execute },
-    });
-    const tool = createWebFetchTool({
-      config: { tools: { web: { fetch: { cacheTtlMinutes: 1 } } } },
-    })!;
+    const fetch = stubDirectFetch();
+    const execute = stubProvider();
+    const tool = createTool();
     const args = { url: "https://example.com/pre-aborted-cache-direct" };
     const fresh = await tool.execute("seed", args);
     const reason = new Error("parent already cancelled");
@@ -130,19 +136,8 @@ describe("web_fetch provider cancellation", () => {
   });
 
   it("does not publish content if cancelled during guard release", async () => {
-    const fetch = vi.fn(
-      async () =>
-        new Response("fresh direct body", {
-          status: 200,
-          headers: { "content-type": "text/plain" },
-        }),
-    );
-    vi.stubGlobal("fetch", withFetchPreconnect(fetch));
-    const execute = vi.fn(async () => ({ text: "fresh provider body" }));
-    resolveWebFetchDefinition.mockReturnValue({
-      provider: { id: "test-fetch" },
-      definition: { execute },
-    });
+    const fetch = stubDirectFetch();
+    const execute = stubProvider();
     const started = createDeferred();
     const released = createDeferred();
     const realGuard = webGuardedFetch.fetchWithWebToolsNetworkGuard;
@@ -159,18 +154,7 @@ describe("web_fetch provider cancellation", () => {
         };
       },
     );
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 1,
-              readability: true,
-            },
-          },
-        },
-      },
-    })!;
+    const tool = createTool();
     const args = { url: "https://example.com/cancel-during-release-direct" };
     const controller = new AbortController();
     const reason = new Error("cancelled during release");
