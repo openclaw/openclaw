@@ -2,9 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { applyCodeModeCatalog } from "./code-mode.js";
 import {
-  createCodeModeHarness,
+  createCatalogCodeModeHarness,
   codeModeRunner,
   fakeTool,
   resetCodeModeTestState,
@@ -13,16 +12,12 @@ import {
 import { jsonResult } from "./tools/common.js";
 
 function createLoopHarness(maxOutputBytes?: number) {
-  const harness = createCodeModeHarness({ codeMode: { maxOutputBytes } });
   const fixture = fakeTool("loop_fixture", "A stable fixture operation");
-  applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, fixture] });
-  const [exec, wait] = harness.tools.map((tool) =>
+  const harness = createCatalogCodeModeHarness([fixture], { codeMode: { maxOutputBytes } });
+  const tools = harness.tools.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, { ...harness.ctx, loopDetection: { enabled: true } }),
   );
-  if (!exec || !wait) {
-    throw new Error("Code Mode controls missing");
-  }
-  return { ...harness, ...codeModeRunner([exec, wait]), exec, wait, fixture };
+  return { ...codeModeRunner(tools), fixture };
 }
 
 afterEach(async () => {
@@ -117,7 +112,7 @@ describe("Code Mode loop protection", () => {
 
   it("allows changing pending operations even when the guest emits no output", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    const { exec, wait, fixture } = createLoopHarness();
+    const { execute, resume, fixture } = createLoopHarness();
     let started = createDeferred();
     let release = () => {};
     fixture.execute = async (_id, _input, signal) => {
@@ -135,7 +130,7 @@ describe("Code Mode loop protection", () => {
     };
     const code =
       'for (let index = 0; index < 12; index++) { await loop_fixture({value: String(index)}); } return "finished";';
-    const initial = exec.execute("start-changing-work", { title: "Start changing work", code });
+    const initial = execute(code, "start-changing-work", { title: "Start changing work" });
     await started.promise;
     await vi.advanceTimersByTimeAsync(10_000);
     let result = resultDetails(await initial);
@@ -144,12 +139,12 @@ describe("Code Mode loop protection", () => {
       expect(result.status).toBe("waiting");
       started = createDeferred();
       release();
-      const next = wait.execute("advance-work-" + index, { runId });
+      const next = resume({ runId }, "advance-work-" + index);
       if (index < 11) {
         await started.promise;
         await vi.advanceTimersByTimeAsync(10_000);
       }
-      result = resultDetails(await next);
+      result = await next;
     }
     expect(result).toMatchObject({ status: "completed", value: "finished" });
   });

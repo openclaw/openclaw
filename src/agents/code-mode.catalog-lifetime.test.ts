@@ -9,26 +9,17 @@ import {
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 
-afterEach(async () => {
-  await resetCodeModeTestState();
-  vi.useRealTimers();
-});
+afterEach(resetCodeModeTestState);
 
 it("keeps the 64-slot limit on suspensions, including a reserved active resume, not CPU-only exec", async () => {
   const entered = createDeferred();
   const release = createDeferred();
-  let aborts = 0;
+  const aborted = vi.fn();
   const gate = pluginToolWithExecute(
     "capacity_gate",
     "Hold a resumed slot",
     async (_id, _args, signal) => {
-      signal?.addEventListener(
-        "abort",
-        () => {
-          aborts += 1;
-        },
-        { once: true },
-      );
+      signal?.addEventListener("abort", aborted, { once: true });
       entered.resolve();
       await release.promise;
       return jsonResult(true);
@@ -39,31 +30,31 @@ it("keeps the 64-slot limit on suspensions, including a reserved active resume, 
   const extra = createCatalogCodeModeHarness();
   let active: Promise<unknown> | undefined;
   try {
-    // Four real VM starts at a time; no fabricated map entries or worker-count quota.
+    // Bound concurrent VM starts without fabricating capacity slots.
     for (let offset = 0; offset < owners.length; offset += 4) {
-      await Promise.all(
+      const batch = await Promise.all(
         owners.slice(offset, offset + 4).map(async (h, index) => {
           const result = await h.run(
             "await yield_control(); await yield_control(); await capacity_gate({}); return true;",
             `capacity-${offset + index}`,
           );
           expect(result.status).toBe("waiting");
-          ids[offset + index] = result.runId;
+          return result.runId;
         }),
       );
+      ids.push(...batch);
     }
     expect(new Set(ids).size).toBe(64);
     expect(testing.activeRuns.size).toBe(64);
     expect(
       await extra.run("let n=0; for(let i=0;i<1000;i++) n+=i; return n;", "cpu-at-capacity"),
     ).toMatchObject({ status: "completed", value: 499500 });
-    const rejectSuspension = async () => {
+    const rejectSuspension = async () =>
       expect(await extra.run("await yield_control(); return true;", "overflow")).toMatchObject({
         status: "failed",
         code: "invalid_input",
         error: expect.stringContaining("too many suspended"),
       });
-    };
     await rejectSuspension();
     const first = owners[0]!;
     const repark = await first.resume({ runId: ids[0] }, "repark-at-capacity");
@@ -75,7 +66,7 @@ it("keeps the 64-slot limit on suspensions, including a reserved active resume, 
     await rejectSuspension();
     clearToolSearchCatalog(first.ctx);
     expect(await active).toMatchObject({ status: "failed", code: "aborted" });
-    expect(aborts).toBe(1);
+    expect(aborted).toHaveBeenCalledOnce();
     const healthy = await extra.run("await yield_control(); return 'healthy';", "new-slot");
     expect(healthy.status).toBe("waiting");
     expect(testing.activeRuns.size).toBe(64);
@@ -86,8 +77,7 @@ it("keeps the 64-slot limit on suspensions, including a reserved active resume, 
     });
   } finally {
     release.resolve();
-    owners.forEach((h) => clearToolSearchCatalog(h.ctx));
-    clearToolSearchCatalog(extra.ctx);
+    [...owners, extra].forEach((h) => clearToolSearchCatalog(h.ctx));
     await active;
   }
   expect(testing.activeRuns.size).toBe(0);

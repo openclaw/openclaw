@@ -26,15 +26,17 @@ import { recordEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-rec
 import { Agent } from "./runtime/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult } from "./tools/common.js";
 import { createMessageTool } from "./tools/message-tool-execution.js";
 
 const model = makeProviderModelFixture({
   id: "test-model",
-  name: "Test Model",
   api: "openai-responses",
   provider: "test-provider",
   baseUrl: "https://example.test",
@@ -42,40 +44,23 @@ const model = makeProviderModelFixture({
   maxTokens: 1_000,
 });
 
-function call(
-  id: string,
-  name: string,
-  args: Record<string, unknown>,
-): AssistantMessage["content"] {
-  return [{ type: "toolCall", id, name, arguments: args }];
+function call(id: string, name: string, args: Record<string, unknown>) {
+  return [{ type: "toolCall" as const, id, name, arguments: args }];
 }
+const isControl = (name: string) => name === "exec" || name === "wait";
 
 it.for([
   { name: "direct final", nested: false },
   { name: "nested final" },
   { name: "nested final with pending siblings", held: true },
   { name: "nested progress with pending siblings", held: true, final: false },
-  {
-    name: "nested final before late accepted input",
-    held: true,
-    lateInput: "accepted",
-  },
-  {
-    name: "nested final before late cancelled input",
-    held: true,
-    lateInput: "cancelled",
-  },
-  {
-    name: "nested final with same-input continuation after failed publication",
-    recovery: "same",
-  },
-  {
-    name: "nested final with new input after failed publication",
-    recovery: "new",
-  },
+  { name: "late accepted input", held: true, lateInput: "accepted" },
+  { name: "late cancelled input", held: true, lateInput: "cancelled" },
+  { name: "same-input publication recovery", recovery: "same" },
+  { name: "new-input publication recovery", recovery: "new" },
 ])("Code Mode explicit source-reply completion: $name", async (scenario, { signal }) => {
   const {
-    name,
+    name: scenarioName,
     nested = true,
     held = false,
     final = true,
@@ -85,7 +70,7 @@ it.for([
   await withStateDirEnv("openclaw-code-mode-final-", async ({ tempRoot }) => {
     const config = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config);
-    const id = name.replaceAll(" ", "-");
+    const id = scenarioName.replaceAll(" ", "-");
     const scope = {
       agentId: "main",
       sessionId: `session-code-mode-${id}`,
@@ -94,18 +79,12 @@ it.for([
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const manager = SessionManager.open(scope);
-    manager.appendMessage({
-      role: "user",
-      content: "Read and report the result",
-      timestamp: 1,
-    });
+    const question = "Read and report the result";
+    const answer = "RESULT: VERIFIED INPUT";
+    manager.appendMessage(makeAgentUserMessage({ content: question, timestamp: 1 }));
     const inputPath = join(tempRoot, "input.txt");
     await writeFile(inputPath, "verified input\n");
     const delivered = createDeferred();
-    const innerStarted = createDeferred();
-    const innerRelease = createDeferred();
-    const outerStarted = createDeferred();
-    const outerRelease = createDeferred();
     const parked = createDeferred();
     const waiting = createDeferred();
     const effects: string[] = [];
@@ -123,11 +102,7 @@ it.for([
     let publicationFailed = false;
     let recoveryProbeSent = false;
     const publicationError = new Error("tool result publication failed");
-    const nextInput = {
-      role: "user" as const,
-      content: "Input B needs its own answer.",
-      timestamp: 2,
-    };
+    const nextInput = makeAgentUserMessage({ content: "Answer input B.", timestamp: 2 });
     const code = [
       `const input = await read({ path: ${JSON.stringify(inputPath)} });`,
       ...(held ? ["const sibling = inner_sibling({});"] : []),
@@ -140,9 +115,7 @@ it.for([
       streamFn: (_model, context) => {
         requests += 1;
         const lastResult = context.messages.findLast(
-          (message) =>
-            message.role === "toolResult" &&
-            (message.toolName === "exec" || message.toolName === "wait"),
+          (message) => message.role === "toolResult" && isControl(message.toolName),
         );
         const pending = readToolResultDetails(lastResult);
         let content: AssistantMessage["content"];
@@ -153,7 +126,7 @@ it.for([
               nested ? "exec" : "message",
               nested
                 ? { title: "Read and reply", code }
-                : { action: "send", message: "RESULT: VERIFIED INPUT", final },
+                : { action: "send", message: answer, final },
             ),
             ...(held ? call("outer-call", "outer_sibling", {}) : []),
           ];
@@ -169,16 +142,12 @@ it.for([
           content = [{ type: "text", text: "Automatic final after the tools." }];
         }
         const stopReason = content.some((part) => part.type === "toolCall") ? "toolUse" : "stop";
-        const message: AssistantMessage = {
-          role: "assistant",
+        const message = makeAgentAssistantMessage({
           content,
-          api: model.api,
           provider: model.provider,
-          model: model.id,
-          usage: createZeroUsageFixture(),
           stopReason,
           timestamp: requests,
-        };
+        });
         const stream = createAssistantMessageEventStream();
         queueMicrotask(() => {
           stream.push({ type: "done", reason: stopReason, message });
@@ -212,44 +181,36 @@ it.for([
     });
     const read = createReadTool(tempRoot);
     const readSpy = vi.spyOn(read, "execute");
-    function sibling(
-      siblingName: string,
-      started: ReturnType<typeof createDeferred>,
-      release: ReturnType<typeof createDeferred>,
-    ) {
-      return pluginToolWithExecute(`${siblingName}_sibling`, "Settle an operation", async () => {
+    function sibling(siblingName: string) {
+      const started = createDeferred();
+      const release = createDeferred();
+      const tool = pluginToolWithExecute(`${siblingName}_sibling`, "Settle", async () => {
         started.resolve();
         await release.promise;
         effects.push(`${siblingName} settled`);
         return jsonResult({ settled: true });
       });
+      return { tool, started, release };
     }
-    const inner = sibling("inner", innerStarted, innerRelease);
-    const outer = sibling("outer", outerStarted, outerRelease);
+    const inner = sibling("inner");
+    const outer = sibling("outer");
     applyCodeModeCatalog({
       ...harness,
-      tools: [...harness.tools, source, read, inner, outer],
+      tools: [...harness.tools, source, read, inner.tool, outer.tool],
     });
     agent.state.tools = nested
-      ? [...harness.tools, source, outer, ...(recovery !== "none" ? [read] : [])]
+      ? [...harness.tools, source, outer.tool, ...(recovery !== "none" ? [read] : [])]
       : [source];
     agent.afterToolCall = async ({ toolCall, result }) => {
       recordEmbeddedToolReceipt(manager, toolCall.id, result.details, toolCall.name === "message");
-      return undefined;
     };
     installMessageToolTerminalHook({ agent, sourceReplyDeliveryMode: "automatic" });
-    agent.afterToolOutcome = async ({ toolCall, result }) => {
-      if (toolCall.name !== "exec" && toolCall.name !== "wait") {
+    agent.afterToolOutcome = async ({ toolCall: { name }, result }) => {
+      if (!isControl(name)) {
         return;
       }
-      const details = readToolResultDetails(result);
-      const status = details?.status;
-      controls.push({
-        name: toolCall.name,
-        status,
-        runId: details?.runId,
-        terminate: result.terminate,
-      });
+      const { status, runId } = readToolResultDetails(result) ?? {};
+      controls.push({ name, status, runId, terminate: result.terminate });
       if (status === "waiting") {
         parked.resolve();
       }
@@ -261,7 +222,7 @@ it.for([
         !publicationFailed &&
         event.type === "message_end" &&
         event.message.role === "toolResult" &&
-        (event.message.toolName === "exec" || event.message.toolName === "wait") &&
+        isControl(event.message.toolName) &&
         readToolResultDetails(event.message)?.status === "completed"
       ) {
         publicationFailed = true;
@@ -273,8 +234,7 @@ it.for([
         event.type === "turn_end" &&
         event.toolResults.some((result) => readToolResultDetails(result)?.status === "waiting")
       ) {
-        // The completion hook has already run; only the later checkpoint can
-        // adopt this input. Queue cancellation must leave A's authority intact.
+        // Only the post-completion checkpoint adopts this input; cancellation retains A's authority.
         agent.steer(nextInput);
         queuedLateInput = true;
         if (lateInput === "cancelled") {
@@ -303,21 +263,20 @@ it.for([
     try {
       if (held) {
         await beforeSettlement(
-          Promise.all([delivered.promise, innerStarted.promise, outerStarted.promise]),
+          Promise.all([delivered.promise, inner.started.promise, outer.started.promise]),
         );
-        // The guest explicitly yields with its nested operation still held;
-        // reply delivery alone does not imply that a host wait timer is armed.
+        // Guest yield parks a live sibling; delivery alone does not arm a host wait timer.
         await beforeSettlement(parked.promise);
         expect(controls).toEqual([
           { name: "exec", status: "waiting", runId: expect.any(String), terminate: undefined },
         ]);
         expect(settled).toBe(false);
         expect(effects).toEqual(["reply committed"]);
-        outerRelease.resolve();
+        outer.release.resolve();
         await beforeSettlement(waiting.promise);
         expect(settled).toBe(false);
         expect(effects).toEqual(["reply committed", "outer settled"]);
-        innerRelease.resolve();
+        inner.release.resolve();
       }
       await withinTest(running, signal);
       await withinTest(harness.subscription.waitForPendingEvents(), signal);
@@ -331,14 +290,9 @@ it.for([
         .getEntries()
         .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
       expect(messages.filter((message) => message.role === "assistant")).toEqual([
-        expect.objectContaining({
-          content: [{ type: "text", text: "RESULT: VERIFIED INPUT" }],
-        }),
+        expect.objectContaining({ content: [{ type: "text", text: answer }] }),
       ]);
-      expect(messages[0]).toMatchObject({
-        role: "user",
-        content: "Read and report the result",
-      });
+      expect(messages[0]).toMatchObject({ role: "user", content: question });
       expect(testing.activeRuns.size).toBe(0);
       expect(testing.resumingRunIds.size).toBe(0);
       expect(waitRunIds).toHaveLength(Math.max(0, controls.length - 1));
@@ -358,21 +312,15 @@ it.for([
         final && lateInput !== "accepted" && recovery !== "new" ? 0 : 1,
       );
     } finally {
-      innerRelease.resolve();
-      outerRelease.resolve();
+      inner.release.resolve();
+      outer.release.resolve();
       agent.abort();
-      try {
-        await running;
-      } finally {
-        try {
-          await resetCodeModeTestState();
-        } finally {
-          unsubscribe();
-          harness.dispose();
-          vi.restoreAllMocks();
-          clearRuntimeConfigSnapshot();
-        }
-      }
+      await running.finally(resetCodeModeTestState).finally(() => {
+        unsubscribe();
+        harness.dispose();
+        vi.restoreAllMocks();
+        clearRuntimeConfigSnapshot();
+      });
     }
   });
 });
