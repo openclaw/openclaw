@@ -25,42 +25,50 @@ import { deleteSessionUpstreamLinkInDatabase } from "./session-upstream-links.ke
 
 afterEach(() => vi.restoreAllMocks());
 
+function link(sessionKey: string, threadId: string) {
+  return {
+    sessionKey,
+    agentId: "main",
+    catalogId: "fixture",
+    hostId: "gateway:local",
+    threadId,
+    upstreamKind: "codex-app-server" as const,
+    upstreamRef: null,
+    marker: null,
+  };
+}
+
+function expectPresence(prepared: { current(): boolean }, present: boolean) {
+  const sql = observeMainThreadSql();
+  try {
+    expect(prepared.current()).toBe(present);
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+}
+
 it.each(["worker delete", "settlement", "session cleanup", "legacy SDK"] as const)(
   "keeps prepared upstream presence current after %s without guard SQL",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       openOpenClawStateDatabase();
       const input = {
-        sessionKey: "agent:main:presence",
-        agentId: "main",
-        catalogId: "fixture",
-        hostId: "gateway:local",
-        threadId: "presence-thread",
-        upstreamKind: "codex-app-server" as const,
+        ...link("agent:main:presence", "presence-thread"),
         upstreamRef: { threadId: "presence-thread" },
-        marker: null,
       };
       using prepared = await prepareSessionUpstreamPresence(
         captureSessionUpstreamLinkReadSource(),
         input.sessionKey,
         input.agentId,
       );
-      const expectPresence = (present: boolean) => {
-        const sql = observeMainThreadSql();
-        try {
-          expect(prepared.current()).toBe(present);
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
-      };
-      expectPresence(false);
+      expectPresence(prepared, false);
       expect(
         await (writer === "legacy SDK"
           ? upsertSessionUpstreamLink(input, { now: 1 })
           : upsertSessionUpstreamLinkAsync(input, { now: 1 })),
       ).toBe(true);
-      expectPresence(true);
+      expectPresence(prepared, true);
       if (writer === "legacy SDK") {
         expect(() =>
           runOpenClawStateWriteTransaction(({ db }) => {
@@ -68,7 +76,7 @@ it.each(["worker delete", "settlement", "session cleanup", "legacy SDK"] as cons
             throw new Error("rollback presence");
           }),
         ).toThrow("rollback presence");
-        expectPresence(true);
+        expectPresence(prepared, true);
         expect(deleteSessionUpstreamLink(input.sessionKey, input.agentId)).toBe("deleted");
       } else if (writer === "worker delete") {
         expect(await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId)).toBe(
@@ -85,7 +93,7 @@ it.each(["worker delete", "settlement", "session cleanup", "legacy SDK"] as cons
       } else {
         await handleSessionStateSessionDeleted(input.sessionKey, input.agentId);
       }
-      expectPresence(false);
+      expectPresence(prepared, false);
     });
   },
 );
@@ -112,18 +120,7 @@ it("keeps a committed adoption when the initial read reply arrives later", async
     );
     try {
       await awaitGateBeforeSettlement(readComplete.promise, pending, "upstream read preparation");
-      expect(
-        await upsertSessionUpstreamLinkAsync({
-          sessionKey,
-          agentId: "main",
-          catalogId: "fixture",
-          hostId: "gateway:local",
-          threadId: "late-read-thread",
-          upstreamKind: "codex-app-server",
-          upstreamRef: null,
-          marker: null,
-        }),
-      ).toBe(true);
+      expect(await upsertSessionUpstreamLinkAsync(link(sessionKey, "late-read-thread"))).toBe(true);
     } finally {
       deliverRead.resolve();
     }
@@ -142,28 +139,13 @@ it.each(["worker", "legacy SDK"] as const)(
       const sessionKey = "agent:main:presence-create";
       using prepared = await prepareSessionUpstreamPresence(source, sessionKey, "main");
       expect(prepared.current()).toBe(false);
-      const input = {
-        sessionKey,
-        agentId: "main",
-        catalogId: "fixture",
-        hostId: "gateway:local",
-        threadId: "created-thread",
-        upstreamKind: "codex-app-server" as const,
-        upstreamRef: null,
-        marker: null,
-      };
+      const input = link(sessionKey, "created-thread");
       expect(
         await (writer === "worker"
           ? upsertSessionUpstreamLinkAsync(input)
           : upsertSessionUpstreamLink(input)),
       ).toBe(true);
-      const sql = observeMainThreadSql();
-      try {
-        expect(prepared.current()).toBe(true);
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
+      expectPresence(prepared, true);
     });
   },
 );
@@ -183,18 +165,7 @@ it("denies the final guard when committed presence facts cannot be installed", a
       }
     });
     try {
-      expect(
-        await upsertSessionUpstreamLinkAsync({
-          sessionKey,
-          agentId: "main",
-          catalogId: "fixture",
-          hostId: "gateway:local",
-          threadId: "unknown-thread",
-          upstreamKind: "codex-app-server",
-          upstreamRef: null,
-          marker: null,
-        }),
-      ).toBe(true);
+      expect(await upsertSessionUpstreamLinkAsync(link(sessionKey, "unknown-thread"))).toBe(true);
       expect(() => prepared.current()).toThrow("Session upstream source is unavailable");
     } finally {
       release();

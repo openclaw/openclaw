@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveNativeAttempt,
   type EmbeddedAgentQueueHandle,
@@ -528,44 +528,23 @@ async function replay(seed: number, events = sequence(seed)) {
       // Flush actual async continuations with a fake clock, never sleeps/polling.
       // Advancing the clock cannot resolve either raw cleanup receipt.
       await vi.advanceTimersByTimeAsync(event.type === "tick" ? 6 : 0);
-      const context =
-        "seed=" +
-        seed +
-        " prefix=" +
-        JSON.stringify(observedPrefix) +
-        " errors=" +
-        errors.map(String).join(";");
-      expect(actual, context).toBe(expected);
-      expect(starts, context).toEqual(model.starts);
-      expect(cancelled, context).toEqual(model.cancelled);
-      expect(backendStops, context).toEqual(model.backendStops);
-      expect(mutationStarted, context).toBe(model.mutationsStarted);
-      expect(
-        [...ownersSettled].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(
-        model.mail
-          .filter((entry) => entry.selected && entry.finished && entry.ownerSettled)
-          .map((entry) => entry.id),
-      );
-      expect(
-        [...cleanupStarted].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(
-        model.mail.filter((entry) => !entry.native && entry.retiring).map((entry) => entry.id),
-      );
-      expect(
-        [...settled].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(model.mail.filter((entry) => !entry.native && entry.done).map((entry) => entry.id));
-      expect(
-        [...rejected].toSorted((a, b) => a - b),
-        context,
-      ).toEqual(
-        model.mail
-          .filter((entry) => !entry.selected && entry.ready && entry.retiring)
-          .map((entry) => entry.id),
-      );
+      const context = `seed=${seed} prefix=${JSON.stringify(observedPrefix)} errors=${errors.map(String).join(";")}`;
+      expect({ actual, starts, cancelled, backendStops, mutationStarted }, context).toEqual({
+        actual: expected,
+        starts: model.starts,
+        cancelled: model.cancelled,
+        backendStops: model.backendStops,
+        mutationStarted: model.mutationsStarted,
+      });
+      const expectIds = (ids: number[], matches: (entry: Mail) => boolean) =>
+        expect(
+          ids.toSorted((a, b) => a - b),
+          context,
+        ).toEqual(model.mail.filter(matches).map((entry) => entry.id));
+      expectIds(ownersSettled, (entry) => entry.selected && entry.finished && entry.ownerSettled);
+      expectIds(cleanupStarted, (entry) => !entry.native && entry.retiring);
+      expectIds(settled, (entry) => !entry.native && entry.done);
+      expectIds(rejected, (entry) => !entry.selected && entry.ready && entry.retiring);
       const active = model.active === undefined ? undefined : mail(model, model.active);
       const owner =
         active && !(active.finished && active.ownerSettled)
@@ -606,46 +585,38 @@ async function replay(seed: number, events = sequence(seed)) {
 }
 
 describe("real controller selector sequences", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
   it("waits for sources withdrawn after a mutation captured its cleanup receipts", async () => {
-    vi.useFakeTimers();
-    try {
-      await replay(3, [
-        ...prefix,
-        { type: "hold", id: 6 },
-        { type: "owner-settled", id: 6 },
-        { type: "owner-settled", id: 4 },
-        { type: "mutation" },
-        { type: "finish", id: 4 },
-        { type: "withdraw", id: 6 },
-        { type: "source-settled", id: 4 },
-        { type: "reserve", id: 8, interrupt: false },
-        { type: "native", id: 9 },
-        { type: "hold", id: 8 },
-        { type: "withdraw", id: 8 },
-        { type: "source-settled", id: 6 },
-        { type: "source-settled", id: 8 },
-        { type: "mutation-settled" },
-        { type: "finish", id: 9 },
-        { type: "owner-settled", id: 9 },
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    await replay(3, [
+      ...prefix,
+      { type: "hold", id: 6 },
+      { type: "owner-settled", id: 6 },
+      { type: "owner-settled", id: 4 },
+      { type: "mutation" },
+      { type: "finish", id: 4 },
+      { type: "withdraw", id: 6 },
+      { type: "source-settled", id: 4 },
+      { type: "reserve", id: 8, interrupt: false },
+      { type: "native", id: 9 },
+      { type: "hold", id: 8 },
+      { type: "withdraw", id: 8 },
+      { type: "source-settled", id: 6 },
+      { type: "source-settled", id: 8 },
+      { type: "mutation-settled" },
+      { type: "finish", id: 9 },
+      { type: "owner-settled", id: 9 },
+    ]);
   });
 
   it("matches bounded mixed-producer sequences through raw owner, source and mutation fences", async () => {
-    vi.useFakeTimers();
-    try {
-      for (let seed = 1; seed <= 16; seed++) {
-        await replay(seed);
-      }
-    } finally {
-      vi.useRealTimers();
+    for (let seed = 1; seed <= 16; seed++) {
+      await replay(seed);
     }
   });
 
   it("borrows the admitted native turn inside a mutation without admitting its queued competitor", async () => {
-    vi.useFakeTimers();
     const key = "agent:main:sequence-borrow";
     const sessionId = "sequence-borrow";
     const target = captureSessionTarget({
@@ -733,7 +704,6 @@ describe("real controller selector sequences", () => {
       }
       await vi.advanceTimersByTimeAsync(0);
       await Promise.allSettled([first, ...(competitor ? [competitor] : [])]);
-      vi.useRealTimers();
     }
   });
 });

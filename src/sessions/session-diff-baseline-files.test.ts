@@ -74,16 +74,18 @@ describe("session diff baseline file capture", () => {
           await fs.link(pathname, path.join(root, "notes.txt"));
           await fs.link(`${pathname}-shm`, path.join(root, "mapping.txt"));
         }
-        const mainLocks = readMainDatabasePosixLocks(pathname);
-        const shmLocks = readSqliteShmPosixLocks(`${pathname}-shm`);
-        expect(mainLocks).not.toEqual([]);
-        expect(shmLocks).not.toEqual([]);
+        const locks = () => ({
+          main: readMainDatabasePosixLocks(pathname),
+          shm: readSqliteShmPosixLocks(`${pathname}-shm`),
+        });
+        const held = locks();
+        expect(held.main).not.toEqual([]);
+        expect(held.shm).not.toEqual([]);
 
         const baseline = await collectCheckoutDiffBaseline({ cwd: root });
 
         // Query locks before any new SQLite connection can truncate the unlocked SHM.
-        expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);
-        expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
+        expect(locks()).toEqual(held);
         expect(baseline?.files).toEqual([]);
         expect(baseline?.truncated).toBe(true);
         const files = (await fs.readdir(root)).filter(
@@ -101,8 +103,7 @@ describe("session diff baseline file capture", () => {
           },
         });
         expect(diff.files.map((file) => file.path).toSorted()).toEqual(files.toSorted());
-        expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);
-        expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
+        expect(locks()).toEqual(held);
       } finally {
         writer.close();
       }
@@ -163,30 +164,21 @@ describe("session diff baseline file capture", () => {
 
       const baseline = await collectCheckoutDiffBaseline({ cwd: root });
 
-      expect(new Map(baseline?.files.map((entry) => [entry.path, entry.fingerprint]))).toEqual(
-        new Map([
-          [
-            "deleted.txt",
-            storedFingerprint("deleted.txt", "deleted", undefined, "deleted", "", false),
-          ],
-          ["link", storedFingerprint("link", "symlink:~/draft.txt")],
-          [
-            "renamed.txt",
-            storedFingerprint(
-              "renamed.txt",
-              `${renamed.mode}\0${renamed.size}`,
-              Buffer.from("tracked bytes\n"),
-              "renamed",
-              "old.txt",
-              false,
-            ),
-          ],
-          [
-            "~/draft.txt",
-            storedFingerprint("~/draft.txt", `${literal.mode}\0${literal.size}`, bytes),
-          ],
-        ]),
-      );
+      expect(
+        Object.fromEntries(baseline?.files.map((entry) => [entry.path, entry.fingerprint]) ?? []),
+      ).toEqual({
+        "deleted.txt": storedFingerprint("deleted.txt", "deleted", undefined, "deleted", "", false),
+        link: storedFingerprint("link", "symlink:~/draft.txt"),
+        "renamed.txt": storedFingerprint(
+          "renamed.txt",
+          `${renamed.mode}\0${renamed.size}`,
+          Buffer.from("tracked bytes\n"),
+          "renamed",
+          "old.txt",
+          false,
+        ),
+        "~/draft.txt": storedFingerprint("~/draft.txt", `${literal.mode}\0${literal.size}`, bytes),
+      });
       expect(baseline?.truncated).toBeUndefined();
     },
   );

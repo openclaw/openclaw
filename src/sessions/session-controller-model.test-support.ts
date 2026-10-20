@@ -1,9 +1,5 @@
-/**
- * Reference specification for the executable pilot, NOT a runtime controller.
- * It observes one retained ReplyOperation, V2 steering and its finishing writer.
- * Mailbox custody below is a target contract; the pilot does not migrate queues,
- * durable replay, command stop/children/hooks or lifecycle mutation scheduling.
- */
+// Reference model, not a runtime controller: one ReplyOperation, V2 steering and
+// its finishing writer. Mailbox custody excludes durable replay and command stop.
 export type PilotInput = Readonly<{ id: string; authority: string }>;
 export type PilotCustody = "offered" | "accepted" | "indeterminate" | "rejected" | "failed";
 export type PilotEvent =
@@ -51,42 +47,39 @@ export function stepPilot(
   event: PilotEvent,
 ): { state: PilotState; effects: PilotEffect[] } {
   const unchanged = { state, effects: [] };
+  const update = (patch: Partial<PilotState>, effects: PilotEffect[] = []) => ({
+    state: { ...state, ...patch },
+    effects,
+  });
   switch (event.type) {
     case "run":
-      return state.phase === "preparing"
-        ? { state: { ...state, phase: "running" }, effects: [] }
-        : unchanged;
+      return state.phase === "preparing" ? update({ phase: "running" }) : unchanged;
     case "finish":
-      return state.phase === "running"
-        ? { state: { ...state, phase: "finishing" }, effects: [] }
-        : unchanged;
+      return state.phase === "running" ? update({ phase: "finishing" }) : unchanged;
     case "stop":
       // This is exact-parent cancellation only. A command stop is NOT modeled as
       // a no-op: queues, children and hooks retain their separate command owner.
       return state.phase === "preparing" || state.phase === "running"
-        ? { state: { ...state, phase: "terminal", cancelled: true }, effects: [{ type: "cancel" }] }
+        ? update({ phase: "terminal", cancelled: true }, [{ type: "cancel" }])
         : unchanged;
     case "complete":
-      return { state: { ...state, phase: "terminal", slot: false }, effects: [] };
+      return update({ phase: "terminal", slot: false });
     case "delivery-settled":
-      return state.slot ? unchanged : { state: { ...state, writer: false }, effects: [] };
+      return state.slot ? unchanged : update({ writer: false });
     case "revoke":
-      return { state: { ...state, live: false }, effects: [] };
+      return update({ live: false });
     case "injection-available":
-      return { state: { ...state, injectionAvailable: event.available }, effects: [] };
+      return update({ injectionAvailable: event.available });
     case "compact":
-      return { state: { ...state, compacting: event.active }, effects: [] };
+      return update({ compacting: event.active });
     case "replace":
       return state.slot
         ? unchanged
-        : {
-            state: {
-              ...initialPilotState(),
-              generation: state.generation + 1,
-              inputs: state.inputs,
-            },
-            effects: [],
-          };
+        : update({
+            ...initialPilotState(),
+            generation: state.generation + 1,
+            inputs: state.inputs,
+          });
     case "offer": {
       if (state.inputs[event.input.id]) {
         return unchanged;
@@ -101,9 +94,8 @@ export function stepPilot(
       const allowed = targetAvailable && state.live && event.input.authority === state.authority;
       const custody: PilotCustody =
         targetAvailable && !state.live ? "failed" : allowed ? "offered" : "rejected";
-      return {
-        state: {
-          ...state,
+      return update(
+        {
           inputs: {
             ...state.inputs,
             [event.input.id]: {
@@ -113,10 +105,10 @@ export function stepPilot(
             },
           },
         },
-        effects: allowed
+        allowed
           ? [{ type: "inject", input: event.input, generation: state.generation }]
           : [{ type: "reject", id: event.input.id }],
-      };
+      );
     }
     case "receipt": {
       const entry = state.inputs[event.id];
@@ -129,10 +121,7 @@ export function stepPilot(
         (state.phase === "running" || state.phase === "finishing") &&
         entry.generation === state.generation;
       const custody = current ? event.outcome : "failed";
-      return {
-        state: { ...state, inputs: { ...state.inputs, [event.id]: { ...entry, custody } } },
-        effects: [],
-      };
+      return update({ inputs: { ...state.inputs, [event.id]: { ...entry, custody } } });
     }
   }
   return event satisfies never;

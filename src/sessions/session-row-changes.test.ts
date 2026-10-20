@@ -7,6 +7,7 @@ import {
   captureSessionRowChanges,
   readSessionRowChangeRevision,
   sessionChanges,
+  type SessionRowChange,
 } from "./session-row-changes.js";
 
 const cleanup: Array<() => void> = [];
@@ -16,30 +17,35 @@ afterEach(() => {
   }
 });
 
-it("captures only surviving transaction postimages before the worker receipt is serialized", () => {
+function database() {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(":memory:");
-  cleanup.push(() => database.close());
-  database.exec("CREATE TABLE facts (key TEXT PRIMARY KEY)");
+  const db = new DatabaseSync(":memory:");
+  cleanup.push(() => db.close());
+  return db;
+}
+
+function collectKeys(keys: string[]) {
+  return (change: SessionRowChange) => {
+    if ("sessionKey" in change) {
+      keys.push(change.sessionKey);
+    }
+  };
+}
+
+it("captures only surviving transaction postimages before the worker receipt is serialized", () => {
+  const db = database();
+  db.exec("CREATE TABLE facts (key TEXT PRIMARY KEY)");
   const write = (key: string) => {
-    database.prepare("INSERT INTO facts VALUES (?)").run(key);
-    sessionChanges.emit({ sessionKey: key, facts: { kind: "unchanged" } }, database);
+    db.prepare("INSERT INTO facts VALUES (?)").run(key);
+    sessionChanges.emit({ sessionKey: key, facts: { kind: "unchanged" } }, db);
   };
   const initialRevision = readSessionRowChangeRevision();
   const transaction = <T>(run: () => T) =>
-    withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, run),
-    );
+    withSqlitePostCommitPublications(db, () => runSqliteImmediateTransactionSync(db, run));
   const notifications: string[] = [];
-  cleanup.push(
-    sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change) {
-        notifications.push(change.sessionKey);
-      }
-    }),
-  );
+  cleanup.push(sessionChanges.subscribe(collectKeys(notifications)));
   const receipt = transaction(() =>
-    captureSessionRowChanges(database, () => {
+    captureSessionRowChanges(db, () => {
       write("first");
       expect(() =>
         transaction(() => {
@@ -60,16 +66,14 @@ it("captures only surviving transaction postimages before the worker receipt is 
   ]);
   expect(notifications).toEqual(["first", "last"]);
   expect(readSessionRowChangeRevision()).toBeGreaterThan(initialRevision);
-  expect(database.prepare("SELECT key FROM facts ORDER BY key").all()).toEqual([
+  expect(db.prepare("SELECT key FROM facts ORDER BY key").all()).toEqual([
     { key: "first" },
     { key: "last" },
   ]);
 });
 
 it("keeps postcommit observer events outside the committing worker's captured postimages", () => {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(":memory:");
-  cleanup.push(() => database.close());
+  const db = database();
   const observed: string[] = [];
   cleanup.push(
     sessionChanges.subscribe((change) => {
@@ -78,14 +82,14 @@ it("keeps postcommit observer events outside the committing worker's captured po
       }
       observed.push(change.sessionKey);
       if (change.sessionKey === "committed") {
-        sessionChanges.emit({ sessionKey: "observer" }, database);
+        sessionChanges.emit({ sessionKey: "observer" }, db);
       }
     }),
   );
-  const captured = captureSessionRowChanges(database, () =>
-    withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, () =>
-        sessionChanges.emit({ sessionKey: "committed", facts: { kind: "unchanged" } }, database),
+  const captured = captureSessionRowChanges(db, () =>
+    withSqlitePostCommitPublications(db, () =>
+      runSqliteImmediateTransactionSync(db, () =>
+        sessionChanges.emit({ sessionKey: "committed", facts: { kind: "unchanged" } }, db),
       ),
     ),
   );
@@ -94,26 +98,15 @@ it("keeps postcommit observer events outside the committing worker's captured po
 });
 
 it("settles session notifications through a connection's separate publication anchor", () => {
-  const { DatabaseSync } = requireNodeSqlite();
-  const anchor = new DatabaseSync(":memory:");
-  const database = Object.assign(new DatabaseSync(":memory:"), {
+  const anchor = database();
+  const db = Object.assign(database(), {
     anchor,
     [Symbol.for("openclaw.postgres-sync-connection")]: true,
   });
-  cleanup.push(
-    () => anchor.close(),
-    () => database.close(),
-  );
   const observed: string[] = [];
-  cleanup.push(
-    sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change) {
-        observed.push(change.sessionKey);
-      }
-    }),
-  );
+  cleanup.push(sessionChanges.subscribe(collectKeys(observed)));
   const emit = (sessionKey: string) =>
-    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, database);
+    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, db);
   const captured = captureSessionRowChanges(anchor, () =>
     withSqlitePostCommitPublications(anchor, () => {
       expect(() =>
@@ -137,16 +130,8 @@ it("installs private authority before observers without duplicate presentation n
   const pluginEvents: string[] = [];
   const pluginFacts: string[][] = [];
   cleanup.push(
-    sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change) {
-        installed.push(change.sessionKey);
-      }
-    }),
-    sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change) {
-        projected.push(change.sessionKey);
-      }
-    }),
+    sessionChanges.subscribeFacts(collectKeys(installed)),
+    sessionChanges.subscribeProjection(collectKeys(projected)),
     sessionChanges.subscribe(() => observed.push([...installed])),
     subscribeRuntimeSessionChanges((change) => {
       pluginEvents.push(change.sessionKey);
