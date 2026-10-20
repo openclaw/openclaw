@@ -7,7 +7,7 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 type GatewayRequest = { method: string; params?: Record<string, unknown> };
@@ -230,6 +230,46 @@ describe("openclaw session lookup context", () => {
       sessionKey: "global",
       agentId: "research",
     });
+  });
+
+  it("resolves a scoped agent key before synchronous tool construction", () => {
+    let constructionError: unknown;
+    try {
+      createOpenClawTools({
+        agentSessionKey: "agent:research:dashboard:control",
+        runSessionKey: "global",
+        config: { agents: { ownership: "explicit", entries: { main: {}, research: {} } } },
+        wrapBeforeToolCallHook: false,
+      });
+    } catch (error) {
+      constructionError = error;
+    }
+    expect(String(constructionError)).not.toContain("Multiple agents are configured");
+  });
+
+  it("accepts an explicit execution owner before outer tool construction", () => {
+    expect(() =>
+      createOpenClawTools({
+        agentSessionKey: "agent:research:dashboard:control",
+        runSessionKey: "global",
+        requesterAgentIdOverride: "research",
+        config: { agents: { ownership: "explicit", entries: { main: {}, research: {} } } },
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      }),
+    ).not.toThrow(/Multiple agents are configured/);
+  });
+
+  it("retains a scoped agent key through async outer tool preparation", async () => {
+    await expect(
+      createOpenClawToolsAsync({
+        agentSessionKey: "agent:research:dashboard:control",
+        runSessionKey: "global",
+        config: { agents: { ownership: "explicit", entries: { main: {}, research: {} } } },
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      }),
+    ).resolves.toBeInstanceOf(Array);
   });
 
   it("binds nested session lookups to the durable caller", async () => {

@@ -9,13 +9,10 @@ import {
   prepareUserProfileCatalog,
 } from "../state/user-profile-list.js";
 import { prepareWebSearchConfiguration } from "../web-search/runtime.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveSessionAgentIds,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
+import { resolveOpenClawToolSession } from "./openclaw-tools.plugin-context.js";
 import { prepareProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
@@ -29,11 +26,12 @@ export async function prepareOpenClawTools(
   shared: PreparedToolConstruction,
 ) {
   const captured = { ...options, config: shared.config };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
+  const resolvedSession = resolveOpenClawToolSession({
+    options: captured,
     config: captured.config,
-    agentId: captured.requesterAgentIdOverride,
   });
+  captured.resolvedSession = resolvedSession;
+  const { sessionAgentId } = resolvedSession;
   captured.authProfileStore ??= captured.preparedModelRuntime
     ? getPreparedModelRuntimeAuthStore(captured.preparedModelRuntime)
     : undefined;
@@ -119,6 +117,7 @@ export async function prepareOpenClawTools(
   }
   return {
     captured,
+    resolvedSession,
     delegated,
     webSearchConfigured,
     personalInstructionsEnabled,

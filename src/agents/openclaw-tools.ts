@@ -10,11 +10,7 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { hasMultipleSessionSharingIdentitiesNative } from "../state/user-profile-list.native.js";
 import { hasConfiguredWebSearchProvider } from "../web-search/runtime.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveSessionAgentIds,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
@@ -38,6 +34,7 @@ import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { resolveOpenClawToolSession } from "./openclaw-tools.plugin-context.js";
 import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
@@ -166,11 +163,12 @@ export function createOpenClawTools(
   preparedWebSearchConfigured?: boolean,
 ): AnyAgentTool[] {
   const captured = { ...options };
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
+  const resolvedSession = resolveOpenClawToolSession({
+    options: captured,
     config: captured.config,
-    agentId: captured.requesterAgentIdOverride,
   });
+  captured.resolvedSession = resolvedSession;
+  const { sessionAgentId } = resolvedSession;
   captured.authProfileStore ??= ensureAuthProfileStoreWithoutExternalProfiles(
     captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
     { allowKeychainPrompt: false },
@@ -216,11 +214,9 @@ function* createOpenClawToolsSteps(
     runtimeConfig: runtimeSnapshot?.config,
     runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
   });
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-    config: resolvedConfig,
-    agentId: options?.requesterAgentIdOverride,
-  });
+  const preparedSession =
+    options?.resolvedSession ?? resolveOpenClawToolSession({ options, config: resolvedConfig });
+  const { sessionAgentId } = preparedSession;
   const swarmToolGroups = createOpenClawSwarmToolGroups({
     ...options,
     config: sessionConfig ?? getRuntimeConfig(),
@@ -672,7 +668,7 @@ function* createOpenClawToolsSteps(
     tools.push(
       ...(yield {
         plugins: {
-          options: { ...options, activeProjectKeys },
+          options: { ...options, activeProjectKeys, resolvedSession: preparedSession },
           resolvedConfig,
           existingToolNames: new Set(tools.map((tool) => tool.name)),
         },

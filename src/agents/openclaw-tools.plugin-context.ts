@@ -52,7 +52,16 @@ export type OpenClawPluginToolOptions = Pick<
   | "abortSignal"
   | "pluginExecutionSkillsSnapshot"
   | "pluginExecutionAuthority"
-> & { activeProjectKeys?: readonly string[]; approvalReviewerDeviceId?: string };
+> & {
+  activeProjectKeys?: readonly string[];
+  approvalReviewerDeviceId?: string;
+  resolvedSession?: ResolvedOpenClawToolSession;
+};
+
+export type ResolvedOpenClawToolSession = {
+  sessionKey: string | undefined;
+  sessionAgentId: string;
+};
 
 function resolvePluginSessionKey(
   options: Pick<OpenClawPluginToolOptions, "agentSessionKey" | "runSessionKey">,
@@ -72,6 +81,22 @@ function resolvePluginSessionKey(
       : runSessionKey || agentSessionKey;
 }
 
+export function resolveOpenClawToolSession(params: {
+  options?: Pick<
+    OpenClawPluginToolOptions,
+    "agentSessionKey" | "runSessionKey" | "requesterAgentIdOverride"
+  >;
+  config?: OpenClawConfig;
+}): ResolvedOpenClawToolSession {
+  const sessionKey = params.options ? resolvePluginSessionKey(params.options) : undefined;
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey,
+    config: params.config,
+    agentId: params.options?.requesterAgentIdOverride,
+  });
+  return { sessionKey, sessionAgentId };
+}
+
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;
@@ -79,15 +104,12 @@ export function resolveOpenClawPluginToolInputs(params: {
   getRuntimeConfig?: () => OpenClawConfig | undefined;
 }) {
   const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
-  const sessionKey = options ? resolvePluginSessionKey(options) : undefined;
+  const resolvedSession =
+    options?.resolvedSession ?? resolveOpenClawToolSession({ options, config: resolvedConfig });
+  const { sessionKey, sessionAgentId } = resolvedSession;
   if (options?.memoryAudience) {
     assertMemoryAudienceSession(options.memoryAudience, sessionKey);
   }
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey,
-    config: resolvedConfig,
-    agentId: options?.requesterAgentIdOverride,
-  });
   const inferredWorkspaceDir =
     options?.workspaceDir || !resolvedConfig
       ? undefined

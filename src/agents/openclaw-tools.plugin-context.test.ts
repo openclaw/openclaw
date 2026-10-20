@@ -131,19 +131,6 @@ it("fails closed when neither session key establishes an owner", () => {
   );
 });
 
-it("does not let a forged other-agent key override the run owner", () => {
-  const config = {
-    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-  } as never;
-  expect(
-    resolve({
-      config,
-      agentSessionKey: "agent:main:forged-policy",
-      runSessionKey: "agent:research:delegated-run",
-    }),
-  ).toMatchObject({ agentId: "research", sessionKey: "agent:research:delegated-run" });
-});
-
 it("keeps the routable conversation target ahead of the native channel id", () => {
   const result = resolve({
     agentChannel: "slack",

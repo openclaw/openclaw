@@ -14,6 +14,7 @@ import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { InstalledSkill } from "./installed-skill-catalog.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
+import type { ResolvedOpenClawToolSession } from "./openclaw-tools.plugin-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -131,6 +132,7 @@ export type OpenClawToolsOptions = {
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
+  resolvedSession?: ResolvedOpenClawToolSession;
   agentChannel?: string;
   /** Prepared active-conversation support for structured human questions. */
   questionInputMode?: ReturnType<typeof resolveConversationQuestionInputMode>;
