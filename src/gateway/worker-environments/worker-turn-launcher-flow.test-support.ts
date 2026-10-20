@@ -1,17 +1,13 @@
 import { expect, vi } from "vitest";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import * as runAuthority from "../../agents/admitted-run-context.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import {
-  parseWorkerLaunchDescriptor,
-  type WorkerLaunchPlan,
-} from "../../worker/launch-descriptor.js";
+import * as launch from "../../worker/launch-descriptor.js";
 import type { WorkerTunnelHandle, WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import * as fx from "./worker-turn-launcher.test-support.js";
 
+const createProvider = fx.createWorkerSessionTurnPlacementProvider;
+type Environments = fx.WorkerTurnEnvironmentService;
+type LaunchRequest = Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0];
 export const localResult = async () => ({ meta: { durationMs: 1 } });
 
 export const completedWorkerMessage = () =>
@@ -20,34 +16,22 @@ export const completedWorkerMessage = () =>
     timestamp: 21,
   });
 
-export function createLauncher(
-  options: Partial<Parameters<typeof fx.createWorkerSessionTurnPlacementProvider>[0]> = {},
-) {
+export function createLauncher(options: Partial<Parameters<typeof createProvider>[0]> = {}) {
   const { environments = fx.unusedEnvironments(), ...overrides } = options;
-  return fx.createWorkerSessionTurnPlacementProvider({
-    placements: fx.placements,
-    environments,
-    ...overrides,
-  });
+  return createProvider({ placements: fx.placements, environments, ...overrides });
 }
 
 export function expectUncalled(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
 }
 
-export async function completeTurn(
-  request: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0],
-  text: string,
-  timestamp: number,
-) {
+export async function completeTurn(request: LaunchRequest, text: string, timestamp: number) {
   const leaf = await fx.appendWorkerReply(text, timestamp);
   return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leaf);
 }
 
-export function launchDescriptor(plan: WorkerLaunchPlan) {
-  return parseWorkerLaunchDescriptor({
+export function launchDescriptor(plan: launch.WorkerLaunchPlan) {
+  return launch.parseWorkerLaunchDescriptor({
     ...structuredClone(plan),
     connectionEndpoint: { kind: "unix", socketPath: "/worker/gateway.sock" },
   });
@@ -59,28 +43,22 @@ export async function revocableTurn(
   boundary: string,
 ) {
   const base = fx.turn(runId);
-  let sourceLive = true;
-  const admission = prepareAgentRunAdmission({
+  const source = new AbortController();
+  const admission = runAuthority.prepareAgentRunAdmission({
     cfg: base.config,
-    operationalRunInstance: createOperationalRunInstanceRef(base.runId),
+    operationalRunInstance: runAuthority.createOperationalRunInstanceRef(base.runId),
     facts: {
       runId,
       agentId: fx.sessionTarget.agentId,
       ingress: { kind: "worker", boundary, state: "present" },
     },
-    assertSourceCurrent: () => {
-      if (!sourceLive) {
-        throw new Error("source authority revoked");
-      }
-    },
+    assertSourceCurrent: () => source.signal.throwIfAborted(),
   });
   const admitted = authority === "admitted" ? await admission.admit("embedded") : undefined;
   const close = () => admission.close();
   const revoke = admitted
-    ? () => closeAdmittedRunDelegatedAuthority(admitted)
-    : () => {
-        sourceLive = false;
-      };
+    ? () => runAuthority.closeAdmittedRunDelegatedAuthority(admitted)
+    : () => source.abort(new Error("source authority revoked"));
   return {
     input: {
       ...base,
@@ -99,7 +77,7 @@ export function runIdentity(runId: string) {
 }
 
 export function executeTurn(
-  provider: ReturnType<typeof fx.createWorkerSessionTurnPlacementProvider>,
+  provider: ReturnType<typeof createProvider>,
   runId: string,
   runLocal = localResult,
 ) {
@@ -107,9 +85,8 @@ export function executeTurn(
 }
 
 export function environmentForTunnel(
-  overrides: Pick<fx.WorkerTurnEnvironmentService, "startTunnel"> &
-    Partial<fx.WorkerTurnEnvironmentService>,
-): fx.WorkerTurnEnvironmentService {
+  overrides: Pick<Environments, "startTunnel"> & Partial<Environments>,
+): Environments {
   return {
     get: vi.fn(fx.attachedEnvironment),
     acquireTurnCredential: vi.fn(async () => fx.credential()),

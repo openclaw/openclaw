@@ -53,6 +53,10 @@ const sandboxInput = (workspaceDir = "/caller/workspace") => ({
 });
 const transcriptMismatch = "transcript identity does not match the active turn";
 
+function scopedObservation<T extends { restore(): void }>(observation: T) {
+  return { ...observation, [Symbol.dispose]: () => observation.restore() };
+}
+
 describe("worker turn launcher local placement", () => {
   let localProvider: ReturnType<typeof fx.createWorkerSessionTurnPlacementProvider>;
   beforeEach(async () => {
@@ -62,22 +66,17 @@ describe("worker turn launcher local placement", () => {
   afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it("reads absent sandbox placement without caller-thread SQL", async () => {
-    const provider = createLauncher();
-    const uninstall = installSessionPlacementAdmissionProvider(provider);
-    const sql = observeMainThreadSql();
-    try {
-      using prepared = await prepareSessionPlacementSandbox(sandboxInput(fx.root));
-      expect(prepared.sandbox).toBeNull();
-      prepared.assertCurrent();
-      sql.expectIdle();
-      await fx.seedActivePlacement("remote-exec");
-      sql.clear();
-      expect(prepared.assertCurrent).toThrow("placement authority changed");
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-      uninstall();
-    }
+    using cleanup = new DisposableStack();
+    cleanup.defer(installSessionPlacementAdmissionProvider(localProvider));
+    using sql = scopedObservation(observeMainThreadSql());
+    using prepared = await prepareSessionPlacementSandbox(sandboxInput(fx.root));
+    expect(prepared.sandbox).toBeNull();
+    prepared.assertCurrent();
+    sql.expectIdle();
+    await fx.seedActivePlacement("remote-exec");
+    sql.clear();
+    expect(prepared.assertCurrent).toThrow("placement authority changed");
+    sql.expectIdle();
   });
 
   it.each([
@@ -103,9 +102,10 @@ describe("worker turn launcher local placement", () => {
           : resolveSessionPlacementRuntimeOverride;
       const absent = kind === "inference" ? false : undefined;
       const identity = { sessionId: fx.SESSION_ID, sessionKey: fx.SESSION_KEY, agentId: "main" };
-      const uninstall = installSessionPlacementAdmissionProvider(provider);
-      const sql = observeMainThreadSql();
-      try {
+      {
+        using cleanup = new DisposableStack();
+        cleanup.defer(installSessionPlacementAdmissionProvider(provider));
+        using sql = scopedObservation(observeMainThreadSql());
         expect(await read(identity)).toBe(absent);
         sql.expectIdle();
         await fx.seedActivePlacement(executionMode);
@@ -128,9 +128,6 @@ describe("worker turn launcher local placement", () => {
           expect(await read(identity)).toBe(false);
         }
         sql.expectIdle();
-      } finally {
-        sql.restore();
-        uninstall();
       }
       expect(await read(identity)).toBe(absent);
     },
@@ -169,55 +166,48 @@ describe("worker turn launcher local placement", () => {
     );
   });
   it("keeps the exact local claim cleanup across compaction successor acceptance", async () => {
-    const uninstall = installSessionPlacementAdmissionProvider(localProvider);
-    try {
-      const result = await localProvider.executeTurn(
-        runIdentity("run-local"),
-        fx.turn("run-local"),
-        async () => {
-          const placement = fx.placements.get(fx.SESSION_ID);
-          expect(placement?.turnClaim).toMatchObject({ owner: "local", runId: "run-local" });
-          const settle = resolveSessionPlacementForcedTerminalSettlement();
-          if (!settle) {
-            throw new Error("expected exact local claim cleanup");
-          }
-          await fx.withWorkerCompactionAdoption("run-local", async (adopt) => {
-            await expect(adopt("session-local-successor")).resolves.toBe(fx.SESSION_ID);
-            expect(loadSessionEntry(fx.sessionTarget)?.sessionId).toBe("session-local-successor");
-            expect(fx.placements.get(fx.SESSION_ID)).toEqual(placement);
-            expect(await fx.placements.getAsync("session-local-successor")).toBeUndefined();
-            await settle();
-            expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
-          });
-          return {
-            payloads: [{ text: "local" }],
-            meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "local" } },
-          };
-        },
-      );
+    using cleanup = new DisposableStack();
+    cleanup.defer(installSessionPlacementAdmissionProvider(localProvider));
+    const result = await localProvider.executeTurn(
+      runIdentity("run-local"),
+      fx.turn("run-local"),
+      async () => {
+        const placement = fx.placements.get(fx.SESSION_ID);
+        expect(placement?.turnClaim).toMatchObject({ owner: "local", runId: "run-local" });
+        const settle = resolveSessionPlacementForcedTerminalSettlement();
+        if (!settle) {
+          throw new Error("expected exact local claim cleanup");
+        }
+        await fx.withWorkerCompactionAdoption("run-local", async (adopt) => {
+          await expect(adopt("session-local-successor")).resolves.toBe(fx.SESSION_ID);
+          expect(loadSessionEntry(fx.sessionTarget)?.sessionId).toBe("session-local-successor");
+          expect(fx.placements.get(fx.SESSION_ID)).toEqual(placement);
+          expect(await fx.placements.getAsync("session-local-successor")).toBeUndefined();
+          await settle();
+          expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
+        });
+        return {
+          payloads: [{ text: "local" }],
+          meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "local" } },
+        };
+      },
+    );
 
-      expect(result.payloads).toEqual([{ text: "local" }]);
-      expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
-    } finally {
-      uninstall();
-    }
+    expect(result.payloads).toEqual([{ text: "local" }]);
+    expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
   });
 
   it("leaves no placement row for an auxiliary model run without a session key", async () => {
     const runLocal = vi.fn(localResult);
-
-    const sql = observeMainThreadSql();
-    try {
+    {
+      using sql = scopedObservation(observeMainThreadSql());
       await localProvider.executeTurn(
         { sessionId: fx.SESSION_ID, agentId: "main", runId: "run-model-probe" },
         { ...fx.turn("run-model-probe"), modelRun: true },
         runLocal,
       );
       sql.expectIdle();
-    } finally {
-      sql.restore();
     }
-
     expect(runLocal).toHaveBeenCalledOnce();
     expect(await fx.placements.listAsync()).toEqual([]);
   });
@@ -283,50 +273,40 @@ describe("worker turn launcher local placement", () => {
     ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
     ["blank agent id", { agentId: " ", sessionKey: fx.SESSION_KEY }],
     ["blank session key", { agentId: "main", sessionKey: " " }],
-  ])(
-    "rejects a conflicting supplied placement %s before workspace access",
-    async (_label, identity) => {
+    ["omitted", undefined],
+  ] as const)(
+    "validates supplied placement identity before workspace access (%s)",
+    async (label, identity) => {
       await fx.seedActivePlacement();
-      const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: fx.root }));
-      const runLocal = vi.fn(localResult);
-      const provider = createLauncher({
-        resolveWorkspace,
+      const resolveWorkspace = vi.fn(async () => {
+        throw new Error("workspace reached");
       });
-
+      const runLocal = vi.fn(localResult);
+      const provider = createLauncher({ resolveWorkspace });
+      const runId = label === "omitted" ? "run-inherited-identity" : `run-conflict-${label}`;
       await expect(
         provider.executeTurn(
-          { sessionId: fx.SESSION_ID, ...identity, runId: `run-conflict-${_label}` },
-          fx.turn(`run-conflict-${_label}`),
+          { sessionId: fx.SESSION_ID, ...identity, runId },
+          fx.turn(runId),
           runLocal,
         ),
-      ).rejects.toThrow(/Worker turn (agent id|session key) (?:is required|does not match)/u);
-      expectUncalled(resolveWorkspace, runLocal);
-      expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
+      ).rejects.toThrow(
+        identity
+          ? /Worker turn (agent id|session key) (?:is required|does not match)/u
+          : "workspace reached",
+      );
+      if (identity) {
+        expectUncalled(resolveWorkspace, runLocal);
+        expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
+      } else {
+        expect(resolveWorkspace).toHaveBeenCalledWith({
+          sessionId: fx.SESSION_ID,
+          agentId: "main",
+          sessionKey: fx.SESSION_KEY,
+        });
+      }
     },
   );
-
-  it("inherits omitted placement identity before workspace access", async () => {
-    await fx.seedActivePlacement();
-    const resolveWorkspace = vi.fn(async () => {
-      throw new Error("workspace reached");
-    });
-    const provider = createLauncher({
-      resolveWorkspace,
-    });
-
-    await expect(
-      provider.executeTurn(
-        { sessionId: fx.SESSION_ID, runId: "run-inherited-identity" },
-        fx.turn("run-inherited-identity"),
-        vi.fn(),
-      ),
-    ).rejects.toThrow("workspace reached");
-    expect(resolveWorkspace).toHaveBeenCalledWith({
-      sessionId: fx.SESSION_ID,
-      agentId: "main",
-      sessionKey: fx.SESSION_KEY,
-    });
-  });
 
   it.each(["absent", "local"] as const)(
     "prepares %s placement once before claiming an admitted local turn",
@@ -401,8 +381,8 @@ describe("worker turn launcher local placement", () => {
       await expect(localProvider.executeTurn(claim, fx.turn(), runLocal)).rejects.toThrow(
         "needs a cloud worker",
       );
-      const sql = observeHostDataSql();
-      try {
+      {
+        using sql = scopedObservation(observeHostDataSql());
         await expect(localProvider.executeLocalTurn(claim, runLocal)).rejects.toThrow(
           "needs a cloud worker",
         );
@@ -411,8 +391,6 @@ describe("worker turn launcher local placement", () => {
             /\bsession_(?:nodes|windows|participants|entry_snapshots)\b/.test(query),
           ),
         ).toEqual([]);
-      } finally {
-        sql.restore();
       }
       expect(runLocal).not.toHaveBeenCalled();
 
@@ -520,12 +498,7 @@ describe("worker turn launcher local placement", () => {
     const finishOldRun = createDeferred();
     const replacementStarted = createDeferred();
     const finishReplacement = createDeferred();
-    const admission = {
-      sessionId: fx.SESSION_ID,
-      sessionKey: fx.SESSION_KEY,
-      agentId: "main",
-      storePath: fx.sessionTarget.storePath,
-    };
+    const admission = fx.sessionTarget;
     const handle = createEmbeddedRunHandle({ runId: "run-cancelled" });
     let oldOperation: ReturnType<typeof createReplyOperation> | undefined;
     let settleOldPlacement: (() => Promise<void>) | undefined;
@@ -681,85 +654,72 @@ describe("worker turn launcher local placement", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("resolves an exact paired-device sandbox without requiring an SSH identity resolver", async () => {
-    await fx.seedActivePlacement("remote-exec");
-    const environment = {
-      ...fx.attachedEnvironment(),
-      providerId: "device",
-      nodeDeviceId: "paired-node-1",
-      sharedHost: true,
-      sshEndpoint: null,
-    };
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
-      get: vi.fn(() => environment),
-      resolveSshIdentity: undefined,
-    };
-    const provider = createLauncher({ environments });
-
-    using prepared = await provider.prepareSandbox(sandboxInput());
-    expect(prepared.sandbox).toMatchObject({
-      backendId: "node",
-      placementExecutionMode: "remote-exec",
-      placementNodeId: "paired-node-1",
-      containerWorkdir: "/worker/workspace",
-    });
-    const sql = observeMainThreadSql();
-    try {
+  it.each(["current", "placement-replaced", "node-replaced"] as const)(
+    "prepares an exact remote sandbox (%s)",
+    async (scenario) => {
+      await fx.seedActivePlacement("remote-exec");
+      const environment =
+        scenario === "placement-replaced"
+          ? fx.attachedEnvironment()
+          : {
+              ...fx.attachedEnvironment(),
+              providerId: "device",
+              nodeDeviceId: "paired-node-1",
+              sshEndpoint: null,
+              ...(scenario === "current" ? { sharedHost: true } : {}),
+            };
+      const get = vi.fn<fx.WorkerTurnEnvironmentService["get"]>(() => environment);
+      if (scenario === "node-replaced") {
+        get
+          .mockReturnValueOnce(environment)
+          .mockReturnValueOnce(environment)
+          .mockReturnValueOnce({ ...environment, nodeDeviceId: "replacement-node" });
+      }
+      const provider = createLauncher({
+        environments: {
+          ...fx.unusedEnvironments(),
+          get,
+          ...(scenario === "current" ? { resolveSshIdentity: undefined } : {}),
+        },
+        ...(scenario === "placement-replaced"
+          ? {
+              resolveWorkspace: async () => {
+                const placement = fx.placements.get(fx.SESSION_ID);
+                if (placement?.state !== "active") {
+                  throw new Error("expected an active placement");
+                }
+                await fx.placements.startDrain({
+                  sessionId: fx.SESSION_ID,
+                  environmentId: placement.environmentId,
+                  ownerEpoch: placement.activeOwnerEpoch,
+                  expectedGeneration: placement.generation,
+                });
+                return { kind: "local" as const, path: "/local/managed-worktree" };
+              },
+            }
+          : {}),
+      });
+      if (scenario !== "current") {
+        await expect(provider.prepareSandbox(sandboxInput())).rejects.toThrow(
+          scenario === "placement-replaced"
+            ? "placement authority changed"
+            : "environment changed while preparing its sandbox",
+        );
+        return;
+      }
+      using prepared = await provider.prepareSandbox(sandboxInput());
+      expect(prepared.sandbox).toMatchObject({
+        backendId: "node",
+        placementExecutionMode: "remote-exec",
+        placementNodeId: "paired-node-1",
+        containerWorkdir: "/worker/workspace",
+      });
+      using sql = scopedObservation(observeMainThreadSql());
       prepared.assertCurrent();
       sql.expectIdle();
       environment.nodeDeviceId = "replacement-node";
       expect(prepared.assertCurrent).toThrow("environment changed");
       sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  });
-
-  it("rejects a remote-exec placement replaced while resolving its managed workspace", async () => {
-    await fx.seedActivePlacement("remote-exec");
-    const environment = fx.attachedEnvironment();
-    const provider = createLauncher({
-      environments: { ...fx.unusedEnvironments(), get: vi.fn(() => environment) },
-      resolveWorkspace: async () => {
-        const placement = fx.placements.get(fx.SESSION_ID);
-        if (placement?.state !== "active") {
-          throw new Error("expected an active placement");
-        }
-        await fx.placements.startDrain({
-          sessionId: fx.SESSION_ID,
-          environmentId: placement.environmentId,
-          ownerEpoch: placement.activeOwnerEpoch,
-          expectedGeneration: placement.generation,
-        });
-        return { kind: "local", path: "/local/managed-worktree" };
-      },
-    });
-
-    await expect(provider.prepareSandbox(sandboxInput())).rejects.toThrow(
-      "placement authority changed",
-    );
-  });
-
-  it("rejects a paired-node environment replaced after sandbox preparation", async () => {
-    await fx.seedActivePlacement("remote-exec");
-    const environment = {
-      ...fx.attachedEnvironment(),
-      providerId: "device",
-      nodeDeviceId: "paired-node-1",
-      sshEndpoint: null,
-    };
-    const get = vi
-      .fn<fx.WorkerTurnEnvironmentService["get"]>()
-      .mockReturnValueOnce(environment)
-      .mockReturnValueOnce(environment)
-      .mockReturnValueOnce({ ...environment, nodeDeviceId: "replacement-node" });
-    const provider = createLauncher({
-      environments: { ...fx.unusedEnvironments(), get },
-    });
-
-    await expect(provider.prepareSandbox(sandboxInput())).rejects.toThrow(
-      "environment changed while preparing its sandbox",
-    );
-  });
+    },
+  );
 });

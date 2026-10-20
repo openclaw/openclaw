@@ -65,9 +65,22 @@ const remoteCase = (
   } = {},
 ) => ({ label, nodeDeviceId, providerId, closeFails: false, ...overrides });
 
+function environmentFor(
+  tunnel: WorkerTunnelHandle,
+  overrides: Partial<fx.WorkerTurnEnvironmentService> = {},
+): fx.WorkerTurnEnvironmentService {
+  return {
+    ...fx.unusedEnvironments(),
+    get: vi.fn(fx.attachedEnvironment),
+    acquireTurnCredential: vi.fn(async () => fx.credential()),
+    startTunnel: vi.fn(async () => tunnel),
+    ...overrides,
+  };
+}
+
 describe("worker launch capabilities", () => {
-  beforeEach(fx.setupWorkerTurnLauncherTest);
-  beforeEach(() => {
+  beforeEach(async () => {
+    await fx.setupWorkerTurnLauncherTest();
     readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
   afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
@@ -131,20 +144,13 @@ describe("worker launch capabilities", () => {
         reconcileWorkspace: vi.fn(),
       });
       let publicationOffered = false;
-      const createGatewayTools: NonNullable<
-        fx.WorkerTurnEnvironmentService["createGatewayTools"]
-      > = async ({ prepareTools }) => {
-        const tools = (await prepareTools?.([])) ?? [];
-        publicationOffered = tools.some((tool) => tool.name === "github_publish");
-        return tools;
-      };
-      const environments = {
-        ...fx.unusedEnvironments(),
-        createGatewayTools,
-        get: vi.fn(() => fx.attachedEnvironment()),
-        acquireTurnCredential: vi.fn(async () => fx.credential()),
-        startTunnel: vi.fn(async () => tunnel),
-      };
+      const environments = environmentFor(tunnel, {
+        createGatewayTools: async ({ prepareTools }) => {
+          const tools = (await prepareTools?.([])) ?? [];
+          publicationOffered = tools.some((tool) => tool.name === "github_publish");
+          return tools;
+        },
+      });
       const provider = createLauncher({ environments });
       const execution = executeTurn(provider, "run-github", vi.fn());
       if (revoked) {
@@ -204,13 +210,10 @@ describe("worker launch capabilities", () => {
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
       });
-      const environments = {
-        ...fx.unusedEnvironments(),
+      const environments = environmentFor(tunnel, {
         get: vi.fn(() => environment),
-        acquireTurnCredential: vi.fn(async () => fx.credential()),
-        startTunnel: vi.fn(async () => tunnel),
         prepareComputer,
-      };
+      });
       const provider = createLauncher({ environments });
       await expect(
         provider.executeTurn(
@@ -243,41 +246,42 @@ describe("worker launch capabilities", () => {
     "settles $label remote-exec output and restores attachment prompts before cleanup (close fails: $closeFails)",
     async ({ nodeDeviceId, providerId, closeFails, primary, pauseSkillCleanup }) => {
       const returnedInterruption = primary === "returned-abort" || primary === "returned-timeout";
+      const returnedError = {
+        kind: "incomplete_turn" as const,
+        message: "recorded primary failure",
+        fallbackSafe: true,
+      };
       const localResult: EmbeddedAgentRunResult = {
         payloads: [
-          {
-            text: primary === "returned" ? "recorded primary failure" : "local remote reply",
-            ...(primary === "returned" ? { isError: true } : {}),
-          },
+          primary === "returned"
+            ? { text: returnedError.message, isError: true }
+            : { text: "local remote reply" },
         ],
-        ...(returnedInterruption || primary === "returned-success"
-          ? { didSendViaMessagingTool: true, messagingToolSentTexts: ["already delivered"] }
-          : {}),
-        meta: {
-          durationMs: 17,
-          ...(primary === "returned"
-            ? {
-                error: {
-                  kind: "incomplete_turn",
-                  message: "recorded primary failure",
-                  fallbackSafe: true,
-                },
-                replayInvalid: false,
-                livenessState: "blocked",
-                toolSummary: { calls: 1, tools: ["computer"], failures: 1 },
-              }
-            : {}),
-          ...(returnedInterruption
-            ? {
-                aborted: true,
-                replayInvalid: true,
-                providerStarted: true,
-                stopReason: primary === "returned-timeout" ? "timeout" : "aborted",
-                ...(primary === "returned-timeout" ? { timeoutPhase: "provider" } : {}),
-              }
-            : {}),
-        },
+        meta: { durationMs: 17 },
       };
+      if (returnedInterruption || primary === "returned-success") {
+        localResult.didSendViaMessagingTool = true;
+        localResult.messagingToolSentTexts = ["already delivered"];
+      }
+      if (primary === "returned") {
+        Object.assign(localResult.meta, {
+          error: returnedError,
+          replayInvalid: false,
+          livenessState: "blocked",
+          toolSummary: { calls: 1, tools: ["computer"], failures: 1 },
+        });
+      }
+      if (returnedInterruption) {
+        Object.assign(localResult.meta, {
+          aborted: true,
+          replayInvalid: true,
+          providerStarted: true,
+          stopReason: primary === "returned-timeout" ? "timeout" : "aborted",
+        });
+        if (primary === "returned-timeout") {
+          localResult.meta.timeoutPhase = "provider";
+        }
+      }
       const providerFailure =
         primary === "provider"
           ? ({ reason: "auth", status: 401 } as const)
@@ -317,35 +321,14 @@ describe("worker launch capabilities", () => {
         media: [{ path: saved.path, contentType: "text/plain" }],
       };
       const originalPrompt = inputTurn.prompt;
+      const expectRestoredPrompts = () =>
+        expect(inputTurn).toMatchObject({
+          prompt: originalPrompt,
+          transcriptPrompt: "Canonical transcript request",
+        });
       await fx.seedActivePlacement("remote-exec", remote);
       const order: string[] = [];
       const launchTurn = vi.fn();
-      const quiesceWorkspace = vi.fn(async () => {
-        order.push("quiesce");
-        return {
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {
-            order.push("resume");
-          }),
-        };
-      });
-      const reconcileWorkspace = vi.fn(
-        async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          order.push("reconcile");
-          await request.source.journal.commit(fx.MANIFEST_REF);
-          return {
-            manifestRef: fx.MANIFEST_REF,
-            changed: false,
-            verifyStable: vi.fn(async () => {}),
-            verifyLocalStable: vi.fn(async () => {}),
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
-      );
       const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: async (command) =>
@@ -355,16 +338,26 @@ describe("worker launch capabilities", () => {
             timeoutMs: 5_000,
             signal: command.signal,
           }),
-        quiesceWorkspace,
+        quiesceWorkspace: vi.fn(async () => {
+          order.push("quiesce");
+          return {
+            assertActive: vi.fn(async () => {}),
+            resume: vi.fn(async () => {
+              order.push("resume");
+            }),
+          };
+        }),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace,
+        reconcileWorkspace: vi.fn(async (request) => {
+          order.push("reconcile");
+          return fx.reconcileUnchangedLocalWorkspace(request);
+        }),
       });
       const secret = ["synthetic", "cleanup", "credential"].join("-");
       const cleanupDetail = `native close failed: HTTP 401 request timed out Authorization: Bearer ${secret} ${"x".repeat(3000)}`;
       const cleanupError = new AggregateError([new Error(cleanupDetail)], "computer close failed");
       const closeComputer = vi.fn(async () => {
-        expect(inputTurn.prompt).toBe(originalPrompt);
-        expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
+        expectRestoredPrompts();
         order.push("close");
         if (closeFails) {
           throw cleanupError;
@@ -377,17 +370,23 @@ describe("worker launch capabilities", () => {
         },
         close: closeComputer,
       };
-      const environments: fx.WorkerTurnEnvironmentService = {
-        ...fx.unusedEnvironments(),
+      const environments = environmentFor(tunnel, {
         get: vi.fn(() =>
           nodeDeviceId
             ? { ...fx.attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
             : fx.attachedEnvironment(),
         ),
-        startTunnel: vi.fn(async () => tunnel),
+        acquireTurnCredential: fx.unusedEnvironments().acquireTurnCredential,
         prepareComputer: vi.fn(async () => (nodeDeviceId ? computer : undefined)),
-      };
+      });
       const provider = createLauncher({ environments });
+      const selection = {
+        cfg: {},
+        manifestPlugins: [],
+        provider: "fixture-provider",
+        model: "fixture-model",
+        fallbacksOverride: ["fixture-next/fixture-model"],
+      };
       const successorGate = vi.spyOn(provider, "assertCompactionSuccessorAllowed");
       let retainedNodeAuthority: (() => void) | undefined;
       const runLocal = vi.fn(() =>
@@ -522,12 +521,9 @@ describe("worker launch capabilities", () => {
           for (const error of failures) {
             const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(localResult);
             const fallback = runWithModelFallback({
+              ...selection,
               cfg: undefined,
-              manifestPlugins: [],
               run,
-              provider: "fixture-provider",
-              model: "fixture-model",
-              fallbacksOverride: ["fixture-next/fixture-model"],
             });
             if (providerFailure && !closeFails) {
               await expect(fallback).resolves.toMatchObject({
@@ -569,13 +565,7 @@ describe("worker launch capabilities", () => {
             expect(JSON.stringify(result)).not.toContain(secret);
             const runCandidate = vi.fn(async () => result);
             const entry = await runEmbeddedAgentEntry({
-              selection: {
-                cfg: {},
-                provider: "fixture-provider",
-                model: "fixture-model",
-                manifestPlugins: [],
-                fallbacksOverride: ["fixture-next/fixture-model"],
-              },
+              selection,
               identity: { runId: "settlement-entry", agentId: "main", sessionId: fx.SESSION_ID },
               harness: {
                 workspaceDir: fx.root,
@@ -589,10 +579,10 @@ describe("worker launch capabilities", () => {
             });
             expect(runCandidate).toHaveBeenCalledOnce();
             expect(entry.attempts).toEqual([]);
-            expect(entry.terminal.outcome.status).toBe(
-              primary === "returned-timeout" ? "timeout" : "error",
-            );
-            expect(entry.terminal.metadata.replayInvalid).toBe(true);
+            expect(entry.terminal).toMatchObject({
+              outcome: { status: primary === "returned-timeout" ? "timeout" : "error" },
+              metadata: { replayInvalid: true },
+            });
             if (returnedInterruption) {
               expect(entry.terminal.metadata).toMatchObject({
                 aborted: true,
@@ -608,8 +598,7 @@ describe("worker launch capabilities", () => {
         uninstall();
         inputTurn.preparedRunAdmission.close();
       }
-      expect(inputTurn.prompt).toBe(originalPrompt);
-      expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
+      expectRestoredPrompts();
       expect(closeComputer).toHaveBeenCalledTimes(nodeDeviceId ? 1 : 0);
       expect(order).toEqual([
         "local",

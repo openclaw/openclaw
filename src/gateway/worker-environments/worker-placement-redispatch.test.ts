@@ -55,12 +55,12 @@ describe("createWorkerPlacementRedispatch", () => {
         requiredNodeCommands: executionMode === "remote-exec" ? ["codex.exec-server.stdio.v1"] : [],
         consumesWorkerSlot: executionMode === "worker-turn",
       };
-      const resolveDevicePlacementRequirement = vi.fn(async () => requirement);
+      const resolveRequirement = vi.fn(async () => requirement);
       const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
       const redispatch = createWorkerPlacementRedispatch({
         placements: reader(source, environment),
         dispatch,
-        resolveDevicePlacementRequirement,
+        resolveDevicePlacementRequirement: resolveRequirement,
       });
 
       await expect(redispatch(source, dispatchOptions)).resolves.toBe(ACTIVE_PLACEMENT);
@@ -79,9 +79,7 @@ describe("createWorkerPlacementRedispatch", () => {
         dispatchOptions.assertCurrent,
         undefined,
       );
-      expect(resolveDevicePlacementRequirement.mock.calls).toEqual(
-        nodeDeviceId ? [[identity]] : [],
-      );
+      expect(resolveRequirement.mock.calls).toEqual(nodeDeviceId ? [[identity]] : []);
     },
   );
 
