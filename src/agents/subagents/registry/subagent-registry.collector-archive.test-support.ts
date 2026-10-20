@@ -8,6 +8,26 @@ import {
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import { makeCompletedCollectorRun } from "./subagent-registry.run-fixtures.test-support.js";
 
+const identity = (suffix: string) => ({
+  sessionId: `session-${suffix}`,
+  lifecycleRevision: `revision-${suffix}`,
+});
+const collectorRun = (
+  suffix: string,
+  now: number,
+  overrides: Partial<Parameters<typeof makeCompletedCollectorRun>[0]> = {},
+) =>
+  makeCompletedCollectorRun({
+    runId: `run-${suffix}`,
+    childSessionKey: `agent:main:subagent:${suffix}`,
+    childSessionIdentity: identity(suffix),
+    task: suffix,
+    createdAt: now - 10_000,
+    endedAt: now - 5_000,
+    archiveAtMs: now - 1,
+    ...overrides,
+  });
+
 export function registerCollectorArchiveTests({
   getRegistry,
   mocks,
@@ -29,19 +49,11 @@ export function registerCollectorArchiveTests({
       ] as const) {
         const requesterSessionKey = scope === "agent" ? "global" : `agent:main:requester-${suffix}`;
         await mod.addSubagentRunForTests(
-          makeCompletedCollectorRun({
-            runId: `run-${suffix}`,
+          collectorRun(suffix, now, {
             childSessionKey: `agent:${suffix}:subagent:collector`,
-            childSessionIdentity: {
-              sessionId: `session-${suffix}`,
-              lifecycleRevision: `revision-${suffix}`,
-            },
             requesterSessionKey,
             requesterAgentId: scope === "agent" ? suffix : "main",
-            task: "retain requester-scoped collector groups",
             cleanup: "delete",
-            createdAt: now - 10_000,
-            endedAt: now - 5_000,
             cleanupCompletedAt: now - 4_000,
             archiveAtMs,
             groupId: "swarm:shared-group-id",
@@ -65,18 +77,10 @@ export function registerCollectorArchiveTests({
       const childSessionKey = "agent:main:subagent:collector-before-await";
       const blockerKey =
         phase === "sweep" ? "agent:main:subagent:archive-blocker" : childSessionKey;
-      const blockerIdentity = {
-        sessionId: "session-blocker",
-        lifecycleRevision: "revision-blocker",
-      };
-      const collectorIdentity = {
-        sessionId: "session-collector-before-await",
-        lifecycleRevision: "revision-collector-before-await",
-      };
       mocks.entries = {
-        [blockerKey]: createSessionEntry({
-          ...(phase === "sweep" ? blockerIdentity : collectorIdentity),
-        }),
+        [blockerKey]: createSessionEntry(
+          identity(phase === "sweep" ? "blocker" : "collector-before-await"),
+        ),
       };
       let releaseDelete: (() => void) | undefined;
       mocks.callGateway.mockImplementation((request: { method?: string }) => {
@@ -91,7 +95,7 @@ export function registerCollectorArchiveTests({
         await mod.addSubagentRunForTests({
           runId: "run-archive-blocker",
           childSessionKey: blockerKey,
-          childSessionIdentity: blockerIdentity,
+          childSessionIdentity: identity("blocker"),
           task: "hold the sweep before collector archival",
           cleanup: "delete",
           createdAt: now - 10_000,
@@ -101,14 +105,7 @@ export function registerCollectorArchiveTests({
         });
       }
       await mod.addSubagentRunForTests(
-        makeCompletedCollectorRun({
-          runId,
-          childSessionKey,
-          childSessionIdentity: collectorIdentity,
-          task: "completed collector present before cleanup",
-          createdAt: now - 10_000,
-          endedAt: now - 5_000,
-          archiveAtMs: now - 1,
+        collectorRun("collector-before-await", now, {
           groupId: "swarm:cleanup-race",
         }),
       );
@@ -119,17 +116,10 @@ export function registerCollectorArchiveTests({
       }
       if (phase === "collector replacement") {
         await mod.addSubagentRunForTests(
-          makeCompletedCollectorRun({
+          collectorRun("collector-after-await", now, {
             runId,
-            childSessionKey: "agent:main:subagent:collector-after-await",
-            childSessionIdentity: {
-              sessionId: "session-collector-after-await",
-              lifecycleRevision: "revision-collector-after-await",
-            },
-            task: "collector after replacement",
             createdAt: now,
             endedAt: now,
-            archiveAtMs: now - 1,
             groupId: "swarm:cleanup-race",
           }),
         );
@@ -137,10 +127,7 @@ export function registerCollectorArchiveTests({
         await mod.addSubagentRunForTests({
           runId: "run-collector-after-await",
           childSessionKey: "agent:main:subagent:collector-after-await",
-          childSessionIdentity: {
-            sessionId: "session-collector-after-await",
-            lifecycleRevision: "revision-collector-after-await",
-          },
+          childSessionIdentity: identity("collector-after-await"),
           task: "incomplete collector registered during cleanup",
           createdAt: now,
           collect: true,

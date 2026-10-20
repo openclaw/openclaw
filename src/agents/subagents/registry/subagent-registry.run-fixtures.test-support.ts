@@ -5,16 +5,15 @@ import {
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type RunRecordFixtureOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
-  Partial<Omit<SubagentRunRecordOverrides, "runId">>;
-type KilledRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
-  Required<Pick<SubagentRunRecord, "task" | "createdAt">> &
-  Partial<Omit<SubagentRunRecordOverrides, "runId" | "task" | "createdAt">>;
-type QueuedRunOverrides = Pick<SubagentRunRecordOverrides, "runId" | "createdAt" | "groupId"> &
-  Partial<Omit<SubagentRunRecordOverrides, "runId" | "createdAt" | "groupId" | "queuedLaunch">> & {
-    queuedLaunch?: Partial<NonNullable<SubagentRunRecord["queuedLaunch"]>>;
-  };
-type SuspendedDeliveryRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
+type KilledRunOverrides = SubagentRunRecordOverrides &
+  Required<Pick<SubagentRunRecord, "task" | "createdAt">>;
+type QueuedRunOverrides = Omit<SubagentRunRecordOverrides, "queuedLaunch"> & {
+  queuedLaunch?: Partial<NonNullable<SubagentRunRecord["queuedLaunch"]>>;
+};
+type SuspendedDeliveryRunOverrides = Omit<
+  SubagentRunRecordOverrides,
+  "startedAt" | "outcome" | "expectsCompletionMessage" | "delivery"
+> &
   Required<
     Pick<
       SubagentRunRecord,
@@ -23,22 +22,7 @@ type SuspendedDeliveryRunOverrides = Pick<SubagentRunRecordOverrides, "runId"> &
   > & {
     endedAt: number;
     delivery: Partial<NonNullable<SubagentRunRecord["delivery"]>>;
-  } & Partial<
-    Omit<
-      SubagentRunRecordOverrides,
-      | "runId"
-      | "childSessionKey"
-      | "requesterSessionKey"
-      | "requesterDisplayKey"
-      | "task"
-      | "createdAt"
-      | "startedAt"
-      | "endedAt"
-      | "outcome"
-      | "expectsCompletionMessage"
-      | "delivery"
-    >
-  >;
+  };
 
 export const makeKilledRun = (
   killedAt: number,
@@ -54,7 +38,7 @@ export const makeKilledRun = (
   ...overrides,
 });
 export const makeCompletedCollectorRun = (
-  overrides: RunRecordFixtureOverrides,
+  overrides: SubagentRunRecordOverrides,
 ): SubagentRunRecordOverrides => ({
   collect: true,
   collectorCompletion: { status: "done" },

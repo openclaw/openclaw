@@ -53,22 +53,23 @@ export function registerCompletedFollowupAuthorityTests({
             "completion followup source",
           );
           client.internal = { operatorRunAuthority: source.authority };
-          return { client, revoked, source };
+          return {
+            revoked,
+            source,
+            run: <T>(work: () => T) =>
+              withPluginRuntimeGatewayRequestScope(
+                { client, context, resolveGatewayContext, isWebchatConnect: () => false },
+                work,
+              ),
+          };
         };
         const original = await captureSource("completion-owner");
         let followup: Awaited<ReturnType<typeof captureSource>> | undefined;
         try {
-          await withPluginRuntimeGatewayRequestScope(
-            {
-              client: original.client,
-              context,
-              resolveGatewayContext,
-              isWebchatConnect: () => false,
-            },
-            () =>
-              registerSubagentRun(
-                registration("child", { requesterAgentId: "main", requesterTurnRunId: "parent" }),
-              ),
+          await original.run(() =>
+            registerSubagentRun(
+              registration("child", { requesterAgentId: "main", requesterTurnRunId: "parent" }),
+            ),
           );
           original.source.release();
           expect(original.source.authority.assertCurrent).not.toThrow();
@@ -80,22 +81,15 @@ export function registerCompletedFollowupAuthorityTests({
           });
           followup = await captureSource("followup-owner");
           expect(
-            await withPluginRuntimeGatewayRequestScope(
-              {
-                client: followup.client,
-                context,
-                resolveGatewayContext,
-                isWebchatConnect: () => false,
-              },
-              () =>
-                replaceSubagentRunAfterSteerCore({
-                  previousRunId: entry.runId,
-                  nextRunId: "successor",
-                  expected: subagentRuns.get(entry.runId),
-                  allowEndedSource: true,
-                  preserveCompletedRun: true,
-                  task: "second turn",
-                }),
+            await followup.run(() =>
+              replaceSubagentRunAfterSteerCore({
+                previousRunId: entry.runId,
+                nextRunId: "successor",
+                expected: subagentRuns.get(entry.runId),
+                allowEndedSource: true,
+                preserveCompletedRun: true,
+                task: "second turn",
+              }),
             ),
           ).toBe(true);
           followup.source.release();
