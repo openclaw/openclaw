@@ -158,7 +158,7 @@ it.each([
       const requesterPolicy = {
         spawnedBy: "agent:main:parent",
         spawnDepth: 1,
-        inheritedToolPolicyVersion: 1,
+        inheritedToolPolicyVersion: 1 as const,
         inheritedToolDeny: ["web_search"],
       };
       const revokeRequester = () =>

@@ -56,7 +56,7 @@ function renderChatView(overrides: Partial<ChatProps>) {
   return container;
 }
 
-const find = <T extends Element = HTMLElement>(container: Element, selector: string) =>
+const find = <T extends Element = HTMLElement>(container: Element, selector: string): T =>
   expectDefined(container.querySelector<T>(selector), selector);
 const click = (container: Element, selector: string) =>
   find(container, selector).dispatchEvent(new MouseEvent("click", { bubbles: true }));

@@ -93,7 +93,7 @@ it.each([
   ['<final reason="a>b">visible'],
   ["```xml\n<think>literal</think>\n<final>literal</final>\n```\nDone."],
   [`<${" ".repeat(128)}/${"\t".repeat(128)}ThiNKing>Answer`, "Answer"],
-])("preserves every prefix and final output for %s", (source, expected) => {
+])("preserves every prefix and final output for %s", (source, expected = source) => {
   for (const size of [1, 3, 7]) {
     const stream = createAssistantVisibleStreamText();
     let prefix = "";

@@ -91,8 +91,11 @@ it.each(["success", "returned-error", "throw"] as const)(
       await expect(pending).resolves.toMatchObject({ role: "assistant" });
     }
     await waitForDiagnosticEventsDrained();
-    const calls = events.filter((event) =>
-      ["model.call.started", "model.call.completed", "model.call.error"].includes(event.type),
+    const calls = events.filter(
+      (event) =>
+        event.type === "model.call.started" ||
+        event.type === "model.call.completed" ||
+        event.type === "model.call.error",
     );
     expect(calls.map((event) => event.type)).toEqual([
       "model.call.started",

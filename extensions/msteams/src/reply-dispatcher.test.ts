@@ -184,7 +184,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(typing?.maxDurationMs).toBeGreaterThanOrEqual(300_000);
     await startTool(dispatcher);
     await vi.advanceTimersByTimeAsync(5_000);
-    await dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
+    dispatcher.replyOptions.onItemEvent?.({ progressText: "done" });
 
     const stream = dispatcher.stream();
     expect(stream.update).toHaveBeenCalled();

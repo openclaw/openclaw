@@ -174,9 +174,21 @@ suite.define(() => {
     }
     await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
     const focusIsInsideLightbox = () =>
-      page
-        .locator("openclaw-image-lightbox")
-        .evaluate((lightbox) => lightbox.matches(":focus-within"));
+      page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
+        let active: Element | null = document.activeElement;
+        while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
+          active = active.shadowRoot.activeElement;
+        }
+        let node: Node | null = active;
+        while (node) {
+          if (node === lightbox) {
+            return true;
+          }
+          const root = node.getRootNode();
+          node = root instanceof ShadowRoot ? root.host : node.parentNode;
+        }
+        return false;
+      });
     await expectFocused(closeButton);
     const displayedImage = page.getByAltText("OpenClaw banner").last();
     await expectLoadedImage(displayedImage);

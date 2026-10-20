@@ -446,7 +446,7 @@ suite.define(() => {
         [pageSettingsKey, pageSettings],
         [remoteSettingsKey, JSON.stringify({ gatewayUrl: remoteGateway })],
         [selectionKey, remoteGateway],
-      ],
+      ] satisfies Array<[string, string]>,
     );
 
     await visitApproval(

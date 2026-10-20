@@ -7,25 +7,26 @@ export function createSigninEvent(
   senderId = "29:user",
 ) {
   const serviceUrl = "https://smba.trafficmanager.net/teams";
-  return {
-    body: {
-      type: "invoke",
-      name,
-      id: `invoke-${name}`,
-      channelId: "msteams",
-      serviceUrl,
-      from: { id: senderId, aadObjectId: "aad-user" },
-      recipient: { id: "fixture-bot" },
-      conversation: {
-        id: "fixture-conversation",
-        conversationType: "personal",
-        tenantId: "fixture-tenant",
-      },
-      value:
-        name === "signin/tokenExchange"
-          ? { id: "exchange-id", connectionName: "graph", token: "fixture-user-token" }
-          : { state: "fixture-state" },
+  const body = {
+    type: "invoke",
+    name,
+    id: `invoke-${name}`,
+    channelId: "msteams",
+    serviceUrl,
+    from: { id: senderId, aadObjectId: "aad-user" },
+    recipient: { id: "fixture-bot" },
+    conversation: {
+      id: "fixture-conversation",
+      conversationType: "personal",
+      tenantId: "fixture-tenant",
     },
+    value:
+      name === "signin/tokenExchange"
+        ? { id: "exchange-id", connectionName: "graph", token: "fixture-user-token" }
+        : { state: "fixture-state" },
+  };
+  return {
+    body,
     token: {
       appId: "fixture-bot",
       from: "bot",

@@ -90,7 +90,7 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">, initial
     provider,
     render,
     reportError,
-    query: <T extends Element = HTMLElement>(selector: string) =>
+    query: <T extends Element = HTMLElement>(selector: string): T | null =>
       provider.querySelector<T>(selector),
     count: (selector: string) => provider.querySelectorAll(selector).length,
     selectReplacement: () => {

@@ -25,7 +25,7 @@ function expectArrow(target: HTMLElement, key: "ArrowDown" | "ArrowUp", destinat
 function get<T extends HTMLElement = HTMLElement>(
   root: Pick<ParentNode, "querySelector">,
   selector: string,
-) {
+): T {
   return expectDefined(root.querySelector<T>(selector), selector);
 }
 

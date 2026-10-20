@@ -169,7 +169,7 @@ suite.define(() => {
           requests.filter((request) => request.meta && normalSources.includes(request.source)),
         ).toHaveLength(2);
       },
-      () => {
+      async () => {
         metadata.resolve();
         imageBytes.resolve();
         approval.resolve();
