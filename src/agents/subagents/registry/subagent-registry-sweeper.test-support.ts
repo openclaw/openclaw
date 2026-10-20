@@ -2,6 +2,7 @@ import { onTestFinished, vi } from "vitest";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import * as subagentMemory from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
@@ -22,9 +23,13 @@ export function createSubagentSweeperRun(): SubagentRunRecord {
   });
 }
 
-export const createSubagentSweeperChildLookup =
-  (runs: Map<string, SubagentRunRecord>) => (childSessionKey: string) =>
-    [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey);
+export function mockSubagentSweeperChildLookup(runs: Map<string, SubagentRunRecord>) {
+  return vi
+    .spyOn(subagentMemory, "getSubagentRunsForChildSession")
+    .mockImplementation((childSessionKey) =>
+      [...runs.values()].filter((entry) => entry.childSessionKey === childSessionKey),
+    );
+}
 
 export function createArchivedSubagentSweeperRun(
   overrides: Partial<SubagentRunRecord> = {},
@@ -101,9 +106,21 @@ export function createSubagentSweeperHarness(
   const notifyContextEngineSubagentEnded = vi.fn();
   const runContextEngineSubagentEnded = vi.fn();
   const callGateway = vi.fn();
-  const resumeRequesterSettleWake = vi.fn();
   const warn = vi.fn();
   const startSubagentAnnounceCleanupFlow = vi.fn(() => true);
+  const resumeRequesterSettleWake = vi.fn();
+  const childLookup = mockSubagentSweeperChildLookup(runs);
+  const collectorLookup = vi
+    .spyOn(subagentMemory, "getSubagentRunsForCollectorGroup")
+    .mockImplementation((requesterSessionKey, groupId) =>
+      [...runs].filter(
+        ([, candidate]) =>
+          candidate.collect &&
+          candidate.groupId === groupId &&
+          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
+            requesterSessionKey,
+      ),
+    );
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
@@ -113,9 +130,10 @@ export function createSubagentSweeperHarness(
     completeSubagentRunWithRecovery,
     getGatewayRecoveryRuntime: () => runtime.current,
     finalizeInterruptedSubagentRun,
-    resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow,
     completeCleanupBookkeeping,
+    resumeRequesterSettleWake,
+    resumePendingRequesterSettlements: () => false,
     isCleanupOwnerCurrent: (selected) =>
       isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
     isTerminalTailActive: () => false,
@@ -130,19 +148,15 @@ export function createSubagentSweeperHarness(
     runContextEngineSubagentEnded,
     notifyContextEngineSubagentEnded,
     retireSupersededRun: vi.fn(),
-    getRunsForChildSession: createSubagentSweeperChildLookup(runs),
-    getRunsForCollectorGroup: (requesterSessionKey, groupId) =>
-      [...runs].filter(
-        ([, candidate]) =>
-          candidate.collect &&
-          candidate.groupId === groupId &&
-          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-            requesterSessionKey,
-      ),
+    retireObligations: vi.fn(async () => {}),
+    getRunsForChildSession: childLookup,
+    getRunsForCollectorGroup: collectorLookup,
     warn,
   });
   onTestFinished(async () => {
     await sweeper.reset();
+    childLookup.mockRestore();
+    collectorLookup.mockRestore();
     worker.mockRestore();
   });
   return {
@@ -155,9 +169,9 @@ export function createSubagentSweeperHarness(
     emitSubagentEndedHookForRun,
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
-    resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow,
     runContextEngineSubagentEnded,
+    resumeRequesterSettleWake,
     sweeper,
     warn,
   };

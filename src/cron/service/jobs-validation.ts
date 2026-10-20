@@ -11,7 +11,9 @@ import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
+import { isCronEventSchedule } from "../source-schedule.js";
 import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import { CronStreamPolicyDeniedError } from "../stream-exec-authority.js";
 import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
@@ -154,17 +156,26 @@ export function assertPacingSupport(job: Pick<CronJob, "schedule" | "pacing">) {
   }
 }
 
-export function assertStreamScheduleSupport(
+export function assertExternalSourceScheduleSupport(
   job: Pick<CronJob, "schedule" | "payload">,
   opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
 ) {
-  if (job.schedule.kind !== "stream") {
+  if (job.schedule.kind !== "stream" && job.schedule.kind !== "event") {
     return;
   }
   if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
-    throw new Error(
-      "cron stream schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
-    );
+    const message = `cron ${job.schedule.kind} schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true`;
+    throw job.schedule.kind === "stream"
+      ? new CronStreamPolicyDeniedError(message)
+      : new Error(message);
+  }
+  if (job.schedule.kind === "event") {
+    if (!isCronEventSchedule(job.schedule) || job.payload.kind !== "agentTurn") {
+      throw new Error(
+        "event schedules require a plugin source, options object, and agentTurn payload",
+      );
+    }
+    return;
   }
   const { command, mode = "line", match } = job.schedule;
   if (

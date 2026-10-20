@@ -13,11 +13,40 @@ import {
   validateClawsUpdateApplyParams,
 } from "./index.js";
 
+const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
+const catalogEntry = {
+  packageName: coordinate.packageName,
+  displayName: "Workflow Operator",
+  channel: "official",
+  official: true,
+  downloads: 0,
+  installs: 0,
+  updatedAtMs: 0,
+};
+const basePlan = {
+  schemaVersion: "openclaw.clawsGatewayPlan.v1",
+  operation: "add",
+  planIntegrity: "sha256:reviewed-plan",
+  target: { agentId: "workflow-operator" },
+  actions: [],
+  capabilities: [],
+  pluginReviews: [],
+  skillReviews: [],
+  blockers: [],
+  riskAcknowledgementRequired: false,
+};
+const checkPlan = (plan: unknown) => expect(validateClawLifecyclePlanResult(plan)).toBe(true);
+const rejectPlan = (plan: unknown) => expect(validateClawLifecyclePlanResult(plan)).toBe(false);
+
 describe("Claws Gateway contract", () => {
-  it("allows the starter catalog before a search query and only official Add coordinates", () => {
+  it("allows the public catalog and exact publisher Add coordinates", () => {
     expect(validateClawsCatalogSearchParams({})).toBe(true);
     expect(validateClawsCatalogSearchParams({ query: "workflow", limit: 30 })).toBe(true);
     expect(validateClawsCatalogSearchParams({ sourceRoot: "/private/claw" })).toBe(false);
+    expect(validateClawsCatalogSearchResult({ entries: [catalogEntry] })).toBe(true);
+    expect(validateClawsCatalogDetailParams(coordinate)).toBe(true);
+    const preview = { kind: "instruction", name: "AGENTS.md" };
+    expect(validateClawsCatalogPreviewParams({ ...coordinate, ...preview })).toBe(true);
     expect(
       validateClawsCatalogSearchResult({
         entries: [
@@ -27,6 +56,7 @@ describe("Claws Gateway contract", () => {
             channel: "official",
             official: true,
             downloads: 0,
+            installs: 0,
             updatedAtMs: 0,
           },
         ],
@@ -54,13 +84,8 @@ describe("Claws Gateway contract", () => {
     expect(
       validateClawsCatalogDetailResult({
         detail: {
-          packageName: "@openclaw/workflow-operator",
-          displayName: "Workflow Operator",
-          channel: "official",
-          official: true,
-          downloads: 0,
-          updatedAtMs: 0,
-          version: "1.0.0",
+          ...catalogEntry,
+          version: coordinate.version,
           workspaceFiles: 2,
           skills: 0,
           plugins: 1,
@@ -77,50 +102,59 @@ describe("Claws Gateway contract", () => {
         },
       }),
     ).toBe(true);
-    expect(
-      validateClawsAddPlanParams({
-        source: { packageName: "@openclaw/workflow-operator", version: "1.0.0" },
-      }),
-    ).toBe(true);
+    expect(validateClawsAddPlanParams({ source: coordinate })).toBe(true);
 
-    expect(
-      validateClawsAddApplyParams({
-        source: { packageName: "@openclaw/workflow-operator", version: "1.0.0" },
-        planIntegrity: "sha256:reviewed-plan",
-        acknowledgeSkillWarnings: [
-          {
-            actionId: "skill:@community/triage",
-            ref: "@community/triage",
-            reviewToken: "sha256:reviewed-skill",
-            acknowledgeRiskWarning: true,
-          },
-        ],
-      }),
-    ).toBe(true);
-    expect(
-      validateClawsAddApplyParams({
-        source: { packageName: "@openclaw/workflow-operator", version: "1.0.0" },
-        planIntegrity: "sha256:reviewed-plan",
-        acknowledgeSkillWarnings: [
-          {
-            actionId: "skill:@community/triage",
-            ref: "@community/triage",
-            reviewToken: "sha256:reviewed-skill",
-            acknowledgeRiskWarning: false,
-          },
-        ],
-      }),
-    ).toBe(false);
+    const apply = (acknowledgeRiskWarning: boolean) => ({
+      source: coordinate,
+      planIntegrity: "sha256:reviewed-plan",
+      acknowledgeSkillWarnings: [
+        {
+          actionId: "skill:@community/triage",
+          ref: "@community/triage",
+          reviewToken: "sha256:reviewed-skill",
+          acknowledgeRiskWarning,
+        },
+      ],
+    });
+    expect(validateClawsAddApplyParams(apply(true))).toBe(true);
+    expect(validateClawsAddApplyParams(apply(false))).toBe(false);
     expect(
       validateClawsAddApplyParams({
         source: { packageName: "@someone-else/workflow-operator", version: "1.0.0" },
         planIntegrity: "sha256:reviewed-plan",
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      validateClawsCatalogSearchResult({
+        entries: [
+          {
+            packageName: "@alice/workflow-operator",
+            displayName: "Workflow Operator",
+            channel: "community",
+            official: false,
+            ownerHandle: "alice",
+            downloads: 0,
+            installs: 0,
+            updatedAtMs: 0,
+          },
+        ],
+      }),
+    ).toBe(true);
+    for (const packageName of [
+      "../local",
+      "https://registry.example/claw",
+      "@alice/claw@latest",
+      "@Alice/claw",
+      "@alice/claw ",
+    ]) {
+      expect(validateClawsAddApplyParams({ source: { packageName, version: "1.0.0" } })).toBe(
+        false,
+      );
+    }
     expect(
       validateClawsUpdateApplyParams({
         agentId: "workflow-operator",
-        source: { packageName: "@openclaw/workflow-operator", version: "1.0.1" },
+        source: { ...coordinate, version: "1.0.1" },
         planIntegrity: "sha256:reviewed-update",
       }),
     ).toBe(true);
@@ -134,9 +168,7 @@ describe("Claws Gateway contract", () => {
 
   it("rejects source paths and setup answers in the browser's reviewed plan", () => {
     const plan = {
-      schemaVersion: "openclaw.clawsGatewayPlan.v1",
-      operation: "add",
-      planIntegrity: "sha256:reviewed-plan",
+      ...basePlan,
       target: { agentId: "workflow-operator", name: "@openclaw/workflow-operator" },
       manifestDisclosure: {
         source: {
@@ -145,37 +177,28 @@ describe("Claws Gateway contract", () => {
           integrity: `sha256:${"a".repeat(64)}`,
           byteLength: 123,
         },
-        manifestJson: JSON.stringify({
-          schemaVersion: 1,
-          agent: { id: "workflow-operator" },
-          workspace: { bootstrapFiles: {}, files: [] },
-          packages: [],
-          mcpServers: {},
-          cronJobs: [],
-        }),
+        manifestJson: '{"schemaVersion":1}',
       },
-      actions: [],
-      capabilities: [],
-      pluginReviews: [],
-      skillReviews: [],
-      blockers: [],
-      riskAcknowledgementRequired: false,
     };
-    expect(validateClawLifecyclePlanResult(plan)).toBe(true);
-    expect(validateClawLifecyclePlanResult({ ...plan, sourceRoot: "/private/claw" })).toBe(false);
-    expect(validateClawLifecyclePlanResult({ ...plan, answers: { token: "secret" } })).toBe(false);
-    expect(
-      validateClawLifecyclePlanResult({
-        ...plan,
-        manifestDisclosure: {
-          ...plan.manifestDisclosure,
-          source: { ...plan.manifestDisclosure.source, packageRoot: "/private/claw" },
-        },
-      }),
-    ).toBe(false);
+    checkPlan(plan);
+    rejectPlan({ ...plan, sourceRoot: "/private/claw" });
+    rejectPlan({ ...plan, answers: { token: "secret" } });
+    rejectPlan({
+      ...plan,
+      manifestDisclosure: {
+        ...plan.manifestDisclosure,
+        source: { ...plan.manifestDisclosure.source, packageRoot: "/private/claw" },
+      },
+    });
   });
 
   it("requires exact plugin artifact integrity in an install review", () => {
+    const grants = {
+      hooks: {
+        allowPromptInjection: { effective: false },
+        allowConversationAccess: { effective: false },
+      },
+    };
     const pluginReview = {
       actionId: "plugin:@openclaw/lobster",
       pluginId: "lobster",
@@ -195,60 +218,37 @@ describe("Claws Gateway contract", () => {
         skills: [],
         dangerousConfigFlags: [],
       },
-      capabilityGrants: {
-        hooks: {
-          allowPromptInjection: { effective: false },
-          allowConversationAccess: { effective: false },
-        },
-      },
-      capabilityGrantsByPluginId: {
-        lobster: {
-          hooks: {
-            allowPromptInjection: { effective: false },
-            allowConversationAccess: { effective: false },
-          },
-        },
-      },
+      capabilityGrants: grants,
+      capabilityGrantsByPluginId: { lobster: grants },
       reviewToken: "sha256:reviewed-surface",
     };
-    const plan = {
-      schemaVersion: "openclaw.clawsGatewayPlan.v1",
-      operation: "add",
-      planIntegrity: "sha256:reviewed-plan",
-      target: { agentId: "workflow-operator" },
-      actions: [],
-      capabilities: [],
-      pluginReviews: [pluginReview],
-      skillReviews: [],
-      blockers: [],
-      riskAcknowledgementRequired: false,
-    };
+    const plan = { ...basePlan, pluginReviews: [pluginReview] };
 
-    expect(validateClawLifecyclePlanResult(plan)).toBe(true);
+    checkPlan(plan);
     const { integrity: _integrity, ...withoutIntegrity } = pluginReview;
-    expect(validateClawLifecyclePlanResult({ ...plan, pluginReviews: [withoutIntegrity] })).toBe(
-      false,
-    );
-    expect(
-      validateClawLifecyclePlanResult({
-        ...plan,
-        pluginReviews: [{ ...pluginReview, integrity: "sha256-not-a-digest" }],
-      }),
-    ).toBe(false);
+    rejectPlan({ ...plan, pluginReviews: [withoutIntegrity] });
+    rejectPlan({
+      ...plan,
+      pluginReviews: [{ ...pluginReview, integrity: "sha256-not-a-digest" }],
+    });
   });
 
   it("admits bounded access and schedule disclosures without cron prompts", () => {
+    const scheduledJob = {
+      id: "daily",
+      action: "schedule",
+      blocked: false,
+      proposed: {
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "isolated",
+        delivery: "last-channel",
+        message: "Prepare the daily brief",
+        messageDigest: "sha256:proposed-task",
+      },
+    };
     const plan = {
-      schemaVersion: "openclaw.clawsGatewayPlan.v1",
-      operation: "add",
-      planIntegrity: "sha256:reviewed-plan",
+      ...basePlan,
       target: { agentId: "worker" },
-      actions: [],
-      capabilities: [],
-      pluginReviews: [],
-      skillReviews: [],
-      blockers: [],
-      riskAcknowledgementRequired: false,
       configuredAccess: {
         coverage: "configuration-only",
         desired: {
@@ -278,79 +278,60 @@ describe("Claws Gateway contract", () => {
       },
       scheduledJobs: {
         coverage: "package-declarations",
-        jobs: [
-          {
-            id: "daily",
-            action: "schedule",
-            blocked: false,
-            proposed: {
-              schedule: { cron: "0 9 * * *", timezone: "UTC" },
-              session: "isolated",
-              delivery: "last-channel",
-              message: "Prepare the daily brief",
-              messageDigest: "sha256:proposed-task",
-            },
-          },
-        ],
+        jobs: [scheduledJob],
       },
     };
-    expect(validateClawLifecyclePlanResult(plan)).toBe(true);
-    expect(
-      validateClawLifecyclePlanResult({
-        ...plan,
-        configuredAccess: {
-          ...plan.configuredAccess,
-          desired: { ...plan.configuredAccess.desired, memorySearch: { state: "unresolved" } },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      validateClawLifecyclePlanResult({
-        ...plan,
-        configuredAccess: {
-          ...plan.configuredAccess,
-          desired: {
-            ...plan.configuredAccess.desired,
-            subagentTargets: {
-              ...plan.configuredAccess.desired.subagentTargets,
-              privatePolicy: "never disclose",
-            },
+    const withJob = (base: typeof plan, job: unknown) => ({
+      ...base,
+      scheduledJobs: { ...base.scheduledJobs, jobs: [job] },
+    });
+    checkPlan(plan);
+    checkPlan({
+      ...plan,
+      configuredAccess: {
+        ...plan.configuredAccess,
+        desired: { ...plan.configuredAccess.desired, memorySearch: { state: "unresolved" } },
+      },
+    });
+    rejectPlan({
+      ...plan,
+      configuredAccess: {
+        ...plan.configuredAccess,
+        desired: {
+          ...plan.configuredAccess.desired,
+          subagentTargets: {
+            ...plan.configuredAccess.desired.subagentTargets,
+            privatePolicy: "never disclose",
           },
         },
+      },
+    });
+    checkPlan(
+      withJob(plan, {
+        ...scheduledJob,
+        proposed: { ...scheduledJob.proposed, message: "Updated scheduled task" },
       }),
-    ).toBe(false);
-    const scheduledJob = plan.scheduledJobs.jobs[0];
-    if (!scheduledJob) {
-      throw new Error("expected one scheduled job fixture");
-    }
-    expect(
-      validateClawLifecyclePlanResult({
-        ...plan,
-        scheduledJobs: {
-          ...plan.scheduledJobs,
-          jobs: [
-            {
-              ...scheduledJob,
-              proposed: {
-                ...scheduledJob.proposed,
-                message: "Updated scheduled task",
-              },
-            },
-          ],
-        },
-      }),
-    ).toBe(true);
+    );
 
-    expect(
-      validateClawLifecyclePlanResult({
-        ...plan,
-        scheduledJobs: {
-          ...plan.scheduledJobs,
-          jobs: [{ ...scheduledJob, proposed: { ...scheduledJob.proposed, message: undefined } }],
-        },
+    rejectPlan(
+      withJob(plan, {
+        ...scheduledJob,
+        proposed: { ...scheduledJob.proposed, message: undefined },
       }),
-    ).toBe(false);
+    );
 
+    const updatedJob = {
+      id: "daily",
+      action: "change",
+      blocked: false,
+      current: {
+        schedule: { cron: "0 8 * * *", timezone: "UTC" },
+        session: "main",
+        delivery: "none",
+        messageDigest: "sha256:current-task",
+      },
+      proposed: scheduledJob.proposed,
+    };
     const updatePlan = {
       ...plan,
       operation: "update",
@@ -360,36 +341,15 @@ describe("Claws Gateway contract", () => {
       },
       scheduledJobs: {
         ...plan.scheduledJobs,
-        jobs: [
-          {
-            id: "daily",
-            action: "change",
-            blocked: false,
-            current: {
-              schedule: { cron: "0 8 * * *", timezone: "UTC" },
-              session: "main",
-              delivery: "none",
-              messageDigest: "sha256:current-task",
-            },
-            proposed: plan.scheduledJobs.jobs[0]?.proposed,
-          },
-        ],
+        jobs: [updatedJob],
       },
     };
-    expect(validateClawLifecyclePlanResult(updatePlan)).toBe(true);
-    expect(
-      validateClawLifecyclePlanResult({
-        ...updatePlan,
-        scheduledJobs: {
-          ...updatePlan.scheduledJobs,
-          jobs: [
-            {
-              ...updatePlan.scheduledJobs.jobs[0],
-              current: { ...updatePlan.scheduledJobs.jobs[0]?.current, message: "private prompt" },
-            },
-          ],
-        },
+    checkPlan(updatePlan);
+    rejectPlan(
+      withJob(updatePlan, {
+        ...updatedJob,
+        current: { ...updatedJob.current, message: "private prompt" },
       }),
-    ).toBe(false);
+    );
   });
 });

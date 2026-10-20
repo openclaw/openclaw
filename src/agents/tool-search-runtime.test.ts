@@ -11,6 +11,8 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -24,6 +26,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
+import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
@@ -50,6 +53,7 @@ import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
 afterEach(() => {
+  resetSecretRedactionRegistryForTest();
   resetGlobalHookRunner();
   setActiveDegradedSecretOwners([]);
 });
@@ -300,6 +304,159 @@ describe("Tool Search terminal results", () => {
 });
 
 describe("Tool Search input schemas", () => {
+  it.each([
+    ["10", '"10" (string)'],
+    [false, "false (boolean)"],
+    [null, "null (null)"],
+    [["private payload"], "[array] (array)"],
+    [{ password: "private payload" }, "[object] (object)"],
+  ])("explains rejected integer input %j without executing it", async (value, received) => {
+    const target = fakeTool(
+      "strict_limit",
+      Type.Object({ maxFires: Type.Integer({ minimum: 1 }) }),
+    );
+    const { runtime } = createRuntime([target]);
+
+    await expect(runtime.call("strict_limit", { maxFires: value })).rejects.toThrow(
+      `maxFires: expected integer; received ${received}`,
+    );
+    expect(target.execute).not.toHaveBeenCalled();
+    await expect(runtime.call("strict_limit", { maxFires: 10 })).resolves.toMatchObject({
+      result: { details: { input: { maxFires: 10 } } },
+    });
+    expect(target.execute).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["apiKey", "12345"],
+    ["authorization", 12345],
+    ["password", "synthetic-password"],
+    ["cardNumber", 4242424242424242],
+    ["cvv", 123],
+    ["value", "Bearer synthetic-private-credential"],
+    ["value", "https://example.invalid/?token=synthetic-private-credential"],
+  ])("redacts rejected %s values while retaining their type", async (field, value) => {
+    const target = fakeTool("private_limit", Type.Object({ [field]: Type.Boolean() }));
+    const { runtime } = createRuntime([target]);
+    const failure = await runtime
+      .call("private_limit", { [field]: value })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain(`expected boolean; received [redacted] (${typeof value})`);
+    expect(message).not.toContain(String(value));
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["123456789", 123456789])("withholds registered scalar secrets %j", async (value) => {
+    registerSecretValueForRedaction("123456789");
+    const target = fakeTool("registered_limit", Type.Object({ value: Type.Boolean() }));
+    const { runtime } = createRuntime([target]);
+
+    const failure = await runtime
+      .call("registered_limit", { value })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(`received [redacted] (${typeof value})`);
+    expect((failure as Error).message).not.toContain("123456789");
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("redacts registered secrets in rejected property names before truncating details", async () => {
+    registerSecretValueForRedaction("synthetic-private-key");
+    const target = fakeTool("private_keys", Type.Object({}, { additionalProperties: false }));
+    const { runtime } = createRuntime([target]);
+    const failure = await runtime
+      .call("private_keys", {
+        ["synthetic-private-key".repeat(100)]: true,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("[redacted]");
+    expect((failure as Error).message).not.toContain("synthetic-private-key");
+    expect((failure as Error).message.length).toBeLessThan(1_000);
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("uses exact nested paths rather than similarly spelled sensitive fields", async () => {
+    const target = fakeTool(
+      "nested_limit",
+      Type.Object({
+        "a.b": Type.Integer(),
+        a: Type.Object({ b: Type.String() }),
+        credentials: Type.Array(Type.Object({ token: Type.Integer() })),
+        "a/b~c": Type.Boolean(),
+        "literal: must be number": Type.String(),
+      }),
+    );
+    const { runtime } = createRuntime([target]);
+
+    const failure = await runtime
+      .call("nested_limit", {
+        "a.b": "10",
+        a: { b: "synthetic-private-credential" },
+        credentials: [{ token: "12345" }],
+        "a/b~c": 42,
+        "literal: must be number": false,
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain('a.b: expected integer; received "10" (string)');
+    expect(message).toContain(
+      "credentials.0.token: expected integer; received [redacted] (string)",
+    );
+    expect(message).toContain("a.b~c: expected boolean; received 42 (number)");
+    expect(message).toContain("literal: must be number: expected string; received false (boolean)");
+    expect(message).not.toContain("synthetic-private-credential");
+    expect(message).not.toContain("12345");
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("bounds oversized rejected values and validation details without exposing payloads", async () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 20 }, (_, i) => [`limit${i}`, Type.Integer()]),
+    );
+    const target = fakeTool("large_limits", Type.Object(properties));
+    const { runtime } = createRuntime([target]);
+    const value = Object.fromEntries(
+      Object.keys(properties).map((name) => [name, "7".repeat(1_000_000)]),
+    );
+
+    const failure = await runtime.call("large_limits", value).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain("received [redacted] (string)");
+    expect(message).toContain("additional validation issues omitted");
+    expect(message.length).toBeLessThan(2_500);
+    expect(message).not.toContain("7".repeat(65));
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("bounds oversized unexpected property names without losing validation failure", async () => {
+    const target = fakeTool(
+      "strict_keys",
+      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
+    );
+    const { runtime } = createRuntime([target]);
+    const failure = await runtime
+      .call("strict_keys", {
+        instruction: "valid",
+        ["unexpected".repeat(30_000)]: "synthetic-private-payload",
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain("must not have additional properties");
+    expect(message).toContain("[truncated]");
+    expect(message.length).toBeLessThan(1_000);
+    expect(message).not.toContain("synthetic-private-payload");
+    expect(target.execute).not.toHaveBeenCalled();
+  });
+
   it("validates arguments after a policy hook repairs them", async () => {
     const hook = vi.fn(async () => ({ params: { instruction: "repaired" } }));
     initializeGlobalHookRunner(
@@ -331,7 +488,7 @@ describe("Tool Search input schemas", () => {
     const { runtime } = createRuntime([target]);
 
     await expect(runtime.call("strict_instruction", { instruction: "valid" })).rejects.toThrow(
-      "instruction",
+      "instruction: expected string; received 42 (number)",
     );
     expect(hook).toHaveBeenCalledOnce();
     expect(target.execute).not.toHaveBeenCalled();
@@ -418,12 +575,12 @@ describe("Tool Search input schemas", () => {
     );
 
     expect(callTool).toBeDefined();
-    await expect(
-      callTool!.execute("invalid-structured-call", {
-        id: "strict_instruction",
-        args: { instructions: "run" },
-      }),
-    ).rejects.toThrow("Did you mean: instruction?");
+    const call = callTool!.execute("invalid-structured-call", {
+      id: "strict_instruction",
+      args: { instruction: 42, instructions: "run" },
+    });
+    await expect(call).rejects.toThrow("Did you mean: instruction?");
+    await expect(call).rejects.toThrow("instruction: expected string; received 42 (number)");
     expect(target.execute).not.toHaveBeenCalled();
   });
 
@@ -647,4 +804,29 @@ describe("Tool Search network error boundaries", () => {
     expect(runtime.hasNetworkContent("secret-parent")).toBe(false);
     expect(formatToolSearchControlError(failure, runtime, "secret-parent")).toBe(failure);
   });
+});
+
+it("admits complete values without lending that route to direct or nested dispatch", async () => {
+  const small = "complete";
+  const large = "é🙂".repeat(20_000);
+  const reportId = "openclaw:core:report";
+  const proxyId = "openclaw:core:proxy";
+  const target = fakeTool("report");
+  target.execute = async (_id, input) => {
+    await Promise.resolve();
+    const text = typeof input === "object" && input !== null && "small" in input ? small : large;
+    assertCompleteToolResult(text, resolveToolResultBudget(4096));
+    return jsonResult({ text });
+  };
+  const proxy = fakeTool("proxy");
+  proxy.execute = async () => (await runtime.callExactId(reportId)).result;
+  const { runtime } = createRuntime([target, proxy]);
+  await expect(runtime.callExactId(reportId, { small: true })).resolves.toMatchObject({
+    result: { details: { text: small } },
+  });
+  await Promise.all([
+    expect(runtime.callExactValue(reportId)).resolves.toEqual({ text: large }),
+    expect(runtime.callExactId(reportId)).rejects.toThrow("Code Mode"),
+    expect(runtime.callExactValue(proxyId)).rejects.toThrow("Code Mode"),
+  ]);
 });

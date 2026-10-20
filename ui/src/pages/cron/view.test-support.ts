@@ -39,6 +39,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     hasLoaded: true,
     listError: null,
     canManage: true,
+    connected: true,
     jobsLoadingMore: false,
     status: {
       enabled: true,
@@ -94,7 +95,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onClone: () => undefined,
     onToggle: () => undefined,
     onRun: () => undefined,
-    onRemove: () => undefined,
+    onRemove: async () => undefined,
     onLoadMoreJobs: () => undefined,
     onJobsFiltersChange: () => undefined,
     onJobsFiltersReset: () => undefined,

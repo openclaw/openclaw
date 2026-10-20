@@ -99,7 +99,6 @@ export async function changeSessionPlacement(params: {
   onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
-  requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const placement = params.row.placement;
@@ -300,6 +299,5 @@ export async function changeSessionPlacement(params: {
     }
   } finally {
     params.onPendingChange(null);
-    params.requestUpdate();
   }
 }

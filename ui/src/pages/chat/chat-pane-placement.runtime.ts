@@ -10,22 +10,26 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
-import { resolveChatPaneWorkerPresentation } from "./chat-pane-placement.ts";
+import {
+  resolveChatPanePlacement,
+  resolveChatPaneWorkerPresentation,
+} from "./chat-pane-placement.ts";
 
 registerNewSessionSetupEnglish();
 
 export async function reclaimChatPanePlacement(params: {
   client: GatewayBrowserClient | null;
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  currentGatewaySnapshot: () => ApplicationGatewaySnapshot;
   reclaimingKey: string | null;
   placementStartup: ApplicationPlacementStartup;
   row: GatewaySessionRow;
+  currentRow: () => GatewaySessionRow | undefined;
   fallbackAgentId: string;
   isCurrent: () => boolean;
   onReclaimingChange: (reclaimingKey: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
-  requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const action = resolveCloudWorkerStopAction(params.row.placement);
@@ -49,6 +53,9 @@ export async function reclaimChatPanePlacement(params: {
     params.publishError(access.reason);
     return;
   }
+  const sessionId = params.row.sessionId;
+  const generation = placement?.generation;
+  const agentId = resolveUiSessionRowAgentId(params.row, params.fallbackAgentId);
   const worker = resolveChatPaneWorkerPresentation(
     params.row,
     params.placementStartup.get(params.row.key),
@@ -65,7 +72,29 @@ export async function reclaimChatPanePlacement(params: {
     params.publishError(t("sessionsView.actionUnavailable"));
     return;
   }
-  const agentId = resolveUiSessionRowAgentId(params.row, params.fallbackAgentId);
+  const snapshot = params.currentGatewaySnapshot();
+  const currentRow = params.currentRow();
+  if (
+    snapshot.client !== client ||
+    !currentRow ||
+    currentRow.key !== params.row.key ||
+    currentRow.sessionId !== sessionId ||
+    resolveUiSessionRowAgentId(currentRow, params.fallbackAgentId) !== agentId ||
+    currentRow.placement?.generation !== generation
+  ) {
+    params.publishError(t("sessionsView.actionUnavailable"));
+    return;
+  }
+  const controls = resolveChatPanePlacement({
+    gatewaySnapshot: snapshot,
+    movingKey: null,
+    reclaimingKey: null,
+    row: currentRow,
+  });
+  if (controls.reclaimDisabledReason) {
+    params.publishError(controls.reclaimDisabledReason);
+    return;
+  }
   params.onReclaimingChange(params.row.key);
   try {
     await requestCloudWorkerStop(
@@ -88,6 +117,5 @@ export async function reclaimChatPanePlacement(params: {
     }
   } finally {
     params.onReclaimingChange(null);
-    params.requestUpdate();
   }
 }

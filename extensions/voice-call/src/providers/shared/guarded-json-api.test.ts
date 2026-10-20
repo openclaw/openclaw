@@ -1,4 +1,3 @@
-// Voice Call tests cover guarded json api plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../../../test-support/streaming-error-response.js";
 
@@ -21,18 +20,16 @@ const DEFAULT_REQUEST = {
   errorPrefix: "provider error",
 } satisfies Parameters<typeof guardedJsonApiRequest>[0];
 
+const release = vi.fn(async () => {});
+function respondWith(response: Response) {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+}
+
 describe("guardedJsonApiRequest", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("uses the SSRF-guarded fetch and parses json responses", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ ok: true }), { status: 200 }),
-      release,
-    });
-
+    respondWith(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     await expect(
       guardedJsonApiRequest({
         ...DEFAULT_REQUEST,
@@ -58,9 +55,8 @@ describe("guardedJsonApiRequest", () => {
   });
 
   it("rejects malformed UTF-8 provider JSON instead of returning corrupted identifiers", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
+    respondWith(
+      new Response(
         Buffer.concat([
           Buffer.from('{"call_control_id":"call-'),
           Buffer.from([0xff]),
@@ -68,71 +64,35 @@ describe("guardedJsonApiRequest", () => {
         ]),
         { status: 200 },
       ),
-      release,
-    });
-
-    await expect(
-      guardedJsonApiRequest({
-        ...DEFAULT_REQUEST,
-        method: "POST",
-        headers: { Authorization: "Bearer token" },
-      }),
-    ).rejects.toThrow("provider error: malformed JSON response");
-
+    );
+    await expect(guardedJsonApiRequest(DEFAULT_REQUEST)).rejects.toThrow(
+      "provider error: malformed JSON response",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("returns undefined for empty bodies and allowed 404s", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("", { status: 200 }),
-      release,
-    });
-
-    await expect(
-      guardedJsonApiRequest({
-        ...DEFAULT_REQUEST,
-        url: "https://api.example.com/v1/calls/1",
-        errorPrefix: "request failed",
-      }),
-    ).resolves.toBeUndefined();
+    respondWith(new Response("", { status: 200 }));
+    await expect(guardedJsonApiRequest(DEFAULT_REQUEST)).resolves.toBeUndefined();
 
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: missing.response,
-      release,
-    });
-
+    respondWith(missing.response);
     await expect(
-      guardedJsonApiRequest({
-        ...DEFAULT_REQUEST,
-        url: "https://api.example.com/v1/calls/2",
-        allowNotFound: true,
-        errorPrefix: "request failed",
-      }),
+      guardedJsonApiRequest({ ...DEFAULT_REQUEST, allowNotFound: true }),
     ).resolves.toBeUndefined();
-
     expect(missing.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("bounds provider error bodies on complete UTF-8 characters and cancels overflow", async () => {
-    const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse(`${"x".repeat(8 * 1024 - 2)}😀tail`, {
       status: 500,
     });
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: tracked.response,
-      release,
-    });
+    respondWith(tracked.response);
 
     let caught: Error | undefined;
     try {
-      await guardedJsonApiRequest({
-        ...DEFAULT_REQUEST,
-        url: "https://api.example.com/v1/calls/3",
-        method: "DELETE",
-      });
+      await guardedJsonApiRequest(DEFAULT_REQUEST);
     } catch (error) {
       caught = error as Error;
     }
@@ -147,25 +107,22 @@ describe("guardedJsonApiRequest", () => {
   });
 
   it("redacts credential-bearing content from provider error bodies", async () => {
-    const release = vi.fn(async () => {});
     const secretBasic = "QUMxMjM6c3VwZXItc2VjcmV0LWF1dGgtdG9rZW4";
     const secretApiKey = "sk-live-1234567890abcdef";
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
+    respondWith(
+      new Response(
         JSON.stringify({
           message: "Authentication failed",
           detail: `Authorization: Basic ${secretBasic} rejected; retry with api_key=${secretApiKey}`,
         }),
         { status: 401 },
       ),
-      release,
-    });
+    );
 
     let caught: Error | undefined;
     try {
       await guardedJsonApiRequest({
         ...DEFAULT_REQUEST,
-        url: "https://api.example.com/v1/calls/9",
         method: "POST",
         headers: { Authorization: `Basic ${secretBasic}` },
       });
@@ -181,20 +138,11 @@ describe("guardedJsonApiRequest", () => {
   });
 
   it("rejects oversized json success bodies and cancels unread overflow", async () => {
-    const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(1024 * 1024 + 1), { status: 200 });
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: tracked.response,
-      release,
-    });
-
-    await expect(
-      guardedJsonApiRequest({
-        ...DEFAULT_REQUEST,
-        url: "https://api.example.com/v1/calls/5",
-      }),
-    ).rejects.toThrow("provider response body too large: 1048577 bytes (limit: 1048576 bytes)");
-
+    respondWith(tracked.response);
+    await expect(guardedJsonApiRequest(DEFAULT_REQUEST)).rejects.toThrow(
+      "provider response body too large: 1048577 bytes (limit: 1048576 bytes)",
+    );
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });

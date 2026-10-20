@@ -1,6 +1,6 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Match, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
@@ -9,12 +9,13 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
-import { postWidgetTheme } from "../../lib/widget-theme.ts";
+import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
-import { McpAppConfirm } from "../mcp-app-confirm.ts";
+import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 
@@ -57,18 +58,16 @@ function resolveBoardFrameFailureMessage(
 
 type FrameRefresh = (name: string) => Promise<void>;
 
-type BoardWidgetFrameLifecycleHost = {
+type BoardWidgetFrameOwnerHost = {
   active: () => boolean;
   loadingCovered?: () => boolean;
   bridgeEnabled?: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
-  requestUpdate: () => void;
   reportContentHeight: (name: string, height: number) => void;
   scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
-  root: () => ParentNode;
   widget: () => BoardWidget | undefined;
 };
 
@@ -143,517 +142,48 @@ class BoardWidgetTicketRefresh {
   }
 }
 
-export class BoardWidgetFrameLifecycle {
-  error = "";
-  private waiting = false;
-  private renderStalled = false;
-
-  private frameFailureKey = "";
-  private frameRefreshAttempts = 0;
-  private frameProbeGeneration = 0;
-  private boardHostNonce = "";
-  private keyboardHostNonce = "";
-  private lastFrameUrl = "";
-  private sandboxOrigin = "";
-  private sandboxHost: BoardWidgetSandboxHost | null = null;
-  private contentVisible = false;
-  private revealFrame = 0;
-  private readonly confirmation = new McpAppConfirm(() => this.host.requestUpdate());
-  private readonly ticketRefresh = new BoardWidgetTicketRefresh(
-    () => this.host.widget()?.viewTicket,
-    () => this.host.active() && !documentHidden() && this.gatewayAvailable(),
+export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
+export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
+  const changes = new EventStream<void>();
+  let frameError = "";
+  let frameElement: HTMLIFrameElement | undefined;
+  let releaseTheme: (() => void) | undefined;
+  let waiting = false;
+  let renderStalled = false;
+  let frameFailureKey = "";
+  let frameRefreshAttempts = 0;
+  let frameProbeGeneration = 0;
+  let boardHostNonce = "";
+  let keyboardHostNonce = "";
+  let lastFrameUrl = "";
+  let sandboxOrigin = "";
+  let sandboxHost: BoardWidgetSandboxHost | null = null;
+  let contentVisible = false;
+  let revealFrame = 0;
+  const confirmation = createMcpAppConfirm();
+  const ticketRefresh = new BoardWidgetTicketRefresh(
+    () => host.widget()?.viewTicket,
+    () => host.active() && !documentHidden() && gatewayAvailable(),
   );
-
-  constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
-
-  get presentationReady(): boolean {
-    return this.contentVisible || this.waiting || this.renderStalled || Boolean(this.error);
-  }
-
-  private gatewayAvailable(): boolean {
-    const snapshot = this.host.context()?.gateway.snapshot;
-    return !snapshot || isGatewayAvailable(snapshot);
-  }
-
-  connect(): void {
-    window.addEventListener("message", this.handleWindowMessage);
-    if (this.host.active()) {
-      document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    }
-  }
-
-  disconnect(): void {
-    this.frameProbeGeneration += 1;
-    this.resetPresentation();
-    this.stopWork();
-    window.removeEventListener("message", this.handleWindowMessage);
-    this.sandboxHost?.dispose();
-    this.sandboxHost = null;
-  }
-
-  private suspend(): void {
-    this.stopWork();
-    this.sandboxHost?.setActive(false);
-  }
-
-  private stopWork(): void {
-    this.confirmation.cancel();
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-    this.ticketRefresh.reset();
-  }
-
-  activityChanged(): void {
-    if (this.host.active()) {
-      this.connect();
-      this.sandboxHost?.setActive(this.gatewayAvailable());
-      // The inner document may have finished loading while this tab was hidden.
-      const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-      if (frame) {
-        this.postBoardHostState(frame);
-      }
-    } else {
-      // Hidden dashboard cells retain their iframe and sandbox handshake;
-      // terminal disconnect is the only lifecycle edge that disposes them.
-      this.suspend();
-    }
-  }
-
-  widgetChanged(previous: BoardWidget, current: BoardWidget | undefined): void {
-    if (previous.name !== current?.name || previous.revision !== current?.revision) {
-      this.resetFailures(false);
-      return;
-    }
-    if (!this.error) {
-      return;
-    }
-    const nextFrameUrl = this.host.resolveFrameUrl()?.(current.name, current.revision) ?? "";
-    if (nextFrameUrl && nextFrameUrl !== this.lastFrameUrl) {
-      // A newly minted ticket gets one authorization probe, but keeps the
-      // existing remint budget until that probe proves the frame healthy.
-      this.setError("", false);
-    }
-  }
-
-  update(): void {
-    this.confirmation.update();
-    if (!this.host.active()) {
-      this.suspend();
-      return;
-    }
-    this.connect();
-    this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
-    this.updateSandboxHost();
-  }
-
-  render(
-    widget: BoardWidget | (() => BoardWidget),
-    revision: () => number = () => 0,
-  ): SolidJSX.Element {
-    const current = () => (typeof widget === "function" ? widget() : widget);
-    const view = createMemo(() => {
-      revision();
-      const value = current();
-      const resolveFrameUrl = this.host.resolveFrameUrl();
-      if (!resolveFrameUrl) {
-        throw new Error(t("board.widget.frameResolverMissing"));
-      }
-      const src = resolveFrameUrl(value.name, value.revision);
-      this.lastFrameUrl = src;
-      const sandboxSrc = this.resolveSandboxFrameUrl(value);
-      if (!sandboxSrc && (value.sandboxUrl || value.sandboxPort || value.viewTicket)) {
-        throw new Error(t("board.widget.sandboxUnavailable"));
-      }
-      return {
-        src,
-        sandboxSrc,
-        visible: this.contentVisible,
-        waiting: this.waiting,
-        stalled: this.renderStalled,
-        covered: this.host.loadingCovered?.(),
-      };
-    });
-    return (
-      <Show
-        when={Boolean(view().sandboxSrc)}
-        fallback={
-          <iframe
-            class="board-widget__frame"
-            allow="fullscreen"
-            sandbox="allow-scripts"
-            referrerpolicy="no-referrer"
-            loading="lazy"
-            title={current().title || current().name}
-            src={view().src}
-            onError={() => this.refreshFailedFrame(current())}
-            onLoad={(event) => {
-              this.notifyBoardHost(event);
-              this.verifyAuthorization(event, current());
-            }}
-          />
-        }
-      >
-        <div class="board-widget__frame-pane">
-          <McpAppConfirmation confirmation={this.confirmation} revision={revision()} />
-          <Show when={!view().visible && !view().covered}>
-            <Show
-              when={view().stalled}
-              fallback={
-                <Show
-                  when={view().waiting}
-                  fallback={
-                    <PanelLoadingSkeleton
-                      variant="discussion"
-                      label={t("common.loading")}
-                      compact={false}
-                      overlay
-                    />
-                  }
-                >
-                  <div class="board-widget__notice" role="status">
-                    {t("board.widget.waitingForConnection")}
-                  </div>
-                </Show>
-              }
-            >
-              <div class="board-widget__notice" role="status">
-                {t("board.widget.resourceUnavailable")}
-                <button class="btn btn--small" onClick={() => this.retryContent()}>
-                  {t("common.retry")}
-                </button>
-              </div>
-            </Show>
-          </Show>
-          <iframe
-            class="board-widget__frame"
-            allow="fullscreen"
-            style={{ opacity: view().visible ? undefined : 0 }}
-            inert={!view().visible}
-            sandbox="allow-scripts allow-same-origin allow-forms"
-            referrerpolicy="origin"
-            loading="eager"
-            title={current().title || current().name}
-            src={view().sandboxSrc}
-            onOpenclaw:restore-focus={(event: Event) => {
-              const frame = event.currentTarget;
-              if (
-                frame instanceof HTMLIFrameElement &&
-                this.host.active() &&
-                document.activeElement === frame &&
-                this.keyboardHostNonce
-              ) {
-                frame.contentWindow?.postMessage(
-                  { type: "openclaw:widget-shortcut-focus", nonce: this.keyboardHostNonce },
-                  this.sandboxOrigin,
-                );
-              }
-            }}
-            onError={() =>
-              this.sandboxHost
-                ? this.sandboxHost.handleFrameError()
-                : this.refreshFailedFrame(current())
-            }
-            onLoad={(event) => this.notifyBoardHost(event)}
-          />
-        </div>
-      </Show>
-    );
-  }
-
-  private setError(error: string, notify = true): void {
-    if (this.error === error) {
-      return;
-    }
-    this.error = error;
-    if (notify) {
-      this.host.requestUpdate();
-    }
-  }
-
-  private resetFailures(notify = true): void {
-    this.confirmation.cancel();
-    this.waiting = false;
-    this.renderStalled = false;
-    this.resetPresentation();
-    this.frameProbeGeneration += 1;
-    this.frameFailureKey = "";
-    this.frameRefreshAttempts = 0;
-    this.setError("", notify);
-    this.sandboxHost?.reset();
-  }
-
-  private resetPresentation(): void {
-    window.cancelAnimationFrame(this.revealFrame);
-    this.revealFrame = 0;
-    this.contentVisible = false;
-  }
-
-  private revealContent(): void {
-    if (this.contentVisible || this.revealFrame) {
-      return;
-    }
-    // Apply the reported height before revealing the cross-origin frame; its
-    // compositor needs a paint opportunity at the final size to avoid a white flash.
-    this.revealFrame = window.requestAnimationFrame(() => {
-      this.revealFrame = window.requestAnimationFrame(() => {
-        this.revealFrame = 0;
-        this.contentVisible = true;
-        this.host.requestUpdate();
-      });
-    });
-  }
-
-  private refreshFailedFrame(widget: BoardWidget): void {
-    if (!this.host.active()) {
-      return;
-    }
-    this.frameProbeGeneration += 1;
-    const failureKey = `${widget.name}:${widget.revision}`;
-    if (this.frameFailureKey !== failureKey) {
-      this.resetFailures(false);
-      this.frameFailureKey = failureKey;
-    }
-    if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
-      this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
-      return;
-    }
-    const refreshFrame = this.host.refreshFrame();
-    if (!refreshFrame) {
-      this.setError(t("board.widget.frameResolverMissing"));
-      return;
-    }
-    this.frameRefreshAttempts += 1;
-    const refreshGeneration = this.frameProbeGeneration;
-    void refreshFrame(widget.name).catch((error: unknown) => {
-      const current = this.host.widget();
-      if (
-        this.host.connected() &&
-        this.frameProbeGeneration === refreshGeneration &&
-        current?.name === widget.name &&
-        current.revision === widget.revision
-      ) {
-        this.setError(formatUiError(error));
-      }
-    });
-    if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
-      this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
-    }
-  }
-
-  private verifyAuthorization(event: Event, widget: BoardWidget): void {
-    const frame = event.currentTarget;
-    const src = frame instanceof HTMLIFrameElement ? (frame.getAttribute("src") ?? "") : "";
-    if (!src.startsWith("/__openclaw__/board/")) {
-      return;
-    }
-    const probeGeneration = this.frameProbeGeneration + 1;
-    this.frameProbeGeneration = probeGeneration;
-    const isCurrentProbe = () =>
-      frame instanceof HTMLIFrameElement &&
-      frame.isConnected &&
-      frame.getAttribute("src") === src &&
-      this.frameProbeGeneration === probeGeneration &&
-      this.host.active() &&
-      this.host.widget()?.name === widget.name &&
-      this.host.widget()?.revision === widget.revision;
-    // View tickets are reusable HMAC bindings until expiry. Iframe load events
-    // hide HTTP status, so a credentialed probe is the only 401 signal.
-    void fetch(src, { cache: "no-store" })
-      .then((response) => {
-        if (!isCurrentProbe()) {
-          return;
-        }
-        if (response.status === 401) {
-          this.refreshFailedFrame(widget);
-        } else if (response.ok) {
-          this.resetFailures();
-        }
-      })
-      .catch(() => {
-        if (isCurrentProbe()) {
-          this.refreshFailedFrame(widget);
-        }
-      });
-  }
-
-  private notifyBoardHost(event: Event): void {
-    const frame = event.currentTarget;
-    if (frame instanceof HTMLIFrameElement) {
-      this.postBoardHostState(frame);
-    }
-  }
-
-  private postBoardHostState(frame: HTMLIFrameElement): void {
-    this.boardHostNonce = generateUUID();
-    this.keyboardHostNonce = this.sandboxOrigin ? generateUUID() : "";
-    postWidgetTheme(frame, this.sandboxOrigin || "*");
-    frame.contentWindow?.postMessage(
-      { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: this.boardHostNonce },
-      this.sandboxOrigin || "*",
-    );
-    if (this.keyboardHostNonce) {
-      frame.contentWindow?.postMessage(
-        { type: WIDGET_SHORTCUT_HOST_MESSAGE_TYPE, nonce: this.keyboardHostNonce },
-        this.sandboxOrigin,
-      );
-    }
-  }
-
-  private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
-    const gatewayUrl = this.host.context()?.gateway.connection.gatewayUrl;
-    if (
-      !widget.sandboxUrl ||
-      !widget.sandboxPort ||
-      !widget.viewTicket ||
-      gatewayUrl === undefined
-    ) {
-      return undefined;
-    }
-    const url = resolveSandboxHostUrl(
-      widget.sandboxUrl,
-      widget.sandboxPort,
-      widget.sandboxOrigin,
-      gatewayUrl,
-      window.location.origin,
-    );
-    this.sandboxOrigin = new URL(url).origin;
-    return url;
-  }
-
-  private sandboxHostOptions(
-    frame: HTMLIFrameElement,
-    widget: BoardWidget,
-  ): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] | undefined {
-    const resolveFrameUrl = this.host.resolveFrameUrl();
-    if (!resolveFrameUrl) {
-      return undefined;
-    }
-    const context = this.host.context();
-    const client = context?.gateway.snapshot.client;
-    const connectionRevision = context?.gateway.connectionRevision;
-    const hello = context?.gateway.snapshot.hello;
-    return {
-      frame,
-      widget,
-      bridgeEnabled: this.host.bridgeEnabled?.() ?? true,
-      // A lifecycle pause does not retire this authenticated connection or its ticket.
-      connected: !context || context.gateway.snapshot.phase === "connected",
-      sandboxOrigin: this.sandboxOrigin,
-      sandboxUrl: frame.src,
-      sourceOrigin: resolveGatewayHttpOrigin(
-        context?.gateway.connection.gatewayUrl ?? "",
-        window.location.origin,
-      ),
-      controlUiBaseUrl: `${window.location.origin}${context?.basePath ?? ""}`,
-      client: context?.gateway.snapshot.client ?? undefined,
-      resolveFrameUrl,
-      confirmPrompt: (text) =>
-        this.confirmation.request({
-          frame,
-          title: widget.title || widget.name,
-          text,
-          kind: "message",
-          isCurrent: () => {
-            const current = this.host.widget();
-            const gateway = this.host.context()?.gateway;
-            return (
-              this.host.active() &&
-              this.host.connected() &&
-              this.gatewayAvailable() &&
-              frame === this.host.root().querySelector(".board-widget__frame") &&
-              current?.name === widget.name &&
-              current.revision === widget.revision &&
-              current.viewGeneration === widget.viewGeneration &&
-              gateway?.snapshot.client === client &&
-              gateway?.connectionRevision === connectionRevision &&
-              gateway?.snapshot.hello === hello
-            );
-          },
-        }),
-      onFrameUrl: (url) => {
-        this.lastFrameUrl = url;
-      },
-      onLoadFailed: () => this.waitForConnection(),
-      onUnauthorized: (currentWidget) => this.refreshFailedFrame(currentWidget),
-      onReadyTimeout: () => this.waitForConnection(),
-      onPending: () => this.waitForConnection(),
-      onLoaded: () => {
-        this.waiting = false;
-        this.resetPresentation();
-        this.frameFailureKey = "";
-        this.frameRefreshAttempts = 0;
-        this.setError("", false);
-        this.host.requestUpdate();
-      },
-      onRendered: () => {
-        // The proxy replaces its inner document after the outer load event.
-        // Bind host state to that rendered document, including saved widgets
-        // whose wrapper predates the private bridge-ready notification.
-        this.postBoardHostState(frame);
-        this.waiting = false;
-        this.renderStalled = false;
-        this.setError("");
-        this.revealContent();
-      },
-      onError: (error) => {
-        if (error instanceof WidgetRenderTimeoutError) {
-          this.renderStalled = true;
-          this.host.requestUpdate();
-          return;
-        }
-        this.setError(formatUiError(error));
-      },
-    };
-  }
-
-  private retryContent(): void {
-    this.renderStalled = false;
-    this.waiting = false;
-    this.sandboxHost?.reset();
-    this.host.requestUpdate();
-  }
-
-  private waitForConnection(): void {
-    this.waiting = true;
-    this.host.requestUpdate();
-  }
-
-  private updateSandboxHost(): void {
-    const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-    const widget = this.host.widget();
-    if (
-      !frame?.isConnected ||
-      !widget ||
-      !widget.sandboxUrl ||
-      !widget.sandboxPort ||
-      !widget.viewTicket
-    ) {
-      this.sandboxHost?.dispose();
-      this.sandboxHost = null;
-      return;
-    }
-    this.syncSandboxHost(frame, widget);
-  }
-
-  private readonly handleVisibilityChange = (): void => {
+  const handleVisibilityChange = (): void => {
     if (documentHidden()) {
-      this.ticketRefresh.reset();
+      ticketRefresh.reset();
       return;
     }
-    this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
+    ticketRefresh.schedule(host.widget(), host.refreshFrame());
   };
-
-  private handleWindowMessage = (event: MessageEvent): void => {
-    if (!this.host.connected()) {
+  const handleWindowMessage = (event: MessageEvent): void => {
+    if (!host.connected()) {
       return;
     }
-    const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-    if (!frame || event.source !== frame.contentWindow) {
+    const frame = frameElement;
+    if (!frame?.isConnected || event.source !== frame.contentWindow) {
       return;
     }
-    const widget = this.host.widget();
-    if (!this.host.active()) {
-      if (event.origin === this.sandboxOrigin) {
-        this.sandboxHost?.handleMessage(event);
+    const widget = host.widget();
+    if (!host.active()) {
+      if (event.origin === sandboxOrigin) {
+        sandboxHost?.handleMessage(event);
       }
       return;
     }
@@ -671,58 +201,532 @@ export class BoardWidgetFrameLifecycle {
       Number.isFinite(data.height) &&
       data.height > 0
     ) {
-      this.host.reportContentHeight(widget.name, data.height);
+      host.reportContentHeight(widget.name, data.height);
     }
     if (
       widget &&
       data?.type === WIDGET_SCROLL_MESSAGE_TYPE &&
-      data.nonce === this.boardHostNonce &&
+      data.nonce === boardHostNonce &&
       typeof data.deltaY === "number" &&
       Number.isFinite(data.deltaY) &&
       data.deltaY !== 0
     ) {
-      this.host.scrollBy(data.deltaY);
+      host.scrollBy(data.deltaY);
     }
     if (
       widget &&
       data?.type === WIDGET_COMMAND_PALETTE_MESSAGE_TYPE &&
-      this.keyboardHostNonce &&
-      data.nonce === this.keyboardHostNonce &&
-      event.origin === this.sandboxOrigin &&
+      keyboardHostNonce &&
+      data.nonce === keyboardHostNonce &&
+      event.origin === sandboxOrigin &&
       frame.isConnected &&
       document.activeElement === frame &&
       !document.openClawModalLayers?.size
     ) {
       window.dispatchEvent(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT));
     }
-    if (!widget?.viewTicket || event.origin !== this.sandboxOrigin) {
+    if (!widget?.viewTicket || event.origin !== sandboxOrigin) {
       return;
     }
-    this.syncSandboxHost(frame, widget)?.handleMessage(event);
+    syncSandboxHost(frame, widget)?.handleMessage(event);
   };
+  let stopMessages: (() => void) | undefined;
+  let stopVisibility: (() => void) | undefined;
+  function gatewayAvailable(): boolean {
+    const snapshot = host.context()?.gateway.snapshot;
+    return !snapshot || isGatewayAvailable(snapshot);
+  }
 
-  private syncSandboxHost(
+  function suspend(): void {
+    stopWork();
+    sandboxHost?.setActive(false);
+  }
+
+  function stopWork(): void {
+    confirmation.cancel();
+    stopVisibility?.();
+    stopVisibility = undefined;
+    ticketRefresh.reset();
+  }
+
+  function setError(error: string, notify = true): void {
+    if (frameError === error) {
+      return;
+    }
+    frameError = error;
+    if (notify) {
+      changes.emit();
+    }
+  }
+
+  function resetFailures(notify = true): void {
+    confirmation.cancel();
+    waiting = false;
+    renderStalled = false;
+    resetPresentation();
+    frameProbeGeneration += 1;
+    frameFailureKey = "";
+    frameRefreshAttempts = 0;
+    setError("", notify);
+    sandboxHost?.reset();
+  }
+
+  function resetPresentation(): void {
+    window.cancelAnimationFrame(revealFrame);
+    revealFrame = 0;
+    contentVisible = false;
+  }
+
+  function revealContent(): void {
+    if (contentVisible || revealFrame) {
+      return;
+    }
+    // Apply the reported height before revealing the cross-origin frame; its
+    // compositor needs a paint opportunity at the final size to avoid a white flash.
+    revealFrame = window.requestAnimationFrame(() => {
+      revealFrame = window.requestAnimationFrame(() => {
+        revealFrame = 0;
+        contentVisible = true;
+        changes.emit();
+      });
+    });
+  }
+
+  function resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
+    const gatewayUrl = host.context()?.gateway.connection.gatewayUrl;
+    if (
+      !widget.sandboxUrl ||
+      !widget.sandboxPort ||
+      !widget.viewTicket ||
+      gatewayUrl === undefined
+    ) {
+      return undefined;
+    }
+    const url = resolveSandboxHostUrl(
+      widget.sandboxUrl,
+      widget.sandboxPort,
+      widget.sandboxOrigin,
+      gatewayUrl,
+      window.location.origin,
+    );
+    sandboxOrigin = new URL(url).origin;
+    return url;
+  }
+
+  function sandboxHostOptions(
+    frame: HTMLIFrameElement,
+    widget: BoardWidget,
+  ): ConstructorParameters<typeof BoardWidgetSandboxHost>[0] | undefined {
+    const resolveFrameUrl = host.resolveFrameUrl();
+    if (!resolveFrameUrl) {
+      return undefined;
+    }
+    const context = host.context();
+    const client = context?.gateway.snapshot.client;
+    const connectionRevision = context?.gateway.connectionRevision;
+    const hello = context?.gateway.snapshot.hello;
+    return {
+      frame,
+      widget,
+      bridgeEnabled: host.bridgeEnabled?.() ?? true,
+      // A lifecycle pause does not retire this authenticated connection or its ticket.
+      connected: !context || context.gateway.snapshot.phase === "connected",
+      sandboxOrigin,
+      sandboxUrl: frame.src,
+      sourceOrigin: resolveGatewayHttpOrigin(
+        context?.gateway.connection.gatewayUrl ?? "",
+        window.location.origin,
+      ),
+      controlUiBaseUrl: `${window.location.origin}${context?.basePath ?? ""}`,
+      client: context?.gateway.snapshot.client ?? undefined,
+      resolveFrameUrl,
+      confirmPrompt: (text) =>
+        confirmation.request({
+          frame,
+          title: widget.title || widget.name,
+          text,
+          kind: "message",
+          isCurrent: () => {
+            const current = host.widget();
+            const gateway = host.context()?.gateway;
+            return (
+              host.active() &&
+              host.connected() &&
+              gatewayAvailable() &&
+              frame === frameElement &&
+              frame.isConnected &&
+              current?.name === widget.name &&
+              current.revision === widget.revision &&
+              current.viewGeneration === widget.viewGeneration &&
+              gateway?.snapshot.client === client &&
+              gateway?.connectionRevision === connectionRevision &&
+              gateway?.snapshot.hello === hello
+            );
+          },
+        }),
+      onFrameUrl: (url) => {
+        lastFrameUrl = url;
+      },
+      onLoadFailed: () => waitForConnection(),
+      onUnauthorized: (currentWidget) => api.refreshFailedFrame(currentWidget),
+      onReadyTimeout: () => waitForConnection(),
+      onPending: () => waitForConnection(),
+      onLoaded: () => {
+        waiting = false;
+        resetPresentation();
+        frameFailureKey = "";
+        frameRefreshAttempts = 0;
+        setError("", false);
+        changes.emit();
+      },
+      onRendered: () => {
+        // The proxy replaces its inner document after the outer load event.
+        // Bind host state to that rendered document, including saved widgets
+        // whose wrapper predates the private bridge-ready notification.
+        api.postBoardHostState(frame);
+        waiting = false;
+        renderStalled = false;
+        setError("");
+        revealContent();
+      },
+      onError: (error) => {
+        if (error instanceof WidgetRenderTimeoutError) {
+          renderStalled = true;
+          changes.emit();
+          return;
+        }
+        setError(formatUiError(error));
+      },
+    };
+  }
+
+  function waitForConnection(): void {
+    waiting = true;
+    changes.emit();
+  }
+
+  function updateSandboxHost(): void {
+    const frame = frameElement;
+    const widget = host.widget();
+    if (
+      !frame?.isConnected ||
+      !widget ||
+      !widget.sandboxUrl ||
+      !widget.sandboxPort ||
+      !widget.viewTicket
+    ) {
+      sandboxHost?.dispose();
+      sandboxHost = null;
+      return;
+    }
+    syncSandboxHost(frame, widget);
+  }
+
+  function syncSandboxHost(
     frame: HTMLIFrameElement,
     widget: BoardWidget,
   ): BoardWidgetSandboxHost | undefined {
-    const options = this.sandboxHostOptions(frame, widget);
+    const options = sandboxHostOptions(frame, widget);
     if (!options) {
       return undefined;
     }
-    const active = this.host.active() && this.gatewayAvailable();
+    const active = host.active() && gatewayAvailable();
     // Pause before updating options, then resume only under current availability.
     // Reuse the existing inactive lifecycle so pending work is fenced without
     // requiring a new authorization ticket after suspension is canceled.
     if (!active) {
-      this.sandboxHost?.setActive(false);
+      sandboxHost?.setActive(false);
     }
-    if (!this.sandboxHost || this.sandboxHost.frame !== frame) {
-      this.sandboxHost?.dispose();
-      this.sandboxHost = new BoardWidgetSandboxHost(options);
+    if (!sandboxHost || sandboxHost.frame !== frame) {
+      sandboxHost?.dispose();
+      sandboxHost = new BoardWidgetSandboxHost(options);
     } else {
-      this.sandboxHost.update(options);
+      sandboxHost.update(options);
     }
-    this.sandboxHost.setActive(active);
-    return this.sandboxHost;
+    sandboxHost.setActive(active);
+    return sandboxHost;
   }
+  const api = {
+    retryContent(): void {
+      renderStalled = false;
+      waiting = false;
+      sandboxHost?.reset();
+      changes.emit();
+    },
+    get error() {
+      return frameError;
+    },
+    get presentationReady(): boolean {
+      return contentVisible || waiting || renderStalled || Boolean(frameError);
+    },
+    connect(): void {
+      stopMessages ??= listen(window, "message", handleWindowMessage);
+      if (host.active()) {
+        stopVisibility ??= listen(document, "visibilitychange", handleVisibilityChange);
+      }
+    },
+    disconnect(): void {
+      releaseTheme?.();
+      releaseTheme = undefined;
+      frameProbeGeneration += 1;
+      resetPresentation();
+      stopWork();
+      stopMessages?.();
+      stopMessages = undefined;
+      sandboxHost?.dispose();
+      sandboxHost = null;
+    },
+    activityChanged(): void {
+      if (host.active()) {
+        api.connect();
+        sandboxHost?.setActive(gatewayAvailable());
+        // The inner document may have finished loading while this tab was hidden.
+        const frame = frameElement;
+        if (frame?.isConnected) {
+          api.postBoardHostState(frame);
+        }
+      } else {
+        // Hidden dashboard cells retain their iframe and sandbox handshake;
+        // terminal disconnect is the only lifecycle edge that disposes them.
+        suspend();
+      }
+    },
+    widgetChanged(previous: BoardWidget, current: BoardWidget | undefined): void {
+      if (previous.name !== current?.name || previous.revision !== current?.revision) {
+        resetFailures();
+        return;
+      }
+      if (!frameError) {
+        return;
+      }
+      const nextFrameUrl = host.resolveFrameUrl()?.(current.name, current.revision) ?? "";
+      if (nextFrameUrl && nextFrameUrl !== lastFrameUrl) {
+        // A newly minted ticket gets one authorization probe, but keeps the
+        // existing remint budget until that probe proves the frame healthy.
+        setError("");
+      }
+    },
+    update(): void {
+      confirmation.update();
+      if (!host.active()) {
+        suspend();
+        return;
+      }
+      api.connect();
+      ticketRefresh.schedule(host.widget(), host.refreshFrame());
+      updateSandboxHost();
+    },
+    refreshFailedFrame(widget: BoardWidget): void {
+      if (!host.active()) {
+        return;
+      }
+      frameProbeGeneration += 1;
+      const failureKey = `${widget.name}:${widget.revision}`;
+      if (frameFailureKey !== failureKey) {
+        resetFailures(false);
+        frameFailureKey = failureKey;
+      }
+      if (frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
+        setError(resolveBoardFrameFailureMessage(widget, sandboxOrigin));
+        return;
+      }
+      const refreshFrame = host.refreshFrame();
+      if (!refreshFrame) {
+        setError(t("board.widget.frameResolverMissing"));
+        return;
+      }
+      frameRefreshAttempts += 1;
+      const refreshGeneration = frameProbeGeneration;
+      void refreshFrame(widget.name).catch((error: unknown) => {
+        const current = host.widget();
+        if (
+          host.connected() &&
+          frameProbeGeneration === refreshGeneration &&
+          current?.name === widget.name &&
+          current.revision === widget.revision
+        ) {
+          setError(formatUiError(error));
+        }
+      });
+      if (frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
+        setError(resolveBoardFrameFailureMessage(widget, sandboxOrigin));
+      }
+    },
+    verifyAuthorization(event: Event, widget: BoardWidget): void {
+      const frame = event.currentTarget;
+      const src = frame instanceof HTMLIFrameElement ? (frame.getAttribute("src") ?? "") : "";
+      if (!src.startsWith("/__openclaw__/board/")) {
+        return;
+      }
+      const probeGeneration = frameProbeGeneration + 1;
+      frameProbeGeneration = probeGeneration;
+      const isCurrentProbe = () =>
+        frame instanceof HTMLIFrameElement &&
+        frame.isConnected &&
+        frame.getAttribute("src") === src &&
+        frameProbeGeneration === probeGeneration &&
+        host.active() &&
+        host.widget()?.name === widget.name &&
+        host.widget()?.revision === widget.revision;
+      // View tickets are reusable HMAC bindings until expiry. Iframe load events
+      // hide HTTP status, so a credentialed probe is the only 401 signal.
+      void fetch(src, { cache: "no-store" })
+        .then((response) => {
+          if (!isCurrentProbe()) {
+            return;
+          }
+          if (response.status === 401) {
+            api.refreshFailedFrame(widget);
+          } else if (response.ok) {
+            resetFailures();
+          }
+        })
+        .catch(() => {
+          if (isCurrentProbe()) {
+            api.refreshFailedFrame(widget);
+          }
+        });
+    },
+    postBoardHostState(frame: HTMLIFrameElement): void {
+      releaseTheme?.();
+      releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin || "*");
+      boardHostNonce = generateUUID();
+      keyboardHostNonce = sandboxOrigin ? generateUUID() : "";
+      postWidgetTheme(frame, sandboxOrigin || "*");
+      frame.contentWindow?.postMessage(
+        { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: boardHostNonce },
+        sandboxOrigin || "*",
+      );
+      if (keyboardHostNonce) {
+        frame.contentWindow?.postMessage(
+          { type: WIDGET_SHORTCUT_HOST_MESSAGE_TYPE, nonce: keyboardHostNonce },
+          sandboxOrigin,
+        );
+      }
+    },
+    // Forward the widget owner's event stream to its projection subscribers.
+    subscribe: (listener: () => void) => changes.subscribe(listener),
+    confirmation,
+    bindFrame(frame: HTMLIFrameElement) {
+      releaseTheme?.();
+      releaseTheme = undefined;
+      frameElement = frame;
+    },
+    prepareView(value: BoardWidget) {
+      const resolveFrameUrl = host.resolveFrameUrl();
+      if (!resolveFrameUrl) {
+        throw new Error(t("board.widget.frameResolverMissing"));
+      }
+      const src = resolveFrameUrl(value.name, value.revision);
+      lastFrameUrl = src;
+      const sandboxSrc = resolveSandboxFrameUrl(value);
+      if (!sandboxSrc && (value.sandboxUrl || value.sandboxPort || value.viewTicket)) {
+        throw new Error(t("board.widget.sandboxUnavailable"));
+      }
+      return {
+        src,
+        sandboxSrc,
+        visible: contentVisible,
+        waiting,
+        stalled: renderStalled,
+        covered: host.loadingCovered?.(),
+      };
+    },
+    restoreFocus(event: Event) {
+      const frame = event.currentTarget;
+      if (
+        frame instanceof HTMLIFrameElement &&
+        host.active() &&
+        document.activeElement === frame &&
+        keyboardHostNonce
+      ) {
+        frame.contentWindow?.postMessage(
+          { type: "openclaw:widget-shortcut-focus", nonce: keyboardHostNonce },
+          sandboxOrigin,
+        );
+      }
+    },
+    handleFrameError(widget: BoardWidget) {
+      if (sandboxHost) {
+        sandboxHost.handleFrameError();
+      } else {
+        api.refreshFailedFrame(widget);
+      }
+    },
+  };
+  return api;
+}
+
+export function BoardWidgetFrame(props: {
+  state: () => BoardWidgetFrameOwner;
+  current: () => BoardWidget;
+}) {
+  const view = createMemo(() => props.state().prepareView(props.current()));
+  return (
+    <Show
+      when={Boolean(view().sandboxSrc)}
+      fallback={
+        <iframe
+          ref={(frame) => props.state().bindFrame(frame)}
+          class="board-widget__frame"
+          allow="fullscreen"
+          sandbox="allow-scripts"
+          referrerpolicy="no-referrer"
+          loading="lazy"
+          title={props.current().title || props.current().name}
+          src={view().src}
+          onError={() => props.state().refreshFailedFrame(props.current())}
+          onLoad={(event) => {
+            props.state().postBoardHostState(event.currentTarget);
+            props.state().verifyAuthorization(event, props.current());
+          }}
+        />
+      }
+    >
+      <div class="board-widget__frame-pane">
+        <McpAppConfirmation confirmation={props.state().confirmation} />
+        <Show when={!view().visible && !view().covered}>
+          <Switch
+            fallback={
+              <PanelLoadingSkeleton
+                variant="discussion"
+                label={t("common.loading")}
+                compact={false}
+                overlay
+              />
+            }
+          >
+            <Match when={view().stalled}>
+              <div class="board-widget__notice" role="status">
+                {t("board.widget.resourceUnavailable")}
+                <button class="btn btn--small" onClick={() => props.state().retryContent()}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            </Match>
+            <Match when={view().waiting}>
+              <div class="board-widget__notice" role="status">
+                {t("board.widget.waitingForConnection")}
+              </div>
+            </Match>
+          </Switch>
+        </Show>
+        <iframe
+          ref={(frame) => props.state().bindFrame(frame)}
+          class="board-widget__frame"
+          allow="fullscreen"
+          style={{ opacity: view().visible ? undefined : 0 }}
+          inert={!view().visible}
+          sandbox="allow-scripts allow-same-origin allow-forms"
+          referrerpolicy="origin"
+          loading="eager"
+          title={props.current().title || props.current().name}
+          src={view().sandboxSrc}
+          onOpenclaw:restore-focus={(event: Event) => props.state().restoreFocus(event)}
+          onError={() => props.state().handleFrameError(props.current())}
+          onLoad={(event) => props.state().postBoardHostState(event.currentTarget)}
+        />
+      </div>
+    </Show>
+  );
 }

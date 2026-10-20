@@ -1,12 +1,16 @@
-// Tests heartbeat runner guardrails for subagent sessions.
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+// Tests heartbeat runner guardrails for subagent sessions.
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  setHeartbeatSilentCompletion,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -63,18 +67,17 @@ describe("runHeartbeatOnce", () => {
       enqueueSystemEvent("Exec completed (run-dm, code 0)", {
         sessionKey: mainSessionKey,
       });
-      replySpy.mockResolvedValue({ text: "NO_REPLY" });
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setHeartbeatSilentCompletion(options);
+        return undefined;
+      });
 
+      bindHeartbeatReply(replySpy);
+      bindHeartbeatSend("telegram", vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }));
       await runHeartbeatOnce({
         cfg,
         sessionKey: "agent:main:telegram:default:direct:123",
         source: "exec-event",
-        deps: {
-          getReplyFromConfig: replySpy,
-          telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }),
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);

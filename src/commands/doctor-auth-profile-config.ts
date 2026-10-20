@@ -1,4 +1,3 @@
-/** Protects active auth profile metadata while doctor repairs broader config state. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   normalizeLowercaseStringOrEmpty as normalizeProviderId,

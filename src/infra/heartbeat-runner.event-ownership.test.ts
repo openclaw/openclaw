@@ -1,30 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearCronJobActive,
-  markCronJobActive,
-  markCronJobWaitingForHeartbeat,
-  resetCronActiveJobs,
-} from "../cron/active-jobs.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { inactiveHeartbeatHours } from "./heartbeat-runner.boundary-test-support.js";
 import {
   type HeartbeatRoutingFixture,
   formatQueuedEvents,
   withRouting,
 } from "./heartbeat-runner.event-routing.test-support.js";
-import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   type HeartbeatReplyContext,
-  type HeartbeatReplySpy,
   getFirstReplyContext,
   seedMainSessionStore,
   seedSessionStore,
+  setHeartbeatSilentCompletion,
   setupTelegramHeartbeatPluginRuntimeForTests,
 } from "./heartbeat-runner.test-utils.js";
-import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
+import { PlatformMessageNotDispatchedError } from "./outbound/deliver-types.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEvent,
@@ -41,6 +38,7 @@ describe("Heartbeat cron and exec event ownership", () => {
   });
   afterEach(() => {
     resetSystemEventsForTest();
+    resetCronActiveJobs();
     vi.restoreAllMocks();
   });
 
@@ -78,33 +76,20 @@ describe("Heartbeat cron and exec event ownership", () => {
       fixture.enqueue(reminder, "cron:nightly-report");
       fixture.replySpy.mockResolvedValue({ text: "Handled the reminder" });
       const owner = markCronJobActive("nightly-report");
-      const release = markCronJobWaitingForHeartbeat(owner);
       try {
         await fn(fixture);
       } finally {
-        release();
         clearCronJobActive("nightly-report", owner);
       }
     });
   }
-  function runCron(fixture: Fixture, cron = 0, nested = 0) {
+  function runCron(fixture: Fixture) {
     return fixture.run({
       source: "cron",
       intent: "immediate",
       reason: "cron:nightly-report",
       sessionKey: fixture.sessionKey,
-      deps: {
-        getQueueSize: (lane) =>
-          lane === CommandLane.Cron ? cron : lane === CommandLane.CronNested ? nested : 0,
-      },
     });
-  }
-  function expectCronBusy(
-    result: Awaited<ReturnType<typeof runHeartbeatOnce>>,
-    replySpy: HeartbeatReplySpy,
-  ) {
-    expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
-    expect(replySpy).not.toHaveBeenCalled();
   }
 
   it.each(["outside active hours", "without delivery"])(
@@ -129,7 +114,6 @@ describe("Heartbeat cron and exec event ownership", () => {
                   source: "cron",
                   intent: "immediate",
                   reason: "cron:nightly-report",
-                  deps: { nowMs: () => Date.UTC(2025, 0, 1, 7) },
                 }
               : { reason: "cron:reminder-job" },
           );
@@ -152,7 +136,7 @@ describe("Heartbeat cron and exec event ownership", () => {
         internal
           ? { target: "none" }
           : outsideHours
-            ? { activeHours: { start: "08:00", end: "24:00", timezone: "user" } }
+            ? { activeHours: inactiveHeartbeatHours() }
             : {},
       );
     },
@@ -160,46 +144,103 @@ describe("Heartbeat cron and exec event ownership", () => {
 
   it("executes a cron wake while its active owner waits for heartbeat settlement", async () => {
     await withCronOwner(async (f) => {
+      markCronJobActive("other-agent-report", { agentId: "other" });
       expect((await runCron(f)).status).toBe("ran");
       expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
       expect(peekSystemEvents(f.sessionKey)).toEqual([]);
     });
   });
-  it.each(["cron lane", "nested lane", "unowned job"])(
-    "blocks a cron wake under pressure from %s",
-    async (busy) => {
+  it.each([
+    { owner: "other", sessionKey: undefined, expected: "ran" },
+    { owner: "main", sessionKey: undefined, expected: "ran" },
+    { owner: undefined, sessionKey: undefined, expected: "ran" },
+    { owner: "other", sessionKey: "agent:main:chat", expected: "ran" },
+  ])(
+    "does not confuse a cron job marker with target turn ownership (owner=$owner, session=$sessionKey)",
+    async ({ owner, sessionKey }) => {
       await withHeartbeat(async (f) => {
-        f.enqueue(reminder, "cron:nightly-report");
-        const owner = markCronJobActive("nightly-report");
-        const release = busy === "unowned job" ? undefined : markCronJobWaitingForHeartbeat(owner);
-        if (release) {
-          f.replySpy.mockResolvedValue({ text: "Handled the reminder" });
-        }
+        markCronJobActive("report", { agentId: owner, sessionKey });
+        const result = await f.run({ source: "interval", intent: "scheduled" });
+        expect(result.status).toBe("ran");
+        expect(f.replySpy).toHaveBeenCalledOnce();
+      });
+    },
+  );
+  it.each([CommandLane.Cron, CommandLane.CronNested, CommandLane.HookDispatch])(
+    "does not use %s capacity queue entries as session turn ownership",
+    async (lane) => {
+      await withHeartbeat(async (f) => {
+        const release = createDeferred();
+        const started = createDeferred();
+        const target = { agentId: "other", sessionKey: "agent:other:main", sessionId: "other" };
+        const active = enqueueCommandInLane(
+          lane,
+          async () => {
+            started.resolve();
+            await release.promise;
+          },
+          { sessionTarget: target },
+        );
+        const foreignQueued = enqueueCommandInLane(lane, async () => {}, { sessionTarget: target });
+        let ownQueued: Promise<void> | undefined;
         try {
-          expectCronBusy(
-            await runCron(f, busy === "cron lane" ? 1 : 0, busy === "nested lane" ? 1 : 0),
-            f.replySpy,
-          );
+          await started.promise;
+          expect((await f.run({ source: "interval", intent: "scheduled" })).status).toBe("ran");
+          expect(f.replySpy).toHaveBeenCalledOnce();
+          f.replySpy.mockClear();
+          ownQueued = enqueueCommandInLane(lane, async () => {}, {
+            sessionTarget: { ...target, sessionKey: f.sessionKey, sessionId: "main" },
+          });
+          expect((await f.run({ source: "interval", intent: "scheduled" })).status).toBe("ran");
+          expect(f.replySpy).toHaveBeenCalledOnce();
         } finally {
-          release?.();
-          clearCronJobActive("nightly-report", owner);
+          release.resolve();
+          await Promise.all([active, foreignQueued, ownQueued]);
         }
       });
     },
   );
-  it("retains a suppressed cron reminder until delivery, then consumes it exactly once", async () => {
+  it("consumes a deliberately silent cron reminder without repeating it", async () => {
     await withHeartbeat(async (f) => {
       f.enqueue(reminder, "cron:nightly-report");
       f.replySpy
-        .mockResolvedValueOnce({ text: "No channel reply." })
-        .mockResolvedValueOnce({ text: "Reminder handled" })
+        .mockImplementationOnce(async (_ctx, options) => {
+          setHeartbeatSilentCompletion(options);
+          return undefined;
+        })
         .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
       const run = () => f.run({ reason: "interval" });
       expect((await run()).status).toBe("ran");
       expect(f.sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEvents(f.sessionKey)).toEqual([]);
+      expectCronPrompt(getFirstReplyContext(f.replySpy), reminder);
+      expect((await run()).status).toBe("ran");
+      expect(f.replySpy).toHaveBeenCalledTimes(2);
+      expect(f.sendTelegram).not.toHaveBeenCalled();
+      const next = f.replySpy.mock.calls[1]?.[0];
+      expect(next?.InternalTurnSource).toBe("heartbeat");
+      expect(next?.Body).not.toContain(reminder);
+    });
+  });
+  it("retains a cron reminder after rejected delivery, then consumes it exactly once", async () => {
+    await withHeartbeat(async (f) => {
+      f.enqueue(reminder, "cron:nightly-report");
+      f.sendTelegram.mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("Permanent synthetic rejection", {
+          cause: undefined,
+          retryable: false,
+        }),
+      );
+      f.replySpy
+        .mockResolvedValueOnce({ text: "Reminder handled" })
+        .mockResolvedValueOnce({ text: "Reminder handled" })
+        .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
+      const run = () => f.run({ reason: "interval" });
+      expect((await run()).status).toBe("failed");
+      expect(f.sendTelegram).toHaveBeenCalledOnce();
       expect(peekSystemEvents(f.sessionKey)).toEqual([reminder]);
       expect((await run()).status).toBe("ran");
-      expect(f.sendTelegram).toHaveBeenCalledOnce();
+      expect(f.sendTelegram).toHaveBeenCalledTimes(2);
       expect(peekSystemEvents(f.sessionKey)).toEqual([]);
       for (const [ctx] of f.replySpy.mock.calls) {
         expectCronPrompt(ctx, reminder);
@@ -207,7 +248,7 @@ describe("Heartbeat cron and exec event ownership", () => {
       }
       expect((await run()).status).toBe("ran");
       expect(f.replySpy).toHaveBeenCalledTimes(3);
-      expect(f.sendTelegram).toHaveBeenCalledOnce();
+      expect(f.sendTelegram).toHaveBeenCalledTimes(2);
       const next = f.replySpy.mock.calls[2]?.[0];
       expect(next?.InternalTurnSource).toBe("heartbeat");
       expect(next?.Body).toContain("Heartbeat monitor scratch:");
@@ -295,7 +336,6 @@ describe("Heartbeat cron and exec event ownership", () => {
               sessionKey: queueKey,
               source: noise ? "interval" : "cron",
               reason: noise ? "interval" : "cron:owner-report",
-              deps: { getQueueSize: () => 0 },
             });
           expect((await run()).status).toBe(noise ? "ran" : "failed");
           expect(f.replySpy).toHaveBeenCalledOnce();

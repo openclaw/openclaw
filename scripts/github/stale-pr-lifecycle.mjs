@@ -663,7 +663,15 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
       ) {
         throw new Error(`changed-after-warning: ${afterDecision.reason}`);
       }
-      await write(mutationGithub.rest.issues.addLabels, { ...base, labels: ["stale"] });
+      try {
+        await write(mutationGithub.rest.issues.addLabels, { ...base, labels: ["stale"] });
+      } catch (error) {
+        if (error.status !== 422 || !error.message.includes("cannot have more than 100 labels")) {
+          throw error;
+        }
+        // The authenticated warning is the receipt; leave the user's labels intact.
+        return { ...decision, reason: "label-capacity", commentId: progress.commentId };
+      }
     } else if (decision.action === "close") {
       let commentId = checked.closeComment;
       if (!commentId) {

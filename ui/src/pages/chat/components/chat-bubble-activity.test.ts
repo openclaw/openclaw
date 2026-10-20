@@ -1,16 +1,17 @@
 /* @vitest-environment jsdom */
-import { nothing, render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./chat-transcript.test-support.ts";
-import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
+import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
@@ -20,8 +21,8 @@ it("keeps streaming text and open status details stable behind the dot preview",
   const transcript = createTestTranscript();
   let connected = false;
   onTestFinished(() => {
-    render(nothing, container);
-    transcript.hostDisconnected();
+    render(null, container);
+    transcript.dispose();
     container.remove();
   });
   const props: ChatThreadProps = {
@@ -38,10 +39,10 @@ it("keeps streaming text and open status details stable behind the dot preview",
   const draw = () => {
     render(renderChatThread(props, transcript), container);
     if (!connected) {
-      transcript.hostConnected();
+      transcript.start();
       connected = true;
     }
-    transcript.hostUpdated();
+    transcript.update();
   };
   draw();
   await waitForSolid(() => {
@@ -80,8 +81,8 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   const transcript = createTestTranscript();
   let connected = false;
   onTestFinished(() => {
-    render(nothing, container);
-    transcript.hostDisconnected();
+    render(null, container);
+    transcript.dispose();
     container.remove();
   });
   const props: ChatThreadProps = {
@@ -107,12 +108,12 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
     ],
   };
   const draw = () => {
-    render(renderChatThread({ ...props, onRequestUpdate: draw }, transcript), container);
+    render(renderChatThread(props, transcript), container);
     if (!connected) {
-      transcript.hostConnected();
+      transcript.start();
       connected = true;
     }
-    transcript.hostUpdated();
+    transcript.update();
   };
   draw();
   await waitForSolid(() => {
@@ -163,15 +164,17 @@ it.each([
   { label: "Waiting for approval", options: { waitingApproval: true } },
 ])("keeps $label visible instead of replacing it with working dots", ({ label, options }) => {
   const container = document.createElement("div");
-  render(
-    renderChatWorkingIndicator(
-      { kind: "reading-indicator", key: "status", startedAt: 1 },
-      { bubbleMode: true, ...options },
-    ),
-    container,
+  const view = mountSolid(
+    () =>
+      createComponent(ChatWorkingIndicator, {
+        part: { kind: "reading-indicator", key: "status", startedAt: 1 },
+        options: { bubbleMode: true, ...options },
+      }),
+    { container },
   );
+  onTestFinished(view.unmount);
+  flush();
   expect(container.querySelector("details")).toBeNull();
   expect(container.querySelector(".chat-working-indicator")?.textContent).toContain(label);
   expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
-  render(nothing, container);
 });

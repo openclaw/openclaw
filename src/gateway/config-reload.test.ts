@@ -1,6 +1,6 @@
 // Gateway config reload tests cover changed-path detection, reload planning,
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -42,11 +42,8 @@ import {
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
-import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
-import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -69,6 +66,7 @@ import {
   listConfigReloadRefinementPrefixes,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
+import { registerInvalidConfigReloadTests } from "./config-reload.invalid-config.test-support.js";
 import type {
   GatewayConfigReloadTransactionOwnership,
   GatewayReloadPlan,
@@ -1309,7 +1307,7 @@ describe("startGatewayConfigReloader", () => {
           expect(harness.onHotReload).not.toHaveBeenCalled();
           expect(configAuditMocks.upsertSnapshot).not.toHaveBeenCalled();
         } else {
-          await harness.reloader.ready;
+          await waitForReloadState(() => harness.reloader.isReady());
           await flushReload(harness.reloader);
           expect(getOnlyHotReloadCall(harness)[1]).toEqual(write.runtimeConfig);
           expect(harness.reloader.isReady()).toBe(true);
@@ -2278,9 +2276,6 @@ describe("startGatewayConfigReloader", () => {
       expect(onHotReload).not.toHaveBeenCalled();
       expect(onRestart).toHaveBeenCalledTimes(1);
       expect(log.info).toHaveBeenCalledWith(
-        "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-      );
-      expect(log.info).toHaveBeenCalledWith(
         "config reload superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
       );
       expect(log.error).not.toHaveBeenCalled();
@@ -2874,36 +2869,7 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onRestart.mock.calls[0]?.[3]).toEqual(sourceConfig);
   });
 
-  it.each(["external", "accepted write"] as const)(
-    "rejects invalid snapshots observed after %s even when the root hash matches",
-    async (state) => {
-      let snapshot = makeZeroDebounceHookSnapshot("same-root-hash");
-      const readSnapshot = vi.fn(async () => snapshot);
-      const onConfigCandidateObserved = vi.fn();
-      const harness = createReloaderHarness(readSnapshot, {
-        initialConfig: state === "accepted write" ? snapshot.config : undefined,
-        onConfigCandidateObserved,
-      });
-      await harness.reloader.ready;
-      if (state !== "external") {
-        harness.emitWrite(makeZeroDebounceHookWrite("same-root-hash"));
-      }
-      if (state === "accepted write") {
-        await flushReload(harness.reloader);
-        expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
-        harness.onConfigAccepted.mockClear();
-      }
-      snapshot = { ...snapshot, valid: false };
-      onConfigCandidateObserved.mockClear();
-      harness.watcher.emit("change");
-      expect(onConfigCandidateObserved).toHaveBeenCalledOnce();
-      expect(readSnapshot).not.toHaveBeenCalled();
-      await flushReload(harness.reloader);
-      expect(harness.onConfigAccepted).not.toHaveBeenCalled();
-      expect(harness.onRestart).not.toHaveBeenCalled();
-      expect(harness.onHotReload).not.toHaveBeenCalled();
-    },
-  );
+  registerInvalidConfigReloadTests(tempDirs);
 
   it("preserves watcher echo restart intent while coalescing a newer write", async () => {
     const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
@@ -2985,6 +2951,9 @@ describe("startGatewayConfigReloader", () => {
       });
       await flushWatcherChange(harness);
 
+      expect(harness.log.error).toHaveBeenCalledExactlyOnceWith(
+        "config reload failed: Error: restart admission failed",
+      );
       if (retry === "new write") {
         const newer: ConfigWriteNotification = {
           ...makeZeroDebounceHookWrite("replay-retry-new"),
@@ -3116,90 +3085,6 @@ describe("startGatewayConfigReloader", () => {
       }
     },
   );
-
-  it("preserves the completed watcher receipt for an exact install handoff", async () => {
-    const root = tempDirs.make("openclaw-reload-completed-install-");
-    const pluginRoot = nodePath.join(root, "plugin");
-    await mkdir(pluginRoot);
-    const source = nodePath.join(pluginRoot, "index.js");
-    await writeFile(source, "export default {};\n");
-    const artifact = capturePluginGenerationArtifact(pluginRoot);
-    artifact.dispose();
-    const sourceDigests = { notes: artifact.sourceDigest };
-    const registry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "notes",
-      source,
-      rootDir: pluginRoot,
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    registry.plugins.push(record);
-    const instance = new PluginInstance("notes", { record, registry });
-    instance.sourceDigest = sourceDigests.notes;
-    const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "notes", rootDir: pluginRoot, source, origin: "global" }],
-    });
-    const records = { notes: { source: "path" as const, installPath: pluginRoot } };
-    const config: OpenClawConfig = { plugins: { entries: { notes: { enabled: true } } } };
-    const snapshot = makeSnapshot({
-      config,
-      hash: "installed-notes",
-    });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const harness = createReloaderHarness(async () => snapshot, {
-        readPluginInstallRecords: async () => records,
-        onHotReload: async (plan, next, ownership) => {
-          setActivePluginRegistry(registry);
-          setCurrentPluginMetadataSnapshotState(
-            metadata,
-            "installed-notes",
-            undefined,
-            undefined,
-            undefined,
-            "gateway",
-          );
-          ownership.markRuntimeCommitted(next, plan);
-          return {
-            status: "applied",
-            runtime: {
-              operationId: plan.pluginLifecycle?.operationId ?? "watcher-install",
-              generation: getPluginRuntimeGeneration(),
-              pluginIds: ["notes"],
-              sourceDigests,
-              warnings: ["Retired source cleanup is deferred."],
-            },
-          };
-        },
-      });
-      await harness.reloader.ready;
-      try {
-        harness.watcher.emit("change");
-        await vi.advanceTimersByTimeAsync(1);
-        await flushReload(harness.reloader);
-        const completed = await harness.onHotReload.mock.results[0]?.value;
-        expect(completed).toHaveProperty("runtime.operationId", "watcher-install");
-        if (typeof completed !== "object" || completed.status !== "applied") {
-          throw new Error("expected the watcher runtime application");
-        }
-        const request = {
-          config,
-          pluginIds: ["notes"],
-          reason: "reload" as const,
-          expectedInstallHashes: { notes: hashStableJson(records.notes) },
-          expectedSourceDigests: sourceDigests,
-        };
-        const application = harness.reloader.applyPluginLifecycleChange(request);
-        await expect(application).resolves.toBe(completed.runtime);
-        expect(harness.onHotReload).toHaveBeenCalledOnce();
-      } finally {
-        await harness.reloader.stop();
-        await instance.dispose();
-        resetPluginRuntimeStateForTest();
-      }
-    });
-  });
 
   it.each(["shutdown", "writer handoff"] as const)(
     "waits outside the config queue for an unfinished install batch (%s)",

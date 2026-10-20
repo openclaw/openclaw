@@ -1,31 +1,3 @@
-.session-menu__compact-details {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 96px;
-  overflow: hidden;
-}
-
-/* The unported session menus still use these shared layout rules. */
-wa-dropdown-item.session-menu__item--compact-details::part(label) {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-wa-dropdown-item.session-menu__item--compact-details {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-}
-
-.session-menu__item::part(submenu) {
-  max-height: calc(100dvh - 16px);
-  overflow: auto;
-}
-
 .sidebar-session-sort-menu.oc-menu {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
@@ -94,15 +66,11 @@ wa-dropdown-item.session-menu__item--compact-details {
   --sidebar-filter-row-height: calc(var(--settings-control-height) + var(--space-1));
   --sidebar-filter-row-inset: var(--space-2);
 
-  box-sizing: border-box;
   width: calc(var(--space-8) * 8);
   max-width: calc(100dvw - var(--space-6));
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
-  overflow: auto;
-  overscroll-behavior: contain;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
@@ -183,11 +151,6 @@ wa-dropdown-item.session-menu__item--compact-details {
   height: var(--settings-control-height);
 }
 
-.sidebar-session-menu-segmented::part(form-control-input) {
-  flex-wrap: nowrap;
-  gap: calc(var(--space-1) / 2);
-}
-
 .sidebar-session-menu-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
   justify-content: center;
@@ -195,11 +158,6 @@ wa-dropdown-item.session-menu__item--compact-details {
   min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);
   padding-inline: var(--space-1);
   font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-session-menu-segmented > .settings-segmented__btn::part(label) {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .sidebar-session-menu-row .picker-select__trigger {

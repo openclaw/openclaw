@@ -1,10 +1,9 @@
+import path from "node:path";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  filterStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { listBuiltRuntimeEntryCandidates } from "../plugins/package-entrypoints.js";
 import { resolvePackageExtensionEntries } from "../plugins/package-manifest.js";
 
 type JsonObject = Record<string, unknown>;
@@ -71,8 +70,42 @@ export function buildToolPluginPackageManifest(params: {
   entry: string;
 }): JsonObject {
   const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
-  const existingExtensions = filterStringEntries(openclaw.extensions);
-  const extensions = uniqueStrings([...existingExtensions, params.entry]);
+  const extensions = filterStringEntries(openclaw.extensions);
+  const selected = path.posix.normalize(params.entry);
+  const matchesSelected = (entry: string) => path.posix.normalize(entry) === selected;
+  const runtimeExtensions = Array.isArray(openclaw.runtimeExtensions)
+    ? openclaw.runtimeExtensions
+    : [];
+  let index = extensions.findIndex(matchesSelected);
+  if (index < 0) {
+    index = runtimeExtensions.findIndex(
+      (entry) => typeof entry === "string" && matchesSelected(entry),
+    );
+  }
+  if (index < 0) {
+    // Reverse selection follows runtime candidate precedence, not declaration order.
+    for (const candidate of listBuiltRuntimeEntryCandidates(params.entry)) {
+      index = extensions.findIndex(
+        (entry) => path.posix.normalize(entry) === path.posix.normalize(candidate),
+      );
+      if (index >= 0) {
+        break;
+      }
+    }
+  }
+  if (index < 0) {
+    // Explicit positional mappings override inferred output paths for source entries.
+    index = extensions.findIndex(
+      (entry, entryIndex) =>
+        !runtimeExtensions[entryIndex] &&
+        listBuiltRuntimeEntryCandidates(entry).some(matchesSelected),
+    );
+  }
+  if (index < 0) {
+    extensions.push(params.entry);
+  } else {
+    extensions[index] = params.entry;
+  }
   return {
     ...params.packageManifest,
     openclaw: {

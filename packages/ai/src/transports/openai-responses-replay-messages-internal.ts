@@ -16,6 +16,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -256,7 +257,6 @@ export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from ".
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
-  replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
@@ -273,7 +273,6 @@ function convertResponsesMessagesWithStyle(
 ): ResponseInput {
   const messages: ResponseInput = [];
   const providerStyle = conversionStyle === "provider";
-  const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
@@ -330,7 +329,8 @@ function convertResponsesMessagesWithStyle(
       ? transformProviderMessages(source, model, normalizeToolCallId)
       : getAiTransportHost().transformTransportMessages(source, model, normalizeToolCallId, {
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
-          preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
+          preserveUnframedToolResults:
+            replayPlan.preserveUnframedToolResults || preparedRequestSuffix.has(context),
         });
   // Results are durable when jobs finish, but Responses continuation must replay
   // every output fragment before adding results to that response's input suffix.
@@ -456,7 +456,6 @@ function convertResponsesMessagesWithStyle(
       for (const block of msg.content) {
         if (block.type === "thinking") {
           if (
-            shouldReplayReasoningItems &&
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
           ) {
@@ -574,8 +573,15 @@ function convertResponsesMessagesWithStyle(
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
-      const callId =
+      const rawCallId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
+      const callId = preparedRequestSuffix.has(context)
+        ? preparedRequestSuffix.toolCallId(
+            context,
+            rawCallId,
+            normalizeToolCallId(rawCallId, model, model),
+          )
+        : rawCallId;
       let output: string | ResponseFunctionCallOutputItemList = hasText
         ? textResult
         : (mediaPlaceholder ?? "(no output)");

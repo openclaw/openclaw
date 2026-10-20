@@ -1,7 +1,11 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { invalidateOperatorRolePolicy } from "../gateway/operator-role-policy.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -13,21 +17,129 @@ import {
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "../gateway/server-model-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type {
-  AgentHarnessModelCatalogParams,
-  AgentHarnessModelCatalogResult,
-} from "./harness/types.js";
-import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { AgentHarness } from "./harness/types.js";
+import { harnessRegistry, snapshot } from "./model-catalog-fixtures.test-support.js";
+import { loadPreparedModelCatalogSnapshot as loadCatalog } from "./prepared-model-catalog.js";
 import {
-  getPreparedModelRuntimeSnapshot,
-  markPreparedModelRuntimeSnapshotsStale,
+  getPreparedModelRuntimeSnapshot as readSnapshot,
+  markPreparedModelRuntimeSnapshotsStale as invalidate,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import type { PreparedModelCatalogRefreshOptions } from "./prepared-model-runtime.types.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "native-demand" });
 const { mocks } = fixture;
+beforeEach(() => {
+  mocks.configuredAgentIds = ["pro"];
+});
 
-function createPicker(config: OpenClawConfig) {
+function installHarnesses(
+  ...harnesses: (Pick<AgentHarness, "id" | "loadModelCatalog"> &
+    Partial<Pick<AgentHarness, "label" | "authBootstrap" | "readModelCatalogReadiness">>)[]
+) {
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
+    const registry = createEmptyPluginRegistry();
+    for (const harness of harnesses) {
+      registry.agentHarnesses.push(...harnessRegistry(harness.id, harness).agentHarnesses);
+    }
+    return registry;
+  });
+}
+
+function modelsResult(models: object[], extra = {}) {
+  return expect.objectContaining({
+    models: expect.arrayContaining(models.map((model) => expect.objectContaining(model))),
+    ...extra,
+  });
+}
+
+function nativeModel(provider: string, id: string, nativeRuntime: string, name = "Native model") {
+  return { provider, id, nativeRuntime, name };
+}
+
+function nativeConfig(
+  model: string,
+  models: NonNullable<AgentDefaultsConfig["models"]>,
+  agentIds = ["pro"],
+): OpenClawConfig {
+  return {
+    agents: {
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
+      defaults: { model, models },
+    },
+  };
+}
+
+function publish(config: OpenClawConfig) {
+  return refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+}
+
+async function prepareOwner(
+  config: OpenClawConfig,
+  options: PreparedModelCatalogRefreshOptions = { changedOnly: true },
+) {
+  await publish(config);
+  const owner = readSnapshot(fixture.agentInput("pro", config))!;
+  await owner.loadFullModelCatalog!(options);
+  return owner;
+}
+
+it("serves published models while single-flight native discovery is pending", async ({
+  signal,
+}) => {
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { pro: {} },
+      defaults: { model: "custom/saved-model", modelPolicy: { allow: ["custom/*"] } },
+    },
+  };
+  const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
+  const discovered = { provider: "custom", id: "discovered-model", name: "Discovered model" };
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  const loadNative = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+    return [discovered];
+  });
+  installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
+  const owner = await prepareOwner(config);
+  const sessionKey = "agent:pro:catalog-reader";
+  setRuntimeConfigSnapshot(config);
+  await upsertSessionEntryCore(
+    { agentId: "pro", sessionKey },
+    { sessionId: "catalog-reader", updatedAt: 1 },
+  );
+  const pick = createPicker(config, { sessionKey, view: "configured" });
+  // Freeze the foreground discovery deadline: returning on timeout is still blocking.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const requests = Array.from({ length: 3 }, () => pick());
+  try {
+    await withinTest(started.promise, signal);
+    for (const response of await withinTest(Promise.all(requests), signal)) {
+      expect(response).toHaveBeenCalledWith(true, modelsResult([saved]), undefined);
+    }
+    expect(loadNative).toHaveBeenCalledOnce();
+    release.resolve();
+    await owner.loadNativeModelCatalog!();
+    expect(await pick()).toHaveBeenCalledWith(true, modelsResult([discovered]), undefined);
+    expect(loadNative).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    vi.useRealTimers();
+    await Promise.allSettled(requests);
+  }
+});
+
+function createPicker(
+  config: OpenClawConfig,
+  pickerParams: { sessionKey?: string; view?: "all" | "configured" } = {},
+) {
   const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
   registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
     loadDeferred: (params) =>
@@ -41,7 +153,13 @@ function createPicker(config: OpenClawConfig) {
     const respond = vi.fn();
     await modelsHandlers["models.list"]!({
       req: { type: "req", id: "native-demand", method: "models.list" },
-      params: { agentId: "pro", view: "all", includeDefaultModels: false, refresh },
+      params: {
+        agentId: "pro",
+        view: "all",
+        includeDefaultModels: false,
+        refresh,
+        ...pickerParams,
+      },
       respond,
       client: null,
       isWebchatConnect: () => false,
@@ -54,80 +172,46 @@ function createPicker(config: OpenClawConfig) {
 it("defers native discovery until agent catalog demand and reacquires retired observations", async () => {
   const agentIds = ["default", "pro", "unused"];
   mocks.configuredAgentIds = agentIds;
-  const config: OpenClawConfig = {
-    agents: {
-      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
-      defaults: {
-        model: "demo/native-model",
-        models: { "demo/native-model": { agentRuntime: { id: "native-test" } } },
-      },
+  const config = nativeConfig(
+    "demo/native-model",
+    {
+      "demo/native-model": { agentRuntime: { id: "native-test" } },
     },
-  };
-  const native = {
-    provider: "demo",
-    id: "native-model",
-    name: "Native model",
-    nativeRuntime: "native-test",
-  };
+    agentIds,
+  );
+  const native = nativeModel("demo", "native-model", "native-test");
   mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
   const observed = new Set<string>();
-  const loadNative = vi.fn<
-    (params: AgentHarnessModelCatalogParams) => Promise<AgentHarnessModelCatalogResult>
-  >(async ({ agentDir }) => {
+  const loadNative = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async ({ agentDir }) => {
     observed.add(agentDir);
     return [native];
   });
-  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "native-test",
-      source: "fixture",
-      harness: {
-        id: "native-test",
-        label: "Native test",
-        authBootstrap: "harness",
-        supports: () => ({ supported: true }),
-        runAttempt: vi.fn(),
-        loadModelCatalog: loadNative,
-        readModelCatalogReadiness: ({ agentDir }) =>
-          observed.has(agentDir) ? { accountType: "apiKey" } : undefined,
-      },
-    });
-    return registry;
+  installHarnesses({
+    id: "native-test",
+    authBootstrap: "harness",
+    loadModelCatalog: loadNative,
+    readModelCatalogReadiness: ({ agentDir }) =>
+      observed.has(agentDir) ? { accountType: "apiKey" } : undefined,
   });
   const providerRows = [{ provider: "builtin", id: "known", name: "Known" }];
-  mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-    entries: providerRows,
-    routeVariants: providerRows,
-  });
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-  });
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot(providerRows));
+  await publish(config);
   for (const agentId of agentIds) {
-    await getPreparedModelRuntimeSnapshot(fixture.agentInput(agentId, config))!
-      .loadFullModelCatalog!({
+    await readSnapshot(fixture.agentInput(agentId, config))!.loadFullModelCatalog!({
       changedOnly: true,
     });
   }
   expect(loadNative).not.toHaveBeenCalled();
   expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(agentIds.length);
-  const read = () =>
-    loadPreparedModelCatalogSnapshot({
-      agentId: "pro",
-      config,
-    });
+  const read = () => loadCatalog({ agentId: "pro", config });
   const requestPicker = createPicker(config);
   const pick = async () => {
     const respond = await requestPicker();
-    const [ok, result, error] = respond.mock.calls[0] ?? [];
-    expect(error).toBeUndefined();
-    expect(ok).toBe(true);
-    expect(result).toMatchObject({
-      models: expect.arrayContaining([
-        expect.objectContaining({ provider: native.provider, id: native.id }),
-      ]),
-    });
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      modelsResult([{ provider: native.provider, id: native.id }]),
+      undefined,
+    ]);
   };
   await Promise.all([pick(), pick()]);
   expect(loadNative).toHaveBeenCalledOnce();
@@ -150,10 +234,7 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
   await read();
   await read();
   expect(loadNative).toHaveBeenCalledTimes(3);
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-  });
+  await publish(config);
   expect(loadNative).toHaveBeenCalledTimes(3);
   expect((await read()).entries).toContainEqual(expect.objectContaining(native));
   expect(loadNative).toHaveBeenCalledTimes(4);
@@ -163,69 +244,41 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
   "preserves the models.list publication contract after native %s",
   async (outcome) => {
     const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
-    mocks.configuredAgentIds = ["pro"];
     const failure = new Error("Native model/list unavailable");
     const loadNative = vi.fn(async () => {
       if (outcome === "superseded owner") {
-        markPreparedModelRuntimeSnapshotsStale();
+        invalidate();
       } else if (outcome === "changed authorization") {
         invalidateOperatorRolePolicy("synthetic-picker-user");
       }
       throw failure;
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "native-test",
-        source: "fixture",
-        harness: {
-          id: "native-test",
-          label: "Native test",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          loadModelCatalog: loadNative,
-        },
-      });
-      return registry;
-    });
+    installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
     const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue({
-      entries: [saved],
-      routeVariants: [saved],
-      providerOutcomes: [{ provider: saved.provider, status: "ready" }],
-    });
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
-    await owner.loadFullModelCatalog!({ changedOnly: true });
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(
+      snapshot([saved], {
+        providerOutcomes: [{ provider: saved.provider, status: "ready" }],
+      }),
+    );
+    const owner = await prepareOwner(config);
     expect(owner.readFullModelCatalog!()?.entries).toContainEqual(expect.objectContaining(saved));
     expect(loadNative).not.toHaveBeenCalled();
     const pick = createPicker(config);
     const respond = await pick();
     expect(loadNative).toHaveBeenCalledOnce();
     if (outcome !== "discovery failure") {
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringContaining(
-            outcome === "superseded owner" ? "superseded" : "access changed",
-          ),
-        }),
-      );
+      expect(respond.mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 0 }),
+        ],
+      ]);
       return;
     }
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      expect.objectContaining({
-        models: expect.arrayContaining([expect.objectContaining(saved)]),
-        refreshFailed: true,
-      }),
-      undefined,
-    );
+    expect(respond.mock.calls).toEqual([
+      [true, modelsResult([saved], { refreshFailed: true }), undefined],
+    ]);
     await pick();
     expect(loadNative).toHaveBeenCalledOnce();
     await expect(
@@ -248,28 +301,14 @@ it.each([
 ])(
   "reacquires a retired $runtime after a sibling failure (shared provider: $sharedProvider)",
   async ({ sharedProvider, runtime }) => {
-    const config: OpenClawConfig = {
-      agents: {
-        entries: { pro: {} },
-        defaults: {
-          model: "demo/native-model",
-          models: {
-            "demo/native-model": {
-              agentRuntime: { id: runtime },
-              ...(sharedProvider ? { pickerRuntimes: ["failed-native"] } : {}),
-            },
-          },
-        },
+    const config = nativeConfig("demo/native-model", {
+      "demo/native-model": {
+        agentRuntime: { id: runtime },
+        ...(sharedProvider ? { pickerRuntimes: ["failed-native"] } : {}),
       },
-    };
-    mocks.configuredAgentIds = ["pro"];
+    });
     mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
-    const native = {
-      provider: "demo",
-      id: "native-model",
-      name: "Native model",
-      nativeRuntime: runtime,
-    };
+    const native = nativeModel("demo", "native-model", runtime);
     let healthyReady = false;
     let failedReady = sharedProvider;
     const loadHealthy = vi.fn(async () => {
@@ -282,34 +321,21 @@ it.each([
       }
       return [{ ...native, nativeRuntime: "failed-native" }];
     });
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-      const registry = createEmptyPluginRegistry();
-      for (const [id, loadModelCatalog, isReady] of [
-        [runtime, loadHealthy, () => healthyReady],
-        ["failed-native", loadFailed, () => failedReady],
-      ] as const) {
-        registry.agentHarnesses.push({
-          pluginId: id,
-          source: "fixture",
-          harness: {
-            id,
-            label: id,
-            authBootstrap: "harness",
-            supports: () => ({ supported: true }),
-            runAttempt: vi.fn(),
-            loadModelCatalog,
-            readModelCatalogReadiness: () => (isReady() ? { accountType: "apiKey" } : undefined),
-          },
-        });
-      }
-      return registry;
-    });
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-    const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
-    await owner.loadFullModelCatalog!({ changedOnly: true });
+    installHarnesses(
+      ...(
+        [
+          [runtime, loadHealthy, () => healthyReady],
+          ["failed-native", loadFailed, () => failedReady],
+        ] as const
+      ).map(([id, loadModelCatalog, isReady]) => ({
+        id,
+        label: id,
+        authBootstrap: "harness" as const,
+        loadModelCatalog,
+        readModelCatalogReadiness: () => (isReady() ? { accountType: "apiKey" } : undefined),
+      })),
+    );
+    await prepareOwner(config);
     const pick = createPicker(config);
     await pick();
     if (sharedProvider) {
@@ -320,12 +346,7 @@ it.each([
     const expectHealthy = async () => {
       expect(await pick()).toHaveBeenCalledWith(
         true,
-        expect.objectContaining({
-          models: expect.arrayContaining([
-            expect.objectContaining({ id: native.id, available: true }),
-          ]),
-          refreshFailed: true,
-        }),
+        modelsResult([{ id: native.id, available: true }], { refreshFailed: true }),
         undefined,
       );
     };
@@ -340,72 +361,34 @@ it.each([
 );
 
 it("acquires remaining native runtimes after an initial provider-scoped refresh", async () => {
-  const config: OpenClawConfig = {
-    agents: {
-      entries: { pro: {} },
-      defaults: {
-        model: "first/native-model",
-        models: {
-          "first/native-model": { agentRuntime: { id: "native-first" } },
-          "second/configured-hint": { pickerRuntimes: ["native-second"] },
-        },
-      },
-    },
-  };
-  mocks.configuredAgentIds = ["pro"];
+  const config = nativeConfig("first/native-model", {
+    "first/native-model": { agentRuntime: { id: "native-first" } },
+    "second/configured-hint": { pickerRuntimes: ["native-second"] },
+  });
   mocks.resolveNativeModelPrimary.mockReturnValue("first/native-model");
-  const first = {
-    provider: "first",
-    id: "native-model",
-    name: "First",
-    nativeRuntime: "native-first",
-  };
-  const second = {
-    provider: "second",
-    id: "discovered-model",
-    name: "Second",
-    nativeRuntime: "native-second",
-  };
+  const first = nativeModel("first", "native-model", "native-first", "First");
+  const second = nativeModel("second", "discovered-model", "native-second", "Second");
   const loadFirst = vi.fn(async () => [first]);
   const loadSecond = vi.fn(async () => [second]);
-  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-    const registry = createEmptyPluginRegistry();
-    for (const [row, loadModelCatalog] of [
-      [first, loadFirst],
-      [second, loadSecond],
-    ] as const) {
-      registry.agentHarnesses.push({
-        pluginId: row.nativeRuntime,
-        source: "fixture",
-        harness: {
-          id: row.nativeRuntime,
-          label: row.name,
-          authBootstrap: "harness",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-          loadModelCatalog,
-        },
-      });
-    }
-    return registry;
-  });
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-  });
-  const owner = getPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config))!;
-  await owner.loadFullModelCatalog!({ providerIds: ["first"], refresh: true, wait: true });
+  installHarnesses(
+    ...(
+      [
+        [first, loadFirst],
+        [second, loadSecond],
+      ] as const
+    ).map(([entry, loadModelCatalog]) => ({
+      id: entry.nativeRuntime,
+      label: entry.name,
+      authBootstrap: "harness" as const,
+      loadModelCatalog,
+    })),
+  );
+  await prepareOwner(config, { providerIds: ["first"], refresh: true, wait: true });
   expect(loadFirst).toHaveBeenCalledOnce();
   expect(loadSecond).not.toHaveBeenCalled();
   const respond = await createPicker(config)();
   expect(loadSecond).toHaveBeenCalledOnce();
-  expect(respond).toHaveBeenCalledExactlyOnceWith(
-    true,
-    expect.objectContaining({
-      models: expect.arrayContaining([
-        expect.objectContaining({ provider: second.provider, id: second.id }),
-      ]),
-    }),
-    undefined,
-  );
+  expect(respond.mock.calls).toEqual([
+    [true, modelsResult([{ provider: second.provider, id: second.id }]), undefined],
+  ]);
 });

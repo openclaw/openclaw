@@ -70,6 +70,7 @@ describe("createTextProjection", () => {
       const expected =
         mode === "both" ? source.trim() : mode === "start" ? source.trimStart() : source;
       expect(result).toEqual({ text: expected, delta: expected.slice(delivered.length) });
+      expect(projection.matchesTrimmedSource).toBe(expected === source.trim());
       delivered = expected;
     }
     expect(projection.replace(" \tReset \n")).toEqual({
@@ -77,6 +78,25 @@ describe("createTextProjection", () => {
       delta: null,
     });
     expect(projection.append("end").text).toBe(filter.transform(" \tReset \nend"));
+  });
+
+  it("distinguishes preserved indentation and equal-length rewrites from trimmed source", () => {
+    const projection = createTextProjection([
+      { activationTokens: ["swap"], transform: (text) => text.replace("swap", "edit") },
+      trimTextFilter("both", { preserveCodeIndentation: true }),
+    ]);
+    for (const source of ["\u00a0plain \n", "    code\n", " swap ", "\t\n"]) {
+      projection.replace(source);
+      expect(projection.matchesTrimmedSource).toBe(projection.text === source.trim());
+      projection.append(" tail");
+      expect(projection.matchesTrimmedSource).toBe(projection.text === `${source} tail`.trim());
+    }
+    const padding = createTextProjection([
+      { activationTokens: ["\n"], transform: (text) => text.replace(/^\n/, "") },
+      trimTextFilter("both"),
+    ]);
+    padding.append("\nSame ");
+    expect(padding.matchesTrimmedSource).toBe(true);
   });
 
   it.each([{ chunks: [" \r", "\n\t\n", "  Code", "\n next"], expected: "  Code\n next" }])(

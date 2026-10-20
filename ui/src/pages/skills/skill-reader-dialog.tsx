@@ -32,6 +32,7 @@ export function SkillReaderDialog(props: {
   label: string;
   onClose: () => void;
   title: JSX.Element;
+  footer?: JSX.Element;
   children: JSX.Element;
 }) {
   return (
@@ -53,6 +54,7 @@ export function SkillReaderDialog(props: {
           </button>
         </div>
         {props.children}
+        {props.footer}
       </div>
     </openclaw-modal-dialog>
   );
@@ -60,15 +62,15 @@ export function SkillReaderDialog(props: {
 
 export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: boolean }) {
   const detail = createMemo(() => props.view.state.clawhubDetail);
-  const skillIconUrl = createMemo(() => {
+  const skillIconUrl = () => {
     const icon = detail()?.skill?.icon;
     return icon ? props.view.state.clawhubIconUrls?.[icon] : undefined;
-  });
-  const profileImageUrl = createMemo(() => {
+  };
+  const profileImageUrl = () => {
     const image = detail()?.owner?.image;
     return skillIconUrl() || !image ? undefined : props.view.state.clawhubIconUrls?.[image];
-  });
-  const detailImageUrl = createMemo(() => skillIconUrl() ?? profileImageUrl());
+  };
+  const detailImageUrl = () => skillIconUrl() ?? profileImageUrl();
   return (
     <SkillReaderDialog
       label={
@@ -95,6 +97,33 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
             {detail()?.skill?.displayName ?? props.view.state.clawhubDetailRef}
           </div>
         </div>
+      }
+      footer={
+        <Show when={!props.view.state.clawhubDetailLoading && !props.view.state.clawhubDetailError}>
+          <Show when={detail()?.skill}>
+            {(skill) => (
+              <openclaw-modal-actions class="exec-approval-actions skill-reader-dialog__actions">
+                <button
+                  class="btn primary"
+                  disabled={props.installLocked}
+                  onClick={() => {
+                    const ref = props.view.state.clawhubDetailRef;
+                    if (ref) {
+                      props.view.onClawHubInstall(ref);
+                    }
+                  }}
+                >
+                  {props.view.state.skillOperation?.kind === "clawhub" &&
+                  props.view.state.skillOperation.ref === (props.view.state.clawhubDetailRef ?? "")
+                    ? t("skillsPage.installing")
+                    : props.view.showInventory === false
+                      ? t("skillLibrary.import")
+                      : t("skillsPage.installNamed", { name: skill().displayName })}
+                </button>
+              </openclaw-modal-actions>
+            )}
+          </Show>
+        </Show>
       }
     >
       <div class="skill-reader-dialog__body clawhub-skill-detail__body">
@@ -159,26 +188,6 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                       </div>
                     )}
                   </Show>{" "}
-                  <div class="exec-approval-actions" style={{ "margin-top": "0" }}>
-                    <button
-                      class="btn primary"
-                      disabled={props.installLocked}
-                      onClick={() => {
-                        const ref = props.view.state.clawhubDetailRef;
-                        if (ref) {
-                          props.view.onClawHubInstall(ref);
-                        }
-                      }}
-                    >
-                      {props.view.state.skillOperation?.kind === "clawhub" &&
-                      props.view.state.skillOperation.ref ===
-                        (props.view.state.clawhubDetailRef ?? "")
-                        ? t("skillsPage.installing")
-                        : props.view.showInventory === false
-                          ? t("skillLibrary.import")
-                          : t("skillsPage.installNamed", { name: skill().displayName })}
-                    </button>
-                  </div>
                 </>
               )}
             </Show>

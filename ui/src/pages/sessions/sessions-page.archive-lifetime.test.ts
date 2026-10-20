@@ -51,7 +51,14 @@ async function setup() {
     }
     if (method === "sessions.list") {
       const query = params as { spawnedBy?: string } | undefined;
-      return sessionsResult(query?.spawnedBy ? [] : [row], 1);
+      return sessionsResult(
+        query?.spawnedBy === row.key
+          ? [{ ...row, key: "agent:main:child", sessionId: "child-session" }]
+          : query?.spawnedBy
+            ? []
+            : [row],
+        1,
+      );
     }
     if (method === "sessions.describe") {
       return { session: row };
@@ -82,8 +89,8 @@ describe("Sessions page archive confirmation lifetime", () => {
     const fixture = await setup();
     const confirm = vi.spyOn(confirmDialog, "showConfirmDialog");
     try {
-      const archive = modal.track(fixture.page.archiveActions.archive(fixture.row));
-      const tree = modal.track(fixture.page.archiveActions.archiveTree(fixture.row));
+      const archive = modal.track(fixture.page.archive(fixture.row));
+      const tree = modal.track(fixture.page.archive(fixture.row, true));
       await archiveImport.started;
       fixture.page.remove();
       archiveImport.release();
@@ -103,18 +110,18 @@ describe("Sessions page archive confirmation lifetime", () => {
   });
 
   it.each([
-    { action: "archive", retire: "navigate" },
-    { action: "archive", retire: "reconnect" },
-    { action: "archiveTree", retire: "navigate" },
-    { action: "archiveTree", retire: "reconnect" },
+    { hasDescendants: false, retire: "navigate" },
+    { hasDescendants: false, retire: "reconnect" },
+    { hasDescendants: true, retire: "navigate" },
+    { hasDescendants: true, retire: "reconnect" },
   ] as const)(
-    "closes an open $action confirmation on $retire without writing",
-    async ({ action, retire }) => {
+    "closes an open confirmation (descendants=$hasDescendants) on $retire without writing",
+    async ({ hasDescendants, retire }) => {
       archiveImport.release();
       const modal = createModalDialogTestFixture();
       const fixture = await setup();
       try {
-        const operation = modal.track(fixture.page.archiveActions[action](fixture.row));
+        const operation = modal.track(fixture.page.archive(fixture.row, hasDescendants));
         await waitForConfirmDialogActions();
         expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
         expect(fixture.writes()).toEqual([]);

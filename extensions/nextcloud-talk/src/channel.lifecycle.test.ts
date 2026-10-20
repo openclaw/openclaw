@@ -4,24 +4,31 @@ import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
+  createPluginRuntimeMock,
+  createTestRegistry,
+  setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { setNextcloudTalkRuntime } from "./runtime.js";
 
 const hoisted = vi.hoisted(() => ({
-  monitorNextcloudTalkProvider: vi.fn(),
+  createNextcloudTalkWebhookSpool: vi.fn(),
 }));
 
-vi.mock("./monitor-runtime.js", () => ({
-  monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
+vi.mock("./webhook-spool.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./webhook-spool.js")>()),
+  createNextcloudTalkWebhookSpool: hoisted.createNextcloudTalkWebhookSpool,
 }));
 
-const { nextcloudTalkGatewayAdapter } = await import("./gateway.js");
+const { nextcloudTalkPlugin } = await import("./channel.js");
 
-type NextcloudTalkStartAccount = NonNullable<typeof nextcloudTalkGatewayAdapter.startAccount>;
+type NextcloudTalkStartAccount = NonNullable<
+  NonNullable<typeof nextcloudTalkPlugin.gateway>["startAccount"]
+>;
 
 function requireStartAccount(): NextcloudTalkStartAccount {
-  const startAccount = nextcloudTalkGatewayAdapter.startAccount;
+  const startAccount = nextcloudTalkPlugin.gateway?.startAccount;
   if (!startAccount) {
     throw new Error("Expected Nextcloud Talk gateway startAccount");
   }
@@ -45,7 +52,12 @@ function buildAccount(): ResolvedNextcloudTalkAccount {
 
 function mockStartedMonitor() {
   const stop = vi.fn();
-  hoisted.monitorNextcloudTalkProvider.mockResolvedValue({ stop });
+  hoisted.createNextcloudTalkWebhookSpool.mockReturnValue({
+    stop,
+    ready: vi.fn(async () => {}),
+    receive: vi.fn(),
+    waitForIdle: vi.fn(),
+  });
   return stop;
 }
 
@@ -53,12 +65,17 @@ function startNextcloudAccount(abortSignal?: AbortSignal) {
   return requireStartAccount()(
     createStartAccountContext({
       account: buildAccount(),
+      cfg: { channels: { "nextcloud-talk": buildAccount().config } },
       abortSignal,
     }),
   );
 }
 
 describe("nextcloud-talk startAccount lifecycle", () => {
+  beforeEach(() => {
+    setNextcloudTalkRuntime(createPluginRuntimeMock());
+    setActivePluginRegistry(createTestRegistry());
+  });
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -66,11 +83,15 @@ describe("nextcloud-talk startAccount lifecycle", () => {
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = mockStartedMonitor();
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: requireStartAccount(),
+      startAccount: (ctx) =>
+        requireStartAccount()({
+          ...ctx,
+          cfg: { channels: { "nextcloud-talk": buildAccount().config } },
+        }),
       account: buildAccount(),
     });
     await expectStopPendingUntilAbort({
-      waitForStarted: waitForStartedMocks(hoisted.monitorNextcloudTalkProvider),
+      waitForStarted: waitForStartedMocks(hoisted.createNextcloudTalkWebhookSpool),
       isSettled,
       abort,
       task,
@@ -85,7 +106,7 @@ describe("nextcloud-talk startAccount lifecycle", () => {
 
     await startNextcloudAccount(abort.signal);
 
-    expect(hoisted.monitorNextcloudTalkProvider).toHaveBeenCalledOnce();
+    expect(hoisted.createNextcloudTalkWebhookSpool).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
   });
 
@@ -98,6 +119,6 @@ describe("nextcloud-talk startAccount lifecycle", () => {
     await expect(requireStartAccount()(createStartAccountContext({ account }))).rejects.toThrow(
       /secret|unavailable/i,
     );
-    expect(hoisted.monitorNextcloudTalkProvider).not.toHaveBeenCalled();
+    expect(hoisted.createNextcloudTalkWebhookSpool).not.toHaveBeenCalled();
   });
 });

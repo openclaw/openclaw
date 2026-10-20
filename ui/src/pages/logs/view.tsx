@@ -10,9 +10,12 @@ import {
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
+import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { createMsFormatter } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
+
+registerEnglishCatalog(registerLogsEnglish);
 
 export type LogsProps = {
   loading: boolean;
@@ -24,6 +27,7 @@ export type LogsProps = {
   levelFilters: Record<LogLevel, boolean>;
   autoFollow: boolean;
   truncated: boolean;
+  onStreamRef?: (element: HTMLDivElement) => void;
   onFilterTextChange: (next: string) => void;
   onLevelToggle: (level: LogLevel, enabled: boolean) => void;
   onToggleAutoFollow: (next: boolean) => void;
@@ -63,9 +67,8 @@ export function LogsView(props: LogsProps) {
       formatTime: createMsFormatter({ timeStyle: "short" }),
     };
   });
-  const exportFileLabel = createMemo(() =>
-    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible",
-  );
+  const exportFileLabel = () =>
+    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
   // Keep the fill-height flex chain from the workspace through the log stream.
   return (
@@ -113,7 +116,7 @@ export function LogsView(props: LogsProps) {
           <div class="chip-row">
             <For each={LOG_LEVELS}>
               {(level) => (
-                <label class={`chip log-chip ${level}`}>
+                <label class={["chip log-chip", level]}>
                   <input
                     type="checkbox"
                     checked={props.levelFilters[level]}
@@ -139,6 +142,7 @@ export function LogsView(props: LogsProps) {
           </div>
         </Show>
         <div
+          ref={(element) => props.onStreamRef?.(element)}
           class="log-stream"
           role="region"
           aria-label={t("gatewayLogs.title")}

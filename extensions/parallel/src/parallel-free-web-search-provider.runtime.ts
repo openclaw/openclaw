@@ -1,10 +1,130 @@
+import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import {
+  ProviderHttpError,
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   type SearchConfigRecord,
+  withTrustedWebSearchEndpoint,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { PARALLEL_MCP_SEARCH_URL, runParallelMcpSearch } from "./parallel-mcp-search.runtime.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { executeParallelSearchRequest } from "./parallel-search-normalize.js";
+
+// Free hosted Search MCP. This keyless transport is used only after the user
+// explicitly selects the `parallel-free` web_search provider. Docs:
+// https://docs.parallel.ai/integrations/mcp/search-mcp
+const PARALLEL_MCP_SEARCH_URL = "https://search.parallel.ai/mcp";
+// Initial protocol version we advertise on `initialize`; we then echo whatever
+// the server negotiates back on every follow-up request.
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+const PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+
+const require = createRequire(import.meta.url);
+const PLUGIN_VERSION = readPluginPackageVersion({ require });
+// Identify free-tier traffic at the HTTP layer (mirrors the paid REST path);
+// without this, undici sends a generic `node` UA and OpenClaw usage is only
+// visible via the JSON-RPC `clientInfo` payload.
+const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
+
+type JsonRpcMessage = Record<string, unknown>;
+
+/**
+ * Select the first result/error matching requestId from a fully read JSON or SSE body,
+ * falling back to the last result/error when no id matches. JSON batches are flattened
+ * one level; multiline SSE data fields are joined and malformed events are skipped.
+ */
+function selectMcpEnvelope(text: string, requestId: string): JsonRpcMessage {
+  let envelope: JsonRpcMessage = {};
+  const selectMessage = (message: unknown): boolean => {
+    if (!isRecord(message) || !("result" in message || "error" in message)) {
+      return false;
+    }
+    envelope = message;
+    return message.id === requestId;
+  };
+  const selectPayload = (json: string): boolean => {
+    try {
+      const payload: unknown = JSON.parse(json);
+      return Array.isArray(payload) ? payload.some(selectMessage) : selectMessage(payload);
+    } catch {
+      return false;
+    }
+  };
+
+  const body = text.trim();
+  if (!body) {
+    return envelope;
+  }
+  if (body.startsWith("{") || body.startsWith("[")) {
+    selectPayload(body);
+    return envelope;
+  }
+
+  let dataLines: string[] = [];
+  const flush = (): boolean => {
+    if (dataLines.length === 0) {
+      return false;
+    }
+    const matched = selectPayload(dataLines.join("\n"));
+    dataLines = [];
+    return matched;
+  };
+
+  for (const raw of body.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).replace(/^ /, ""));
+    } else if (line.trim() === "" && flush()) {
+      return envelope;
+    }
+  }
+  flush();
+  return envelope;
+}
+
+/**
+ * Extract the tool result payload from a `tools/call` envelope.
+ *
+ * Prefers `structuredContent` (authoritative machine-readable form); otherwise
+ * scans text blocks for the first JSON-parseable one. Throws on a JSON-RPC
+ * error or a tool-level `isError`.
+ */
+function extractMcpToolPayload(envelope: JsonRpcMessage): Record<string, unknown> {
+  if ("error" in envelope) {
+    throw new Error(
+      `Parallel MCP error: ${truncateUtf16Safe(JSON.stringify(envelope.error), 500)}`,
+    );
+  }
+  const result = isRecord(envelope.result) ? envelope.result : {};
+  if (result.isError) {
+    throw new Error(`Parallel MCP tool error: ${truncateUtf16Safe(JSON.stringify(result), 500)}`);
+  }
+  if (isRecord(result.structuredContent)) {
+    return result.structuredContent;
+  }
+  const content = Array.isArray(result.content) ? result.content : [];
+  for (const block of content) {
+    if (isRecord(block) && block.type === "text" && typeof block.text === "string" && block.text) {
+      try {
+        const parsed: unknown = JSON.parse(block.text);
+        if (isRecord(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Try the next text block.
+      }
+    }
+  }
+  throw new Error(
+    `Parallel MCP returned no parseable content: ${truncateUtf16Safe(JSON.stringify(result), 500)}`,
+  );
+}
 
 export async function executeParallelFreeWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
@@ -23,14 +143,117 @@ export async function executeParallelFreeWebSearchProviderTool(
     endpoint: PARALLEL_MCP_SEARCH_URL,
     args,
     searchConfig,
-    signal,
-    search: ({ count, clientModel, ...request }, timeoutSeconds) =>
-      runParallelMcpSearch({
-        ...request,
-        maxResults: count,
-        modelName: clientModel,
-        timeoutSeconds,
-        signal,
-      }),
+    search: async (request, timeoutSeconds) => {
+      const postMcp = (params: {
+        body: JsonRpcMessage & { method: string };
+        sessionId?: string;
+        protocolVersion?: string;
+      }) =>
+        withTrustedWebSearchEndpoint(
+          {
+            url: PARALLEL_MCP_SEARCH_URL,
+            timeoutSeconds,
+            signal,
+            init: {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+                Accept: "application/json, text/event-stream",
+                ...(params.sessionId ? { "Mcp-Session-Id": params.sessionId } : {}),
+                ...(params.protocolVersion
+                  ? { "MCP-Protocol-Version": params.protocolVersion }
+                  : {}),
+              },
+              body: JSON.stringify(params.body),
+            },
+          },
+          // Read the body inside the callback: the trusted-endpoint wrapper ties the
+          // request's abort/timeout lifecycle to this scope (same pattern as the REST
+          // path), so the Response must be consumed here, not returned and read later.
+          async (response) => {
+            if (!response.ok) {
+              const detail = await readResponseTextLimited(
+                response,
+                PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES,
+              );
+              throw new ProviderHttpError(
+                `Parallel MCP ${params.body.method} failed (${response.status}): ${detail || response.statusText}`,
+                { status: response.status },
+              );
+            }
+            return {
+              text: await readProviderTextResponse(response, "Parallel MCP"),
+              sessionIdHeader: response.headers.get("mcp-session-id"),
+            };
+          },
+        );
+
+      // Search sessions are distinct from the server's MCP transport session.
+      const sessionId = request.sessionId?.trim() || randomUUID();
+      const searchArgs: Record<string, unknown> = {
+        // MCP requires a non-empty objective (REST treats it as optional); when the
+        // caller only supplied keyword queries, use them as the objective rather
+        // than failing the call.
+        objective: request.objective ?? request.searchQueries.join(" "),
+        search_queries: request.searchQueries,
+        session_id: sessionId,
+      };
+      if (request.clientModel) {
+        searchArgs.model_name = request.clientModel;
+      }
+
+      const initId = randomUUID();
+      const init = await postMcp({
+        body: {
+          jsonrpc: "2.0",
+          id: initId,
+          method: "initialize",
+          params: {
+            protocolVersion: MCP_PROTOCOL_VERSION,
+            capabilities: {},
+            clientInfo: { name: "openclaw-parallel", version: PLUGIN_VERSION },
+          },
+        },
+      });
+      // Only echo a server-assigned session id. Stateless Streamable HTTP servers
+      // omit Mcp-Session-Id; inventing one can make such servers reject follow-ups.
+      const mcpSessionId = init.sessionIdHeader ?? undefined;
+      const initEnvelope = selectMcpEnvelope(init.text, initId);
+      const negotiatedVersion =
+        (isRecord(initEnvelope.result) && typeof initEnvelope.result.protocolVersion === "string"
+          ? initEnvelope.result.protocolVersion
+          : undefined) ?? MCP_PROTOCOL_VERSION;
+
+      await postMcp({
+        body: { jsonrpc: "2.0", method: "notifications/initialized" },
+        sessionId: mcpSessionId,
+        protocolVersion: negotiatedVersion,
+      });
+      const callId = randomUUID();
+      const call = await postMcp({
+        body: {
+          jsonrpc: "2.0",
+          id: callId,
+          method: "tools/call",
+          params: { name: "web_search", arguments: searchArgs },
+        },
+        sessionId: mcpSessionId,
+        protocolVersion: negotiatedVersion,
+      });
+      const payload = extractMcpToolPayload(selectMcpEnvelope(call.text, callId));
+      const allResults = Array.isArray(payload.results) ? payload.results : [];
+      // The MCP serves a fixed result count, so apply the caller's count client-side
+      // to match the REST path's max_results behavior.
+      const results = allResults.slice(0, Math.max(request.count, 1));
+
+      return {
+        search_id: typeof payload.search_id === "string" ? payload.search_id : undefined,
+        session_id: sessionId,
+        results,
+        warnings: payload.warnings,
+        usage: payload.usage,
+      };
+    },
   });
 }

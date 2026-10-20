@@ -99,8 +99,11 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
     chatRunStartup: null,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
     connected: true,
@@ -111,6 +114,48 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+it("keeps a diagnostic-only internal failure out of live and reloaded retry banners", async () => {
+  const user = textMessage("user", "Publish the fix", { id: "request", seq: 1, runId: "user-run" });
+  const answer = textMessage("assistant", "The fix is published.", {
+    id: "answer",
+    seq: 2,
+    runId: "user-run",
+  });
+  const errorMessage = "No answer was returned. Ask again if you still need one.";
+  const state = createState({ chatMessages: [user, answer] });
+  receive(state, "error", { runId: "internal-run", errorMessage, suppressErrorNotice: true });
+  expect(state.chatRunError).toBeNull();
+  expect(getChatSessionProjection(state).runs["internal-run"]).toMatchObject({ status: "error" });
+  expect(getChatSessionProjection(state).runs["internal-run"]?.errorMessage).toBeUndefined();
+  expect(state.chatMessages).toEqual([user, answer]);
+  const sessionInfo = {
+    key: "main",
+    kind: "direct",
+    sessionId: "session",
+    updatedAt: 3,
+    status: "failed",
+    lastRunId: "internal-run",
+    lastRunError: errorMessage,
+    suppressErrorNotice: true,
+    hasActiveRun: false,
+  } as const;
+  const reloaded = createHistoryState(
+    vi.fn(async () => ({ messages: [user, answer], sessionInfo })),
+  );
+  await loadChatHistory(reloaded);
+  expect(reloaded.chatRunError?.summary).toBeUndefined();
+  expect(reloaded.chatMessages).toEqual([user, answer]);
+  expect(getChatSessionProjection(reloaded).runs["internal-run"]).toMatchObject({
+    status: "error",
+  });
+  expect(getChatSessionProjection(reloaded).runs["internal-run"]?.errorMessage).toBeUndefined();
+  const attached = createStateWithRunningSession({ chatRunId: "internal-run" });
+  attached.sessionsResult = { ...attached.sessionsResult, sessions: [sessionInfo] };
+  reconcileChatRunAfterSessionStatePublication(attached);
+  expect(attached.chatRunError?.summary).toBeUndefined();
+  expect(attached.chatRunId).toBeNull();
+});
 
 it.each([true, false])(
   "keeps identical injected notes separate without adopting a run (persisted first=%s)",
@@ -476,29 +521,33 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunStartup).toBeNull();
   });
 
-  it("shows startup status until the first chat delta and ignores late status", () => {
+  it("keeps preparation, model wait, and answer status monotonic through an empty replacement", () => {
     const state = createState({ chatRunId: "run-1", chatStream: "" });
-    const status: ChatEventPayload = chatEvent("status", { phase: "preparing_context" });
-
-    handleChatGatewayEvent(state, status);
+    const label = () =>
+      chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
+    receive(state, "status", { phase: "preparing_context", seq: 1 });
+    expect(label()).toBe("Preparing this turn…");
+    receive(state, "delta", {
+      runId: "run-other",
+      message: { role: "assistant", content: "Other" },
+    });
+    expect(label()).toBe("Preparing this turn…");
+    receive(state, "status", { phase: "starting_model", seq: 2 });
+    expect(label()).toBe("Waiting for a response");
+    receive(state, "status", { phase: "preparing_context", seq: 3 });
+    expect(label()).toBe("Waiting for a response");
+    receive(state, "delta", { message: { role: "assistant", content: "Hello" } });
     expect(state.chatRunStartup).toEqual({
       state: "status",
+      phase: "answer",
       runId: "run-1",
-      phase: "preparing_context",
+      seq: 2,
     });
-
-    receive(state, "delta", { runId: "run-other", deltaText: "Other reply" });
-    expect(state.chatRunStartup).toEqual({
-      state: "status",
-      runId: "run-1",
-      phase: "preparing_context",
-    });
-
-    receive(state, "delta", { deltaText: "Hello" });
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
-
-    handleChatGatewayEvent(state, status);
-    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
+    receive(state, "delta", { replace: true, message: { role: "assistant", content: "" } });
+    receive(state, "status", { phase: "preparing_context", seq: 4 });
+    expect(state.chatRunStartup).toMatchObject({ phase: "answer" });
+    expect(label()).toBeUndefined();
+    expect(state.chatRunId).toBe("run-1");
   });
 
   it.each([true])(
@@ -588,12 +637,20 @@ describe("handleChatGatewayEvent", () => {
 
   it.each([
     {
-      name: "retires saved text when a replacement tail is a silent token",
+      name: "retracts the stream when a replacement snapshot is empty",
+      previous: "Draft",
+      delta: "",
+      snapshot: "",
+      replace: true,
+      expected: "",
+    },
+    {
+      name: "preserves a prepared literal marker in a replacement tail",
       previous: "The token is ",
       delta: "",
       snapshot: "NO_REPLY",
       replace: true,
-      expected: "",
+      expected: "NO_REPLY",
     },
   ])("$name", ({ previous, delta, snapshot, replace, expected }) => {
     const state = createState({
@@ -1020,6 +1077,70 @@ describe("handleChatGatewayEvent", () => {
     verify?.(state);
   });
 
+  it.each([
+    [
+      "openai",
+      429,
+      "subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "chatgpt_business_usage_limit",
+    ],
+    ["openai", 429, "subscription_sharing_usage_limit_exceeded", "chatgpt_consumer_usage_limit"],
+    ["openai", 429, "rate_limit_exceeded", undefined],
+    ["openai", 403, "subscription_sharing_workplace_individual_usage_limit_exceeded", undefined],
+    ["openai", 403, "subscription_sharing_usage_limit_exceeded", undefined],
+    ["other", 429, "subscription_sharing_workplace_individual_usage_limit_exceeded", undefined],
+    ["other", 429, "subscription_sharing_usage_limit_exceeded", undefined],
+  ])(
+    "classifies ChatGPT sharing limits only from provider facts (%s, %s, %s)",
+    (provider, httpStatus, providerErrorCode, kind) => {
+      const state = createState({ chatRunId: "run-1" });
+      receive(state, "error", {
+        errorMessage: "Usage limit reached",
+        errorDetail: { provider, httpStatus, providerErrorCode },
+      });
+      expect(state.chatRunError?.kind).toBe(kind);
+      expect(state.chatRunError?.runId).toBe("run-1");
+    },
+  );
+
+  it.each([
+    [
+      "subscription_sharing_workplace_individual_usage_limit_exceeded",
+      "chatgpt_business_usage_limit",
+    ],
+    ["subscription_sharing_usage_limit_exceeded", "chatgpt_consumer_usage_limit"],
+  ])(
+    "adopts %s recovery after history publishes the same terminal summary",
+    (providerErrorCode, kind) => {
+      const summary = "Usage limit reached";
+      const state = createState({
+        chatRunId: "run-1",
+        chatRunError: { runId: "run-1", summary },
+      });
+      const scope = { sessionKey: state.sessionKey };
+      publishChatSessionProjection(
+        state,
+        reduceSessionProjection(getChatSessionProjection(state, scope), {
+          type: "runTerminal",
+          runId: "run-1",
+          status: "error",
+          errorMessage: summary,
+          scope,
+        }),
+      );
+      receive(state, "error", {
+        errorMessage: summary,
+        errorDetail: {
+          provider: "openai",
+          httpStatus: 429,
+          providerErrorCode,
+        },
+      });
+      expect(state.chatRunError?.kind).toBe(kind);
+      expect(state.chatRunError?.runId).toBe("run-1");
+    },
+  );
+
   it("adds bounded OAuth facts to live errors without changing the summary", () => {
     const summary =
       "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
@@ -1151,6 +1272,52 @@ describe("handleChatGatewayEvent", () => {
 });
 
 describe("authoritative terminal history identity", () => {
+  it.each([false, true])(
+    "keeps the live pairing QR through history refreshes (history first=%s)",
+    async (historyFirst) => {
+      const text =
+        "Scan this QR code with the OpenClaw iOS app:\n\n- Gateway: wss://pair.example.invalid\n- Auth: token\n- Security: single-use bootstrap token";
+      const saved = textMessage("assistant", text, { id: "pair-reply", seq: 2, runId: "run-1" });
+      const qr = {
+        type: "openclaw_pairing_qr",
+        image_url: "data:image/png;base64,c3ludGhldGljLXFy",
+        alt: "OpenClaw pairing QR code",
+        expiresAtMs: Date.now() + 600_000,
+        sensitive: true,
+      };
+      const live = { ...saved, content: [{ type: "text", text }, qr] };
+      const { state, request } = createResolvedHistoryState(
+        { messages: [saved], sessionId: "pair-session" },
+        { chatRunId: "run-1", currentSessionId: "pair-session" },
+      );
+      if (historyFirst) {
+        rememberAuthoritativeTerminal({
+          host: state,
+          event: { key: "main", runId: "run-1", hasActiveRun: false },
+          payload: { message: saved },
+          matchesChat: true,
+          runIdBeforeApply: "run-1",
+        });
+        await loadChatHistory(state);
+        expect(authoritativeHistoryAppliedForRun(state, "run-1")).toBe(true);
+      }
+      receive(state, "final", { message: live });
+      expect(state.chatMessages).toEqual([live]);
+      for (let refresh = 0; refresh < 2; refresh += 1) {
+        await loadChatHistory(state);
+        expect(state.chatMessages).toEqual([live]);
+      }
+      const revised = { ...saved, content: [{ type: "text", text: "Updated pairing details" }] };
+      applySessionMessagePayload(state, { message: revised }, false, { kind: "history-delta" });
+      expect(state.chatMessages).toEqual([{ ...revised, content: [...revised.content, qr] }]);
+      request.mockResolvedValue({ messages: [revised], sessionId: "pair-session" });
+      await loadChatHistory(state);
+      request.mockResolvedValue({ messages: [], sessionId: "pair-session" });
+      await loadChatHistory(state);
+      expect(state.chatMessages).toEqual([]);
+    },
+  );
+
   it("does not retire a native terminal for user or imported identities with a colliding id", () => {
     const collisions = [
       textMessage("user", "Different native user", { id: "native-terminal" }),
@@ -1202,13 +1369,18 @@ describe("authoritative terminal history identity", () => {
 });
 
 describe("loadChatHistory filtering", () => {
-  it("filters silent and synthetic history rows while preserving user content and media", async () => {
+  it("trusts prepared history text while filtering synthetic rows and heartbeat acknowledgments", async () => {
     const repair =
       "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
     const visible = [
       textMessage("user", "NO_REPLY"),
       textMessage("user", repair),
       textMessage("assistant", "no_reply"),
+      textMessage("assistant", "NO_REPLY"),
+      { role: "assistant", text: "  NO_REPLY  " },
+      textMessage("assistant", "NO_REPLY."),
+      textMessage("assistant", '{"action":"NO_REPLY"}'),
+      textMessage("assistant", "I will not reply: NO_REPLY"),
       textMessage("assistant", "ANNOUNCE_SKIP"),
       textMessage("assistant", "REPLY_SKIP"),
       textMessage("assistant", "Real answer"),
@@ -1222,8 +1394,6 @@ describe("loadChatHistory filtering", () => {
       },
     ];
     const hidden = [
-      textMessage("assistant", "NO_REPLY"),
-      { role: "assistant", text: "  NO_REPLY  " },
       textMessage("assistant", "HEARTBEAT_OK"),
       textMessage(
         "user",
@@ -1245,7 +1415,6 @@ describe("loadChatHistory filtering", () => {
     });
     await loadChatHistory(state);
     expect(state.chatMessages).toEqual(visible);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
@@ -1276,7 +1445,13 @@ describe("loadChatHistory filtering", () => {
           type: "hello-ok",
           protocol: 4,
           auth: { role: "operator", scopes: [] },
-          snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "ops",
+              mainKey: "main",
+              mainSessionKey: "agent:ops:main",
+            },
+          },
         },
       },
     );
@@ -1623,14 +1798,12 @@ describe("loadChatHistory retry handling", () => {
     const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
       chatMessages: [textMessage("assistant", "old")],
-      chatThinkingLevel: "high",
       chatVerboseLevel: "full",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toStrictEqual([]);
-    expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatVerboseLevel).toBeNull();
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
@@ -1646,10 +1819,14 @@ describe("loadChatHistory retry handling", () => {
   it("refreshes history for a new pending source and coalesces unchanged receipt queries", async () => {
     const staleHistory = createDeferred<HistoryResult>();
     const currentHistory = createDeferred<HistoryResult>();
+    const currentHistoryStarted = createDeferred();
     const request = vi
       .fn()
       .mockImplementationOnce(() => staleHistory.promise)
-      .mockImplementationOnce(() => currentHistory.promise);
+      .mockImplementationOnce(() => {
+        currentHistoryStarted.resolve();
+        return currentHistory.promise;
+      });
     const state = createHistoryState(request);
 
     const firstLoad = loadChatHistory(state);
@@ -1665,19 +1842,20 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
     ]);
     expect(state.chatMessages).toEqual([pending]);
 
     staleHistory.resolve(createAssistantHistory("stale history"));
-    await firstLoad;
+    await currentHistoryStarted.promise;
     expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
-      ["chat.history", { sessionKey: "main", ...historyBudget }],
+      ["chat.history", { sessionKey: "main", ...historyBudget, knownState: {} }],
       [
         "chat.history",
         {
           sessionKey: "main",
           ...historyBudget,
+          knownState: {},
           inputRunIds: ["same-session-pending-run"],
         },
       ],
@@ -1690,7 +1868,7 @@ describe("loadChatHistory retry handling", () => {
       seq: 1,
     });
     currentHistory.resolve({ messages: [persisted] });
-    await Promise.all([secondLoad, thirdLoad]);
+    await Promise.all([firstLoad, secondLoad, thirdLoad]);
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([persisted, pending]);
@@ -1723,14 +1901,12 @@ describe("loadChatHistory retry handling", () => {
     await staleLoad;
 
     expect(state.chatMessages).toEqual([visibleMessage]);
-    expect(state.chatThinkingLevel).toBeNull();
     expect(state.chatLoading).toBe(true);
 
     freshRequest.resolve(createAssistantHistory("fresh history", { thinkingLevel: "low" }));
     await freshLoad;
 
     expect(state.chatMessages).toEqual([textMessage("assistant", "fresh history")]);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -1779,7 +1955,6 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatLoading).toBe(false);
     expect(state.chatMessages).toEqual([textMessage("assistant", "visible old")]);
-    expect(state.chatThinkingLevel).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

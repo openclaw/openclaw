@@ -658,8 +658,8 @@ enum CLIInstaller {
                 String(localized: "Gateway update failed.")
             }
             let details = [
+                failedStep.map { "\($0.name): \($0.stderrTail?.nonEmpty ?? "exit \($0.exitCode ?? -1)")" },
                 reason,
-                failedStep.map { "\($0.name): \($0.stderrTail ?? "exit \($0.exitCode ?? -1)")" },
                 response.stderr,
                 response.errorMessage,
                 response.stdout,

@@ -129,7 +129,7 @@ describe("Matrix reaction ownership", () => {
       await targetLookup.promise;
       builder.rollbackPluginGlobalSideEffects(record.id, record);
       target.resolve(targetEvent);
-      await reaction;
+      await expect(reaction).rejects.toThrow('Plugin "matrix" runtime is no longer active');
 
       expect(peekSystemEventEntries("agent:ops:main")).toEqual([]);
       expect(runtime.error).toHaveBeenCalledWith(
@@ -137,7 +137,7 @@ describe("Matrix reaction ownership", () => {
       );
     } finally {
       target.resolve(targetEvent);
-      await reaction;
+      await reaction.catch(() => undefined);
       await disposePluginRegistryInstances(builder.registry);
     }
   });

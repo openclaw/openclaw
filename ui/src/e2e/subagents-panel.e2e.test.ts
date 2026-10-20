@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -12,9 +9,14 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  expectAbsent,
+  expectNoRequests,
+  expectRequestCount,
+} from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Subagents panel" });
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const previewModel = {
   agentModel: "openai/gpt-4.1",
   models: [{ id: "gpt-4.1", name: "Preview model", provider: "openai" }],
@@ -191,17 +193,7 @@ suite.define(() => {
           { exact: true },
         );
         await copy.waitFor();
-        if (capture) {
-          const frame = await takeControlUiScreenshotFrame(page, panel, [copy], {
-            animations: "disabled",
-            elements: [panel],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, "subagent-width.png"),
-            frame.elements[0]!.png,
-          );
-          await writeFile(path.join(suite.artifactDir, "subagent-width-context.png"), frame.png);
-        }
+
         const geometry = await copy.evaluate((element) => {
           const thread = element.closest<HTMLElement>(".chat-thread")!;
           const column = element.closest(".chat-group-messages")!;
@@ -246,15 +238,7 @@ suite.define(() => {
       const panel = page.locator("openclaw-chat-subagents-panel");
       const waitingRow = panel.locator(`[data-session-key="${waiting.key}"]`);
       await waitingRow.waitFor();
-      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-        const frame = await takeControlUiScreenshotFrame(page, panel, [waitingRow], {
-          animations: "disabled",
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "subagent-waiting-on-descendants.png"),
-          frame.png,
-        );
-      }
+
       expect(await panel.locator(".chat-subagents__running").getByText(waiting.label).count()).toBe(
         1,
       );
@@ -282,10 +266,19 @@ suite.define(() => {
       {
         viewport,
         colorScheme: "dark",
-        ...(capture ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
       },
       async ({ page }) => {
         const { parent, child, other, finished, swarm, persistent, queued, messages } = scenario();
+        const keyboardActivity = {
+          itemId: "tool:keyboard-command",
+          toolCallId: "keyboard-command",
+          kind: "tool",
+          name: "exec",
+          title: "Exec Retry failed benchmark targets",
+          meta: "Retry failed benchmark targets",
+          phase: "start",
+          status: "running",
+        };
         const gateway = await installMockGateway(page, {
           ...previewModel,
           sessionKey: parent.key,
@@ -313,18 +306,7 @@ suite.define(() => {
                             },
                           },
                         ],
-                        activity: [
-                          {
-                            itemId: "tool:keyboard-command",
-                            toolCallId: "keyboard-command",
-                            kind: "tool",
-                            name: "exec",
-                            title: "Exec Retry failed benchmark targets",
-                            meta: "Retry failed benchmark targets",
-                            phase: "start",
-                            status: "running",
-                          },
-                        ],
+                        activity: [keyboardActivity],
                       },
                     ],
                     hasMore: true,
@@ -386,9 +368,7 @@ suite.define(() => {
         await draft.fill("Keep this parent draft");
         const recovery = parentPane.locator(".chat-outbox-recovery-row");
         await recovery.getByText(recoveryDraft, { exact: true }).waitFor();
-        if (capture) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "parent-before-panel.png") });
-        }
+
         expect(
           await parentPane
             .locator(".chat-pane__header")
@@ -444,16 +424,7 @@ suite.define(() => {
           seq: 1,
           ts: Date.now(),
           stream: "item",
-          data: {
-            itemId: "tool:keyboard-command",
-            toolCallId: "keyboard-command",
-            kind: "tool",
-            name: "exec",
-            title: "Exec Retry failed benchmark targets",
-            meta: "Retry failed benchmark targets",
-            phase: "update",
-            status: "running",
-          },
+          data: { ...keyboardActivity, phase: "update" },
         });
         const otherRow = panel.locator(`[data-session-key="${other.key}"]`);
         await otherRow.locator(".chat-subagents__activity").waitFor();
@@ -464,12 +435,6 @@ suite.define(() => {
           .poll(() => otherRow.locator(".chat-subagents__calls").textContent())
           .toBe("1+ calls");
         expect(await row.locator("svg").count()).toBe(1);
-        if (capture) {
-          const frame = await takeControlUiScreenshotFrame(page, panel, [row, otherRow], {
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, "subagent-list.png"), frame.png);
-        }
 
         await panel.getByRole("button", { name: swarm.label, exact: true }).click();
         await panel.getByText("Comparing concurrent task results.", { exact: true }).waitFor();
@@ -479,19 +444,15 @@ suite.define(() => {
         await row.getByRole("button", { name: child.label, exact: true }).click();
         const detail = panel.locator(".chat-subagent-detail");
         await detail.getByText("Inspecting the notice component.", { exact: true }).waitFor();
-        expect(await detail.locator("textarea").count()).toBe(0);
-        expect(await detail.locator(".agent-chat__disabled-banner").count()).toBe(0);
-        expect(
-          await detail.locator(".chat-subagent-detail__header openclaw-elapsed-time").count(),
-        ).toBe(0);
+        await expectAbsent(detail, [
+          "textarea",
+          ".agent-chat__disabled-banner",
+          ".chat-subagent-detail__header openclaw-elapsed-time",
+        ]);
         expect(await detail.getByRole("button", { name: "Open parent session" }).count()).toBe(0);
         expect(await draft.inputValue()).toBe("Keep this parent draft");
         expect(await page.locator("html").getAttribute("data-subagent-claimed-input")).toBeNull();
-        if (capture) {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "subagent-panel-detail.png"),
-          });
-        }
+
         expect(await detail.locator("openclaw-chat-outbox-recovery").count()).toBe(0);
         expect(await recovery.count()).toBe(1);
         await recovery.getByRole("button", { name: "Restore", exact: true }).waitFor();
@@ -517,14 +478,13 @@ suite.define(() => {
         await detail.getByRole("button", { name: "Back to Subagents", exact: true }).click();
         await row.waitFor();
         await otherRow.getByRole("button", { name: `Stop ${other.label}`, exact: true }).click();
-        await expect.poll(async () => (await gateway.getRequests("sessions.abort")).length).toBe(1);
+        await expectRequestCount(gateway, "sessions.abort", 1);
         expect((await gateway.getRequests("sessions.abort"))[0]?.params).toMatchObject({
           key: other.key,
           agentId: "main",
           runId: "keyboard-run",
         });
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        await expectNoRequests(gateway, ["chat.send", "chat.abort"]);
         expect(await draft.inputValue()).toBe("Keep this parent draft");
         await page.reload();
         await parentPane.locator("openclaw-chat-subagents-panel").waitFor();
@@ -668,13 +628,11 @@ suite.define(() => {
           const notice = pane.locator(".agent-chat__disabled-banner--replacement");
           await notice.getByText("View-only subagent", { exact: true }).waitFor();
           await notice.getByText(`Continue in ${parent.label}.`, { exact: true }).waitFor();
-          if (capture) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `subagent-standalone-${width}.png`),
-            });
-          }
-          expect(await pane.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
-          expect(await pane.locator("openclaw-chat-outbox-recovery").count()).toBe(0);
+
+          await expectAbsent(pane, [
+            ".agent-chat__composer-combobox textarea",
+            "openclaw-chat-outbox-recovery",
+          ]);
           await pane.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
           expect(
             await notice.getByRole("button", { name: "Stop generating", exact: true }).count(),

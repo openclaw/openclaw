@@ -234,11 +234,10 @@ export function startFaceTimeAudioPump(params: {
   onInputAudio: (audio: Buffer) => void;
   onError?: (error: Error) => boolean | void | Promise<boolean | void>;
   onSuppressionLost?: (error: Error) => void | Promise<void>;
-  onPlaybackDrained?: (event: { generation: number; playedFrames: number }) => void;
+  onPlaybackDrained?: () => void;
 }): FaceTimeAudioPump {
   const childEnv = sanitizedAudioChildEnv();
   const playbackClock = new PlaybackClock();
-  let playbackGeneration = 1;
   let drainTimer: NodeJS.Timeout | undefined;
   let outputProcess: ChildProcess;
   const captureProcess = spawnAudioProcess(
@@ -308,7 +307,6 @@ export function startFaceTimeAudioPump(params: {
     }
     const previous = outputProcess;
     outputProcess = spawnOutput();
-    playbackGeneration += 1;
     cancelDrainTimer();
     playbackClock.reset();
     void terminateProcess(previous, "SIGKILL");
@@ -422,9 +420,8 @@ export function startFaceTimeAudioPump(params: {
         return;
       }
       cancelDrainTimer();
-      const generation = playbackGeneration;
       const notifyWhenDrained = () => {
-        if (stopped || mediaSuspended || generation !== playbackGeneration) {
+        if (stopped || mediaSuspended) {
           return;
         }
         const delayMs = Math.ceil(playbackClock.millisecondsUntilDrained());
@@ -435,10 +432,7 @@ export function startFaceTimeAudioPump(params: {
         }
         drainTimer = undefined;
         playbackClock.retireItems();
-        params.onPlaybackDrained?.({
-          generation,
-          playedFrames: Math.floor(playbackClock.playedFrames()),
-        });
+        params.onPlaybackDrained?.();
       };
       notifyWhenDrained();
     },

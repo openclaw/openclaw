@@ -1,5 +1,9 @@
 // Openrouter tests cover media understanding provider plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { describe, expect, it, vi } from "vitest";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
@@ -7,21 +11,9 @@ if (!transcribeOpenRouterAudio) {
   throw new Error("expected OpenRouter audio transcription provider");
 }
 
-const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = vi.hoisted(() => ({
-  postJsonRequestMock: vi.fn(),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, resolveProviderHttpRequestConfigMock } = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
+installProviderHttpMockCleanup();
 
 function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
   const [request] = postJsonRequestMock.mock.calls[0] ?? [];
@@ -32,11 +24,6 @@ function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
 }
 
 describe("openrouter media understanding provider", () => {
-  afterEach(() => {
-    postJsonRequestMock.mockReset();
-    resolveProviderHttpRequestConfigMock.mockClear();
-  });
-
   it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({

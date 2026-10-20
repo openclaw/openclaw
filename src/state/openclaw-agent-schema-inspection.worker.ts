@@ -1,11 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import {
+  withDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
-import { adoptSqliteSchemaContracts } from "../infra/sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
+import { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
+import { readAgentDatabaseSchemaVersion } from "./openclaw-agent-db-schema-read.js";
 import {
   serializeAgentSchemaInspectionError,
   type AgentSchemaInspectionResponse,
@@ -17,7 +25,6 @@ import {
 } from "./openclaw-agent-schema-inspection.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
-  captureStateSchemaInspectionContracts,
   inspectStateDatabaseSchema,
   type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
@@ -38,6 +45,7 @@ process.on(
           requestId: number;
           input: AgentSchemaInspectionInput;
           snapshot?: AgentSchemaInspectionSnapshot;
+          databaseEngineSelection?: DatabaseEngineSelection;
         }
       | {
           type: "inspect-state";
@@ -54,7 +62,6 @@ process.on(
     try {
       if (request.type === "inspect-state") {
         const { input, snapshot } = request;
-        adoptSqliteSchemaContracts(input.schemaContracts ?? []);
         const inspect = (database: DatabaseSync) => inspectStateDatabaseSchema(database, input);
         let inspection;
         if (snapshot) {
@@ -76,10 +83,6 @@ process.on(
           requestId,
           ok: true,
           inspection: null,
-          schemaContracts: captureStateSchemaInspectionContracts().filter(
-            (contract) =>
-              !input.schemaContracts?.some((prior) => prior.schemaSql === contract.schemaSql),
-          ),
           stateInspection: inspection
             ? {
                 ...inspection,
@@ -92,6 +95,30 @@ process.on(
         return;
       }
       const { input, snapshot } = request;
+      if (input.env) {
+        input.env = cloneEnvWithPlatformSemantics(input.env);
+      }
+      if (request.databaseEngineSelection) {
+        const agentId = input.agentId;
+        if (!agentId) {
+          throw new Error("PostgreSQL schema inspection requires an established agent owner");
+        }
+        // Inspection establishes runtime admission, so it cannot borrow a runtime writer.
+        const inspected = withDatabaseEngineSelection(request.databaseEngineSelection, () =>
+          withEngineStoreAdmission(() =>
+            withFreshOpenClawAgentDatabaseReadOnly(
+              ({ db }) => ({
+                version: readAgentDatabaseSchemaVersion(db),
+                integrityGateOutcome: "healthy" as const,
+                agentSchemaMeta: readExistingAgentSchemaMeta(db),
+              }),
+              { agentId, path: input.pathname, env: input.env },
+            ),
+          ),
+        );
+        send({ requestId, ok: true, inspection: inspected.found ? inspected.value : null });
+        return;
+      }
       const readVerification = () =>
         !snapshot && input.requireStartupMigrationReadiness
           ? readSqliteDatabaseIntegrityVerification(input.pathname)

@@ -185,7 +185,7 @@ export function splitArgs(value: string | undefined): string[] {
   return args;
 }
 
-export function parseBindArgs(args: string[]): ParsedBindArgs {
+export function parseBindArgs(args: readonly string[]): ParsedBindArgs {
   const { parsed, values } = parseConnectionArgs(args, "bind");
   return {
     ...parsed,
@@ -195,7 +195,7 @@ export function parseBindArgs(args: string[]): ParsedBindArgs {
   };
 }
 
-export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
+export function parseCodexCliSessionsArgs(args: readonly string[]): ParsedCodexCliSessionsArgs {
   const { parsed, values, filter } = parseConnectionArgs(args, "sessions");
   return {
     ...parsed,
@@ -204,7 +204,7 @@ export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSession
   };
 }
 
-export function parseResumeArgs(args: string[]): ParsedResumeArgs {
+export function parseResumeArgs(args: readonly string[]): ParsedResumeArgs {
   const { parsed, values } = parseConnectionArgs(args, "resume");
   return {
     ...parsed,
@@ -213,7 +213,7 @@ export function parseResumeArgs(args: string[]): ParsedResumeArgs {
   };
 }
 
-function parseConnectionArgs(args: string[], kind: keyof typeof CONNECTION_OPTIONS) {
+function parseConnectionArgs(args: readonly string[], kind: keyof typeof CONNECTION_OPTIONS) {
   const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> & { limit?: number } = {};
   const values = new Map<string, string>();
   const filter: string[] = [];
@@ -263,7 +263,7 @@ function parseConnectionArgs(args: string[], kind: keyof typeof CONNECTION_OPTIO
   return { parsed, values, filter };
 }
 
-export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
+export function parseComputerUseArgs(args: readonly string[]): ParsedComputerUseArgs {
   const parsed: ParsedComputerUseArgs = {
     action: "status",
     overrides: {},
@@ -331,7 +331,7 @@ export function formatComputerUsePersistentIdentityMigration(
   ].join(" ");
 }
 
-function readRequiredOptionValue(args: string[], index: number): string | undefined {
+function readRequiredOptionValue(args: readonly string[], index: number): string | undefined {
   const value = args[index + 1];
   const normalized = value?.trim();
   if (!normalized || normalized.startsWith("-")) {

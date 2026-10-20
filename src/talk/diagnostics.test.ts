@@ -5,7 +5,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { recordTalkDiagnosticEvent } from "./diagnostics.js";
+import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
 
 describe("talk diagnostics", () => {
@@ -39,7 +39,7 @@ describe("talk diagnostics", () => {
       },
     });
 
-    recordTalkDiagnosticEvent(talkEvent);
+    recordTalkObservabilityEvent(talkEvent);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

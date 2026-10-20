@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   acquireStateDatabaseSchemaLease,
   type StateDatabaseSchemaLease,
@@ -22,8 +22,6 @@ import { installSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import {
   captureSqliteDatabaseAdmissions,
   createSqliteDatabaseAdmissionCursor,
-  installSqliteDatabaseAdmissions,
-  type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { prepareSqliteWorkerActorContext } from "./sqlite-worker-broker-admission.js";
@@ -37,6 +35,7 @@ import {
   type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import {
+  bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
 } from "./sqlite-worker-operation-admission.js";
@@ -49,8 +48,6 @@ import {
   type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
-
-const databaseAdmissionCursors = new WeakMap<Slot, SqliteDatabaseAdmissionCursor>();
 
 export async function dispatchSqliteWorkerJob(
   slot: Slot,
@@ -75,7 +72,7 @@ export async function dispatchSqliteWorkerJob(
   try {
     job.signal?.throwIfAborted();
     assertCurrentJob();
-    prepareSqliteWorkerActorContext(actor, job);
+    const deliveredStateContext = prepareSqliteWorkerActorContext(actor, job);
     const stateAccess = actor?.stateAccess;
     const databasePath = stateAccess?.canonicalPath;
     // Retirement must drain even after ordinary database access is revoked.
@@ -85,6 +82,7 @@ export async function dispatchSqliteWorkerJob(
         assertCurrentJob();
         stateAccess.assertAccessAllowed({
           maintenanceScope: job.maintenanceScope,
+          schemaLease: job.cleanupAccess,
         });
       };
       const isPending = (error: unknown) =>
@@ -106,18 +104,17 @@ export async function dispatchSqliteWorkerJob(
       }
     }
     job.request.operationAdmission = prepareSqliteWorkerOperationAdmission(
+      slot,
       job,
       actor,
       databasePath,
       assertDispatchable,
       assertCurrentJob,
     );
-    let admissionCursor = databaseAdmissionCursors.get(slot);
-    if (!admissionCursor) {
-      admissionCursor = createSqliteDatabaseAdmissionCursor();
-      databaseAdmissionCursors.set(slot, admissionCursor);
+    const databaseAdmissions = captureSqliteDatabaseAdmissions(slot.databaseAdmissionCursor);
+    if (databaseAdmissions.length > 0) {
+      job.request.databaseAdmissions = databaseAdmissions;
     }
-    job.request.databaseAdmissions = captureSqliteDatabaseAdmissions(admissionCursor);
     job.request.timing = job.observation.timing;
     job.request.requestCustody = job.custody.descriptor;
     const request = prepareSqliteWorkerRequest(job);
@@ -134,15 +131,21 @@ export async function dispatchSqliteWorkerJob(
       ...("input" in request ? [request.input.buffer] : []),
       ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
     ]);
+    if (actor && deliveredStateContext) {
+      actor.deliveredStateContext = deliveredStateContext;
+    }
     if (request.timing) {
       request.timing.postFinished = performance.now();
     }
   } catch (error) {
+    // A refused dispatch may have captured a publication without delivering it.
+    slot.databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
     onRejected(error, job.custody.postAttempted);
   }
 }
 
 function prepareSqliteWorkerOperationAdmission(
+  slot: Slot,
   job: Job,
   actor: Actor | undefined,
   databasePath: string | undefined,
@@ -166,6 +169,11 @@ function prepareSqliteWorkerOperationAdmission(
         nativeLocations: databasePath ? [databasePath] : [],
       };
   try {
+    bindSqliteWorkerDatabaseAdmissionCursor(
+      retained.admission,
+      slot.databaseAdmissionCursor,
+      () => (slot.databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor()),
+    );
     if (databasePath) {
       const assertCreate = (location: string) => {
         const creationPaths = new Set<string>();
@@ -201,7 +209,7 @@ function prepareSqliteWorkerOperationAdmission(
         job.maintenanceScope?.assertAdmission();
         actor?.stateAccess.assertReadAllowed({
           maintenanceScope: job.maintenanceScope,
-          schemaLease,
+          schemaLease: schemaLease ?? job.cleanupAccess,
         });
       };
       retained.admission.bindDatabaseAuthority({
@@ -248,6 +256,7 @@ function prepareSqliteWorkerOperationAdmission(
     ),
   };
   job.request.executionAuthority = readSqliteWorkerExecutionAuthority(retained.admission);
+  job.request.operationAttachment = retained.admission.attachment;
   return retained.admission.port;
 }
 
@@ -366,6 +375,9 @@ function decodeSqliteWorkerReplyError(
   if (error.name === "SqliteWorkerAdmissionTimeoutError" && error.code === "admission-timeout") {
     return new SqliteWorkerAdmissionTimeoutError();
   }
+  if (error.name === "SqliteWorkerError" && error.code === "outcome-unknown") {
+    return new SqliteWorkerError(error.message, "outcome-unknown");
+  }
   const failure = Object.assign(new Error(error.message), {
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),
@@ -420,9 +432,6 @@ export function receiveSqliteWorkerReply(
   if (job.observation.timing && reply.timing) {
     Object.assign(job.observation.timing, reply.timing, { replyReceived: performance.now() });
   }
-  if (reply.databaseAdmissions) {
-    installSqliteDatabaseAdmissions(reply.databaseAdmissions);
-  }
   if (!reply.ok) {
     if (reply.cleanupFailure && job.custody.dispatched && !reply.retire) {
       const admission = job.operationAdmission?.admission;
@@ -464,12 +473,12 @@ export function receiveSqliteWorkerReply(
       const refusedOpen =
         job.request.type === "open" && reply.openOutcome === "refused-before-agent-open";
       const failure =
-        refusedOpen || (job.request.type === "open" && reply.admissionRefused)
+        refusedOpen || reply.admissionRefused
           ? toErrorObject(job.operationAdmission?.admission.failure ?? error, error.message)
           : error;
       owner.fail(
         failure,
-        job.request.type !== "execute" ? failure : undefined,
+        job.request.type !== "execute" || reply.admissionRefused ? failure : undefined,
         refusedOpen ? "refused-before-agent-open" : undefined,
       );
       return;
@@ -568,6 +577,7 @@ export function failSqliteWorkerSlot(
   const error = toErrorObject(reason, "SQLite worker failed");
   slot.custody.retire();
   slot.failed = new SqliteWorkerError(error.message, "unavailable");
+  slot.failed.cause = error;
   for (const actor of slot.actors) {
     if (!actor.backendClosed) {
       notifyListeners(actor.nativeLostObservers ?? [], slot.failed);

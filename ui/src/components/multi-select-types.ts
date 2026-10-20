@@ -1,4 +1,4 @@
-import type { ModelPickerOption } from "./model-picker.ts";
+import type { ModelPickerOption } from "./model-picker-options.ts";
 
 export type MultiSelectOption = ModelPickerOption;
 

@@ -26,7 +26,7 @@ function factsFor(identity: string): Facts {
 
 sandboxRegistryPublication.subscribeFacts((change) => {
   if ("kind" in change) {
-    if (change.kind === "unknown" || (change.kind === "settled" && change.outcome === "unknown")) {
+    if (change.kind === "unknown") {
       const facts = databases.get(String(change.identity));
       if (facts) {
         facts.revision++;

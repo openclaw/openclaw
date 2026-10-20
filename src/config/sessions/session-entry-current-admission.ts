@@ -32,6 +32,7 @@ function decodeSessionEntryCurrentFacts(
     return {
       ...(deviceFolder ? { deviceFolder } : {}),
       sessionId: value.sessionId,
+      createdVia: value.createdVia,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
@@ -59,6 +60,8 @@ function decodeSessionEntryCurrentFacts(
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
     activeWriterRunId: value.activeWriterRunId,
+    skillLibrarySelections: value.skillLibrarySelections,
+    executionPolicy: value.executionPolicy,
     ...(recovery
       ? {
           subagentRecovery: {

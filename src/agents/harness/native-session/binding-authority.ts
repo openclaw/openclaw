@@ -1,4 +1,3 @@
-import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   captureNativeSessionEntryCurrentRead,
@@ -31,7 +30,9 @@ import {
 } from "../../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { ReplyToolAuthorityPreparation } from "../../../sessions/session-controller.contracts.js";
 import {
   capturePreparedToolAuthorityReads,
   type PreparedToolAuthorityRead,
@@ -62,6 +63,47 @@ type CapturedNativePolicy = {
   reads: PreparedToolAuthorityRead[];
   assertCompatibility?: () => void;
 };
+
+async function captureNativePolicies(
+  preparations: readonly NativePreparedPolicy[],
+  assertCurrent?: () => void,
+): Promise<CapturedNativePolicy[]> {
+  const policies: CapturedNativePolicy[] = [];
+  for (const preparation of preparations) {
+    assertCurrent?.();
+    try {
+      policies.push({ preparation, ...(await capturePreparedToolAuthorityReads(preparation)) });
+    } catch (error) {
+      if (preparation.onRefused?.(error) !== "discarded") {
+        throw error;
+      }
+    }
+  }
+  return policies;
+}
+
+function assertLegacyNativePolicies(policies: readonly CapturedNativePolicy[]): void {
+  const survivors: CapturedNativePolicy[] = [];
+  for (const policy of policies) {
+    try {
+      policy.preparation.assertCurrent();
+      survivors.push(policy);
+    } catch (error) {
+      if (policy.preparation.onRefused?.(error) !== "discarded") {
+        throw error;
+      }
+    }
+  }
+  // A late compatibility refusal rejects the whole undispatched batch.
+  for (const policy of survivors) {
+    assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
+  }
+  // Refusal callbacks can revoke earlier survivors before the effect.
+  for (const policy of survivors) {
+    policy.preparation.assertCurrent();
+  }
+}
+
 export type NativeSessionBindingAuthority = {
   readonly lineage: readonly NativeSessionBindingLineage[];
   /** Prepared authorities include lineage; legacy authorities check it through withCurrent. */
@@ -125,36 +167,11 @@ export function createPreparedNativeSessionBindingAuthority(params: {
     },
     async withPreparedCurrent(consume, preparations) {
       assertCurrent();
-      const policies: CapturedNativePolicy[] = [];
-      for (const preparation of preparations) {
-        try {
-          policies.push({ preparation, ...(await capturePreparedToolAuthorityReads(preparation)) });
-        } catch (error) {
-          if (preparation.onRefused?.(error) !== "discarded") {
-            throw error;
-          }
-        }
-      }
+      const policies = await captureNativePolicies(preparations);
       if (policies.some((policy) => policy.assertCompatibility)) {
         // Shipped policy callbacks can read SQLite and cannot run inside a worker grant.
         return withSessionEntriesFromStoresInWorker([], () => {
-          const survivors: CapturedNativePolicy[] = [];
-          for (const policy of policies) {
-            try {
-              policy.preparation.assertCurrent();
-              survivors.push(policy);
-            } catch (error) {
-              if (policy.preparation.onRefused?.(error) !== "discarded") {
-                throw error;
-              }
-            }
-          }
-          for (const policy of survivors) {
-            assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
-          }
-          for (const policy of survivors) {
-            policy.preparation.assertCurrent();
-          }
+          assertLegacyNativePolicies(policies);
           assertLegacyCurrent();
           return consume();
         });
@@ -280,8 +297,20 @@ export function readNativeSessionBindingEntries<T>(
   );
 }
 
-/** @deprecated Retain prepared lineage or use createNativeSessionBindingScope. */
+/** @deprecated Use createPreparedNativeSessionBindingAuthority with retained lineage or createNativeSessionBindingScope; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
 export function createNativeSessionBindingAuthority(
+  lineage: readonly NativeSessionBindingLineage[],
+  assertCurrent: () => void,
+): NativeSessionBindingAuthority {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "createNativeSessionBindingAuthority",
+    replacement: "createPreparedNativeSessionBindingAuthority or createNativeSessionBindingScope",
+  });
+  return createNativeSessionBindingAuthorityInternal(lineage, assertCurrent);
+}
+
+export function createNativeSessionBindingAuthorityInternal(
   lineage: readonly NativeSessionBindingLineage[],
   assertCurrent: () => void,
 ): NativeSessionBindingAuthority {
@@ -356,20 +385,7 @@ export function createNativeSessionBindingAuthority(
           }
         };
       });
-      const policies: CapturedNativePolicy[] = [];
-      for (const preparation of preparations) {
-        assertCurrent();
-        try {
-          policies.push({
-            preparation,
-            ...(await capturePreparedToolAuthorityReads(preparation)),
-          });
-        } catch (error) {
-          if (preparation.onRefused?.(error) !== "discarded") {
-            throw error;
-          }
-        }
-      }
+      const policies = await captureNativePolicies(preparations, assertCurrent);
       for (const check of sources) {
         check();
       }
@@ -377,24 +393,7 @@ export function createNativeSessionBindingAuthority(
         // Released synchronous policies may read this same database. Keep their
         // complete final check outside worker grants, with no await before the effect.
         return withSessionEntriesFromStoresInWorker([], () => {
-          const survivors: CapturedNativePolicy[] = [];
-          for (const policy of policies) {
-            try {
-              policy.preparation.assertCurrent();
-              survivors.push(policy);
-            } catch (error) {
-              if (policy.preparation.onRefused?.(error) !== "discarded") {
-                throw error;
-              }
-            }
-          }
-          // A late compatibility refusal rejects the whole undispatched batch.
-          for (const policy of survivors) {
-            assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
-          }
-          for (const policy of survivors) {
-            policy.preparation.assertCurrent();
-          }
+          assertLegacyNativePolicies(policies);
           for (const check of sources) {
             check();
           }
@@ -541,12 +540,23 @@ export function combinePreparedNativeSessionBindingAuthority(
   });
 }
 
-/** @deprecated Use combinePreparedNativeSessionBindingAuthority. */
+/** @deprecated Use combinePreparedNativeSessionBindingAuthority; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
 export function combineNativeSessionBindingAuthority(
   ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
 ): NativeSessionBindingAuthority {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "combineNativeSessionBindingAuthority",
+    replacement: "combinePreparedNativeSessionBindingAuthority",
+  });
+  return combineNativeSessionBindingAuthorityInternal(...authorities);
+}
+
+export function combineNativeSessionBindingAuthorityInternal(
+  ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
+): NativeSessionBindingAuthority {
   const present = [...new Set(authorities.filter((authority) => authority !== undefined))];
-  return createNativeSessionBindingAuthority(
+  return createNativeSessionBindingAuthorityInternal(
     present.flatMap(({ lineage }) => lineage),
     () => {
       for (const authority of present) {

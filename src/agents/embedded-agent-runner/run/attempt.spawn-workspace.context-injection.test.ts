@@ -37,75 +37,26 @@ describe("embedded attempt context injection", () => {
   });
 
   it.each([
-    {
-      mode: "always",
-      bootstrapMode: "none",
-      runKind: "default",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "always",
-      bootstrapMode: "full",
-      runKind: "default",
-      contextMode: "full",
-      complete: true,
-      expected: true,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "none",
-      runKind: "cron",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "none",
-      runKind: "heartbeat",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "none",
-      runKind: "default",
-      contextMode: "lightweight",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "limited",
-      runKind: "default",
-      contextMode: "full",
-      complete: false,
-      expected: false,
-    },
-    {
-      mode: "never",
-      bootstrapMode: "full",
-      runKind: "default",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
+    ["always", "none", "default", "full", true, false],
+    ["always", "full", "default", "full", true, true],
+    ["continuation-skip", "none", "cron", "full", true, false],
+    ["continuation-skip", "none", "heartbeat", "full", true, false],
+    ["continuation-skip", "none", "default", "lightweight", true, false],
+    ["continuation-skip", "limited", "default", "full", false, false],
+    ["never", "full", "default", "full", true, false],
   ] as const)(
-    "completion eligibility: $mode / $bootstrapMode / $runKind / $contextMode",
-    async (testCase) => {
+    "completion eligibility: %s / %s / %s / %s / complete=%s -> %s",
+    async (mode, bootstrapMode, runKind, contextMode, complete, expected) => {
       const result = await resolveAttemptBootstrapContext({
-        contextInjectionMode: testCase.mode,
-        bootstrapMode: testCase.bootstrapMode,
-        bootstrapContextRunKind: testCase.runKind,
-        bootstrapContextMode: testCase.contextMode,
-        deliversCompleteWorkspaceContext: testCase.complete,
+        contextInjectionMode: mode,
+        bootstrapMode,
+        bootstrapContextRunKind: runKind,
+        bootstrapContextMode: contextMode,
+        deliversCompleteWorkspaceContext: complete,
         hasCompletedBootstrapTurn: async () => false,
         resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
       });
-      expect(result.shouldRecordCompletedBootstrapTurn).toBe(testCase.expected);
+      expect(result.shouldRecordCompletedBootstrapTurn).toBe(expected);
     },
   );
 
@@ -147,14 +98,7 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls.at(0)?.[0] as
-      | { messages?: AgentMessage[] }
-      | undefined;
-    const projectedMessages = assembleInput?.messages?.map((message) => ({
-      role: message.role,
-      content: (message as { content?: unknown }).content,
-    }));
-    expect(projectedMessages).toEqual([
+    expect(assemble.mock.calls[0]?.[0].messages).toMatchObject([
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);

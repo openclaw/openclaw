@@ -423,16 +423,19 @@ export async function dispatchGatewayMethodInProcess<T>(
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
+            controllerInput: options?.controllerInput,
             prepareDispatchCurrent: options?.prepareDispatchCurrent,
             assertAdmissionCurrent: composeSessionSourceAssertion([
               resolved.assertInvocationCurrent,
               captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
             ]),
             privateCompletion: options?.privateCompletion,
+            replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
+            onStartOwner: options?.onStartOwner,
             onExecutionStarted: options?.onExecutionStarted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,

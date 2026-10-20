@@ -17,10 +17,9 @@ function toConversationLifecycleBinding(binding: {
 }) {
   return {
     boundAt: binding.boundAt,
-    lastActivityAt:
-      typeof binding.lastActivityAt === "number" ? binding.lastActivityAt : binding.boundAt,
-    idleTimeoutMs: typeof binding.idleTimeoutMs === "number" ? binding.idleTimeoutMs : undefined,
-    maxAgeMs: typeof binding.maxAgeMs === "number" ? binding.maxAgeMs : undefined,
+    lastActivityAt: binding.lastActivityAt ?? binding.boundAt,
+    idleTimeoutMs: binding.idleTimeoutMs,
+    maxAgeMs: binding.maxAgeMs,
   };
 }
 

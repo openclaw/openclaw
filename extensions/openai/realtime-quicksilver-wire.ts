@@ -1,4 +1,3 @@
-// GPT-Live frameless session, call-creation, and sideband event wire contracts.
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
@@ -90,16 +89,6 @@ type OpenAIQuicksilverSessionUpdate =
 
 export { parseOpenAIQuicksilverEvent } from "./realtime-quicksilver-events.js";
 export type { OpenAIQuicksilverInboundEvent } from "./realtime-quicksilver-events.js";
-
-class OpenAIQuicksilverCallError extends Error {
-  constructor(
-    message: string,
-    readonly status?: number,
-  ) {
-    super(message);
-    this.name = "OpenAIQuicksilverCallError";
-  }
-}
 
 export function buildOpenAIQuicksilverSession(params: {
   model: string;
@@ -351,7 +340,7 @@ function decodeOpenAIQuicksilverCallId(params: {
   if (isOpenAIQuicksilverCallId(sessionId)) {
     return sessionId;
   }
-  throw new OpenAIQuicksilverCallError(errorMessage);
+  throw new Error(errorMessage);
 }
 
 function describeOpenAIQuicksilverCallError(
@@ -464,11 +453,10 @@ export async function createOpenAIQuicksilverCall(
           ),
           OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS,
         );
-    throw new OpenAIQuicksilverCallError(
+    throw new Error(
       isGptLive
         ? describeOpenAIQuicksilverCallError(response.status, detail, params.auth)
         : `OpenAI Realtime call creation failed (${response.status})${detail ? `: ${detail}` : ""}`,
-      response.status,
     );
   }
   let gaCallId: string | undefined;
@@ -488,9 +476,8 @@ export async function createOpenAIQuicksilverCall(
     { maxBytes: OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES },
   );
   if (!answerSdp.trim()) {
-    throw new OpenAIQuicksilverCallError(
+    throw new Error(
       `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} call creation returned an empty SDP answer`,
-      response.status,
     );
   }
   if (gaCallId) {

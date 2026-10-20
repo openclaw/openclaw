@@ -25,7 +25,8 @@ Put aspirations in `MEMORY.md`, a project note, or another maintained Markdown f
 
 Standing intents are owner-directed memory. Channel owners recognized by
 `commands.ownerAllowFrom` can use the `intent` tool to create, list, or cancel
-them; other senders do not receive that tool. Authenticated Gateway/Control UI
+them. The tool definition stays available across turns, but calls without owner
+authority are denied. Authenticated Gateway/Control UI
 administrators and the local CLI can inspect and cancel existing intents, but
 creation requires an authenticated channel and sender identity. If either is
 missing, OpenClaw refuses creation and asks the operator to retry from an
@@ -48,6 +49,11 @@ Defaults are intentionally conservative:
 - cooldown: 24 hours
 - maximum fires: 3
 - expiry: 90 days
+
+The `intent` tool accepts integers or numeric strings for `maxFires` and
+`cooldownSeconds`. `maxFires` must be positive; `cooldownSeconds` may be zero.
+Fractions, negative values, and nonnumeric strings are rejected with an integer
+type error.
 
 For a clock time, the agent should use the existing scheduled-task path instead of creating a standing intent.
 

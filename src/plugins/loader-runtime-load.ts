@@ -59,37 +59,40 @@ const providerRegistry = Object.freeze(
 const providerHooks = Object.freeze(createProviderHookRuntime(providerRegistry));
 const externalProfiles = Object.freeze(createProviderExternalAuthResolver(providerHooks));
 const externalAuth = Object.freeze(
-  createExternalAuthRuntime(externalProfiles.resolveExternalAuthProfilesWithPlugins),
+  createExternalAuthRuntime(
+    externalProfiles.resolveExternalAuthProfilesWithPlugins,
+    externalProfiles.withPreparedExternalAuthProfiles,
+  ),
 );
 const authStore = Object.freeze(createAuthProfileStoreRuntime(externalAuth));
-const authAvailability = Object.freeze(createProviderAuthAvailability(authStore));
+const authAvailability = Object.freeze(
+  createProviderAuthAvailability(authStore, providerHooks.resolveProviderRuntimePlugin),
+);
 let modelAuth: NativePluginLoadBindings["modelAuth"] | undefined;
 let modelConfig: NativePluginLoadBindings["modelConfig"] | undefined;
 let capabilityCatalogContext: NativePluginLoadBindings["capabilityCatalogContext"] | undefined;
 // Imports of store/hook facades must not construct unrelated policy surfaces.
 // Consumers share immutable defaults and retain their own mutable method views.
-const loaderBindings: NativePluginLoadBindings = Object.freeze({
+const loaderBindings: NativePluginLoadBindings = {
   get modelAuth() {
-    return (modelAuth ??= Object.freeze(
-      createRuntimeModelAuth({
-        ensureAuthProfileStore: authStore.ensureAuthProfileStore,
-        ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
-        isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
-        isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
-      }),
-    ));
+    return (modelAuth ??= createRuntimeModelAuth({
+      ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+      ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
+      isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+      isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
+    }));
   },
   get modelConfig() {
-    return (modelConfig ??= Object.freeze({
+    return (modelConfig ??= {
       resolveDefaultModelForAgent,
       resolveAllowedModelRef: resolveAllowedModelRefCore,
       resolveModelRuntimePolicy,
-    }));
+    });
   },
   get capabilityCatalogContext() {
     return (capabilityCatalogContext ??= createPluginCapabilityCatalogContext(authAvailability));
   },
-});
+};
 
 export const nativePluginBindings = Object.freeze({
   providerRegistry,
@@ -111,11 +114,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 export async function loadOpenClawPluginsAsync(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  const steps = loadOpenClawPluginsSteps(options, loaderBindings);
+  return runPluginLoadStepsAsync(loadOpenClawPluginsSteps(options, loaderBindings));
+}
+
+async function runPluginLoadStepsAsync(
+  steps: ReturnType<typeof loadOpenClawPluginsSteps>,
+): Promise<PluginRegistry> {
   let step = steps.next();
   while (!step.done) {
     await nextTurn();
-    step = steps.next();
+    try {
+      await step.value?.();
+      step = steps.next();
+    } catch (error) {
+      step = steps.throw(error);
+    }
   }
   return step.value;
 }
@@ -126,12 +139,14 @@ export async function loadAndActivateRootPluginRegistry(
 ): Promise<PluginRegistry> {
   const cleanup: Promise<void>[] = [];
   try {
-    return loadOpenClawPluginsCore(
-      { ...options, activate: true },
-      loaderBindings,
-      undefined,
-      undefined,
-      (completion) => cleanup.push(completion),
+    return await runPluginLoadStepsAsync(
+      loadOpenClawPluginsSteps(
+        { ...options, activate: true },
+        loaderBindings,
+        undefined,
+        undefined,
+        (completion) => cleanup.push(completion),
+      ),
     );
   } finally {
     await Promise.allSettled(cleanup);
@@ -143,17 +158,19 @@ export async function acquirePluginRegistryForInspection(
   options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   return acquireRegistryResources((resources) =>
-    loadOpenClawPluginsCore(
-      { ...options, activate: false, cache: false },
-      loaderBindings,
-      undefined,
-      resources,
+    runPluginLoadStepsAsync(
+      loadOpenClawPluginsSteps(
+        { ...options, activate: false, cache: false },
+        loaderBindings,
+        undefined,
+        resources,
+      ),
     ),
   );
 }
 
 async function acquireRegistryResources(
-  load: (resources: PluginRegistryInspectionResources) => PluginRegistry,
+  load: (resources: PluginRegistryInspectionResources) => PluginRegistry | Promise<PluginRegistry>,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   const cache = createPluginCache();
   const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
@@ -196,7 +213,7 @@ async function acquireRegistryResources(
   });
   try {
     inheritPluginNativeAdmissions(getPluginCache(), cache);
-    const registry = withPluginCache(cache, () => load(resources));
+    const registry = await withPluginCache(cache, () => load(resources));
     return { registry, release: () => resources.release() };
   } catch (error) {
     try {
@@ -221,7 +238,12 @@ export function loadOpenClawPluginsWithInternalOverrides(
   options: PluginLoadOptions & { cache: false },
   overrides: ScopedRuntimeOverrides,
 ): PluginRegistry {
-  return loadRegistryWithInternalOverrides(options, overrides);
+  const steps = loadRegistryWithInternalOverridesSteps(options, overrides);
+  let step = steps.next();
+  while (!step.done) {
+    step = steps.next();
+  }
+  return step.value;
 }
 
 /** Owns the same narrow capability runtime without publishing or caching its registrations. */
@@ -230,15 +252,15 @@ export function acquirePluginRegistryWithInternalOverrides(
   overrides: ScopedRuntimeOverrides,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   return acquireRegistryResources((resources) =>
-    loadRegistryWithInternalOverrides(options, overrides, resources),
+    runPluginLoadStepsAsync(loadRegistryWithInternalOverridesSteps(options, overrides, resources)),
   );
 }
 
-function loadRegistryWithInternalOverrides(
+function loadRegistryWithInternalOverridesSteps(
   options: PluginLoadOptions & { cache: false },
   overrides: ScopedRuntimeOverrides,
   resources?: PluginRegistryInspectionResources,
-): PluginRegistry {
+): ReturnType<typeof loadOpenClawPluginsSteps> {
   const runtimeModelAuth = overrides.runtime.modelAuth ??
     options.runtimeOptions?.modelAuth ?? { ...loaderBindings.modelAuth };
   const runtimeModelConfig = overrides.runtime.modelConfig ??
@@ -258,7 +280,7 @@ function loadRegistryWithInternalOverrides(
   delete runtimeDescriptors.modelAuth;
   delete runtimeDescriptors.modelConfig;
   Object.defineProperties(runtime, runtimeDescriptors);
-  return loadOpenClawPluginsCore(options, loaderBindings, { ...overrides, runtime }, resources);
+  return loadOpenClawPluginsSteps(options, loaderBindings, { ...overrides, runtime }, resources);
 }
 
 export function resolveNativePluginModelAuth(): PluginRuntime["modelAuth"] {

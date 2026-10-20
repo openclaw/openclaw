@@ -97,17 +97,9 @@ function createNodeStreamSplice(params: {
   ws: WebSocket;
   streamName: string;
   diagnostics: NodeStreamDiagnostics;
-  closeAckMs?: number;
-  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
   let cancelCloseAck: (() => void) | undefined;
-  const scheduleCloseAck =
-    params.scheduleCloseAck ??
-    ((callback: () => void, delayMs: number) => {
-      const timer = setTimeout(callback, delayMs);
-      return () => clearTimeout(timer);
-    });
   let settled = false;
   let forwardedBytes = 0;
   let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
@@ -182,7 +174,6 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
       if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
-        const closeAckMs = params.closeAckMs ?? STREAM_CLOSE_ACK_MS;
         const retireUnacknowledged = () => {
           cancelCloseAck = undefined;
           finish("websocket-close");
@@ -195,7 +186,8 @@ function createNodeStreamSplice(params: {
         };
         if (forwardedBytes === 0) {
           params.ws.close();
-          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, closeAckMs);
+          const timer = setTimeout(retireUnacknowledged, STREAM_CLOSE_ACK_MS);
+          cancelCloseAck = () => clearTimeout(timer);
           return;
         }
         // bufferedAmount === 0 only means the kernel accepted the bytes.
@@ -217,7 +209,8 @@ function createNodeStreamSplice(params: {
           }
           if (amount > 0) {
             if (now - progressAt < STREAM_CLOSE_FLUSH_MS) {
-              cancelCloseAck = scheduleCloseAck(closeAfterDrain, RESUME_CHECK_MS);
+              const timer = setTimeout(closeAfterDrain, RESUME_CHECK_MS);
+              cancelCloseAck = () => clearTimeout(timer);
               return;
             }
             retireUnacknowledged();
@@ -258,8 +251,6 @@ export async function runNodeStreamTransport(params: {
   streamName: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
-  closeAckMs?: number;
-  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }): Promise<void> {
   const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
@@ -322,8 +313,6 @@ export async function runNodeStreamTransport(params: {
       ws,
       streamName: params.streamName,
       diagnostics,
-      closeAckMs: params.closeAckMs,
-      scheduleCloseAck: params.scheduleCloseAck,
     });
     await sendAttachMetadata(ws, params.metadata);
     void params.emitStatus?.(`${params.streamName} stream attached\n`).catch(() => undefined);

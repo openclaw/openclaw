@@ -31,6 +31,8 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId),
         "openclaw.provider": evt.provider ?? "unknown",
         "openclaw.model": evt.model ?? "unknown",
+        ...(evt.purpose ? { "openclaw.purpose": evt.purpose } : {}),
+        ...(evt.runtimeKind ? { "openclaw.runtime.kind": evt.runtimeKind } : {}),
       };
       const genAiAttrs: Record<string, string> = {
         "gen_ai.operation.name": "chat",
@@ -303,7 +305,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       const spanAttrs: Record<string, string | number | boolean> = {};
       runtime.addRunAttrs(spanAttrs, evt);
-      const span = runtime.trackTrustedSpan(
+      const span = runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,
         runtime.spanWithDuration("openclaw.run", spanAttrs, undefined, {

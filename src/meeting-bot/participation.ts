@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
 import type {
   MeetingParticipationAttempt,
@@ -27,9 +28,7 @@ function fingerprint(value: unknown): string {
     }
     return input;
   };
-  return createHash("sha256")
-    .update(JSON.stringify(canonical(value)))
-    .digest("hex");
+  return sha256Hex(JSON.stringify(canonical(value)));
 }
 
 type LiveSource = MeetingParticipationSource & {

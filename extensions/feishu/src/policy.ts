@@ -294,10 +294,6 @@ export function resolveFeishuReplyPolicy(params: {
 
   return {
     requireMention:
-      typeof groupRequireMention === "boolean"
-        ? groupRequireMention
-        : typeof resolvedCfg.requireMention === "boolean"
-          ? resolvedCfg.requireMention
-          : params.groupPolicy !== "open",
+      groupRequireMention ?? resolvedCfg.requireMention ?? params.groupPolicy !== "open",
   };
 }

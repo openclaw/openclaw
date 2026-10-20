@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Tool, ToolCall } from "openclaw/plugin-sdk/llm";
+import type { Tool } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOllamaStreamFn } from "./stream-api.js";
 
@@ -31,8 +31,6 @@ async function runToolCallScenario(tool: Tool, toolCallArguments: Record<string,
       res.writeHead(200, { "content-type": "application/x-ndjson" });
       res.end(
         `${JSON.stringify({
-          model: "proof-model",
-          created_at: "2026-01-01T00:00:00Z",
           message: {
             role: "assistant",
             content: "",
@@ -41,9 +39,6 @@ async function runToolCallScenario(tool: Tool, toolCallArguments: Record<string,
             ],
           },
           done: true,
-          done_reason: "stop",
-          prompt_eval_count: 1,
-          eval_count: 1,
         })}\n`,
       );
     });
@@ -74,12 +69,7 @@ async function runToolCallScenario(tool: Tool, toolCallArguments: Record<string,
     {},
   );
 
-  let toolCall: ToolCall | undefined;
-  for await (const event of stream) {
-    if (event.type === "done") {
-      toolCall = event.message.content.find((block) => block.type === "toolCall");
-    }
-  }
+  const toolCall = (await stream.result()).content.find((block) => block.type === "toolCall");
   return { request: await capturedRequest, toolCall };
 }
 
@@ -122,10 +112,7 @@ describe("free-form object tool schema over the real Ollama NDJSON transport (#1
   });
 
   it("keeps the real Tool Search dispatcher's nested patternProperties args free-form", async () => {
-    const toolCallArguments = {
-      id: "openclaw:core:exec",
-      args: { command: "uname -r" },
-    };
+    const toolCallArguments = { id: "openclaw:core:exec", args: { command: "uname -r" } };
     const { request, toolCall } = await runToolCallScenario(
       toolCallDispatcherTool,
       toolCallArguments,

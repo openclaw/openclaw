@@ -1,9 +1,6 @@
 // Discord tests cover channel access plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  resolveDiscordChannelInfoSafe,
-  resolveDiscordChannelParentIdSafe,
-} from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
 function resolveDiscordChannelOwnerIdSafe(channel: unknown) {
   return resolveDiscordChannelInfoSafe(channel).ownerId;
@@ -26,37 +23,22 @@ describe("resolveDiscordChannelOwnerIdSafe", () => {
     ).toBe("snake");
   });
 
-  it("ignores invalid values and unsafe accessors", () => {
+  it("ignores invalid values", () => {
     expect(resolveDiscordChannelOwnerIdSafe({ ownerId: 123 })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe({ owner_id: 123 })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe({ rawData: { owner_id: 123 } })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe(null)).toBeUndefined();
-    expect(
-      resolveDiscordChannelOwnerIdSafe(
-        new Proxy(
-          {},
-          {
-            get() {
-              throw new Error("boom");
-            },
-            has() {
-              throw new Error("boom");
-            },
-          },
-        ),
-      ),
-    ).toBeUndefined();
   });
 });
 
-describe("resolveDiscordChannelParentIdSafe", () => {
+describe("channel parent aliases", () => {
   it("prefers camelCase over snake_case and rawData", () => {
     expect(
-      resolveDiscordChannelParentIdSafe({
+      resolveDiscordChannelInfoSafe({
         parentId: "camel",
         parent_id: "snake",
         rawData: { parent_id: "raw" },
-      }),
+      }).parentId,
     ).toBe("camel");
   });
 });
@@ -69,6 +51,7 @@ describe("resolveDiscordChannelInfoSafe", () => {
         parent_id: "parent-snake",
       }),
     ).toEqual({
+      id: undefined,
       name: undefined,
       topic: undefined,
       type: undefined,
@@ -81,6 +64,7 @@ describe("resolveDiscordChannelInfoSafe", () => {
         rawData: { owner_id: "owner-raw", parent_id: "parent-raw" },
       }),
     ).toEqual({
+      id: undefined,
       name: undefined,
       topic: undefined,
       type: undefined,

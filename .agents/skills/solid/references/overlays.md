@@ -20,7 +20,7 @@ The shared primitives (menu, popover, tooltip, dialog, tabs) land with the overl
 
 ## One lifecycle owner per surface
 
-Every past Web Awesome patch fixed the same root cause: several asynchronous paths each acted as the visibility/focus owner. The overlay lifecycle owner is one accepted-open authority:
+Historical Web Awesome patches exposed the same root cause: several asynchronous paths each acted as the visibility/focus owner. The overlay lifecycle owner is one accepted-open authority:
 
 - Phases: opening → open → closing → hidden.
 - Cancellation is decided **before** listeners, inertness, occlusion, or focus change.
@@ -31,7 +31,7 @@ Preserve:
 - prompt usable-state focus, and focus the user moved since
 - native Tab exit, and deepest-only nested Escape
 - vetoed transitions, and synchronous rollback of rejected controlled values
-- sibling-submenu switching that keeps parent navigation (the Web Awesome #135629 bug class)
+- sibling-submenu switching that keeps parent navigation (the historical #135629 bug class)
 
 ## Proving overlay changes
 

@@ -39,7 +39,7 @@ Dedicated deep references:
 - [Configuration — gateway](/gateway/config-gateway) — gateway config: bind, auth, roles, Control UI, terminal, remote, nodes, TLS, and reload.
 - [Configuration — cloud worker environments](/gateway/config-cloud-workers) — cloud worker profiles under `cloudWorkers`, including Crabbox and static SSH development.
 - [Storage locations](/concepts/storage-locations) — named storage destinations under `storage.locations`, initialization, and encryption.
-- [Database engines (experimental)](/reference/database-engines) — SQLite defaults and PostgreSQL selection under `database`, connection SecretRefs, and store support.
+- [Database engines](/reference/database-engines) — SQLite defaults and PostgreSQL selection under `database`, connection SecretRefs, and store support.
 - [Configuration — hooks](/gateway/config-hooks) — hook config: HTTP contract, agent payload, session policy, mapping, retries, and Gmail.
 - [Configuration — environment, secrets, and includes](/gateway/config-secrets-env) — environment variables, secret providers, auth storage, and `$include` config splitting.
 - [Configuration — audit, logging, diagnostics, and telemetry](/gateway/config-observability) — observability config: audit, logging, diagnostics, and telemetry keys.

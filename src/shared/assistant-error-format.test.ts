@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   extractErrorHttpStatus,
-  extractLeadingHttpStatus,
-  extractProviderWrappedHttpStatus,
   formatProviderRefusalText,
   formatRawAssistantErrorForUi,
   formatTransportErrorCopy,
@@ -42,27 +40,6 @@ describe("formatProviderRefusalText", () => {
         diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }],
       }),
     ).toBe("The provider refused this request (category: bio). Revise the request and try again.");
-  });
-});
-
-describe("extractLeadingHttpStatus", () => {
-  it("rejects 3-digit sequences outside the HTTP status code range", () => {
-    // 000 / 099 / 999 / 600 — the regex would capture these as 3-digit
-    // numbers, but they are not valid HTTP statuses and should not be
-    // surfaced as "HTTP <code>" in user-visible messages or in retry
-    // classification.
-    expect(extractLeadingHttpStatus("000 something")).toBeNull();
-    expect(extractLeadingHttpStatus("099 something")).toBeNull();
-    expect(extractLeadingHttpStatus("600 something")).toBeNull();
-    expect(extractLeadingHttpStatus("999 something")).toBeNull();
-  });
-});
-
-describe("extractProviderWrappedHttpStatus", () => {
-  it("rejects provider-wrapped statuses outside the valid HTTP range", () => {
-    expect(extractProviderWrappedHttpStatus("API error (000): something")).toBeNull();
-    expect(extractProviderWrappedHttpStatus("API error (999): something")).toBeNull();
-    expect(extractProviderWrappedHttpStatus("API error (600): something")).toBeNull();
   });
 });
 

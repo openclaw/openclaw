@@ -248,11 +248,20 @@ describe("subagent registry state read cache", () => {
     ];
     try {
       expect(read()).toEqual([grandchild.runId, child.runId]);
+      const projection = getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [root]).get(
+        child.runId,
+      );
+      expect(getSubagentSessionListRunsSnapshotForRead(subagentRuns).get(child.runId)).toBe(
+        projection,
+      );
       const values = vi.spyOn(subagentRuns, "values");
       const entries = vi.spyOn(subagentRuns, Symbol.iterator);
       expect(read()).toEqual([grandchild.runId, child.runId]);
       subagentRuns.set(child.runId, { ...child, childSessionKey: "agent:main:moved" });
       expect(read()).toEqual([child.runId]);
+      expect(
+        getSubagentSessionListRunsSnapshotForSessions(subagentRuns, [root]).get(child.runId),
+      ).not.toBe(projection);
       expect(values).not.toHaveBeenCalled();
       expect(entries).not.toHaveBeenCalled();
     } finally {

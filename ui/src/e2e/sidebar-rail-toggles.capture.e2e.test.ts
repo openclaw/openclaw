@@ -36,7 +36,7 @@ suite.define(() => {
         expect(
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).count(),
         ).toBe(0);
-        for (const view of ["pages", "sessions", "online"]) {
+        for (const view of ["pages", "sessions"]) {
           const button = page.locator('[data-navigation-view="' + view + '"]');
           await button.click();
           await sidebar.waitFor({ state: "visible" });
@@ -48,6 +48,19 @@ suite.define(() => {
             .poll(() => button.evaluate((element) => element === document.activeElement))
             .toBe(true);
         }
+        const users = page.locator('[data-navigation-view="online"]');
+        await users.click();
+        await sidebar.waitFor({ state: "visible" });
+        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("online");
+        await users.click();
+        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("online");
+        expect(await sidebar.isVisible()).toBe(true);
+        await page.keyboard.press("ControlOrMeta+B");
+        await sidebar.waitFor({ state: "hidden" });
+        await expect.poll(() => selected.count()).toBe(0);
+        await expect
+          .poll(() => users.evaluate((element) => element === document.activeElement))
+          .toBe(true);
         await page.keyboard.press("ControlOrMeta+B");
         await sidebar.waitFor({ state: "visible" });
         await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("online");

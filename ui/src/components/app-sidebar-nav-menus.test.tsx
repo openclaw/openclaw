@@ -1,9 +1,21 @@
-import { expect, it, onTestFinished, vi } from "vitest";
+import { createRoot } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
-import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
-import { renderSidebarRailPinMenuForController } from "./sidebar-menus-render.tsx";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import { SessionOrganizer } from "./session-organizer.ts";
+import {
+  renderSidebarRailPinMenuForMenus,
+  renderSidebarSessionMenuForMenus,
+} from "./sidebar-menus-render.tsx";
+import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
   const navigate = vi.fn();
@@ -50,6 +62,79 @@ it("delivers an action selected through the shared sidebar menu", async () => {
   await waitForSolid(() => expect(select).toHaveBeenCalledExactlyOnceWith("customize"));
 });
 
+it("keeps personal pinning and navigation usable in an offline session menu", async () => {
+  const session = { key: "agent:main:review", sessionId: "review-id", label: "Review" };
+  const pin = vi.fn();
+  const menus = {
+    sessionMenu: { x: 12, y: 30, session },
+    pluginActionLifetime: new AbortController(),
+    closeSessionMenu: vi.fn(),
+    triggers: new Map(),
+  } as unknown as SidebarMenus;
+  const host = {
+    connected: false,
+    sessionDataContext: {
+      gateway: { snapshot: { phase: "reconnecting", client: null, hello: null } },
+      agents: { state: { agentsList: null } },
+      sessions: { archiveVisibility: () => null },
+    },
+    sessionData: {
+      sessionsResult: { sessions: [session] },
+      sessionResultsByAgent: {},
+      childSessionRowsByParent: {},
+    },
+    findSidebarMenuSessionByKey: () => session,
+    selectedVisibleSessions: () => [],
+    readSessionMutationAccess: () => ({ allowed: false, reason: "Reconnect" }),
+    knownSessionGroups: () => [],
+    sessionOrganizer: {
+      isPersonalSessionPin: () => false,
+      setPersonalSessionPin: pin,
+      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
+        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
+      },
+    },
+  } as unknown as Parameters<typeof renderSidebarSessionMenuForMenus>[1];
+  const view = render(() => renderSidebarSessionMenuForMenus(menus, host, menus.sessionMenu!));
+  flush();
+  const action = (value: string) =>
+    view.container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!;
+  expect(action("rename").disabled).toBe(true);
+  expect(action("toggle-unread").disabled).toBe(true);
+  expect(action("copy-session-link").disabled).toBe(false);
+  expect(action("toggle-pin").disabled).toBe(false);
+  action("toggle-pin").click();
+  await waitForSolid(() => expect(pin).toHaveBeenCalledExactlyOnceWith(session.key, true));
+});
+
+it("retires sidebar hover callbacks with the mounted menu", async () => {
+  const enter = vi.fn();
+  const leave = vi.fn();
+  const view = render(() => (
+    <SidebarDropdown
+      position={{ x: 12, y: 30 }}
+      class="sidebar-menu-test"
+      label="Sidebar actions"
+      onSelect={vi.fn()}
+      onClose={vi.fn()}
+      onPointerEnter={enter}
+      onPointerLeave={leave}
+      items={[{ id: "customize", label: "Customize" }]}
+    />
+  ));
+  const menu = view.getByRole("menu", { hidden: true });
+  menu.dispatchEvent(new Event("pointerenter"));
+  menu.dispatchEvent(new Event("pointerleave"));
+  expect(enter).toHaveBeenCalledOnce();
+  expect(leave).toHaveBeenCalledOnce();
+
+  view.unmount();
+  menu.dispatchEvent(new Event("pointerenter"));
+  menu.dispatchEvent(new Event("pointerleave"));
+  expect(enter).toHaveBeenCalledOnce();
+  expect(leave).toHaveBeenCalledOnce();
+});
+
 it("returns to the durable trigger without consuming native Tab", async () => {
   const anchor = document.createElement("button");
   document.body.append(anchor);
@@ -75,67 +160,87 @@ it("returns to the durable trigger without consuming native Tab", async () => {
   expect(close).toHaveBeenCalledExactlyOnceWith(false);
 });
 
-it.each([
-  ["before", 1, "route:usage"],
-  ["after", 1, "person:ada"],
-  ["remove", 0, "route:usage"],
-  ["remove", 2, "person:ada"],
-] as const)(
-  "closes the rail pin menu before %s dispatch at position %i",
-  async (action, index, target) => {
-    const entries: readonly string[] = ["route:usage", "route:sessions", "person:ada"];
-    const pins = document.createElement("div");
-    for (const entry of entries) {
-      const pin = document.createElement("div");
-      pin.className = "sidebar-rail__pin";
-      pin.dataset.sidebarEntry = entry;
-      pins.append(pin);
-    }
-    document.body.append(pins);
-    onTestFinished(() => pins.remove());
-    const calls: string[] = [];
-    const move = vi.fn();
-    const remove = vi.fn();
-    const controller = {
-      railPinMenuPosition: { x: 12, y: 30, entry: entries[index], label: "Pinned item" },
-      railPinMenuTrigger: null,
-      host: {
-        sidebarEntries: entries,
-        querySelectorAll: pins.querySelectorAll.bind(pins),
-        updateComplete: Promise.resolve(true),
-        sessionOrganizer: {
-          writeSidebarEntryAt(entry: string, neighbor: string, position: string) {
-            calls.push("move");
-            move(entry, neighbor, position);
-          },
-          removeSidebarEntry(entry: string) {
-            calls.push("remove");
-            remove(entry);
-          },
-        },
-      },
-      closePositionedMenu(_menu: "railPin") {
-        calls.push("close");
-      },
-      positionedMenuHandlers: (_menu: "railPin") => ({ onClose() {} }),
-    } as SidebarMenusController;
-    const view = render(() => renderSidebarRailPinMenuForController(controller), {
-      container: pins,
-    });
-    flush();
-    const menu = view.getByRole("menu", { hidden: true });
-    expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(index === 0);
-    expect(menu.querySelector('[data-value="after"]')?.hasAttribute("disabled")).toBe(index === 2);
-    menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
-    await waitForSolid(() => expect(calls).toHaveLength(2));
-    if (action === "remove") {
-      expect(remove).toHaveBeenCalledExactlyOnceWith(target);
-      expect(move).not.toHaveBeenCalled();
-      expect(calls).toEqual(["close", "remove"]);
-    } else {
-      expect(move).toHaveBeenCalledExactlyOnceWith("route:sessions", target, action);
-      expect(remove).not.toHaveBeenCalled();
-      expect(calls).toEqual(["close", "move"]);
-    }
-  },
-);
+describe("sidebar rail pin menu", () => {
+  setupSidebarTest();
+
+  it.each([
+    ["before", 1, "route:usage"],
+    ["after", 1, "person:ada"],
+    ["remove", 0, "route:usage"],
+    ["remove", 2, "person:ada"],
+  ] as const)(
+    "closes the rail pin menu before %s dispatch at position %i",
+    async (action, index, target) => {
+      const entries: readonly [string, string, string] = [
+        "route:usage",
+        "route:sessions",
+        "person:ada",
+      ];
+      const { sidebar } = await mountSidebar(
+        createGateway(createTestGatewayClient(createGatewayRequestMock())),
+        createSessions("main", []),
+      );
+      sidebar.sidebarEntries = entries;
+      await sidebar.updateComplete;
+      const host = getAppSidebarOwner(sidebar.hostElement)!;
+      const pins = document.createElement("div");
+      const { menus, disposeMenus } = createRoot((disposeRoot) => ({
+        menus: createSidebarMenus({
+          host,
+          element: pins,
+          commit: () => Promise.resolve(true),
+        }),
+        disposeMenus: disposeRoot,
+      }));
+      onTestFinished(disposeMenus);
+      for (const entry of entries) {
+        const pin = document.createElement("div");
+        pin.className = "sidebar-rail__pin";
+        pin.dataset.sidebarEntry = entry;
+        pins.append(pin);
+        menus.railPins.set(entry, pin);
+      }
+      const trigger = document.createElement("button");
+      pins.append(trigger);
+      document.body.append(pins);
+      onTestFinished(() => pins.remove());
+      menus.triggers.set("railPin", trigger);
+      const position: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
+        x: 12,
+        y: 30,
+        entry: entries[index],
+        label: "Pinned item",
+      };
+      const move = vi.spyOn(host.sessionOrganizer, "writeSidebarEntryAt").mockImplementation(() => {
+        expect(menus.triggers.has("railPin")).toBe(false);
+      });
+      const remove = vi
+        .spyOn(host.sessionOrganizer, "removeSidebarEntry")
+        .mockImplementation(() => {
+          expect(menus.triggers.has("railPin")).toBe(false);
+        });
+      const view = render(() => renderSidebarRailPinMenuForMenus(menus, host, position), {
+        container: pins,
+      });
+      onTestFinished(() => view.unmount());
+      flush();
+      const menu = view.getByRole("menu", { hidden: true });
+      expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(
+        index === 0,
+      );
+      expect(menu.querySelector('[data-value="after"]')?.hasAttribute("disabled")).toBe(
+        index === 2,
+      );
+      expect(menus.triggers.get("railPin")).toBe(trigger);
+      menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
+      await waitForSolid(() => expect(action === "remove" ? remove : move).toHaveBeenCalledOnce());
+      if (action === "remove") {
+        expect(remove).toHaveBeenCalledExactlyOnceWith(target);
+        expect(move).not.toHaveBeenCalled();
+      } else {
+        expect(move).toHaveBeenCalledExactlyOnceWith("route:sessions", target, action);
+        expect(remove).not.toHaveBeenCalled();
+      }
+    },
+  );
+});

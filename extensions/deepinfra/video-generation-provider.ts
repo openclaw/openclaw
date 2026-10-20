@@ -7,14 +7,11 @@ import {
 } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
+  postJsonResponse,
+  resolveProviderApiKeyHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -157,28 +154,6 @@ function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   return undefined;
 }
 
-async function extractDeepInfraVideoAsset(
-  job: DeepInfraVideoJob,
-  baseUrl: string,
-  maxBytes: number,
-): Promise<GeneratedVideoAsset> {
-  const videoUrl = firstDeepInfraVideoUrl(job);
-  if (!videoUrl) {
-    throw new Error("DeepInfra video response missing video URL");
-  }
-  const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
-  // Some models return the MP4 inline as a data: URL, others a hosted https URL.
-  const dataAsset = await parseVideoDataUrl(normalizedUrl, maxBytes);
-  if (dataAsset) {
-    return dataAsset;
-  }
-  return {
-    url: normalizedUrl,
-    mimeType: "video/mp4",
-    fileName: "video-1.mp4",
-  };
-}
-
 function resolveDeepInfraVideoBaseUrl(req: VideoGenerationRequest): string {
   const providerConfig = req.cfg?.models?.providers?.deepinfra;
   // Canonical `baseUrl` only; legacy `nativeBaseUrl`/`/v1/inference` values are
@@ -227,38 +202,25 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       if ((req.inputVideos?.length ?? 0) > 0) {
         throw new Error("DeepInfra video generation does not support video reference inputs.");
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "deepinfra",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("DeepInfra API key missing");
-      }
-
       const model = normalizeDeepInfraModelRef(req.model, defaultModel);
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "DeepInfra video generation",
-      });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
+        await resolveProviderApiKeyHttpRequestConfig({
+          req,
+          missingApiKeyMessage: "DeepInfra API key missing",
           baseUrl: resolveDeepInfraVideoBaseUrl(req),
           defaultBaseUrl: DEEPINFRA_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
           provider: "deepinfra",
           capability: "video",
-          transport: "http",
           request: sanitizeConfiguredModelProviderRequest(
             req.cfg?.models?.providers?.deepinfra?.request,
           ),
         });
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "DeepInfra video generation",
+      });
 
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse<DeepInfraVideoJob>({
         url: `${baseUrl}/videos`,
         headers,
         body: buildDeepInfraVideoBody(req, model),
@@ -269,17 +231,8 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "DeepInfra video generation failed",
       });
-      let submitted: DeepInfraVideoJob;
-      try {
-        await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        submitted = await readProviderJsonResponse<DeepInfraVideoJob>(
-          response,
-          "DeepInfra video generation failed",
-        );
-      } finally {
-        await release();
-      }
 
       const jobId = normalizeOptionalString(submitted.id);
       if (!jobId) {
@@ -314,11 +267,21 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
                   : undefined,
             });
 
-      const video = await extractDeepInfraVideoAsset(
-        completed,
-        baseUrl,
+      const videoUrl = firstDeepInfraVideoUrl(completed);
+      if (!videoUrl) {
+        throw new Error("DeepInfra video response missing video URL");
+      }
+      const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
+      // Some models return the MP4 inline as a data: URL, others a hosted https URL.
+      const dataAsset = await parseVideoDataUrl(
+        normalizedUrl,
         resolveGeneratedMediaMaxBytes(req.cfg, "video"),
       );
+      const video = dataAsset ?? {
+        url: normalizedUrl,
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      };
       return {
         videos: [video],
         model: normalizeOptionalString(completed.model) ?? model,

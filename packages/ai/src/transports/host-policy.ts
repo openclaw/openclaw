@@ -25,7 +25,7 @@ export function buildManagedModelFetch(
   model: Model,
   host: AiTransportHost = getAiTransportHost(),
 ): typeof fetch | undefined {
-  if (!host.requiresManagedTransport(model)) {
+  if (!host.requiresManagedTransport(model, "fetch")) {
     return undefined;
   }
   const fetcher = host.buildModelFetch(model);

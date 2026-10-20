@@ -1,22 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import {
-  configureSqliteConnectionPragmas,
-  migrateSqliteSchemaToStrict,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+  jsonPathValue,
+  runEngineStoreReadSnapshot,
+  runEngineWorkerWrite,
+  withEngineStoreAdmission,
+  type DatabaseEngineInput,
+  type EngineConnection,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
-  enableNodeSqliteKyselyStatementCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  getSqliteDatabaseAdmission,
   iterateSqliteQuerySync,
-  openNodeSqliteDatabase,
-  publishSqliteDatabaseAdmission,
-  runSqliteDeferredTransactionSync,
+  requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
-  type SqliteDatabaseAdmissionKey,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { aggregateDay, aggregateDays, itemKey } from "./aggregate.js";
@@ -29,23 +25,18 @@ import type {
   StoredPeriod,
   TeamReportsOperations,
 } from "./store-contract.js";
+import { TEAM_REPORTS_WRITES } from "./store-contract.js";
+import { openTeamReportsConnection } from "./store-database.js";
 import {
   reportDocumentSchema,
   runPeriodsSchema,
   runStatsSchema,
   summaryDocumentSchema,
-  TEAM_REPORTS_SCHEMA_SQL,
 } from "./store-schema.js";
 import type { DiscordMessage, GithubItem, Period, ReportDocument } from "./types.js";
 
 // Bound each 12-column person-day insert to 768 parameters.
 const PERSON_DAY_INSERT_BATCH_SIZE = 64;
-const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
-  name: "teamReports.schema",
-  schemaDependent: true,
-  read: (value) => (value === true ? true : undefined),
-};
-
 type PeriodRow = {
   period: Period;
   period_key: string;
@@ -105,30 +96,23 @@ function readPeriod(row: Pick<PeriodRow, "data_json" | "summary_json">) {
   };
 }
 
-function chmodIfExists(file: string): void {
-  try {
-    fs.chmodSync(file, 0o600);
-  } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
-      throw error;
-    }
-  }
-}
-
 class TeamReportsDatabase {
   private readonly query;
 
   constructor(
-    private readonly db: DatabaseSync,
-    private readonly maintenance: ReturnType<typeof configureSqliteConnectionPragmas>,
+    private readonly db: EngineConnection,
+    readonly close: () => void,
+    input: DatabaseEngineInput,
   ) {
     this.query = getNodeSqliteKysely<ReportsDatabase>(db);
     // Collection scratch belongs to this connection; restart/close discards it.
-    db.exec(`CREATE TEMP TABLE team_reports_activity (
-      source TEXT NOT NULL, key TEXT NOT NULL, at_ms INTEGER NOT NULL,
+    withEngineStoreAdmission(() =>
+      db.exec(`CREATE TEMP TABLE team_reports_activity (
+      source TEXT NOT NULL, key TEXT NOT NULL, at_ms ${input ? "BIGINT" : "INTEGER"} NOT NULL,
       sort_key TEXT NOT NULL, actor TEXT NOT NULL, data_json TEXT NOT NULL,
       PRIMARY KEY (source, key)
-    ) STRICT;`);
+    )${input ? " ON COMMIT PRESERVE ROWS" : " STRICT"};`),
+    );
   }
 
   resetActivity(): void {
@@ -227,11 +211,11 @@ class TeamReportsDatabase {
   }
 
   aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]): ReportDocument {
-    // Both metadata and payload passes must observe the same accepted daily reports.
-    return runSqliteDeferredTransactionSync(this.db, () =>
+    // Stream accepted daily reports from one snapshot without retaining their full payloads.
+    return runEngineStoreReadSnapshot(this.db, () =>
       aggregateDays({
         ...input,
-        days: () => this.dayReports(input.period.sinceMs, input.period.untilMs),
+        days: this.dayReports(input.period.sinceMs, input.period.untilMs),
       }),
     );
   }
@@ -352,30 +336,20 @@ class TeamReportsDatabase {
           "generated_at_ms as generatedAtMs",
         ])
         // SQLite extracts only the chart totals instead of materializing every report in JavaScript.
-        .select((eb) => [
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.activeMembers")])
-            .as("activeMembers"),
-          eb.fn<number>("json_extract", ["data_json", eb.val("$.memberCount")]).as("memberCount"),
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.total")])
-            .as("githubTotal"),
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.totals.discord.messages")])
-            .as("discordMessages"),
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.commits")])
-            .as("commits"),
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsOpened")])
-            .as("prsOpened"),
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.prsMerged")])
-            .as("prsMerged"),
-          eb
-            .fn<number>("json_extract", ["data_json", eb.val("$.totals.github.securityAdvisories")])
-            .as("securityAdvisories"),
-        ])
+        .select((eb) => {
+          const numericField = <Name extends string>(path: string, name: Name) =>
+            jsonPathValue<number>(this.db, eb.ref("data_json"), eb.val(path), "number").as(name);
+          return [
+            numericField("$.activeMembers", "activeMembers"),
+            numericField("$.memberCount", "memberCount"),
+            numericField("$.totals.github.total", "githubTotal"),
+            numericField("$.totals.discord.messages", "discordMessages"),
+            numericField("$.totals.github.commits", "commits"),
+            numericField("$.totals.github.prsOpened", "prsOpened"),
+            numericField("$.totals.github.prsMerged", "prsMerged"),
+            numericField("$.totals.github.securityAdvisories", "securityAdvisories"),
+          ];
+        })
         .orderBy("since_ms", "desc")
         .orderBy("period", "asc")
     );
@@ -587,113 +561,79 @@ class TeamReportsDatabase {
     }));
   }
 
-  close(): void {
-    try {
-      this.maintenance.close();
-    } finally {
-      this.db.close();
-    }
+  withWriteTransaction<T>(operation: () => T): T {
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    return runSqliteImmediateTransactionSync(this.db, operation, {
+      withCommit(commit) {
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        commit();
+      },
+    });
   }
 }
 
-function openTeamReportsDatabase(dbPath: string): TeamReportsDatabase {
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
-  fs.chmodSync(path.dirname(dbPath), 0o700);
-  if (!fs.existsSync(dbPath)) {
-    fs.closeSync(fs.openSync(dbPath, "a", 0o600));
-  }
-  const db = openNodeSqliteDatabase(dbPath);
-  let maintenance: ReturnType<typeof configureSqliteConnectionPragmas> | undefined;
+export function openTeamReportsDatabase(dbPath: string, input?: DatabaseEngineInput) {
+  const { db, close } = openTeamReportsConnection(dbPath, input);
   try {
-    enableNodeSqliteKyselyStatementCache(db);
-    maintenance = configureSqliteConnectionPragmas(db, {
-      busyTimeoutMs: 5000,
-      checkpointIntervalMs: 0,
-      databaseLabel: "team-reports database",
-      databasePath: dbPath,
-      foreignKeys: true,
-      synchronous: "NORMAL",
-    });
-    if (!getSqliteDatabaseAdmission(db, schemaAdmission)) {
-      db.exec(TEAM_REPORTS_SCHEMA_SQL);
-      const query = getNodeSqliteKysely<ReportsDatabase>(db);
-      const migration = executeSqliteQueryTakeFirstSync(
-        db,
-        query
-          .selectFrom("team_reports_schema_migrations")
-          .select("id")
-          .where("id", "=", "schema-1"),
-      );
-      if (!migration) {
-        migrateSqliteSchemaToStrict(db, TEAM_REPORTS_SCHEMA_SQL, {
-          databaseLabel: "team-reports database",
-        });
-        executeSqliteQuerySync(
-          db,
-          query
-            .insertInto("team_reports_schema_migrations")
-            .values({ id: "schema-1", applied_at: Date.now() })
-            .onConflict((conflict) => conflict.column("id").doNothing()),
-        );
-      }
-    }
-    for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
-      chmodIfExists(file);
-    }
-    const database = new TeamReportsDatabase(db, maintenance);
-    // This connection's TEMP activity table leaves the admitted persistent schema unchanged.
-    publishSqliteDatabaseAdmission(db, schemaAdmission, true);
-    return database;
+    return new TeamReportsDatabase(db, close, input);
   } catch (error) {
-    try {
-      maintenance?.close();
-    } finally {
-      db.close();
-    }
+    close();
     throw error;
   }
 }
 
-export function createSqliteWorkerBackend(_input: undefined, context: { databasePath: string }) {
-  const database = openTeamReportsDatabase(context.databasePath);
+export function createSqliteWorkerBackend(
+  input: DatabaseEngineInput,
+  context: { databasePath: string },
+) {
+  const database = openTeamReportsDatabase(context.databasePath, input);
+  const execute = (command: SqliteWorkerCommand<TeamReportsOperations>) => {
+    switch (command.type) {
+      case "resetActivity":
+        return database.resetActivity();
+      case "appendActivity":
+        return database.appendActivity(command.input);
+      case "aggregateActivity":
+        return database.aggregateActivity(command.input);
+      case "aggregatePeriod":
+        return database.aggregatePeriod(command.input);
+      case "upsertPeriod":
+        return database.upsertPeriod(command.input);
+      case "getPeriod":
+        return database.getPeriod(command.input.period, command.input.key);
+      case "getPeriodDocument":
+        return database.getPeriodDocument(command.input.period, command.input.key);
+      case "listPeriods":
+        return database.listPeriods(command.input);
+      case "latestSourceWarnings":
+        return database.latestSourceWarnings();
+      case "latestPeople":
+        return database.latestPeople();
+      case "getDayReports":
+        return database.getDayReports(command.input.sinceMs, command.input.untilMs);
+      case "listPersonDays":
+        return database.listPersonDays(command.input.login, command.input.options);
+      case "listPersonDaysSince":
+        return database.listPersonDaysSince(command.input);
+      case "startRun":
+        return database.startRun(command.input);
+      case "finishRun":
+        return database.finishRun(command.input.id, command.input.result);
+      case "listRuns":
+        return database.listRuns(command.input.limit, command.input.filter);
+      case "prune":
+        return database.prune(command.input.retentionDays, command.input.nowMs);
+    }
+  };
   return {
     execute(command: SqliteWorkerCommand<TeamReportsOperations>) {
-      switch (command.type) {
-        case "resetActivity":
-          return database.resetActivity();
-        case "appendActivity":
-          return database.appendActivity(command.input);
-        case "aggregateActivity":
-          return database.aggregateActivity(command.input);
-        case "aggregatePeriod":
-          return database.aggregatePeriod(command.input);
-        case "upsertPeriod":
-          return database.upsertPeriod(command.input);
-        case "getPeriod":
-          return database.getPeriod(command.input.period, command.input.key);
-        case "getPeriodDocument":
-          return database.getPeriodDocument(command.input.period, command.input.key);
-        case "listPeriods":
-          return database.listPeriods(command.input);
-        case "latestSourceWarnings":
-          return database.latestSourceWarnings();
-        case "latestPeople":
-          return database.latestPeople();
-        case "getDayReports":
-          return database.getDayReports(command.input.sinceMs, command.input.untilMs);
-        case "listPersonDays":
-          return database.listPersonDays(command.input.login, command.input.options);
-        case "listPersonDaysSince":
-          return database.listPersonDaysSince(command.input);
-        case "startRun":
-          return database.startRun(command.input);
-        case "finishRun":
-          return database.finishRun(command.input.id, command.input.result);
-        case "listRuns":
-          return database.listRuns(command.input.limit, command.input.filter);
-        case "prune":
-          return database.prune(command.input.retentionDays, command.input.nowMs);
-      }
+      return TEAM_REPORTS_WRITES.has(command.type)
+        ? runEngineWorkerWrite(
+            input,
+            () => execute(command),
+            (operation) => database.withWriteTransaction(operation),
+          )
+        : execute(command);
     },
     close: () => database.close(),
   };

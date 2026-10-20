@@ -1,8 +1,13 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveConfiguredAgentDatabaseTargets, resolveSessionStoreTargets } from "./targets.js";
+import {
+  resolveConfiguredAgentDatabaseCandidatePaths,
+  resolveConfiguredAgentDatabaseTargets,
+  resolveSessionStoreTargets,
+} from "./targets.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -58,16 +63,44 @@ describe("session store target selection", () => {
       const expected = Object.entries(expectedPaths[layout]).flatMap(([agentId, paths]) =>
         paths.map((pathname) => ({ agentId, path: pathname })),
       );
+      for (const agentId of ["openclaw", "crestodian"]) {
+        expected.push({
+          agentId,
+          path: path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+        });
+      }
       const all = resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [] });
       expect(all).toHaveLength(expected.length);
       expect(all).toEqual(expect.arrayContaining(expected));
-      for (const agentId of ["first", "second", "acp-only", "missing"]) {
+      for (const agentId of ["first", "second", "acp-only", "openclaw", "crestodian", "missing"]) {
         expect(
           resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [], agentId }),
         ).toEqual(expected.filter((target) => target.agentId === agentId));
       }
     },
   );
+
+  it("resolves reserved startup targets without probing their files", () => {
+    const root = tempDirs.make("system-database-targets-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const cfg = { agents: { entries: { main: {} } } };
+    const databasePath = path.join(root, "agents", "openclaw", "agent", "openclaw-agent.sqlite");
+    using lstat = vi.spyOn(fs, "lstatSync");
+    using stat = vi.spyOn(fs, "statSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
+
+    expect(resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env })).toContain(databasePath);
+    expect(
+      resolveConfiguredAgentDatabaseTargets(cfg, {
+        env,
+        registeredDatabases: [],
+        agentId: "openclaw",
+      }),
+    ).toEqual([{ agentId: "openclaw", path: databasePath }]);
+    for (const probe of [lstat, stat, realpath]) {
+      expect(probe.mock.calls.filter(([pathname]) => pathname === databasePath)).toEqual([]);
+    }
+  });
 
   it("rejects a blank agent instead of selecting the default store", () => {
     expect(() => resolveSessionStoreTargets({}, { agent: "" })).toThrow(

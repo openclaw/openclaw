@@ -13,6 +13,7 @@ import {
   readCodexComputerUseStatus,
 } from "./computer-use.js";
 import { createComputerUseRequest, expectSetupErrorStatus } from "./computer-use.test-support.js";
+import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexComputerUseConfig } from "./config.js";
 import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -108,7 +109,7 @@ describe("managed unified Computer Use marketplace", () => {
             pluginCacheMode: "shared",
             strictReadiness: false,
           },
-        },
+        } satisfies CodexPluginConfig,
       };
       if (cacheState === "disabled") {
         await expectSetupErrorStatus(ensureCodexComputerUse(params), disabledStatus);
@@ -279,22 +280,31 @@ describe("managed unified Computer Use marketplace", () => {
     },
   );
 
-  it("refreshes same-version official plugin content in the native installation source", async () => {
-    const { candidate, params } = await fixture();
-    const sourceHook = path.join(
-      candidate.bundledMarketplacePath,
-      "plugins",
-      "unified-computer-use",
-      "hook.js",
-    );
-    await fs.writeFile(sourceHook, "first official hook");
-    const target = await publishMarketplace(params);
-    const targetHook = path.join(target, "plugins", "unified-computer-use", "hook.js");
-    expect(await fs.readFile(targetHook, "utf8")).toBe("first official hook");
-    await fs.writeFile(sourceHook, "updated official hook");
-    await expect(ensureCodexManagedBundledMarketplace(params)).resolves.toBe(target);
-    expect(await fs.readFile(targetHook, "utf8")).toBe("updated official hook");
-  });
+  it.each(["desktop-generation", "explicit-install"])(
+    "refreshes copied plugin content for %s",
+    async (refresh) => {
+      const { candidate, params } = await fixture();
+      const sourceHook = path.join(
+        candidate.bundledMarketplacePath,
+        "plugins",
+        "unified-computer-use",
+        "hook.js",
+      );
+      await fs.writeFile(sourceHook, "first official hook");
+      const target = await publishMarketplace({ ...params, desktopFingerprint: "desktop-x" });
+      const targetHook = path.join(target, "plugins", "unified-computer-use", "hook.js");
+      expect(await fs.readFile(targetHook, "utf8")).toBe("first official hook");
+      await fs.writeFile(sourceHook, "updated official hook");
+      await expect(
+        ensureCodexManagedBundledMarketplace({
+          ...params,
+          desktopFingerprint: refresh === "desktop-generation" ? "desktop-y" : "desktop-x",
+          forceRefresh: refresh === "explicit-install",
+        }),
+      ).resolves.toBe(target);
+      expect(await fs.readFile(targetHook, "utf8")).toBe("updated official hook");
+    },
+  );
 
   it("publishes newly added sibling plugins without a unified runtime change", async () => {
     const { candidate, params } = await fixture();

@@ -4,7 +4,7 @@ import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
-import type { CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+import { requestPlaceCatalog, type CloudProfileMenuItemsOptions } from "./cloud-target.ts";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
@@ -39,6 +39,29 @@ function mountCloudProfiles(initial: CloudProfileMenuItemsOptions, container: HT
 }
 
 describe("cloud target menu", () => {
+  it("orders Gateway catalogs while retaining placement facts and omitting unsupported kinds", async () => {
+    const machine = { id: "small", label: "Small", cpu: 2, memoryGb: 4 };
+    const profile = { id: "zeta", providerId: "crabbox", machines: [machine] };
+    const environment = { id: "node:zeta", type: "node", status: "available" };
+    const request = vi.fn().mockResolvedValue({
+      profiles: [profile, { id: "alpha", providerId: "crabbox" }],
+      environments: [
+        environment,
+        { id: "node:alpha", type: "node", status: "available" },
+        { id: "future", type: "future", status: "available" },
+      ],
+    });
+    const catalog = await requestPlaceCatalog({ request }, "openclaw");
+    expect(request).toHaveBeenCalledExactlyOnceWith("environments.list", { runtimeId: "openclaw" });
+    expect(catalog.profiles.map((entry) => entry.id)).toEqual(["alpha", "zeta"]);
+    expect(catalog.environments.map((entry) => entry.id)).toEqual(["node:alpha", "node:zeta"]);
+    expect(catalog.profiles[1]).toEqual({
+      id: "zeta",
+      providerId: "crabbox",
+      machines: [{ id: "small", label: "Small", cpu: 2, memoryGb: 4 }],
+    });
+  });
+
   it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
     const container = document.createElement("div");
     mountSessionItem(

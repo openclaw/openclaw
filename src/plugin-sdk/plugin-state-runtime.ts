@@ -1,6 +1,3 @@
-/**
- * Runtime SDK type surface for plugin-scoped keyed state stores.
- */
 import { capturePluginStateNativeBindingStore } from "../plugin-state/plugin-state-store.native-binding.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -61,7 +58,9 @@ export type {
   OpenBlobStoreOptions,
   PluginBlobEntry,
   PluginBlobEntryInfo,
+  PluginBlobRegistrationReceipt,
   PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "../plugin-state/plugin-blob-store.js";
 
 /** Pin an owner-published read for a final effect guard; custom stores retain their own reader. */

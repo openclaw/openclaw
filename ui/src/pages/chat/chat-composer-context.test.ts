@@ -7,12 +7,17 @@ import type {
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
 } from "../../api/types.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
 function renderComposer(overrides: ComposerOverrides = {}) {
-  return renderComposerFixture(overrides).container;
+  const container = renderComposerFixture(overrides).container;
+  document.body.append(container);
+  container.querySelector<HTMLElement>(".context-usage summary")?.click();
+  flush();
+  return container;
 }
 
 function sessionRow(overrides: Partial<GatewaySessionRow>): GatewaySessionRow {

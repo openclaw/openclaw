@@ -9,6 +9,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { execution } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
 import { ClickButton } from "./driver-client.js";
+import { projectedToolDetails } from "./driver-result.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
 
 // Load the real transport before timing socket behavior, including its cold module graph.
@@ -292,13 +293,13 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
     const desktop = await driver.getDesktopState();
     expect(driver.isAvailable()).toBe(true);
-    expect(JSON.parse(desktop.structuredJson!)).toMatchObject({
+    expect(projectedToolDetails(desktop, "get_desktop_state")).toMatchObject({
       platform: "macos",
       screenshot_width: 200,
     });
     expect(desktop.images).toHaveLength(1);
     const cursor = await driver.getCursorPosition();
-    expect(JSON.parse(cursor.structuredJson!)).toMatchObject({ x: 11, y: 12 });
+    expect(projectedToolDetails(cursor, "get_cursor_position")).toMatchObject({ x: 11, y: 12 });
     const click = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
     expect(click.action).toEqual({
       effect: 0,
@@ -310,7 +311,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       isError: false,
     });
     await expect(driver.getSessionState()).resolves.toMatchObject({
-      desktopCaptureAuthorized: true,
       desktopUnlocked: true,
     });
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
@@ -421,8 +421,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       return result;
     });
     const [first, second] = await Promise.all([firstCall, secondCall]);
-    expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
-    expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });
+    expect(projectedToolDetails(first, "list_windows")).toEqual({ marker: "first" });
+    expect(projectedToolDetails(second, "list_windows")).toEqual({ marker: "second", text: "β雪" });
     expect(settlement).toEqual(["second", "first"]);
     await driver.dispose();
   });
@@ -470,7 +470,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     ]);
     expect(results[0]).toMatchObject({
       status: "fulfilled",
-      value: { structuredJson: JSON.stringify({ marker: "completed" }) },
+      value: { structuredContent: { marker: "completed" } },
     });
     expect(results[1]).toMatchObject({
       status: "rejected",

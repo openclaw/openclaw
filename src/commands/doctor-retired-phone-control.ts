@@ -1,4 +1,3 @@
-// Doctor migration for config and state left by the retired Phone Control lease model.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -61,7 +60,7 @@ async function inspectStatePath(filePath: string, label: string): Promise<StateP
   }
 }
 
-function isStringArray(value: unknown): boolean {
+function isNonBlankStringArray(value: unknown): boolean {
   return (
     Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry.trim() !== "")
   );
@@ -79,7 +78,7 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
     return false;
   }
   if (value.version === 1) {
-    return isStringArray(value.removedFromDeny);
+    return isNonBlankStringArray(value.removedFromDeny);
   }
   if (value.version !== 2 && value.version !== 3) {
     return false;
@@ -87,9 +86,9 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
   if (
     typeof value.group !== "string" ||
     !RETIRED_ARM_GROUPS.has(value.group) ||
-    !isStringArray(value.armedCommands) ||
-    !isStringArray(value.addedToAllow) ||
-    !isStringArray(value.removedFromDeny)
+    !isNonBlankStringArray(value.armedCommands) ||
+    !isNonBlankStringArray(value.addedToAllow) ||
+    !isNonBlankStringArray(value.removedFromDeny)
   ) {
     return false;
   }
@@ -100,7 +99,7 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
     typeof value.generation === "string" &&
     value.generation.trim() !== "" &&
     (value.phase === "preparing" || value.phase === "active") &&
-    isStringArray(value.persistentAllows)
+    isNonBlankStringArray(value.persistentAllows)
   );
 }
 

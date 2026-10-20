@@ -39,6 +39,7 @@ import {
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
+import { bindWorkerGitHubTurn } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
@@ -128,7 +129,8 @@ export async function executeWorkerTurn(
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
   params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
-  const { available: githubPublicationAvailable } = readGitHubPublicationFact(placement);
+  // Keep credential discovery independent of the brokered publication request tool.
+  readGitHubPublicationFact(placement);
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
@@ -158,6 +160,7 @@ export async function executeWorkerTurn(
     modelRef,
     startedAt,
     assertCurrent: assertContextCurrent,
+    assertSourceCurrent,
     onBlocked: () => {
       blocked = true;
     },
@@ -317,6 +320,7 @@ export async function executeWorkerTurn(
       throw new Error("Worker tool surface owner changed");
     }
   };
+  let githubGrant: Awaited<ReturnType<typeof bindWorkerGitHubTurn>>;
   try {
     const isAuthorized = () => {
       try {
@@ -367,7 +371,7 @@ export async function executeWorkerTurn(
                   conversationCapabilityProfile: capabilityProfile,
                   preparedModelRuntime: preparedRuntime.snapshot,
                   installedSkills,
-                  githubPublicationAvailable,
+                  githubPublicationAvailable: true,
                   inheritedPublicationToolRef,
                   cronCreatorAuthorityUnavailableReason: undefined,
                   runSessionKey: placement.sessionKey,
@@ -539,7 +543,16 @@ export async function executeWorkerTurn(
     }
     // Project the wire handshake; the receipt also carries storage-only provenance.
     const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
-    const { github } = readGitHubPublicationFact(placement);
+    githubGrant = await bindWorkerGitHubTurn({
+      session: placement,
+      fact: readGitHubPublicationFact(placement),
+      sessionTarget: transcriptTarget,
+      store: params.placements,
+      claim: params.turnClaim,
+      protocolFeatures: bootstrapReceipt.protocolFeatures,
+      signal,
+      assertCurrent: assertActive,
+    });
     const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
       runtimeIdentity,
       measure: (plan) => tunnel.measureLaunchTurn(plan, params.turnClaim),
@@ -564,7 +577,7 @@ export async function executeWorkerTurn(
             prompt: media.prompt,
             suppressPromptTranscript: true,
             workspaceDir: placement.remoteWorkspaceDir,
-            ...(github ? { github } : {}),
+            ...(githubGrant ? { github: githubGrant.binding } : {}),
             ...(skillResources ? { skillResources } : {}),
             ...(turn.permissionMode
               ? {
@@ -620,7 +633,6 @@ export async function executeWorkerTurn(
     recorder?.markSentToProvider?.();
     turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
     const handoffAbort = new AbortController();
-    let handoffError: Error | undefined;
     let handoffPending: Promise<void> | undefined;
     let dispatchReady = false;
     const onDispatchReady = () => {
@@ -637,30 +649,24 @@ export async function executeWorkerTurn(
       handoffPending = (async () => {
         try {
           if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {
-            handoffError = new Error(
-              "Cloud worker credential owner changed during process handoff",
+            handoffAbort.abort(
+              new Error("Cloud worker credential owner changed during process handoff"),
             );
           }
         } catch (error) {
-          handoffError = new Error("Cloud worker credential handoff failed", { cause: error });
-        }
-        if (handoffError) {
-          handoffAbort.abort(handoffError);
+          handoffAbort.abort(new Error("Cloud worker credential handoff failed", { cause: error }));
         }
       })();
     };
-    if (github && readGitHubPublicationFact(placement).github?.token !== github.token) {
-      throw new Error("GitHub identity changed before worker launch; retry the turn.");
-    }
     let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
     try {
       processResult = await tunnel.launchTurn({
-        assertCurrent: assertActive,
+        assertCurrent: githubGrant?.assertCurrent ?? assertActive,
         plan: launchPlan.plan,
         turnClaim: params.turnClaim,
         timeoutMs: turn.timeoutMs,
         credentialExpiresAtMs: credential.expiresAtMs,
-        signal: AbortSignal.any([signal, handoffAbort.signal]),
+        signal: AbortSignal.any([githubGrant?.signal ?? signal, handoffAbort.signal]),
         onDispatchReady,
       });
     } finally {
@@ -671,9 +677,7 @@ export async function executeWorkerTurn(
     if (environment.nodeDeviceId && environment.sshEndpoint === null) {
       params.onTerminal();
     }
-    if (handoffError) {
-      throw handoffError;
-    }
+    handoffAbort.signal.throwIfAborted();
     if (!dispatchReady) {
       throw new Error("Cloud worker launch completed before transport dispatch");
     }
@@ -698,6 +702,7 @@ export async function executeWorkerTurn(
       startedAt,
     });
   } finally {
+    await githubGrant?.revoke();
     await toolRuntime?.close();
     stopWatchingClaim();
     stopWatchingRun();

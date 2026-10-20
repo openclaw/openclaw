@@ -11,7 +11,6 @@ import {
   buildMatrixReplyArtifact,
   isMatrixQaExactMarkerReply,
   assertTopLevelReplyArtifact,
-  advanceMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
   runAssertedDriverTopLevelScenario,
@@ -19,7 +18,7 @@ import {
 } from "./scenario-runtime-shared.js";
 import {
   rewriteMatrixSyncStoreCursor,
-  waitForMatrixInboundDedupeEntry,
+  waitForMatrixIngressCompletion,
   waitForMatrixSyncStoreWithCursor,
 } from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
@@ -85,12 +84,6 @@ export async function runInitialCatchupThenIncrementalScenario(context: MatrixQa
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: catchupMatched.since,
-    startSince,
-  });
   const catchupReply = buildMatrixReplyArtifact(catchupMatched.event, catchupToken);
   assertTopLevelReplyArtifact("catchup reply", catchupReply);
 
@@ -155,9 +148,9 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     tokenPrefix: "MATRIX_QA_STALE_SYNC_DEDUPE",
   });
 
-  await waitForMatrixInboundDedupeEntry({
+  await waitForMatrixIngressCompletion({
+    accountId: context.sutAccountId,
     eventId: replayDriverEventId,
-    roomId,
     stateDir,
     timeoutMs: Math.min(5_000, context.timeoutMs),
   });
@@ -198,12 +191,6 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
       ].join("\n"),
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: duplicate.since,
-    startSince: firstMatchedSince ?? startSince,
-  });
 
   const postRestart = await runAssertedDriverTopLevelScenario({
     context,

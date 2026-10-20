@@ -2,16 +2,34 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 
-type SqlObservationOptions = { includeClose?: boolean };
+type SqlObservationOptions = {
+  includeClose?: boolean;
+  /** Observe bound SQL before the caller can dispose its statement. */
+  onStatement?: (sql: string) => void;
+};
 
 function mainThreadSqlSpies(options: SqlObservationOptions = {}) {
   return [
     vi.spyOn(DatabaseSync.prototype, "prepare"),
     vi.spyOn(DatabaseSync.prototype, "exec"),
     ...(options.includeClose ? [vi.spyOn(DatabaseSync.prototype, "close")] : []),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
+    ...(["get", "all", "run", "iterate"] as const).map((method) => {
+      const original = StatementSync.prototype[method];
+      const spy = vi.spyOn(StatementSync.prototype, method);
+      const onStatement = options.onStatement;
+      if (onStatement) {
+        spy.mockImplementation(
+          new Proxy(original, {
+            apply(target, receiver: StatementSync, args) {
+              const result = Reflect.apply(target, receiver, args);
+              onStatement(receiver.expandedSQL);
+              return result;
+            },
+          }),
+        );
+      }
+      return spy;
+    }),
   ];
 }
 

@@ -51,6 +51,12 @@ then confirm the active memory plugin supports public artifacts.
 - `bridge`: reads public memory artifacts and event logs from the active memory plugin through public plugin SDK interfaces. Use this to compile the memory plugin's exported artifacts without reaching into private plugin internals.
 - `unsafe-local`: explicit same-machine escape hatch for local private paths. Intentionally experimental and non-portable; use only when you understand the trust boundary and specifically need local filesystem access bridge mode cannot provide.
 
+Bridge and unsafe-local source files must contain valid UTF-8. If a changed
+source contains malformed bytes, its import fails without replacing its existing
+wiki page or updating its synchronization metadata. Restore the source as valid
+UTF-8, then retry `openclaw wiki bridge import` or
+`openclaw wiki unsafe-local import`.
+
 Vault mode and vault scope are separate choices:
 
 - `vaultMode` chooses where wiki inputs come from.
@@ -96,6 +102,10 @@ reads are off, those commands keep local/offline behavior.
 
 Managed content stays inside generated blocks; human note blocks are
 preserved across regeneration.
+Pruning also leaves a source page and its synchronization record intact when
+its bytes are not valid UTF-8, rather than salvaging replacement-decoded Notes
+and deleting the original. Keep a byte-for-byte backup, convert a copy to UTF-8
+using its original encoding, and retry the import.
 
 - `sources/`: imported raw material and bridge/unsafe-local-backed pages
 - `entities/`: durable things, people, systems, projects, objects
@@ -213,6 +223,10 @@ synchronous prompt assembly never scrapes Markdown or reads cache files.
 Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
+
+Compile preserves existing indexes and dashboard notes when their files cannot
+be read. It reports the read error instead of treating the page as missing;
+resolve the filesystem error and compile again.
 
 Source edits and vault restores become machine-facing only after the next
 compile. Restarting or refreshing the plugin lifecycle compares the vault's

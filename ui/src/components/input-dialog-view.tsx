@@ -1,5 +1,6 @@
-import { createMemo, createSignal, untrack } from "solid-js";
+import { createSignal, untrack } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { InputDialogOptions } from "./input-dialog-types.ts";
 
@@ -8,46 +9,48 @@ export function InputDialogView(props: {
   finish(value: string | null): void;
   settled: () => boolean;
 }) {
-  const options = untrack(() => props.options);
-  const settled = untrack(() => props.settled);
+  // A prompt keeps its submitted request and default for its entire lifetime.
+  const initialOptions = untrack(() => props.options);
+  const gateway = initialOptions.gateway ? projectGateway(initialOptions.gateway) : undefined;
   let input!: HTMLInputElement;
+  // Submission admission stays synchronous; signals publish the visible state.
   let submitting = false;
-  let failure: string | null = null;
-  const [revision, setRevision] = createSignal(0);
-  const [rawValue, setRawValue] = createSignal(options.defaultValue ?? "");
-  const state = createMemo(() => {
-    revision();
-    return { submitting, failure };
+  const [state, setState] = createSignal<{ submitting: boolean; failure: string | null }>({
+    submitting: false,
+    failure: null,
   });
-  const entryValue = (raw: string) => (options.requireValue ? raw.trim() : raw);
+  const [rawValue, setRawValue] = createSignal(initialOptions.defaultValue ?? "");
+  const entryValue = (raw: string) => (initialOptions.requireValue ? raw.trim() : raw);
   const submitBlocked = (raw: string) => {
     const value = entryValue(raw);
+    const connected = gateway?.read().snapshot.phase === "connected";
+    const canSubmit = initialOptions.canSubmit?.();
     return (
-      (options.requireValue === true && !value.length) ||
-      (options.requireChange === true && value === (options.defaultValue ?? ""))
+      canSubmit === false ||
+      (gateway !== undefined && !connected && canSubmit !== true) ||
+      (initialOptions.requireValue === true && !value.length) ||
+      (initialOptions.requireChange === true && value === (initialOptions.defaultValue ?? ""))
     );
   };
-  const paint = () => setRevision((value) => value + 1);
   async function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (submitting || submitBlocked(input.value)) {
+    if (props.settled() || submitting || submitBlocked(input.value)) {
       return;
     }
     const value = entryValue(input.value);
-    if (!options.submit) {
+    if (!initialOptions.submit) {
       props.finish(value);
       return;
     }
     submitting = true;
-    failure = null;
-    paint();
+    setState({ submitting: true, failure: null });
     let message: string | null;
     try {
-      message = await options.submit(value);
+      message = await initialOptions.submit(value);
     } catch (error) {
       message = formatUiError(error);
     }
-    if (settled()) {
+    if (props.settled()) {
       return;
     }
     submitting = false;
@@ -55,19 +58,19 @@ export function InputDialogView(props: {
       props.finish(value);
       return;
     }
-    failure = message;
-    paint();
+    setState({ submitting: false, failure: message });
     // The view update re-enables the input before restoring its editing focus.
     queueMicrotask(() => {
-      if (!settled()) {
+      if (!props.settled()) {
         input.focus();
       }
     });
   }
   return (
     <openclaw-modal-dialog
-      label={options.title}
-      description={options.label ?? options.title}
+      prop:initialFocus={() => input}
+      label={initialOptions.title}
+      description={initialOptions.label ?? initialOptions.title}
       onModal-cancel={(event: Event) => {
         if (submitting) {
           event.preventDefault();
@@ -83,10 +86,10 @@ export function InputDialogView(props: {
         }}
       >
         <div class="exec-approval-header">
-          <div class="exec-approval-title">{options.title}</div>
+          <div class="exec-approval-title">{initialOptions.title}</div>
         </div>
         <label class="field input-dialog__field">
-          <span>{options.label ?? options.title}</span>
+          <span>{initialOptions.label ?? initialOptions.title}</span>
           <input
             ref={(element) => {
               input = element;
@@ -107,13 +110,13 @@ export function InputDialogView(props: {
             {state().failure}
           </div>
         ) : undefined}
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button
             type="submit"
             class="btn primary"
             disabled={state().submitting || submitBlocked(rawValue())}
           >
-            {options.submitLabel ?? t("common.save")}
+            {initialOptions.submitLabel ?? t("common.save")}
           </button>
           <button
             type="button"
@@ -121,9 +124,9 @@ export function InputDialogView(props: {
             disabled={state().submitting}
             onClick={() => props.finish(null)}
           >
-            {options.cancelLabel ?? t("common.cancel")}
+            {initialOptions.cancelLabel ?? t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </form>
     </openclaw-modal-dialog>
   );

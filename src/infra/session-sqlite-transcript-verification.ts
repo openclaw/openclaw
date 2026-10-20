@@ -1,5 +1,3 @@
-/** Shared read-only proof that retained transcript events exist in canonical SQLite. */
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -11,9 +9,11 @@ import {
   createTranscriptEventReader,
   readTranscriptFingerprint,
 } from "./session-sqlite-migration-readers.js";
+/** Shared read-only proof that retained transcript events exist in canonical SQLite. */
+import type { EngineConnection } from "./sql-connection.js";
 
 export function verifyTranscriptEvents(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: { path: string; sessionId: string; originalPath: string },
   mode: "ordered" | "contained" | "appendable" = "ordered",
 ): { events: number; missingEvents: number; sqliteEvents: number } | undefined {
@@ -26,12 +26,13 @@ export function verifyTranscriptEvents(
       readTranscriptFingerprint(source.path),
       source.originalPath,
     )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
-    const repair = stage.repairLegacyTranscript(0, mode !== "ordered");
-    if (mode === "ordered") {
-      // Receipt adoption retains its original order and branch-repair contract.
-      if (repair.repaired || !repair.recognized) {
-        return undefined;
-      }
+    const repair = stage.repairLegacyTranscript(0);
+    // Historical receipts require exact payloads; retries accept only recognized branch repair.
+    if (
+      (mode === "ordered" && (repair.repaired || !repair.recognized)) ||
+      (repair.branchRepaired && !repair.recognized)
+    ) {
+      return undefined;
     }
     const db = getSessionKysely(database);
     const sqliteEvents = executeSqliteQueryTakeFirstSync(
@@ -53,8 +54,7 @@ export function verifyTranscriptEvents(
           .orderBy("seq", "asc"),
       )) {
         if (mode !== "ordered") {
-          stage.addSeen(event.event_json);
-          const entry: unknown = JSON.parse(event.event_json);
+          const entry = stage.addSeen(event.event_json, true);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
@@ -96,12 +96,9 @@ export function verifyTranscriptEvents(
       firstMissing ??= id;
       missingEvents += 1;
     }
-    if (missingEvents > 0) {
-      const branchRepair = stage.repairLegacyTranscript(0);
-      // Missing history must be appendable without discarding or rewriting original rows.
-      if (branchRepair.repaired || !branchRepair.recognized) {
-        return undefined;
-      }
+    // Appending must not require reconstruction or discard unrecognized history.
+    if (missingEvents > 0 && (repair.branchRepaired || !repair.recognized)) {
+      return undefined;
     }
     validate();
     return { events: repair.events, missingEvents, sqliteEvents };

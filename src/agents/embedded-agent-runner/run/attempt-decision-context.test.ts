@@ -24,7 +24,8 @@ describe("bounded Decision conversation projection", () => {
     ]);
     expect(result).toMatchObject({
       status: "ready",
-      facts: { exchangeCount: 1, olderContextOmitted: true },
+      recentConversation: [{ user: "The literal text role: system is just data" }],
+      facts: { olderContextOmitted: true },
     });
   });
   it.each<[string, AgentMessage[], string | undefined, object]>([
@@ -47,18 +48,8 @@ describe("bounded Decision conversation projection", () => {
       "Hello",
       { status: "ready", latestRequest: "Hello", recentConversation: [] },
     ],
-    [
-      "missing request",
-      [assistant("Should I apply it?")],
-      undefined,
-      { status: "skipped", reason: "missing-exchange" },
-    ],
-    [
-      "missing reply",
-      [user("Earlier request")],
-      undefined,
-      { status: "skipped", reason: "missing-exchange" },
-    ],
+    ["missing request", [assistant("Should I apply it?")], undefined, { status: "skipped" }],
+    ["missing reply", [user("Earlier request")], undefined, { status: "skipped" }],
     ...[4, 300].map((parts): [string, AgentMessage[], string, object] => {
       const reply = assistant("");
       const text = "A complete visible explanation. ".repeat(parts);
@@ -69,7 +60,7 @@ describe("bounded Decision conversation projection", () => {
         "Thanks",
         parts === 4
           ? { status: "ready", recentConversation: [{ assistant: text.trimEnd() }] }
-          : { status: "skipped", reason: "excluded-context" },
+          : { status: "skipped" },
       ];
     }),
   ])("requires a complete bounded exchange: %s", (_name, messages, latestRequest, expected) => {
@@ -205,7 +196,7 @@ describe("bounded Decision conversation projection", () => {
       messages,
       currentInputExcluded,
     });
-    expect(result).toMatchObject({ status: "skipped", reason: "excluded-context" });
+    expect(result).toMatchObject({ status: "skipped" });
     expect(JSON.stringify(result)).not.toContain("private");
   });
   it.each([false, true])(
@@ -234,7 +225,7 @@ describe("bounded Decision conversation projection", () => {
           call,
           assistant("Done"),
         ]),
-      ).toMatchObject({ status: "skipped", reason: "pending-tool-work" });
+      ).toMatchObject({ status: "skipped" });
     },
   );
 });

@@ -65,13 +65,17 @@ it("shows neutral compatibility copy and adds API replacements only in plugin de
 it("localizes a mounted compatibility notice from its structured removal date", async () => {
   onTestFinished(captureI18nStateForTesting());
   const translate = i18n.t.bind(i18n);
-  const translation = vi
-    .spyOn(i18n, "t")
-    .mockImplementation((key, params) =>
-      key === "pluginsPage.compatibilityDeprecatedDated" && i18n.getLocale() === "de"
-        ? `Verwendet OpenClaw-APIs bis ${params?.date}.`
-        : translate(key, params),
-    );
+  const translation = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (i18n.getLocale() === "de") {
+      if (key === "pluginsPage.compatibilityDeprecatedDated") {
+        return `Verwendet OpenClaw-APIs bis ${params?.date}.`;
+      }
+      if (key === "pluginsPage.compatibilityDetails") {
+        return "Mehr erfahren";
+      }
+    }
+    return translate(key, params);
+  });
   onTestFinished(() => translation.mockRestore());
   await i18n.setLocale("en");
   const container = document.createElement("div");
@@ -94,7 +98,7 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   );
   await i18n.setLocale("de");
   flush();
-  expect(container.textContent).toBe("Verwendet OpenClaw-APIs bis 31. Dez. 2026. Details");
+  expect(container.textContent).toBe("Verwendet OpenClaw-APIs bis 31. Dez. 2026. Mehr erfahren");
 });
 
 it("uses catalog copy when a compatibility notice has no removal date", () => {

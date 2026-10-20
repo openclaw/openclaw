@@ -1,9 +1,10 @@
-// Voice Call plugin entrypoint registers its OpenClaw integration.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePluginServiceScheduler } from "openclaw/plugin-sdk/runtime";
@@ -25,23 +26,28 @@ import {
   VoiceCallCommandInputError,
 } from "./src/command-service.js";
 import {
-  VoiceCallConfigSchema,
+  normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
-import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
+import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./src/telephony-tts.js";
 import { resolveActiveVoiceCallToolScope } from "./src/tool-call-scope.js";
 import { VoiceCallToolSchema } from "./src/tool-schema.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
 
+type VoiceCallContinueOperationResultPayload =
+  | { operationId: string; status: "pending"; pollTimeoutMs: number }
+  | { operationId: string; status: "completed"; result: { success: true; transcript?: string } }
+  | { operationId: string; status: "failed"; error: string };
+
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const config = asOptionalRecord(value) ?? {};
     const enabled = typeof config.enabled === "boolean" ? config.enabled : true;
-    return VoiceCallConfigSchema.parse({
+    return normalizeVoiceCallConfig({
       ...config,
       enabled,
       provider: config.provider ?? (enabled ? "mock" : undefined),
@@ -135,10 +141,8 @@ export default definePluginEntry({
       generation: { retired: false },
       ensureRuntime: () => ensureRegisteredRuntime(),
     };
-    const continueOperationStore = createVoiceCallContinueOperationStore({
-      config,
-      coreConfig: api.config as OpenClawConfig,
-    });
+    const continueOperations = new Map<string, VoiceCallContinueOperationResultPayload>();
+    const continueCoreConfig = api.config;
     const activateRuntimeGeneration = (generation: VoiceCallRuntimeGeneration) =>
       activateVoiceCallRuntimeGeneration(runtimeCoordinator, runtimeRegistration, generation);
     const ensureRuntimeForGeneration = async (
@@ -299,13 +303,50 @@ export default definePluginEntry({
 
     registerGatewayCommand(
       "voicecall.continue.start",
-      async ({ params }) =>
-        continueOperationStore.start(
-          await commands.prepareContinue(
-            normalizeOptionalString(params?.callId),
-            normalizeOptionalString(params?.message),
-          ),
-        ),
+      async ({ params }) => {
+        const request = await commands.prepareContinue(
+          normalizeOptionalString(params?.callId),
+          normalizeOptionalString(params?.message),
+        );
+        const operationId = randomUUID();
+        const ttsTimeoutMs =
+          request.rt.config.tts?.timeoutMs ??
+          config.tts?.timeoutMs ??
+          continueCoreConfig.tts?.timeoutMs ??
+          TELEPHONY_DEFAULT_TTS_TIMEOUT_MS;
+        const pollTimeoutMs = resolveTimerTimeoutMs(
+          request.rt.config.transcriptTimeoutMs + ttsTimeoutMs + 30_000,
+          30_000,
+        );
+        const operation: VoiceCallContinueOperationResultPayload = {
+          operationId,
+          status: "pending",
+          pollTimeoutMs,
+        };
+        continueOperations.set(operationId, operation);
+        // Speech/TTS/transcript work continues while the caller polls this registration.
+        void request
+          .run()
+          .then((result) => {
+            continueOperations.set(operationId, {
+              operationId,
+              status: "completed",
+              result: { success: true, transcript: result.transcript },
+            });
+          })
+          .catch((err: unknown) => {
+            continueOperations.set(operationId, {
+              operationId,
+              status: "failed",
+              error: formatErrorMessage(err),
+            });
+          })
+          .finally(() => {
+            const timer = setTimeout(() => continueOperations.delete(operationId), 5 * 60 * 1000);
+            timer.unref?.();
+          });
+        return operation;
+      },
       VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
@@ -316,11 +357,14 @@ export default definePluginEntry({
         if (!operationId) {
           throw new VoiceCallCommandInputError("operationId required");
         }
-        const operation = continueOperationStore.read(operationId);
-        if (!operation.ok) {
-          throw new VoiceCallCommandInputError(operation.error);
+        const operation = continueOperations.get(operationId);
+        if (operation && operation.status !== "pending") {
+          continueOperations.delete(operationId);
         }
-        return operation.payload;
+        if (!operation) {
+          throw new VoiceCallCommandInputError("operation not found");
+        }
+        return operation;
       },
       VOICE_CALL_READ_METHOD_SCOPE,
     );
@@ -474,7 +518,7 @@ export default definePluginEntry({
                   return json(
                     await commands.steer({
                       callId: normalizeOptionalString(rawParams.callId),
-                      message: normalizeOptionalString(rawParams.message),
+                      message: initiateParams.message,
                       mode: rawParams.mode,
                       requesterSessionKey,
                       assertCurrent: () => signal?.throwIfAborted(),
@@ -484,14 +528,14 @@ export default definePluginEntry({
                   return json(
                     await commands.continueCall(
                       normalizeOptionalString(rawParams.callId),
-                      normalizeOptionalString(rawParams.message),
+                      initiateParams.message,
                     ),
                   );
                 case "speak_to_user":
                   return json(
                     await commands.speak({
                       callId: normalizeOptionalString(rawParams.callId),
-                      message: normalizeOptionalString(rawParams.message),
+                      message: initiateParams.message,
                     }),
                   );
                 case "send_dtmf":

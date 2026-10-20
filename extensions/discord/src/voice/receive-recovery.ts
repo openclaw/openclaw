@@ -29,7 +29,7 @@ type DavePassthroughTarget = {
           dave?: {
             lastTransitionId?: number;
             reinitializing?: boolean;
-            recoverFromInvalidTransition?: (transitionId: number) => void;
+            recoverFromInvalidTransition: (transitionId: number) => void;
             session?: {
               setPassthroughMode: (passthrough: boolean, expirySeconds: number) => void;
             };
@@ -102,10 +102,8 @@ export function analyzeVoiceReceiveError(err: unknown) {
   };
 }
 
-export function noteVoiceDecryptFailure(
-  state: VoiceReceiveRecoveryState,
-  now: number = Date.now(),
-) {
+export function noteVoiceDecryptFailure(state: VoiceReceiveRecoveryState) {
+  const now = Date.now();
   if (now - state.lastDecryptFailureAt > DECRYPT_FAILURE_WINDOW_MS) {
     state.decryptFailureCount = 0;
   }
@@ -144,8 +142,7 @@ export function recoverDaveZeroTransition(params: {
     target.connection.state.status !== sdk.VoiceConnectionStatus.Ready ||
     networkingState?.code !== sdk.NetworkingStatusCode.Ready ||
     daveSession?.lastTransitionId !== 0 ||
-    daveSession.reinitializing !== false ||
-    typeof daveSession.recoverFromInvalidTransition !== "function"
+    daveSession.reinitializing !== false
   ) {
     return "not-attempted";
   }
@@ -154,9 +151,9 @@ export function recoverDaveZeroTransition(params: {
     // The upstream DAVE recovery guard treats transition zero as falsy.
     daveSession.recoverFromInvalidTransition(0);
     return "recovered";
-  } catch (err) {
+  } catch {
     onWarn(
-      `discord voice: failed to recover DAVE transition 0 guild=${target.guildId} channel=${target.channelId}: ${formatErrorMessage(err)}`,
+      `discord voice: failed to recover DAVE transition 0 guild=${target.guildId} channel=${target.channelId}`,
     );
     // Upstream marks the session reinitializing before gateway/native work can fail.
     return isDaveReinitializing(daveSession) ? "failed" : "not-attempted";
@@ -168,10 +165,9 @@ export function enableDaveReceivePassthrough(params: {
   sdk: DavePassthroughSdk;
   reason: string;
   expirySeconds: number;
-  onVerbose: (message: string) => void;
   onWarn: (message: string) => void;
 }): boolean {
-  const { target, sdk, reason, expirySeconds, onVerbose, onWarn } = params;
+  const { target, sdk, reason, expirySeconds, onWarn } = params;
   const networkingState = target.connection.state.networking?.state;
   if (
     target.connection.state.status !== sdk.VoiceConnectionStatus.Ready ||
@@ -187,13 +183,10 @@ export function enableDaveReceivePassthrough(params: {
   }
   try {
     daveSession.setPassthroughMode(true, expirySeconds);
-    onVerbose(
-      `enabled DAVE receive passthrough: guild ${target.guildId} channel ${target.channelId} expiry=${expirySeconds}s reason=${reason}`,
-    );
     return true;
-  } catch (err) {
+  } catch {
     onWarn(
-      `discord voice: failed to enable DAVE passthrough guild=${target.guildId} channel=${target.channelId} reason=${reason}: ${formatErrorMessage(err)}`,
+      `discord voice: failed to enable DAVE passthrough guild=${target.guildId} channel=${target.channelId} reason=${reason}`,
     );
     return false;
   }

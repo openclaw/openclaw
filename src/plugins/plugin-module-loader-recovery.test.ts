@@ -10,6 +10,23 @@ import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const instances: PluginInstance[] = [];
+function newInstance(
+  id = "recovery-fixture",
+  binding?: Omit<Parameters<typeof bindPluginInstanceModuleLoader>[0], "instance">,
+) {
+  const instance = new PluginInstance(id);
+  instances.push(instance);
+  if (binding) {
+    bindPluginInstanceModuleLoader({ ...binding, instance });
+  }
+  return instance;
+}
+function capture(instance: PluginInstance, captures: string) {
+  return withPluginSourceCaptureDirectory(captures, () => instance.captureModuleLoaderRecovery());
+}
+function expectIdentity(filename: string, identity: fs.Stats) {
+  expect(fs.statSync(filename)).toMatchObject({ dev: identity.dev, ino: identity.ino });
+}
 afterEach(async () => {
   for (const instance of instances.splice(0).toReversed()) {
     await instance.dispose();
@@ -27,30 +44,29 @@ function fixture(standalone = false, nativePackageMap = false) {
   const nativeDependency = path.join(root, "node_modules", "native-recovery");
   fs.mkdirSync(dependency, { recursive: true });
   fs.mkdirSync(nativeDependency);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: "recovery-fixture",
-      dependencies: { "recovery-dependency": "1.0.0", "native-recovery": "1.0.0" },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(dependency, "package.json"),
-    JSON.stringify({ name: "recovery-dependency", main: "index.cjs" }),
-  );
-  fs.writeFileSync(path.join(dependency, "index.cjs"), "exports.value = 'original dependency';");
-  fs.writeFileSync(
-    path.join(nativeDependency, "package.json"),
-    JSON.stringify({
-      name: "native-recovery",
-      ...(nativePackageMap ? { exports: "./native.node" } : { main: "native.node" }),
-    }),
-  );
-  fs.writeFileSync(path.join(nativeDependency, "native.node"), "original native dependency");
-  fs.writeFileSync(path.join(root, "late.cjs"), "exports.value = 'original late import';");
-  fs.writeFileSync(path.join(root, "native.so"), "original native bytes");
-  fs.writeFileSync(
-    entry,
+  const write = (filename: string, contents: string | object) =>
+    fs.writeFileSync(
+      path.join(root, filename),
+      typeof contents === "string" ? contents : JSON.stringify(contents),
+    );
+  write("package.json", {
+    name: "recovery-fixture",
+    dependencies: { "recovery-dependency": "1.0.0", "native-recovery": "1.0.0" },
+  });
+  write("node_modules/recovery-dependency/package.json", {
+    name: "recovery-dependency",
+    main: "index.cjs",
+  });
+  write("node_modules/recovery-dependency/index.cjs", "exports.value = 'original dependency';");
+  write("node_modules/native-recovery/package.json", {
+    name: "native-recovery",
+    ...(nativePackageMap ? { exports: "./native.node" } : { main: "native.node" }),
+  });
+  write("node_modules/native-recovery/native.node", "original native dependency");
+  write("late.cjs", "exports.value = 'original late import';");
+  write("native.so", "original native bytes");
+  write(
+    "index.cjs",
     `const dependency = require('recovery-dependency');
      const fs = require('node:fs');
      const path = require('node:path');
@@ -62,18 +78,16 @@ function fixture(standalone = false, nativePackageMap = false) {
      exports.native = () => fs.readFileSync(path.join(__dirname, 'native.so'), 'utf8');
      exports.late = () => require('./late.cjs').value;`,
   );
-  const instance = new PluginInstance("recovery-fixture");
-  instances.push(instance);
-  withPluginSourceCaptureDirectory(captures, () =>
-    bindPluginInstanceModuleLoader({
-      instance,
-      origin: "global",
-      source: entry,
-      rootDir: root,
-      standalone,
-    }),
-  );
-  return { root, entry, captures, instance };
+  const create = () =>
+    withPluginSourceCaptureDirectory(captures, () =>
+      newInstance("recovery-fixture", {
+        origin: "global",
+        source: entry,
+        rootDir: root,
+        standalone,
+      }),
+    );
+  return { root, entry, captures, instance: create(), create };
 }
 
 type FixtureModule = {
@@ -109,31 +123,17 @@ it.each(
         symlink(target, link, type);
       });
     }
-    const { root, entry, captures, instance } = fixture(standalone, nativePackageMap);
+    const { root, entry, captures, instance, create } = fixture(standalone, nativePackageMap);
     const oldModule = instance.loadModule(entry) as FixtureModule;
-    expect(oldModule.next()).toBe(1);
-    expect(oldModule.next()).toBe(2);
+    expect([oldModule.next(), oldModule.next()]).toEqual([1, 2]);
     expect(oldModule.native()).toBe("original native bytes");
     const nativeIdentity = fs.statSync(oldModule.nativePath);
     const dependencyIdentity = fs.statSync(oldModule.nativeDependencyPath());
     if (denyFileSymlinks) {
-      const warm = new PluginInstance("recovery-fixture");
-      instances.push(warm);
-      withPluginSourceCaptureDirectory(captures, () =>
-        bindPluginInstanceModuleLoader({
-          instance: warm,
-          origin: "global",
-          source: entry,
-          rootDir: root,
-          standalone,
-        }),
-      );
+      const warm = create();
       const warmModule = warm.loadModule(entry) as FixtureModule;
       expect(warmModule.native()).toBe("original native bytes");
-      expect(fs.statSync(warmModule.nativePath)).toMatchObject({
-        dev: nativeIdentity.dev,
-        ino: nativeIdentity.ino,
-      });
+      expectIdentity(warmModule.nativePath, nativeIdentity);
       expect(fs.readFileSync(warmModule.nativeDependencyPath(), "utf8")).toBe(
         "original native dependency",
       );
@@ -145,15 +145,12 @@ it.each(
     const nativeShadow = fs.realpathSync(oldModule.nativePath);
     fs.writeFileSync(path.join(root, "native.so"), "replacement native bytes");
     expect(oldModule.native()).toBe("original native bytes");
-    const recovery = withPluginSourceCaptureDirectory(captures, () =>
-      instance.captureModuleLoaderRecovery(),
-    );
+    const recovery = capture(instance, captures);
     fs.writeFileSync(entry, "throw new Error('replacement code must not run during recovery');");
     await instance.dispose();
     fs.rmSync(root, { recursive: true });
 
-    const restored = new PluginInstance("recovery-fixture");
-    instances.push(restored);
+    const restored = newInstance();
     withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
     recovery.dispose();
     const restoredModule = restored.loadModule(entry) as FixtureModule;
@@ -161,35 +158,23 @@ it.each(
     expect(restoredModule.dependency()).toBe("original dependency");
     expect(restoredModule.late()).toBe("original late import");
     expect(restoredModule.native()).toBe("original native bytes");
-    expect(fs.statSync(restoredModule.nativePath)).toMatchObject({
-      dev: nativeIdentity.dev,
-      ino: nativeIdentity.ino,
-    });
+    expectIdentity(restoredModule.nativePath, nativeIdentity);
     expect(fs.readFileSync(restoredModule.nativeDependencyPath(), "utf8")).toBe(
       "original native dependency",
     );
-    expect(fs.statSync(restoredModule.nativeDependencyPath())).toMatchObject({
-      dev: dependencyIdentity.dev,
-      ino: dependencyIdentity.ino,
-    });
+    expectIdentity(restoredModule.nativeDependencyPath(), dependencyIdentity);
     expect(() => oldModule.next()).toThrow();
 
     // Recovery remains recoverable itself after another failed update.
-    const again = withPluginSourceCaptureDirectory(captures, () =>
-      restored.captureModuleLoaderRecovery(),
-    );
+    const again = capture(restored, captures);
     await restored.dispose();
-    const final = new PluginInstance("recovery-fixture");
-    instances.push(final);
+    const final = newInstance();
     withPluginSourceCaptureDirectory(captures, () => again.bind(final));
-    expect((final.loadModule(entry) as FixtureModule).next()).toBe(1);
-    expect((final.loadModule(entry) as FixtureModule).late()).toBe("original late import");
     const finalModule = final.loadModule(entry) as FixtureModule;
+    expect(finalModule.next()).toBe(1);
+    expect(finalModule.late()).toBe("original late import");
     expect(finalModule.native()).toBe("original native bytes");
-    expect(fs.statSync(finalModule.nativePath)).toMatchObject({
-      dev: nativeIdentity.dev,
-      ino: nativeIdentity.ino,
-    });
+    expectIdentity(finalModule.nativePath, nativeIdentity);
     await final.dispose();
     expect(fs.readdirSync(captures)).toEqual([]);
     expect(
@@ -219,9 +204,7 @@ it.each(
 it("releases unused recovery custody without disturbing the active loader", async () => {
   const { entry, captures, instance } = fixture();
   const before = fs.readdirSync(captures);
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
-    instance.captureModuleLoaderRecovery(),
-  );
+  const recovery = capture(instance, captures);
   expect(fs.readdirSync(captures).length).toBeGreaterThan(before.length);
   recovery.dispose();
   recovery.dispose();
@@ -235,16 +218,13 @@ it("captures quiesced code without admitting calls and refuses capture after dis
   expect((instance.loadModule(entry) as FixtureModule).dependency()).toBe("original dependency");
   instance.quiesce();
   fs.writeFileSync(entry, "throw new Error('changed disk bytes must not become recovery');");
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
-    instance.captureModuleLoaderRecovery(),
-  );
+  const recovery = capture(instance, captures);
   expect(() => instance.loadModule(entry)).toThrow(/reloaded or disabled/);
   const disposing = instance.dispose();
   expect(() => instance.captureModuleLoaderRecovery()).toThrow(/reloaded or disabled/);
   await disposing;
   fs.rmSync(root, { recursive: true });
-  const restored = new PluginInstance(instance.pluginId);
-  instances.push(restored);
+  const restored = newInstance(instance.pluginId);
   recovery.bind(restored);
   recovery.dispose();
   expect((restored.loadModule(entry) as FixtureModule).dependency()).toBe("original dependency");
@@ -263,16 +243,13 @@ it("shares bundled TypeScript code without captures and warns when edited code n
        export const schema = emptyPluginConfigSchema().jsonSchema;`,
     );
   const load = () => {
-    const instance = new PluginInstance("bundled-source");
-    instances.push(instance);
-    const value = withPluginSourceCaptureDirectory(captures, () => {
-      bindPluginInstanceModuleLoader({
-        instance,
+    const { instance, value } = withPluginSourceCaptureDirectory(captures, () => {
+      const created = newInstance("bundled-source", {
         origin: "bundled",
         source: entry,
         rootDir: root,
       });
-      return instance.loadModule(entry);
+      return { instance: created, value: created.loadModule(entry) };
     });
     expect(instance.sourceDigest).toBeUndefined();
     expect(fs.readdirSync(captures)).toEqual([]);
@@ -303,10 +280,7 @@ it.each(["cjs", "mjs"])(
        };`,
     );
     type BundledModule = { register(): () => number };
-    const previous = new PluginInstance("bundled-recovery");
-    instances.push(previous);
-    bindPluginInstanceModuleLoader({
-      instance: previous,
+    const previous = newInstance("bundled-recovery", {
       origin: "bundled",
       source: entry,
       rootDir: root,
@@ -318,8 +292,7 @@ it.each(["cjs", "mjs"])(
     await previous.dispose();
     fs.rmSync(root, { recursive: true });
 
-    const restored = new PluginInstance(previous.pluginId);
-    instances.push(restored);
+    const restored = newInstance(previous.pluginId);
     recovery.bind(restored);
     recovery.dispose();
     const restoredCallback = (restored.loadModule(entry) as BundledModule).register();
@@ -330,8 +303,7 @@ it.each(["cjs", "mjs"])(
 
     const secondRecovery = restored.captureModuleLoaderRecovery();
     await restored.dispose();
-    const final = new PluginInstance(previous.pluginId);
-    instances.push(final);
+    const final = newInstance(previous.pluginId);
     secondRecovery.bind(final);
     secondRecovery.dispose();
     expect((final.loadModule(entry) as BundledModule).register()()).toBe(3);

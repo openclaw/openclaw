@@ -3,6 +3,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import type { Selectable } from "kysely";
 import { z } from "zod";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -34,6 +35,29 @@ export type RestartSentinelRowState =
   | { kind: "missing" }
   | { kind: "invalid"; revision: number }
   | { kind: "valid"; sentinel: RestartSentinel };
+
+export type ManagedHandoffSentinelIdentity = {
+  handoffId: string;
+  runId?: string;
+  root: string;
+};
+
+export type ManagedHandoffSentinelOutcome = ManagedHandoffSentinelIdentity & {
+  expectedRevision?: number | null;
+  completedStatus?: "ok" | "error" | "skipped";
+  restored?: boolean;
+  foreground?: boolean;
+  fallbackPayload: RestartSentinelPayload;
+  reason: string;
+  triageHint: string;
+  serviceKind: string;
+  handoffFailure: string;
+};
+
+export type ManagedHandoffSentinelOutcomeResult = {
+  kind: "recorded" | "unchanged" | "refused";
+  sentinel: RestartSentinel | null;
+};
 
 const RESTART_SENTINEL_KEY = "current";
 const RESTART_SENTINEL_REVISION_FLOOR_KEY = "revision-floor";
@@ -109,7 +133,7 @@ const restartSentinelContinuationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("systemEvent"), text: z.string() }),
   z.object({ kind: z.literal("agentTurn"), message: z.string() }),
 ]);
-const restartSentinelPayloadSchema = z
+export const restartSentinelPayloadSchema = z
   .object({
     kind: z.enum(["config-apply", "config-auto-recovery", "config-patch", "update", "restart"]),
     status: z.enum(["ok", "error", "skipped"]),
@@ -185,38 +209,47 @@ function decodeRestartSentinelRow(row: RestartSentinelRow): RestartSentinel | nu
   return payload ? { version: 1, payload, revision: row.updated_at_ms } : null;
 }
 
-export function readRestartSentinelRowForKeySync(
-  db: EngineConnection,
-  sentinelKey: string,
+function selectRestartSentinelRows(db: EngineConnection) {
+  return getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db)
+    .selectFrom("gateway_restart_sentinel")
+    .select([
+      "version",
+      "kind",
+      "status",
+      "ts",
+      "session_key",
+      "thread_id",
+      "delivery_channel",
+      "delivery_to",
+      "delivery_account_id",
+      "message",
+      "continuation_json",
+      "doctor_hint",
+      "stats_json",
+      "updated_at_ms",
+    ]);
+}
+
+function decodeRestartSentinelRowState(
+  row: RestartSentinelRow | undefined,
 ): RestartSentinelRowState {
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select([
-        "version",
-        "kind",
-        "status",
-        "ts",
-        "session_key",
-        "thread_id",
-        "delivery_channel",
-        "delivery_to",
-        "delivery_account_id",
-        "message",
-        "continuation_json",
-        "doctor_hint",
-        "stats_json",
-        "updated_at_ms",
-      ])
-      .where("sentinel_key", "=", sentinelKey),
-  );
   if (!row) {
     return { kind: "missing" };
   }
   const sentinel = decodeRestartSentinelRow(row);
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
+}
+
+export function readRestartSentinelRowForKeySync(
+  db: EngineConnection,
+  sentinelKey: string,
+): RestartSentinelRowState {
+  return decodeRestartSentinelRowState(
+    executeSqliteQueryTakeFirstSync(
+      db,
+      selectRestartSentinelRows(db).where("sentinel_key", "=", sentinelKey),
+    ),
+  );
 }
 
 export function readRestartSentinelRowSync(db: EngineConnection): RestartSentinelRowState {
@@ -258,13 +291,17 @@ function readRestartSentinelRevisionFloorSync(db: EngineConnection): number | nu
       .select("updated_at_ms")
       .where("sentinel_key", "=", RESTART_SENTINEL_REVISION_FLOOR_KEY),
   );
-  if (!row) {
+  return decodeRestartSentinelRevisionFloor(row?.updated_at_ms);
+}
+
+function decodeRestartSentinelRevisionFloor(revision: number | undefined): number | null {
+  if (revision === undefined) {
     return null;
   }
-  if (!Number.isSafeInteger(row.updated_at_ms)) {
+  if (!Number.isSafeInteger(revision)) {
     throw new Error("Restart sentinel revision floor is outside the safe integer range");
   }
-  return row.updated_at_ms;
+  return revision;
 }
 
 function maxRevision(left: number | null, right: number | null): number | null {
@@ -331,21 +368,30 @@ function advanceRestartSentinelRevisionFloorSync(db: EngineConnection, revision:
 export function writeRestartSentinelRowSync(
   db: EngineConnection,
   rawPayload: RestartSentinelPayload,
+  previousRevision = readRestartSentinelSnapshotSync(db).revision,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(readRestartSentinelSnapshotSync(db).revision);
+  const revision = nextRevision(previousRevision);
   const row = buildRestartSentinelRow(payload, revision);
   upsertRestartSentinelRowSync(db, row);
   advanceRestartSentinelRevisionFloorSync(db, revision);
   return { version: 1, payload, revision };
 }
 
-/** Read inside a transaction; the floor also identifies an absent, consumed notification. */
+/** One statement owns the snapshot; the floor also identifies an absent, consumed notification. */
 export function readRestartSentinelSnapshotSync(db: EngineConnection): {
   state: RestartSentinelRowState;
   revision: number | null;
 } {
-  const state = readRestartSentinelRowSync(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    selectRestartSentinelRows(db)
+      .select("sentinel_key")
+      .where("sentinel_key", "in", [RESTART_SENTINEL_KEY, RESTART_SENTINEL_REVISION_FLOOR_KEY]),
+  ).rows;
+  const state = decodeRestartSentinelRowState(
+    rows.find((row) => row.sentinel_key === RESTART_SENTINEL_KEY),
+  );
   const currentRevision =
     state.kind === "missing"
       ? null
@@ -354,8 +400,145 @@ export function readRestartSentinelSnapshotSync(db: EngineConnection): {
         : state.revision;
   return {
     state,
-    revision: maxRevision(currentRevision, readRestartSentinelRevisionFloorSync(db)),
+    revision: maxRevision(
+      currentRevision,
+      decodeRestartSentinelRevisionFloor(
+        rows.find((row) => row.sentinel_key === RESTART_SENTINEL_REVISION_FLOOR_KEY)?.updated_at_ms,
+      ),
+    ),
   };
+}
+
+function isManagedHandoffFailure(payload: RestartSentinelPayload): boolean {
+  return (
+    payload.status === "error" ||
+    (payload.status === "skipped" &&
+      !Object.hasOwn(SKIPPED_UPDATE_OUTCOMES, payload.stats?.reason ?? ""))
+  );
+}
+
+function isManagedHandoffSentinel(
+  payload: RestartSentinelPayload,
+  identity: ManagedHandoffSentinelIdentity,
+): boolean {
+  return (
+    payload.kind === "update" &&
+    payload.stats?.handoffId === identity.handoffId &&
+    (!payload.stats.root || payload.stats.root === identity.root) &&
+    (!identity.runId || !payload.stats.runId || payload.stats.runId === identity.runId)
+  );
+}
+
+/** The floor identifies consumption even after the current notice has been deleted. */
+export function inspectManagedHandoffSentinelRowSync(
+  db: EngineConnection,
+  identity: ManagedHandoffSentinelIdentity,
+): { sentinel: RestartSentinel | null; revision: number | null } {
+  const { state, revision } = readRestartSentinelSnapshotSync(db);
+  const sentinel = state.kind === "valid" ? state.sentinel : null;
+  return {
+    sentinel:
+      sentinel &&
+      isManagedHandoffSentinel(sentinel.payload, identity) &&
+      isManagedHandoffFailure(sentinel.payload)
+        ? sentinel
+        : null,
+    revision,
+  };
+}
+
+/** Caller owns the write transaction and revalidates the local handoff lease at commit. */
+export function recordManagedHandoffSentinelOutcomeRowSync(
+  db: EngineConnection,
+  input: ManagedHandoffSentinelOutcome,
+): ManagedHandoffSentinelOutcomeResult {
+  const { state, revision } = readRestartSentinelSnapshotSync(db);
+  const current = state.kind === "valid" ? state.sentinel : null;
+  const refused = (): ManagedHandoffSentinelOutcomeResult => ({
+    kind: "refused",
+    sentinel: current,
+  });
+  if (
+    state.kind === "invalid" ||
+    !isManagedHandoffSentinel(input.fallbackPayload, input) ||
+    (input.expectedRevision !== undefined &&
+      (revision !== input.expectedRevision ||
+        (input.expectedRevision !== null && state.kind === "missing")))
+  ) {
+    return refused();
+  }
+  // The child already attempted publication. An absent notice may have been consumed.
+  if (input.completedStatus && !current) {
+    return { kind: "unchanged", sentinel: null };
+  }
+  let payload = current?.payload;
+  if (
+    payload &&
+    (!isManagedHandoffSentinel(payload, input) ||
+      (!isManagedHandoffFailure(payload) &&
+        (payload.status !== "skipped" ||
+          (input.completedStatus !== "skipped" &&
+            ![
+              "managed-service-handoff-started",
+              "restart-health-pending",
+              "managed-service-handoff-cancelled",
+            ].includes(payload.stats?.reason ?? "")))))
+  ) {
+    return refused();
+  }
+  const status =
+    (input.reason === "managed-service-handoff-cancelled" || input.completedStatus === "skipped") &&
+    input.restored !== false
+      ? "skipped"
+      : "error";
+  if (payload) {
+    const failed = isManagedHandoffFailure(payload);
+    const preserveChildStatus =
+      input.completedStatus === payload.status && input.restored !== false;
+    payload = {
+      ...payload,
+      status: payload.status === "error" || preserveChildStatus ? payload.status : status,
+      stats: {
+        ...payload.stats,
+        reason:
+          failed || preserveChildStatus ? (payload.stats?.reason ?? input.reason) : input.reason,
+      },
+    };
+    delete payload.continuation;
+  } else {
+    payload = { ...input.fallbackPayload, status, stats: { ...input.fallbackPayload.stats } };
+  }
+  if (isManagedHandoffFailure(payload)) {
+    payload.doctorHint = input.triageHint;
+  }
+  if (input.foreground) {
+    delete payload.stats?.handoffId;
+  }
+  if (typeof input.restored === "boolean") {
+    payload.stats = {
+      ...payload.stats,
+      steps: [
+        ...(payload.stats?.steps ?? []),
+        {
+          name: "service-restore",
+          command: input.serviceKind,
+          log: {
+            exitCode: input.restored ? 0 : 1,
+            ...(input.completedStatus && !input.restored
+              ? { stderrTail: input.handoffFailure }
+              : {}),
+          },
+        },
+      ],
+    };
+  }
+  const sentinel = writeRestartSentinelRowIfRevisionSync(
+    db,
+    payload,
+    current?.revision ?? null,
+    revision,
+  );
+  return sentinel ? { kind: "recorded", sentinel } : refused();
 }
 
 export function writeUpdateInstallReceiptRowSync(
@@ -381,22 +564,15 @@ export function writeUpdateInstallReceiptRowSync(
   return { version: 1, payload, revision };
 }
 
-/** Compare inside the caller's transaction; null requires an absent current row. */
+/** The conditional write owns comparison; null requires an absent current row. */
 export function writeRestartSentinelRowIfRevisionSync(
   db: EngineConnection,
   rawPayload: RestartSentinelPayload,
   expectedRevision: number | null,
+  previousRevision = readRestartSentinelRevisionFloorSync(db),
 ): RestartSentinel | null {
-  const { state: current, revision: previousRevision } = readRestartSentinelSnapshotSync(db);
-  if (
-    expectedRevision === null
-      ? current.kind !== "missing"
-      : current.kind !== "valid" || current.sentinel.revision !== expectedRevision
-  ) {
-    return null;
-  }
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(previousRevision);
+  const revision = nextRevision(maxRevision(expectedRevision, previousRevision));
   const row = buildRestartSentinelRow(payload, revision);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(

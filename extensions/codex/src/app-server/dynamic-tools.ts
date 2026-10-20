@@ -1,7 +1,6 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
-  createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   finalizeToolTerminalPresentation,
@@ -22,6 +21,7 @@ import {
   readToolOperatorHint,
   resolveToolExecutionErrorKind,
   readEmbeddedMessageDeliveryFact,
+  resolveMessageToolSourceReplyFinal,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
   type AnyAgentTool,
@@ -103,6 +103,7 @@ type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
+  messageToolFinalByDefault?: boolean;
 };
 
 type CodexToolResultHookContext = Pick<
@@ -193,9 +194,7 @@ export function createCodexDynamicToolBridge(params: {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const contextWindowTokens = params.hookContext?.contextWindowTokens;
   const toolResultMaxChars =
-    typeof contextWindowTokens === "number" &&
-    Number.isFinite(contextWindowTokens) &&
-    contextWindowTokens > 0
+    contextWindowTokens !== undefined && contextWindowTokens > 0
       ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
       : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   const availableProjection = projectCodexExecutableDynamicToolSurface(
@@ -207,9 +206,7 @@ export function createCodexDynamicToolBridge(params: {
     : availableProjection;
   // Supervised thread declarations are native-owned and fingerprinted. Narrow
   // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
-  const inheritedSpecs = params.registeredSpecs
-    ? structuredClone([...params.registeredSpecs])
-    : undefined;
+  const inheritedSpecs = params.registeredSpecs ? [...params.registeredSpecs] : undefined;
   const inheritedNames = inheritedSpecs
     ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
     : undefined;
@@ -290,8 +287,6 @@ export function createCodexDynamicToolBridge(params: {
     }
     return getChannelAgentToolMeta(tool as never) === undefined;
   };
-  const legacyExtensionRunner =
-    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const directToolNames = params.directToolNames;
   const specs =
@@ -378,7 +373,6 @@ export function createCodexDynamicToolBridge(params: {
         confirmedMessagingTarget: MessagingToolSend | undefined;
         deliveredSourceReply: boolean;
       };
-      let executedArgsForPresentation = args;
       let rawIsErrorForPresentation = false;
       let finalSourceReplyDelivered = false;
       let telemetryRawResultForPresentation: unknown;
@@ -437,7 +431,6 @@ export function createCodexDynamicToolBridge(params: {
             value,
           }),
         beforeSnapshotResult: ({ rawResult, rawIsError, executedArguments: executedArgs }) => {
-          executedArgsForPresentation = executedArgs;
           rawIsErrorForPresentation = rawIsError;
           const messageDelivery = readEmbeddedMessageDeliveryFact(
             asOptionalRecord(asOptionalRecord(rawResult)?.details)?.messageDelivery,
@@ -495,7 +488,12 @@ export function createCodexDynamicToolBridge(params: {
                 deliveredPayload: rawResult,
               }),
             });
-          finalSourceReplyDelivered = deliveredSourceReply && executedArgs.final !== false;
+          finalSourceReplyDelivered =
+            deliveredSourceReply &&
+            resolveMessageToolSourceReplyFinal(
+              executedArgs,
+              params.hookContext?.messageToolFinalByDefault,
+            );
           telemetry.finalSourceReplyDelivered ||= finalSourceReplyDelivered || undefined;
           // Delivery is committed before result middleware; presentation changes
           // cannot erase the source owner's confirmation or infer a new one.
@@ -523,15 +521,7 @@ export function createCodexDynamicToolBridge(params: {
             isError: rawIsErrorForPresentation,
             result: event.result,
           });
-          const extendedResult = await legacyExtensionRunner.applyToolResultExtensions({
-            threadId: call.threadId,
-            turnId: call.turnId,
-            toolCallId: call.callId,
-            toolName,
-            args: structuredClone(executedArgsForPresentation),
-            result: middlewareResult,
-          });
-          const result = enforceWholeSkillResult(toolName, extendedResult, toolResultMaxChars);
+          const result = enforceWholeSkillResult(toolName, middlewareResult, toolResultMaxChars);
           presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
           // A successful spawn is durable before presentation middleware can rewrite details.
           const acceptedSessionSpawn =
@@ -611,6 +601,7 @@ export function createCodexDynamicToolBridge(params: {
             result,
             deliveredSourceReply,
             executedArgs,
+            finalByDefault: params.hookContext?.messageToolFinalByDefault,
             runId: toolResultHookContext.runId,
             response,
           });
@@ -678,7 +669,7 @@ export function createCodexDynamicToolBridge(params: {
           );
           const operatorHint = readToolOperatorHint(error);
           if (operatorHint) {
-            embeddedAgentLog.error(`[tools] ${toolName} failed: ${errorMessage} ${operatorHint}`);
+            embeddedAgentLog.error(`[tools] ${toolName} failed: ${operatorHint}`);
           }
           executionBoundary.consumeBlocked();
           const failedResult = failedToolResult(errorMessage, executionDisposition);

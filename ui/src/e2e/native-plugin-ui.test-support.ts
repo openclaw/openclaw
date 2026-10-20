@@ -199,7 +199,6 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
           kind: host.kind,
           surface: host.surface,
           presented: host.presented,
-          defaultView: facts(host.defaultView),
           roots: [...host.querySelectorAll("[data-plugin-view-root]")].map(facts),
         }),
       ),

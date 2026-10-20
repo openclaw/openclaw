@@ -830,10 +830,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for _ in 0..<12 where !latestSeededReply.isHittable {
-            app.swipeUp()
+        // A visible text leaf can be unhittable inside its accessible message container.
+        // This setup needs the reply's pixels in the viewport, not a tap target.
+        for _ in 0..<12 where !latestSeededReply.exists || !transcript.frame.contains(latestSeededReply.frame) {
+            transcript.swipeUp()
         }
-        XCTAssertTrue(latestSeededReply.isHittable)
+        XCTAssertTrue(transcript.frame.contains(latestSeededReply.frame))
+        self.assertElementHasRenderedContent(latestSeededReply, named: "seeded reply after expanding work")
 
         // Revealing the reply after expanding work does not establish live-edge following.
         let initialJumpToLatest = app.buttons["Jump to latest reply"]
@@ -1031,6 +1034,35 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
+    func testTaskListLongPressOffersRefreshDismissAndClear() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-progress-card-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let card = app.buttons.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Plan, 1 of 3 steps done")).firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 8))
+        // On touch the one-line header keeps only the collapse caret.
+        let actions = ["refresh", "dismiss", "clear-saved"]
+        for action in actions {
+            XCTAssertFalse(
+                app.buttons["chat-progress-card-\(action)"].exists,
+                "Task list header still has a \(action) button")
+        }
+        self.attachScreenshot(named: "task-list-card")
+
+        card.press(forDuration: 0.8)
+        for action in actions {
+            XCTAssertTrue(
+                app.buttons["chat-progress-card-\(action)"].waitForExistence(timeout: 3),
+                "Task list menu has no \(action) action")
+        }
+        self.attachScreenshot(named: "task-list-menu")
+        app.buttons["chat-progress-card-dismiss"].tap()
+        XCTAssertTrue(card.waitForNonExistence(timeout: 3))
+        self.attachScreenshot(named: "task-list-dismissed")
     }
 
     func testChatPresentationInLightAppearance() throws {
@@ -1540,7 +1572,86 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts[
             "Authentication failed. Review the provider credential or sign-in, then retry.",
         ].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
+    }
+
+    func testModelSignInMovesToModelMenuWhileSelectedModelCanSend() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-model-sign-in-fixture", "ordinary"])
+        let app = try XCTUnwrap(self.app)
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
+        self.attachScreenshot(named: "chat-composer-no-sign-in-row")
+        modelMenu.tap()
+        XCTAssertTrue(app.buttons["chat-model-sign-in"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-model-menu-sign-in")
+        self.assertModelSignInSheetOpens(in: app)
+    }
+
+    func testModelSignInRemainsReachableDuringActiveResponse() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-model-sign-in-fixture", "ordinary",
+                "--openclaw-hold-initial-chat-run", "--openclaw-startup-status-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the project.")
+        app.buttons["chat-send-message"].tap()
+        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 8))
+        self.openSignInMenuWithModelChangesDisabled(in: app)
+        self.attachScreenshot(named: "chat-model-sign-in-active-response")
+        self.assertModelSignInSheetOpens(in: app)
+        XCTAssertTrue(app.buttons["Stop response"].exists)
+        app.buttons["Stop response"].tap()
+    }
+
+    func testModelSignInRemainsReachableWithoutModelChoices() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-model-sign-in-fixture", "empty"])
+        let app = try XCTUnwrap(self.app)
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertTrue(modelMenu.isEnabled, "Empty catalog must not disable sign-in")
+        modelMenu.tap()
+        self.assertModelSignInSheetOpens(in: app)
+    }
+
+    func testModelSignInRemainsReachableWithoutModelMutationPermission() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-model-sign-in-fixture", "read-only"])
+        let app = try XCTUnwrap(self.app)
+        self.openSignInMenuWithModelChangesDisabled(in: app)
+        self.assertModelSignInSheetOpens(in: app)
+    }
+
+    private func openSignInMenuWithModelChangesDisabled(in app: XCUIApplication) {
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.waitForExistence(timeout: 8))
+        XCTAssertTrue(modelMenu.isEnabled, "Model mutation restrictions must not disable sign-in")
+        modelMenu.tap()
+        let choice = app.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 3))
+        XCTAssertFalse(choice.isEnabled, "Opening sign-in must not enable restricted model changes")
+    }
+
+    private func assertModelSignInSheetOpens(in app: XCUIApplication) {
+        let signIn = app.buttons["chat-model-sign-in"]
+        XCTAssertTrue(signIn.waitForExistence(timeout: 3))
+        XCTAssertTrue(signIn.isEnabled)
+        signIn.tap()
+        XCTAssertTrue(app.staticTexts[
+            "No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.",
+        ].waitForExistence(timeout: 5))
+        app.buttons["Close"].tap()
     }
 
     func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {

@@ -47,10 +47,7 @@ export async function startZaloGatewayAccount(
       `[${account.accountId}] Zalo check failed before provider start: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
     );
   }
-  const statusSink = createAccountStatusSink({
-    accountId: ctx.accountId,
-    setStatus: ctx.setStatus,
-  });
+  const statusSink = createAccountStatusSink(ctx);
   ctx.log?.info(`[${account.accountId}] starting provider${zaloBotLabel} mode=${mode}`);
   const { monitorZaloProvider } = await import("./monitor.js");
   return monitorZaloProvider({

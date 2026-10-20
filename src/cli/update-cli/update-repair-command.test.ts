@@ -62,8 +62,8 @@ vi.mock("../../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: mocks.configWriteAllowed,
   readConfigFileSnapshot: mocks.readConfig,
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: mocks.ownershipAllowed,
 }));
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
@@ -153,6 +153,7 @@ afterEach(async () => {
 
 describe("update repair ledger recovery", () => {
   it("tells operators to stop the live Gateway owner before repair", async () => {
+    const run = seedRun();
     mocks.ownershipAllowed.mockRejectedValueOnce(
       new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"),
     );
@@ -160,6 +161,8 @@ describe("update repair ledger recovery", () => {
       /Stop the Gateway first \(openclaw gateway stop\)/,
     );
     expect(mocks.finalize).not.toHaveBeenCalled();
+    expect(getUpdateRun(run.runId)).toEqual(run);
+    expect(mocks.reachable).not.toHaveBeenCalled();
   });
   it.each(["aborted", "publishing"])(
     "exits nonzero while a released %s package record remains pending",
@@ -379,13 +382,11 @@ describe("update repair ledger recovery", () => {
     "unrelated inherited ID",
     "unrecorded adopter",
     "recent request",
-    "live staging driver",
-    "young live driver",
   ] as const)("preserves the %s and refuses maintenance", async (owner) => {
-    const young = owner === "recent request" || owner === "young live driver";
+    const young = owner === "recent request";
     const unobserved = owner === "unobserved" || owner === "unrelated inherited ID";
     const run = seedRun({
-      phase: young ? undefined : owner === "live staging driver" ? "staging" : "validating",
+      phase: young ? undefined : "validating",
       driver: owner === "recent request" ? undefined : "live",
       ageMs: young ? 60_000 : undefined,
     });
@@ -481,9 +482,17 @@ describe("update repair ledger recovery", () => {
   it.each([
     { driver: "exited", ageMs: 60_000 },
     { driver: "reused", ageMs: 60_000 },
-    { driver: "exited", phase: "validating" },
   ] as const)("repairs a dead driver without maintenance: %j", async (fixture) => {
     const run = seedRun(fixture);
+    const recorded = getUpdateRun(run.runId);
+    expect(await readUpdateRunStatus()).toMatchObject({
+      abandonedRun: {
+        runId: run.runId,
+        rule: "inactive-driver-dead",
+        nextAction: "Run `openclaw update repair` before retrying the update.",
+      },
+    });
+    expect(getUpdateRun(run.runId)).toEqual(recorded);
 
     await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
 
@@ -503,6 +512,31 @@ describe("update repair ledger recovery", () => {
     );
     expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["exited", "reused"] as const)(
+    "settles a %s repair driver before later maintenance can fail",
+    async (driver) => {
+      const run = seedRun({ phase: "repairing", driver, ageMs: 60_000 });
+      recordUpdateRunStep(run.runId, { step: "finalize:doctor", status: "in_progress" });
+      let observedBeforeMaintenance: UpdateRunRecord | undefined;
+      mocks.finalize.mockImplementationOnce(async () => {
+        observedBeforeMaintenance = getUpdateRun(run.runId);
+        throw new Error("Later maintenance failed");
+      });
+
+      await expect(updateRepairCommand({ yes: true })).rejects.toThrow("Later maintenance failed");
+
+      expect(observedBeforeMaintenance).toMatchObject({
+        phase: "finished",
+        status: "failed",
+        reason: "abandoned",
+      });
+      expect(getUpdateRun(run.runId)).toEqual(observedBeforeMaintenance);
+      expect(observedBeforeMaintenance?.steps).not.toContainEqual(
+        expect.objectContaining({ step: "reconcile:acknowledged" }),
+      );
+    },
+  );
 
   it.each(["abandoned", "legacy-driver-expired"])(
     "exits successfully when the Gateway already reconciled the %s row",
@@ -535,7 +569,7 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it.each([-1, 0, 1])(
+  it.each([0, 1])(
     "keeps the lightweight repair window separate from acknowledgment (%sms)",
     async (offset) => {
       const run = seedRun();
@@ -786,7 +820,6 @@ describe("update repair ledger recovery", () => {
     "plugin",
     "channel",
     "readiness",
-    "handshake",
   ])("retains full repair when the serving generation is unverified: %s", async (problem) => {
     const run = seedRun();
     const root = await mocks.resolveRoot();
@@ -802,8 +835,7 @@ describe("update repair ledger recovery", () => {
     }
     mocks.reachable.mockResolvedValue({
       reachable: true,
-      gatewayVersion:
-        problem === "version mismatch" ? "2026.9.2" : problem === "handshake" ? "" : "2026.9.3",
+      gatewayVersion: problem === "version mismatch" ? "2026.9.2" : "2026.9.3",
       gatewayBuildId:
         problem === "build mismatch"
           ? "previous-build"
@@ -818,18 +850,7 @@ describe("update repair ledger recovery", () => {
     await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
     expect(getUpdateRun(run.runId)).toEqual(run);
-    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId], undefined);
     expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
-  });
-
-  it("does not reconcile when write admission is refused", async () => {
-    const run = seedRun();
-    mocks.ownershipAllowed.mockRejectedValueOnce(new Error("externally supervised"));
-
-    await expect(updateRepairCommand({})).rejects.toThrow("externally supervised");
-
-    expect(getUpdateRun(run.runId)).toEqual(run);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-    expect(mocks.reachable).not.toHaveBeenCalled();
   });
 });

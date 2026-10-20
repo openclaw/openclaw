@@ -475,6 +475,10 @@ Local memory embeddings require managed mode:
 For automated embedding-only setup, configure local memory and explicitly consent
 to downloading the embedding model and verified llama.cpp runtime:
 
+This unattended option is not available in v2026.10.5. If your installation
+rejects `--llama-cpp-embedding-only`, use the [interactive embedding-only
+setup](/plugins/llama-cpp#set-up-only-local-embeddings) instead.
+
 ```bash
 openclaw config set memory.search.provider local
 openclaw onboard --non-interactive --accept-risk \
@@ -529,6 +533,10 @@ model.
   not selected as the default. Retry after reviewing its tool support or choose
   another model.
 - Platforms without a verified managed build should use an existing server.
+- Managed embedding server keeps exiting or is OOM-killed: serve embeddings
+  from an external [llmman](/providers/llmman#advanced-configuration) daemon
+  instead. It relaunches a dead backend on the next request, and the Gateway
+  manages no child process.
 
 OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 

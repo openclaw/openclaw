@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createRenderEffect, For } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { createMemo, For } from "solid-js";
 import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
 export type PanelLoadingSkeletonVariant =
@@ -14,15 +13,6 @@ export type PanelLoadingSkeletonVariant =
   | "files"
   | "review"
   | "terminal";
-
-export type PanelLoadingSkeletonProps = {
-  variant?: PanelLoadingSkeletonVariant;
-  label: string;
-  compact?: boolean;
-  overlay?: boolean;
-};
-
-export type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
 
 type LineWidth = "short" | "medium" | "long";
 
@@ -67,7 +57,12 @@ function Widget(props: { columns: number; rows: number; lines: LineWidth[] }) {
   );
 }
 
-export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
+export function PanelLoadingSkeleton(props: {
+  variant?: PanelLoadingSkeletonVariant;
+  label: string;
+  compact?: boolean;
+  overlay?: boolean;
+}) {
   const variant = createMemo(() => props.variant ?? "files");
   const content = (): JSX.Element => {
     switch (variant()) {
@@ -174,34 +169,17 @@ export function PanelLoadingSkeletonContent(props: PanelLoadingSkeletonProps) {
         );
     }
   };
-  return <>{content()}</>;
+  return (
+    <openclaw-panel-loading-skeleton
+      role="status"
+      aria-busy="true"
+      data-panel-skeleton={props.variant ?? "files"}
+      aria-label={props.label}
+      compact={props.compact ? "" : undefined}
+      overlay={props.overlay ? "" : undefined}
+    >
+      <style>{panelStyles}</style>
+      {content()}
+    </openclaw-panel-loading-skeleton>
+  );
 }
-
-export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>(
-  "openclaw-panel-loading-skeleton",
-  (props, host) => {
-    host.setAttribute("role", "status");
-    host.setAttribute("aria-busy", "true");
-    createRenderEffect(
-      () => ({ variant: props.variant ?? "files", label: props.label }),
-      (value) => {
-        host.setAttribute("data-panel-skeleton", value.variant);
-        host.setAttribute("aria-label", value.label);
-      },
-    );
-    return (
-      <>
-        <style>{panelStyles}</style>
-        <PanelLoadingSkeletonContent {...props} />
-      </>
-    );
-  },
-  {
-    properties: {
-      variant: { default: "files", attribute: "data-panel-skeleton", reflect: true },
-      label: { default: "" },
-      compact: { default: false, type: Boolean, reflect: true },
-      overlay: { default: false, type: Boolean, reflect: true },
-    },
-  },
-);

@@ -72,10 +72,9 @@ it.each([
   });
   // Service the real port exchange and release the foreign schema holder only
   // when the existing cold-admission owner yields, without sleeps or polling.
-  vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
-    if (timeout === undefined) {
-      admission.service();
-    } else {
+  vi.spyOn(Atomics, "wait").mockImplementation((array, index, value) => {
+    admission.service();
+    if (Atomics.load(array, index) === value) {
       expect(existsSync(requestedPath)).toBe(false);
       expect(mutate).not.toHaveBeenCalled();
       schemaBusy = false;
@@ -134,11 +133,8 @@ it.each([
     if (retryable) {
       expect(admission.failure).toBeUndefined();
       expect(owner.refusal).toBeUndefined();
-    } else {
-      expect(admission.failure).toBe(scenario === "revoked" ? revoked : pending);
-      if (transport === "schema") {
-        expect(owner.refusal).toBeInstanceOf(Error);
-      }
+    } else if (transport === "schema") {
+      expect(owner.refusal).toBeInstanceOf(Error);
     }
     expect(release).not.toHaveBeenCalled();
   } finally {

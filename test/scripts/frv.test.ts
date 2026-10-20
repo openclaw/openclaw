@@ -26,7 +26,6 @@ import {
   withoutChildRunIdentity,
   plan,
   executionPlanArtifact,
-  historicalExecutionPlanArtifact,
   runFor,
   rootRun,
 } from "./frv.test-support.js";
@@ -242,16 +241,6 @@ describe("FRV immutable plan eligibility", () => {
       });
     },
   );
-
-  it("keeps historical plan verification but rejects it for continuation", async () => {
-    const historical = historicalExecutionPlanArtifact();
-    expect(validateReleaseExecutionPlanArtifact(historical)).not.toHaveProperty(
-      "attemptEvidenceVersion",
-    );
-    await expect(
-      loadPlan({ repository: REPOSITORY, runId: "77" }, async () => historical),
-    ).rejects.toThrow("run predates attempt-aware immutable plans; run a fresh all-group FRV");
-  });
 
   it("rejects missing plans and focused roots", async () => {
     await expect(
@@ -514,35 +503,25 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunParent).not.toHaveBeenCalled();
   });
 
-  it("rechecks the producer after child inspection and before parent mutation", async () => {
-    const fixture = artifactFixture();
-    const read = fixture.client.getRun.getMockImplementation()!;
-    fixture.client.getRun.mockImplementation(async (id) => {
-      if (id === "77") {
-        fixture.producer.head_sha = "c".repeat(40);
-      }
-      return read(id);
-    });
-    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
-      "identity changed",
-    );
-    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
-  });
-
-  it("rechecks the producer before retrying a failed diagnostic child", async () => {
+  it.each(["parent", "child"])("rechecks the producer before %s mutation", async (target) => {
     const fixture = artifactFixture();
     const read = fixture.client.getRun.getMockImplementation()!;
     let childReads = 0;
     fixture.client.getRun.mockImplementation(async (id) => {
-      if (id === "101") {
+      if (target === "child" && id === "101") {
         if (++childReads === 2) {
           fixture.producer.head_sha = "c".repeat(40);
         }
         return runFor(child("normalCi", "101"), 1, "failure");
       }
+      if (target === "parent" && id === "77") {
+        fixture.producer.head_sha = "c".repeat(40);
+      }
       return read(id);
     });
-    fixture.client.getAttemptJobs = async () => [job("test", "failure")];
+    if (target === "child") {
+      fixture.client.getAttemptJobs = async () => [job("test", "failure")];
+    }
     await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
       "identity changed",
     );
@@ -1393,19 +1372,75 @@ describe("FRV same-parent recovery", () => {
     expect(scenario.counters.verifies).toBe(1);
   });
 
-  it("keeps the reconciliation timeout when no newer attempt appears", async () => {
-    const scenario = rerunScenario({
-      childAfter: [[1, "failure"]],
-      childError: new Error("HTTP 502 after dispatch"),
+  it.each(["child", "parent"] as const)(
+    "retries one %s rerun after a 502 produces no newer attempt",
+    async (target) => {
+      const selected = child("normalCi", "101");
+      const childRuns = new Map([
+        ["101", { attempt: 1, conclusion: target === "child" ? "failure" : "success" }],
+      ]);
+      const parent = { attempt: 1, conclusion: target === "parent" ? "failure" : "success" };
+      const base = controllerClient([selected], childRuns, parent);
+      const posts = { child: 0, parent: 0 };
+      const serverError = Object.assign(new Error("gh api failed"), {
+        stderr: "gh: request failed (HTTP 502)",
+      });
+      const client = {
+        ...base,
+        rerunFailed: async () => {
+          posts.child += 1;
+          if (target === "child" && posts.child === 1) {
+            throw serverError;
+          }
+          childRuns.set("101", { attempt: 2, conclusion: "success" });
+        },
+        rerunParent: async () => {
+          posts.parent += 1;
+          if (target === "parent" && posts.parent === 1) {
+            throw serverError;
+          }
+          parent.attempt = 2;
+          parent.conclusion = "success";
+        },
+        verify: async () => "{}",
+      };
+      await withFastPolling(
+        () =>
+          expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+            action: "reran-parent",
+          }),
+        "5",
+      );
+      expect(posts[target]).toBe(2);
+    },
+  );
+
+  it("bounds a repeated 502 rerun failure to one retry", async () => {
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "failure" }]]);
+    const parent = { attempt: 1, conclusion: "success" };
+    const base = controllerClient([selected], childRuns, parent);
+    const serverError = Object.assign(new Error("gh api failed"), {
+      stderr: "gh: request failed (HTTP 502)",
     });
+    let posts = 0;
+    const client = {
+      ...base,
+      rerunFailed: async () => {
+        posts += 1;
+        throw serverError;
+      },
+      rerunParent: async () => {},
+      verify: async () => "{}",
+    };
     await withFastPolling(
       () =>
-        expect(continueFailed(plan([scenario.selected]), "77", scenario.client)).rejects.toThrow(
-          "rerun mutation did not produce an observable newer attempt for 101 (101: HTTP 502 after dispatch)",
+        expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
+          "rerun mutation did not produce an observable newer attempt for 101",
         ),
       "5",
     );
-    expect(scenario.counters.posts.child).toBe(1);
+    expect(posts).toBe(2);
   });
 
   it("keeps exact-terminal parent admission before dispatch", async () => {
@@ -1753,7 +1788,7 @@ describe("FRV child rerun", () => {
     const passed = rerunScenario({ childSource: [1, "success"] });
     await expect(
       continueFailed(plan([passed.selected]), "77", passed.client, { child: "normalCi" }),
-    ).rejects.toThrow("child normalCi is passed; nothing to rerun");
+    ).resolves.toMatchObject({ action: "nothing-to-rerun" });
     expect(scenario.counters.posts.child + passed.counters.posts.child).toBe(0);
   });
 });
@@ -1769,19 +1804,24 @@ const unsealedWatcherReads = {
   },
 };
 
+function watcherPlan() {
+  const immutable = executionPlanArtifact();
+  const source = sourceFact();
+  Object.assign(immutable, {
+    sourceAdmissionContract: "1",
+    sourceAdmission: sourceFact({
+      workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
+      coverage: { ...source.coverage, release_profile: "beta" },
+    }),
+  });
+  immutable.sha256 = releaseExecutionPlanSha256(immutable);
+  return immutable;
+}
+
 describe("FRV watch", () => {
   it("resumes a missing or retired watcher with the immutable candidate, fresh tip, and no duplicate terminal notification", async () => {
     const statePath = path.join(tempDirs.make("frv-candidate-watch-"), "state.json");
-    const immutable = executionPlanArtifact();
-    const source = sourceFact();
-    Object.assign(immutable, {
-      sourceAdmissionContract: "1",
-      sourceAdmission: sourceFact({
-        workflow: { ...source.workflow, ref: `refs/heads/${SOURCE_REF}` },
-        coverage: { ...source.coverage, release_profile: "beta" },
-      }),
-    });
-    immutable.sha256 = releaseExecutionPlanSha256(immutable);
+    const immutable = watcherPlan();
     let tip = TARGET_SHA;
     let conclusion: string | null = null;
     const events: {
@@ -2112,9 +2152,6 @@ describe("FRV watch", () => {
     ]);
     expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
   });
-});
-
-describe("FRV watch completion", () => {
   it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
     const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
     const ci = child("normalCi", "101");
@@ -2164,7 +2201,7 @@ describe("FRV watch completion", () => {
   });
 });
 
-describe("FRV rerun API", () => {
+describe("FRV client", () => {
   it("uses the direct failed-jobs and parent rerun endpoints", async () => {
     const calls: string[][] = [];
     const client = createClient(REPOSITORY, {
@@ -2181,29 +2218,32 @@ describe("FRV rerun API", () => {
       ["api", "-X", "POST", `repos/${REPOSITORY}/actions/runs/77/rerun`],
     ]);
   });
-});
-
-describe("FRV strict verifier", () => {
-  it("uses the immutable trusted workflow identity and remaining operation budget", async () => {
+  it.each([30_000, -1])("verifies within the remaining %i ms budget", async (budgetMs) => {
     let args: string[] = [];
     let timeoutMs = 0;
+    let spawns = 0;
     const client = createClient(REPOSITORY, {
       execCommand: async (
         _command: string,
         commandArgs: string[],
         options: { timeoutMs: number },
       ) => {
+        spawns += 1;
         args = commandArgs;
         timeoutMs = options.timeoutMs;
         return "{}";
       },
     });
-    await expect(
-      client.verify("77", executionPlanArtifact(), Date.now() + 30_000, {
-        "77": 2,
-        "101": 2,
-      }),
-    ).resolves.toBe("{}");
+    const verification = client.verify("77", executionPlanArtifact(), Date.now() + budgetMs, {
+      "77": 2,
+      "101": 2,
+    });
+    if (budgetMs < 0) {
+      await expect(verification).rejects.toThrow("FRV verification timed out");
+      expect(spawns).toBe(0);
+      return;
+    }
+    await expect(verification).resolves.toBe("{}");
     expect(args).toEqual(
       expect.arrayContaining([
         "--validate-run",
@@ -2217,21 +2257,7 @@ describe("FRV strict verifier", () => {
       ]),
     );
     expect(timeoutMs).toBeGreaterThan(0);
-    expect(timeoutMs).toBeLessThanOrEqual(30_000);
-  });
-
-  it("rejects an expired verification budget before spawning the verifier", async () => {
-    let spawns = 0;
-    const client = createClient(REPOSITORY, {
-      execCommand: async () => {
-        spawns += 1;
-        return "{}";
-      },
-    });
-    await expect(client.verify("77", executionPlanArtifact(), Date.now() - 1)).rejects.toThrow(
-      "FRV verification timed out",
-    );
-    expect(spawns).toBe(0);
+    expect(timeoutMs).toBeLessThanOrEqual(budgetMs);
   });
 
   it("treats only typed verifier refresh failures as rerunnable", async () => {

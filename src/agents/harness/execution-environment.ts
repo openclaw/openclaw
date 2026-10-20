@@ -1,4 +1,6 @@
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   captureSessionActorStorageOwner,
@@ -8,10 +10,11 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
+import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
+import { resolveRequesterConversationToolPolicy } from "../requester-tool-policy.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -20,6 +23,7 @@ import { resolveScheduledToolCallerContext } from "../scheduled-tool-policy.js";
 import {
   withPreparedSessionCapabilityRead,
   type PreparedSessionCapabilityEntry,
+  type SessionCapabilitySnapshot,
 } from "../subagents/spawn/subagent-session-store.js";
 import { isKnownCoreToolId } from "../tool-catalog.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
@@ -31,6 +35,7 @@ import {
   readToolAllowlistIntersection,
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
+import { resolveWebSearchToolPolicy } from "../web-search-tool-policy.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import type { AgentHarness } from "./types.js";
 
@@ -135,7 +140,8 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
   const exec = resolveExecConfigState({ cfg, agentId, sessionKey, sessionEntry: entry });
   const nativeRuntimeConsent =
     entry.permissionMode === "full" && entry.sandboxMode === "off"
-      ? entry.nativeRuntimeConsent
+      ? (entry.nativeRuntimeConsent ??
+        (hasRememberedNativeRuntimeConsent(cfg, agentId, harness.id) ? harness.id : undefined))
       : undefined;
   return resolveAgentHarnessExecutionRestriction(harness, {
     sandboxed: sandbox.sandboxed || exec.host === "sandbox",
@@ -268,16 +274,29 @@ function assertPreparedAgentHarnessExecutionEnvironment(
   nativeSource: boolean,
   runtime: ReturnType<typeof resolveSandboxRuntimeStatus>,
 ): boolean {
-  // Consent belongs to this incarnation, never a parent or classification session.
+  const remembered = hasRememberedNativeRuntimeConsent(
+    params.config,
+    resolveSessionAgentId({
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    }),
+    harness.id,
+  );
+  // Per-chat consent belongs to this incarnation; agent consent authorizes the selected harness.
   const nativeRuntimeConsent =
     entry?.sessionId === params.sessionId &&
-    entry.agentRuntimeOverride === harness.id &&
+    (entry.agentRuntimeOverride === harness.id || remembered) &&
     entry.permissionMode === "full" &&
+    params.permissionMode === "full" &&
+    !params.sandbox?.enabled &&
     entry.sandboxMode === "off" &&
     !params.disableTools &&
     params.toolsAllow === undefined &&
     !params.swarmCollector
-      ? entry.nativeRuntimeConsent
+      ? remembered
+        ? harness.id
+        : entry.nativeRuntimeConsent
       : undefined;
   const exec = resolveExecConfigState({
     cfg: params.config,
@@ -325,12 +344,19 @@ type PluginHarnessToolPolicyContext = Pick<
   | "sessionKey"
   | "sandboxSessionKey"
   | "sandboxAgentId"
+  | "sandbox"
   | "agentId"
   | "provider"
   | "modelId"
   | "messageProvider"
   | "messageChannel"
   | "conversationToolPolicy"
+  | "requesterOrigin"
+  | "operatorProfileId"
+  | "conversationId"
+  | "chatType"
+  | "messageThreadId"
+  | "memberRoleIds"
   | "spawnedBy"
   | "groupId"
   | "groupChannel"
@@ -357,19 +383,20 @@ type PluginHarnessToolPolicyContext = Pick<
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
 
 export type ResolvedPluginHarnessToolPolicies = {
+  webSearchPolicy?: EmbeddedRunAttemptParams["preparedWebSearchPolicy"];
   senderPolicy?: PluginHarnessToolPolicy;
   senderScopedGroupPolicy?: PluginHarnessToolPolicy;
   groupPolicy?: PluginHarnessToolPolicy;
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
   requiresLiveToolAuthority: boolean;
+  toolPolicyScope: "conversation" | "turn";
   toolPolicyRestricted: boolean;
 };
 
-export async function preparePluginHarnessPolicyToolsAllow(
-  params: PluginHarnessToolPolicyContext,
-): Promise<[] | undefined> {
-  const policies = await preparePluginHarnessToolPolicies(params);
+export function resolvePluginHarnessPolicyToolsAllow(
+  policies: ResolvedPluginHarnessToolPolicies,
+): [] | undefined {
   return [policies.senderPolicy, policies.groupPolicy, ...policies.runtimePolicies].some(
     toolPolicyRestrictsTools,
   )
@@ -395,31 +422,72 @@ export async function preparePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
   nativeToolNames?: readonly string[],
+  webSearchModel?: ModelRef | null,
 ): Promise<ResolvedPluginHarnessToolPolicies> {
-  const consume = (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) =>
-    withPreparedSessionCapabilityRead(() =>
-      resolvePluginHarnessToolPolicies(params, safeDenyToolNames, nativeToolNames, sandbox),
+  const consume = (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+    const requesterFacts = new Map<string, SessionCapabilitySnapshot>();
+    return withPreparedSessionCapabilityRead(
+      () => {
+        requesterFacts.clear();
+        const policies = resolvePluginHarnessToolPolicies(
+          params,
+          safeDenyToolNames,
+          nativeToolNames,
+          sandbox,
+        );
+        const webSearchPolicy = webSearchModel
+          ? resolveWebSearchToolPolicy({
+              ...params,
+              modelProvider: webSearchModel.provider,
+              modelId: webSearchModel.model,
+              // An independent policy session can belong to another agent than the execution.
+              agentId: sandbox.classificationAgentId,
+              sessionKey: sandbox.classificationSessionKey || params.sessionId,
+              messageProvider: params.messageChannel ?? params.messageProvider,
+              sandboxToolPolicy:
+                params.sandbox !== undefined
+                  ? params.sandbox?.tools
+                  : sandbox.sandboxed
+                    ? sandbox.toolPolicy
+                    : undefined,
+            })
+          : undefined;
+        return {
+          ...policies,
+          webSearchPolicy:
+            webSearchModel === null
+              ? { allowed: false, persistentAllowed: false }
+              : webSearchPolicy && {
+                  ...webSearchPolicy,
+                  modelRef: webSearchModel,
+                  requesterFacts: [...requesterFacts.values()],
+                },
+        };
+      },
+      {
+        onRead: webSearchModel
+          ? (snapshot) => requesterFacts.set(JSON.stringify(snapshot.query), snapshot)
+          : undefined,
+      },
     );
+  };
+  const runtimeParams = {
+    cfg: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
+    classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    classificationAgentId: params.sandboxAgentId,
+  };
   if (params.preparedSessionEntry !== undefined) {
     return consume(
       resolveSandboxRuntimeStatus({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
-        classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
-        classificationAgentId: params.sandboxAgentId,
+        ...runtimeParams,
         preparedSessionEntry: params.preparedSessionEntry,
       }),
     );
   }
   return withSandboxRuntimeStatusInWorker(
-    {
-      cfg: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
-      classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
-      classificationAgentId: params.sandboxAgentId,
-    },
+    runtimeParams,
     { env: process.env, cwd: process.cwd(), assertCurrent() {} },
     consume,
   );
@@ -485,6 +553,12 @@ export function resolvePluginHarnessToolPolicies(
     messageProvider,
     messageChannel: params.messageChannel,
     conversationToolPolicy: params.conversationToolPolicy,
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
+    chatType: params.chatType,
+    messageThreadId: params.messageThreadId,
+    memberRoleIds: params.memberRoleIds,
     agentAccountId: params.agentAccountId,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
@@ -506,6 +580,9 @@ export function resolvePluginHarnessToolPolicies(
     channel: messageProvider,
   });
   const groupPolicyParams = {
+    requesterOrigin: params.requesterOrigin,
+    conversationId: params.conversationId,
+    chatType: params.chatType,
     config: params.config,
     sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
     spawnedBy: params.spawnedBy,
@@ -514,7 +591,7 @@ export function resolvePluginHarnessToolPolicies(
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
-    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -551,13 +628,31 @@ export function resolvePluginHarnessToolPolicies(
     mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
     mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),
   ];
+  const systemAgentOnlyAllowlist =
+    isHostScopedAgentToolActive("openclaw") && isSystemAgentOnlyAllowlist(params.toolsAllow);
+  const senderScopedGroupPolicy = resolveSenderScopedGroupToolPolicy(
+    params,
+    groupPolicyParams,
+    policy.groupPolicy,
+  );
   return {
+    // A no-op wildcard policy does not change lifetime; additive grants still do.
+    toolPolicyScope:
+      params.disableTools ||
+      (!systemAgentOnlyAllowlist && toolPolicyRestrictsTools(requestedToolPolicy)) ||
+      (params.scheduledToolPolicy?.mode === "account" &&
+        (explicitPolicies.some(toolPolicyRestrictsTools) ||
+          profilePolicies.some(toolPolicyRestrictsTools))) ||
+      params.runtimePluginToolGrant !== undefined ||
+      // A persisted delegation floor still requires this turn's live grant projection.
+      Boolean(policy.delegatedToolPolicy) ||
+      params.swarmCollector === true ||
+      toolPolicyRestrictsTools(policy.senderPolicy) ||
+      toolPolicyRestrictsTools(senderScopedGroupPolicy)
+        ? "turn"
+        : "conversation",
     senderPolicy: policy.senderPolicy,
-    senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
-      params,
-      groupPolicyParams,
-      policy.groupPolicy,
-    ),
+    senderScopedGroupPolicy,
     groupPolicy: policy.groupPolicy,
     runtimePolicies: [
       ...profilePolicies,
@@ -584,6 +679,10 @@ export function resolvePluginHarnessToolPolicies(
         toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
       ),
   };
+}
+
+export function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
 }
 
 function collectHarnessSafeDeniedToolNames(
@@ -618,14 +717,23 @@ function toolPolicyRestrictsHarnessNativeTools(
 
 function resolveSenderScopedGroupToolPolicy(
   params: PluginHarnessToolPolicyContext,
-  groupPolicyParams: Parameters<typeof resolveGroupToolPolicy>[0],
+  groupPolicyParams: Parameters<typeof resolveRequesterConversationToolPolicy>[0],
   groupPolicy: { deny?: string[] } | undefined,
 ): { deny?: string[] } | undefined {
   if (!policyDeniesAllTools(groupPolicy) || !hasSenderIdentity(params)) {
     return undefined;
   }
-  const groupPolicyWithoutSender = resolveGroupToolPolicy({
+  const groupPolicyWithoutSender = resolveRequesterConversationToolPolicy({
     ...groupPolicyParams,
+    requesterOrigin: params.requesterOrigin
+      ? {
+          ...params.requesterOrigin,
+          senderId: undefined,
+          senderName: undefined,
+          senderUsername: undefined,
+          senderE164: undefined,
+        }
+      : undefined,
     senderId: undefined,
     senderName: undefined,
     senderUsername: undefined,
@@ -635,11 +743,12 @@ function resolveSenderScopedGroupToolPolicy(
 }
 
 function hasSenderIdentity(params: PluginHarnessToolPolicyContext): boolean {
+  const requester = params.requesterOrigin ?? params;
   return Boolean(
-    params.senderId?.trim() ||
-    params.senderName?.trim() ||
-    params.senderUsername?.trim() ||
-    params.senderE164?.trim(),
+    requester.senderId?.trim() ||
+    requester.senderName?.trim() ||
+    requester.senderUsername?.trim() ||
+    requester.senderE164?.trim(),
   );
 }
 

@@ -11,14 +11,13 @@ scenario:
   successCriteria:
     - The bundled document-extract plugin supplies the PDF extractor.
     - A parseable inline PDF yields its sentinel text through real clawpdf.
-    - The document extractor runtime tags the result with extractor pdf.
+    - Bundled document extractor discovery selects the pdf extractor.
     - Disabling document extraction produces the explicit unavailable error.
   docsRefs:
     - docs/plugins/reference/document-extract.md
     - docs/tools/pdf.md
   codeRefs:
     - src/media/pdf-extract.ts
-    - src/media/document-extractors.runtime.ts
     - src/plugins/document-extractors.runtime.ts
     - extensions/document-extract/document-extractor.ts
     - test/e2e/qa-lab/media/pdf-document-extraction-dispatch.e2e.test.ts

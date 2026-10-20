@@ -14,7 +14,6 @@ import {
   resolveSlackBlocksText,
   resolveSlackMessageText as resolveSharedSlackMessageText,
 } from "./block-text.js";
-import { pruneExpiredMapEntries } from "./lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./message-handler/timestamp.js";
 
 export type SlackThreadStarter = {
@@ -34,11 +33,6 @@ type SlackThreadStarterCacheEntry = {
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarterCacheEntry>();
 const THREAD_STARTER_CACHE_TTL_MS = 6 * 60 * 60_000;
 const THREAD_STARTER_CACHE_MAX = 2000;
-
-function evictThreadStarterCache(): void {
-  pruneExpiredMapEntries(THREAD_STARTER_CACHE, Date.now());
-  pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
-}
 
 function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
@@ -120,7 +114,6 @@ export async function resolveSlackThreadStarter(params: {
   workspaceScope: { accountId: string; teamId: string };
   refresh?: boolean;
 }): Promise<SlackThreadStarter | null> {
-  evictThreadStarterCache();
   const cacheKey = JSON.stringify([
     params.workspaceScope.accountId,
     params.workspaceScope.teamId,
@@ -128,7 +121,7 @@ export async function resolveSlackThreadStarter(params: {
     params.threadTs,
   ]);
   const cached = THREAD_STARTER_CACHE.get(cacheKey);
-  if (cached && !params.refresh) {
+  if (cached && !params.refresh && cached.expiresAt > Date.now()) {
     return cached.value;
   }
   if (params.refresh) {
@@ -159,7 +152,7 @@ export async function resolveSlackThreadStarter(params: {
       value: starter,
       expiresAt: Date.now() + THREAD_STARTER_CACHE_TTL_MS,
     });
-    evictThreadStarterCache();
+    pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
     return starter;
   } catch (err) {
     logVerbose(

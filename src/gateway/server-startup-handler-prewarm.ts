@@ -68,9 +68,9 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
           return;
         }
         const { prewarmMemorySearchWorker } = loadBundledPluginPublicArtifactModuleSync<{
-          prewarmMemorySearchWorker: () => Promise<void>;
+          prewarmMemorySearchWorker: (config: OpenClawConfig) => Promise<void>;
         }>({ dirName: "memory-core", artifactBasename: "prewarm-api.js" });
-        await prewarmMemorySearchWorker();
+        await prewarmMemorySearchWorker(getConfig());
       },
     },
     {

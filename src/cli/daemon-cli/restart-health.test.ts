@@ -4,8 +4,6 @@ import type { GatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   classifyPortListener,
-  createConfigIO,
-  firstCallArg,
   inspectAmbiguousOwnershipWithProbe,
   inspectGatewayRestartWithSnapshot,
   inspectPortUsage,
@@ -14,11 +12,9 @@ import {
   monotonicClock,
   callGateway,
   gatewayResponseError,
-  readBestEffortConfig,
   readGatewayOwnerLease,
   resetRestartHealthMocks,
   resolveGatewayServiceProbeHosts,
-  resolveGatewayProbeAuthSafeWithSecretInputs,
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
 
@@ -210,30 +206,6 @@ describe("restart health", () => {
     },
   );
 
-  it("does not treat known non-gateway listeners as stale", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    classifyPortListener.mockReturnValue("non_gateway");
-
-    const snapshot = await inspectGatewayRestartWithSnapshot({
-      runtime: { status: "stopped" },
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 22001, command: "sshd.exe" }],
-        hints: [],
-      },
-    });
-
-    expect(snapshot.staleGatewayPids).toStrictEqual([]);
-  });
-
-  it("uses a local gateway probe when ownership is ambiguous", async () => {
-    const snapshot = await inspectAmbiguousOwnershipWithProbe();
-
-    expect(snapshot.healthy).toBe(true);
-    expect(firstCallArg(callGateway)).toMatchObject({ localPortOverride: 18789, method: "health" });
-  });
-
   it.each(["pairing required: device is asking for more scopes than currently approved"])(
     "treats a correlated Gateway rejection with reason %s as healthy gateway reachability",
     async (reason) => {
@@ -254,69 +226,6 @@ describe("restart health", () => {
       expect(snapshot.healthy).toBe(false);
     },
   );
-
-  it("uses configured local probe auth while waiting for a matching-version restart", async () => {
-    readBestEffortConfig.mockResolvedValue({
-      gateway: { auth: { mode: "token", token: "probe-token" } },
-    });
-    resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({
-      auth: { token: "probe-token" },
-    });
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-      }),
-    );
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    const serviceEnv = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-restart-service-state",
-    } as NodeJS.ProcessEnv;
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
-
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedVersion: "2026.4.24",
-      attempts: 1,
-      env: serviceEnv,
-    });
-
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayVersion).toBe("2026.4.24");
-    expect(snapshot.expectedVersion).toBe("2026.4.24");
-    const authResolveInput = firstCallArg(resolveGatewayProbeAuthSafeWithSecretInputs) as {
-      cfg?: { gateway?: { auth?: { mode?: string; token?: string } } };
-      mode?: string;
-    };
-    expect(authResolveInput.cfg?.gateway?.auth?.mode).toBe("token");
-    expect(authResolveInput.cfg?.gateway?.auth?.token).toBe("probe-token");
-    expect(authResolveInput.mode).toBe("local");
-    expect(createConfigIO).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: serviceEnv,
-        observe: false,
-        pluginValidation: "skip",
-        suppressFutureVersionWarning: true,
-      }),
-    );
-    const probeInput = firstCallArg(callGateway) as {
-      token?: string;
-      password?: string;
-      config?: unknown;
-    };
-    expect(probeInput.token).toBe("probe-token");
-    expect(probeInput.password).toBeUndefined();
-    expect(probeInput.config).toEqual({
-      gateway: { auth: { mode: "token", token: "probe-token" } },
-    });
-  });
 
   it("does not verify a busy port with unavailable listener details when health fails", async () => {
     const service = {

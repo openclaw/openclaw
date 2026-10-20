@@ -80,6 +80,33 @@ describe("openrouter Fusion prompt hooks", () => {
     expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
   });
 
+  it("uses the bound agent's model-specific Fusion configuration", () => {
+    const contribution = resolveContribution(
+      {
+        defaults: {
+          models: {
+            "openrouter/fusion": {
+              params: { extraBody: fusionBody({ model: "default/model" }) },
+            },
+          },
+        },
+        entries: {
+          reviewer: {
+            models: {
+              "openrouter/openrouter/fusion": {
+                params: { extraBody: fusionBody({ model: "reviewer/model" }) },
+              },
+            },
+          },
+        },
+      },
+      "reviewer",
+    );
+
+    expect(contribution?.dynamicSuffix).toContain("Final Fusion model: reviewer/model.");
+    expect(contribution?.dynamicSuffix).not.toContain("default/model");
+  });
+
   it("keeps arbitrary OpenRouter extraBody fields out of the system prompt", () => {
     const contribution = resolveContribution(
       createFusionModelConfig("openrouter/openrouter/fusion", {

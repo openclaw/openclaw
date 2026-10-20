@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -157,12 +158,16 @@ test("archiving a non-default agent ignores the compatibility owner's ownerless 
     storePath,
   });
 
-  const chatAbortControllers = new Map();
   const compatibilityRun = registerChatAbortController({
-    chatAbortControllers,
     runId: "run-ops-ownerless",
     sessionId,
     sessionKey: "legacy-unscoped",
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "legacy-unscoped",
+      agentId: "ops",
+      incarnation: sessionId,
+    }),
     timeoutMs: 60_000,
   });
 
@@ -174,7 +179,6 @@ test("archiving a non-default agent ignores the compatibility owner's ownerless 
         agentRunSeq: new Map(),
         broadcast: vi.fn(),
         cancelRunBoundApprovals: vi.fn(),
-        chatAbortControllers,
         chatRunState: createChatRunState(),
         getRuntimeConfig: () => cfg,
         nodeSendToSession: vi.fn(),

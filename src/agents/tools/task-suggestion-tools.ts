@@ -66,9 +66,7 @@ export function createTaskSuggestionTools(params: {
   sessionKey: string;
   agentId?: string;
   cwd: string;
-  callGateway?: typeof callGatewayTool;
 }): AnyAgentTool[] {
-  const gatewayCall = params.callGateway ?? callGatewayTool;
   return [
     {
       label: "Suggest Task",
@@ -77,7 +75,7 @@ export function createTaskSuggestionTools(params: {
       description: [
         "Flag an out-of-scope issue as a separate follow-up task instead of ignoring it, fixing it inline, or only mentioning it in your reply — a follow-up described in prose is lost; recording it here is what surfaces it to the operator.",
         "Nothing is spawned or started: this only records a card.",
-        "This is the tool behind requests like 'flag it as a follow-up', 'note that for later', or 'make a task for that'; whenever you would write 'Follow-up:' in a reply, call this instead.",
+        "Use for proposals and requests like 'flag it as a follow-up' or 'note that for later', not explicit requests to start/create a session or spin up a new task. Whenever you would write 'Follow-up:' in a reply, call this instead.",
         "Use this whenever work you were not asked to do surfaces along the way: dead code, stale docs, missing coverage, a confirmed TODO, or a security issue spotted in passing.",
         "Requests to stay scoped or skip cleanup apply to doing the work, not to flagging it: this only records a suggestion card in the operator's UI; nothing runs unless they accept it, and your current turn continues uninterrupted.",
         "Do not flag vague code-smell observations or low-confidence hunches.",
@@ -100,7 +98,7 @@ export function createTaskSuggestionTools(params: {
         if (!path.isAbsolute(cwd)) {
           throw new ToolInputError("cwd must be an absolute path");
         }
-        const result = await gatewayCall<TaskSuggestionsCreateResult>(
+        const result = await callGatewayTool<TaskSuggestionsCreateResult>(
           "taskSuggestions.create",
           {},
           {
@@ -129,7 +127,7 @@ export function createTaskSuggestionTools(params: {
         const input = args as Record<string, unknown>;
         const taskId = readToolStringParam(input, "task_id", { required: true });
         const reason = readToolStringParam(input, "reason");
-        const result = await gatewayCall<TaskSuggestionsDismissResult>(
+        const result = await callGatewayTool<TaskSuggestionsDismissResult>(
           "taskSuggestions.dismiss",
           {},
           {

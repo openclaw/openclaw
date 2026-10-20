@@ -3122,9 +3122,12 @@ class WearChatEventFlowTest {
     }
 
     fun close() {
+      idle()
       replyObserver?.pause()?.stop()?.destroy()
       owner.viewModelStore.clear()
-      idle()
+      // Disposal shuts down the speech Looper before its thread necessarily exits.
+      // Drain remaining UI cleanup without sending control tasks to that Looper.
+      shadowOf(Looper.getMainLooper()).idle()
       clientField.set(app, previousClient)
       repositoryField.set(app, previousRepository)
       originalScale?.let { Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, it) }

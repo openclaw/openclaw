@@ -17,6 +17,7 @@ import {
   type CodeModeNativeCall,
 } from "./event-projector-code-mode.js";
 import {
+  auditNativeToolTerminalStatus,
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   isProjectedNativeToolItem,
@@ -494,14 +495,17 @@ export class CodexToolTranscriptProjection {
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
+    const status =
+      params.status === "running" ? "running" : auditNativeToolTerminalStatus(params.item);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
       itemId: params.item.id,
       toolCallId: params.item.id,
       name: params.name,
-      status: params.status,
+      status,
       isError: isNonSuccessItemStatus(params.status),
+      ...(status === "running" || status === "unknown" ? {} : { success: status === "completed" }),
       ...(toolResult ? { result: toolResult } : {}),
       ...(output ? { output } : {}),
     });
@@ -585,6 +589,7 @@ export class CodexToolTranscriptProjection {
         name,
         status: processId ? "running" : "failed",
         isError: !processId,
+        ...(!processId ? { success: false } : {}),
         result: processId
           ? { status: "running", processId }
           : { status: "failed", reason: "missing_tool_result" },

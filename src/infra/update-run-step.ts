@@ -101,7 +101,9 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       termination: step.termination,
       signal: step.signal,
       stderrTail:
-        failed && step.termination === "signal" && step.stderrTail
+        failed &&
+        (step.termination === "signal" || step.name === "candidate-state-snapshot") &&
+        step.stderrTail
           ? truncateUtf16Safe(step.stderrTail, 8192)
           : undefined,
       // A completed retry replaces diagnostics from the previous attempt with the same ID.
@@ -149,13 +151,17 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
 }
 
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
-    (step.step === "reconcile:settle" ||
-      (step.status === "completed" && step.step.startsWith("warning:"))) &&
-    step.detail
-      ? [step.detail]
-      : [],
-  );
+  return [
+    ...new Set(
+      steps.flatMap((step) =>
+        (step.step === "reconcile:settle" ||
+          (step.status === "completed" && step.step.startsWith("warning:"))) &&
+        step.detail
+          ? [step.detail]
+          : [],
+      ),
+    ),
+  ];
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

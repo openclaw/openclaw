@@ -198,38 +198,37 @@ export function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | 
 
 function resolveOpenAIRequestedServiceTier(
   extraParams?: Record<string, unknown>,
+  serviceTiers?: readonly string[],
 ): OpenAIServiceTier | undefined {
   const explicitTier = normalizeOpenAIServiceTier(
     extraParams?.serviceTier ?? extraParams?.service_tier,
   );
-  if (explicitTier) {
-    return explicitTier;
-  }
   const rawFastMode = extraParams?.fastMode ?? extraParams?.fast_mode;
   const fastMode = normalizeFastMode(
     typeof rawFastMode === "function" ? rawFastMode() : rawFastMode,
   );
-  return fastMode === "ultrafast" ? "ultrafast" : fastMode ? "priority" : undefined;
+  // Authored tiers remain operator-owned; model restrictions apply to speed overrides.
+  return fastMode === undefined || fastMode === "auto"
+    ? explicitTier
+    : fastMode === "ultrafast" && (!serviceTiers || serviceTiers.includes("ultrafast"))
+      ? "ultrafast"
+      : fastMode
+        ? "priority"
+        : explicitTier
+          ? "default"
+          : undefined;
 }
 
-/** Resolve the same explicit-tier-before-fast-mode precedence used at request egress. */
+/** Resolve the same speed-override-before-default-tier precedence used at request egress. */
 export function resolveOpenAIResponsesRequestContextTokens(
   model: OpenAIResponsesPayloadModel,
   extraParams?: Record<string, unknown>,
   serviceTiers?: readonly string[],
 ): number | undefined {
-  // Authored service tiers remain operator-owned; model restrictions apply to Fast mode.
-  if (
-    serviceTiers &&
-    !serviceTiers.includes("ultrafast") &&
-    !normalizeOpenAIServiceTier(extraParams?.serviceTier ?? extraParams?.service_tier)
-  ) {
-    return undefined;
-  }
   return resolveOpenAIResponsesPayloadCapabilities(model).allowsOpenAIServiceTier
     ? resolveModelServiceTierContextTokens(
         normalizeOptionalLowercaseString(model.provider),
-        resolveOpenAIRequestedServiceTier(extraParams),
+        resolveOpenAIRequestedServiceTier(extraParams, serviceTiers),
       )
     : undefined;
 }

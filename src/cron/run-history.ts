@@ -22,6 +22,7 @@ type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
 export type ReadCronRunHistoryPageOptions = {
   storeKey: string;
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   jobId?: string;
@@ -32,6 +33,8 @@ export type ReadCronRunHistoryPageOptions = {
   deliveryStatus?: CronDeliveryStatus;
   deliveryStatuses?: CronDeliveryStatus[];
   query?: string;
+  /** Matches computed while the worker holds each bounded batch of search details. */
+  queryMatchedTaskIds?: ReadonlySet<string>;
   sortDir?: CronRunHistorySortDir;
   jobNameById?: Record<string, string>;
   /** Filter before paging so hidden runs cannot consume page slots or inflate totals. */
@@ -91,6 +94,16 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
   ].join(" ");
 }
 
+export function cronRunHistoryMatchesQuery(
+  entry: CronRunLogEntry,
+  query: string,
+  jobNameById?: Record<string, string>,
+): boolean {
+  return normalizeLowercaseStringOrEmpty(queryText(entry, jobNameById)).includes(
+    normalizeLowercaseStringOrEmpty(query),
+  );
+}
+
 function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string, string>): void {
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
@@ -104,6 +117,14 @@ export function projectCronRunHistoryPage(
   records: readonly CronRunRecord[],
   options: ReadCronRunHistoryPageOptions,
 ): CronRunHistoryPage {
+  return selectCronRunHistoryPage(records, options).page;
+}
+
+/** Select identities before loading page-sized response details. */
+export function selectCronRunHistoryPage(
+  records: readonly CronRunRecord[],
+  options: ReadCronRunHistoryPageOptions,
+): { page: CronRunHistoryPage; records: CronRunRecord[] } {
   const jobId = options.jobId ? normalizeCronRunJobId(options.jobId) : undefined;
   const limit = Math.max(1, Math.min(200, Math.floor(options.limit ?? 50)));
   const offset = Math.max(0, Math.floor(options.offset ?? 0));
@@ -134,7 +155,7 @@ export function projectCronRunHistoryPage(
     rows = exact.length ? exact : aliases.length === 1 ? aliases : [];
   }
   rows = rows
-    .filter(({ entry }) => {
+    .filter(({ record, entry }) => {
       if (statuses && (!entry.status || !statuses.includes(entry.status))) {
         return false;
       }
@@ -143,7 +164,9 @@ export function projectCronRunHistoryPage(
       }
       return (
         (!query ||
-          normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)) &&
+          (options.queryMatchedTaskIds
+            ? options.queryMatchedTaskIds.has(record.id)
+            : cronRunHistoryMatchesQuery(entry, query, options.jobNameById))) &&
         (!options.entryFilter || options.entryFilter(entry))
       );
     })
@@ -152,15 +175,27 @@ export function projectCronRunHistoryPage(
     );
   const total = rows.length;
   const boundedOffset = Math.min(total, offset);
-  const entries = rows.slice(boundedOffset, boundedOffset + limit).map(({ entry }) => entry);
+  const selected = rows.slice(boundedOffset, boundedOffset + limit);
+  const entries = selected.map(({ entry }) => entry);
   attachJobNames(entries, options.jobNameById);
+  if (options.view === "summary") {
+    // Search and visibility use the full record before pruning the response page.
+    for (const entry of entries) {
+      delete entry.diagnostics;
+      delete entry.delivery;
+      delete entry.failureNotificationDelivery;
+    }
+  }
   const nextOffset = boundedOffset + entries.length;
   return {
-    entries,
-    total,
-    offset: boundedOffset,
-    limit,
-    hasMore: nextOffset < total,
-    nextOffset: nextOffset < total ? nextOffset : null,
+    records: selected.map(({ record }) => record),
+    page: {
+      entries,
+      total,
+      offset: boundedOffset,
+      limit,
+      hasMore: nextOffset < total,
+      nextOffset: nextOffset < total ? nextOffset : null,
+    },
   };
 }

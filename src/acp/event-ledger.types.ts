@@ -110,6 +110,6 @@ export function normalizeAcpLedgerEvent(raw: unknown): AcpEventLedgerEntry | und
     sessionId,
     sessionKey,
     ...(typeof runId === "string" && runId ? { runId } : {}),
-    update: structuredClone(raw.update) as SessionUpdate,
+    update: raw.update as SessionUpdate,
   };
 }

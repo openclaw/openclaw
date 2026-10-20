@@ -41,6 +41,14 @@ describe("resolveRetryAfterMs", () => {
 
 describe("classifyRateLimitWindow", () => {
   it.each([
+    ["请求过于频繁，请稍后重试", "short"],
+    ["请求过于频繁; please retry later", "short"],
+    ["上下文长度上限为 128k tokens", "unknown"],
+  ])("keeps transient throttles and context caps out of long windows: %s", (message, kind) => {
+    expect(classifyRateLimitWindow(message, NOW_MS)).toEqual({ kind });
+  });
+
+  it.each([
     [
       "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM). Please try again in 1s.",
       true,

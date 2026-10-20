@@ -8,9 +8,12 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { WorkerOperations } from "../state/worker-operation-registry.js";
 import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
-import type { NodeWorkerJournalWorkerOperations } from "./node-worker-journal.worker-contract.js";
+import type { nodeWorkerJournalOperations } from "./node-worker-journal.worker.js";
 import { nodePreparedWorkspacePublication } from "./node-worker-prepared-workspace-publication.js";
+
+type NodeWorkerJournalWorkerOperations = WorkerOperations<typeof nodeWorkerJournalOperations>;
 
 type JournalScope = {
   execute<Key extends keyof NodeWorkerJournalWorkerOperations>(command: {

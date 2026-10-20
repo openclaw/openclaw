@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ProviderStreamOptions } from "./provider-types.js";
 import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.js";
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
@@ -68,6 +69,28 @@ export const reasoningTagTextPolicy = {
   },
 };
 
+const PREPARED_REQUEST_SUFFIX = Symbol("preparedRequestSuffix");
+
+/** The caller supplies a captured wire prefix; transport repair must retain its late tool results. */
+export const preparedRequestSuffix = {
+  mark(context: object, toolCallIds: ReadonlySet<string>): void {
+    Reflect.set(context, PREPARED_REQUEST_SUFFIX, toolCallIds);
+  },
+  has(context: object): boolean {
+    return Reflect.has(context, PREPARED_REQUEST_SUFFIX);
+  },
+  hasToolCall(context: object, id: string): boolean {
+    // SAFETY: Only mark() writes this private carrier, with captured prefix wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids?.has(id) ?? false;
+  },
+  toolCallId(context: object, id: string, normalized: string): string {
+    // SAFETY: Only mark() writes this private carrier, with the captured prefix's wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids && !ids.has(id) && ids.has(normalized) ? normalized : id;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
@@ -127,7 +150,7 @@ export interface AnthropicOptions extends StreamOptions, AnthropicContextManagem
 }
 
 /** Options shared by the OpenAI Responses and Completions transports. */
-export type BaseOpenAIStreamOptions = StreamOptions & {
+export type BaseOpenAIStreamOptions = ProviderStreamOptions & {
   topP?: number;
   authProfileId?: string;
   firstEventTimeoutMs?: number;

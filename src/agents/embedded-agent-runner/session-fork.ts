@@ -1,13 +1,16 @@
+import { deserialize, serialize } from "node:v8";
 import { getAiTransportHost } from "@openclaw/ai";
 import {
   independentResponsesRequest,
+  modelRequestBodyState,
   responsesRequestLifecycle,
 } from "@openclaw/ai/internal/openai";
 import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
-import { isCredentialFieldName } from "@openclaw/ai/internal/shared";
+import { isCredentialFieldName, preparedRequestSuffix } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import type { Message, Model } from "../../llm/types.js";
+import { isPlainData } from "../../shared/immutable-data.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../usage.js";
@@ -21,12 +24,11 @@ type StreamOptions = NonNullable<Parameters<StreamFn>[2]>;
 export type EmbeddedSessionForkIdentity = { sessionId: string; agentId: string; runId: string };
 type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
-  model: Model;
-  context: Buffer;
-  publications: Message[];
+  metadata: Buffer;
   options: StreamOptions;
+  publications: (Buffer | Message)[];
   streamFn: StreamFn;
-  payload: Buffer;
+  payload: Blob;
   expires: number;
   bytes: number;
   expiryTimer: NodeJS.Timeout;
@@ -98,8 +100,11 @@ export function recordEmbeddedSessionForkMessage(
     return;
   }
   try {
-    const completed = structuredClone(message);
-    const bytes = Buffer.byteLength(JSON.stringify(completed));
+    // Provider plugins can consume opaque cloneable details that V8 cannot encode.
+    const completed = isPlainData(message) ? serialize(message) : structuredClone(message);
+    const bytes = Buffer.isBuffer(completed)
+      ? completed.length
+      : Buffer.byteLength(JSON.stringify(completed));
     snapshot.publications.push(completed);
     snapshot.bytes += bytes;
     retainedBytes += bytes;
@@ -116,8 +121,12 @@ export function wrapStreamFnWithSessionFork(
   identity: EmbeddedSessionForkIdentity,
 ): StreamFn {
   return (model, context, options) => {
-    // A transport without a payload boundary must not leave the previous turn replayable.
-    forgetSnapshot(identity.sessionId);
+    // A new run or transport cannot reuse old prepared data. Within the same run,
+    // keep the last committed request until its replacement finishes preparing.
+    const previous = snapshots.get(identity.sessionId);
+    if (previous && (previous.runId !== identity.runId || previous.streamFn !== streamFn)) {
+      forgetSnapshot(identity.sessionId);
+    }
     if (!captures.has(identity.sessionId) && captures.size >= MAX_ENTRIES) {
       const oldest = captures.keys().next().value;
       if (oldest !== undefined) {
@@ -137,27 +146,6 @@ export function wrapStreamFnWithSessionFork(
       headers,
       ...requestOptions
     } = options ?? {};
-    // Retain UTF-8 bytes before streaming mutates history; Unicode must not widen the entire cache.
-    let savedContext: Buffer;
-    try {
-      savedContext = Buffer.from(
-        JSON.stringify({
-          systemPrompt: context.systemPrompt,
-          messages: context.messages,
-          // AgentTool objects also carry executors. Retain only the transport's Tool contract.
-          tools: context.tools?.map(({ name, description, parameters, async }) => ({
-            name,
-            description,
-            parameters,
-            ...(async === false ? { async } : {}),
-          })),
-        }),
-      );
-    } catch {
-      // Skip this capture without revoking running forks; the old snapshot is already forgotten.
-      return streamFn(model, context, options);
-    }
-    const savedModel = structuredClone({ ...model, headers: safeHeaders(model.headers) });
     const savedOptions = { ...requestOptions, headers: safeHeaders(headers) };
     // Internal symbol carriers belong to the parent run, not the independent request.
     for (const key of Object.getOwnPropertySymbols(savedOptions)) {
@@ -168,46 +156,80 @@ export function wrapStreamFnWithSessionFork(
         Reflect.deleteProperty(savedOptions, key);
       }
     }
-    return streamFn(model, context, {
+    const save = (savedPayload: Blob) => {
+      if (!authority.active || authority.capture !== capture) {
+        return;
+      }
+      // Only tool metadata is needed to convert the suffix; the prefix is already on the wire.
+      let metadata: Buffer;
+      try {
+        metadata = Buffer.from(
+          JSON.stringify({
+            model: { ...model, headers: safeHeaders(model.headers) },
+            tools: context.tools?.map(({ name, description, parameters, async }) => ({
+              name,
+              description,
+              parameters,
+              ...(async === false ? { async } : {}),
+            })),
+          }),
+        );
+      } catch {
+        // Optional capture must not fail the parent or revoke already-running forks.
+        return;
+      }
+      const bytes =
+        savedPayload.size + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
+      forgetSnapshot(identity.sessionId);
+      if (bytes <= MAX_BYTES) {
+        snapshots.set(identity.sessionId, {
+          ...identity,
+          metadata,
+          options: savedOptions,
+          publications: [],
+          payload: savedPayload,
+          streamFn,
+          authority,
+          bytes,
+          expires: Date.now() + TTL_MS,
+          expiryTimer: getAiTransportHost().runInDetachedAsyncContext(() =>
+            setTimeout(clearEmbeddedSessionForkSnapshot, TTL_MS, identity.sessionId).unref(),
+          ),
+        });
+        retainedBytes += bytes;
+      } else {
+        clearEmbeddedSessionForkSnapshot(identity.sessionId);
+      }
+      prune();
+    };
+    let preparedPayload: unknown;
+    const capturedOptions: StreamOptions = {
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await onPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
-        if (isRecord(finalPayload) && authority.active && authority.capture === capture) {
-          // Retain wire data once; only forks need a mutable decoded request.
-          const savedPayload = Buffer.from(JSON.stringify(finalPayload));
-          const bytes =
-            savedPayload.length +
-            savedContext.length +
-            Buffer.byteLength(JSON.stringify({ model: savedModel, options: savedOptions })) +
-            22; // ,"context": and ,"payload": within the accounted envelope
-          forgetSnapshot(identity.sessionId);
-          if (bytes <= MAX_BYTES) {
-            snapshots.set(identity.sessionId, {
-              ...identity,
-              model: savedModel,
-              context: savedContext,
-              publications: [],
-              options: savedOptions,
-              payload: savedPayload,
-              streamFn,
-              authority,
-              bytes,
-              expires: Date.now() + TTL_MS,
-              // Expiry owns only the session ID, never the completed turn or its async context.
-              expiryTimer: getAiTransportHost().runInDetachedAsyncContext(() =>
-                setTimeout(clearEmbeddedSessionForkSnapshot, TTL_MS, identity.sessionId).unref(),
-              ),
-            });
-            retainedBytes += bytes;
-          } else {
-            clearEmbeddedSessionForkSnapshot(identity.sessionId);
-          }
-          prune();
+        // Native ChatGPT, Anthropic, and custom transports do not use the encoded-body boundary.
+        if (modelRequestBodyState(capturedOptions).enabled) {
+          preparedPayload = finalPayload;
+        } else if (isRecord(finalPayload)) {
+          save(new Blob([JSON.stringify(finalPayload)]));
         }
         return finalPayload;
       },
-    });
+    };
+    modelRequestBodyState(capturedOptions).onEncoded = (body, payload) => {
+      if (!isRecord(payload)) {
+        return;
+      }
+      // HTTP continuations send only a suffix; an independent fork still needs the full prefix.
+      // Suffix-only retries reuse the captured prefix; a rebuilt request calls onPayload again.
+      if (payload.previous_response_id && preparedPayload === undefined) {
+        return;
+      }
+      save(payload.previous_response_id ? new Blob([JSON.stringify(preparedPayload)]) : body);
+      preparedPayload = undefined;
+    };
+    return streamFn(model, context, capturedOptions);
   };
 }
 
@@ -228,6 +250,13 @@ function stripNewCacheMarkers(value: unknown): unknown {
   );
 }
 
+const FORK_TOOL_CHOICE_SHAPES = new Map<Model["api"], "object" | "string">([
+  ["anthropic-messages", "object"],
+  ["openai-responses", "string"],
+  ["openai-chatgpt-responses", "string"],
+  ["openai-completions", "string"],
+]);
+
 /** Replay prepared payload data, never the parent's one-shot admission hooks or tool executor. */
 export async function runEmbeddedSessionFork(params: {
   sessionId: string;
@@ -239,16 +268,10 @@ export async function runEmbeddedSessionFork(params: {
   assertCurrent: () => void;
   onUsage?: (usage: NormalizedUsage | undefined) => void;
 }): Promise<string> {
-  switch (params.model.api) {
-    case "openai-responses":
-    case "openai-chatgpt-responses":
-    case "openai-completions":
-    case "anthropic-messages":
-      break;
-    default:
-      throw new Error(
-        `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
-      );
+  if (!FORK_TOOL_CHOICE_SHAPES.has(params.model.api)) {
+    throw new Error(
+      `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
+    );
   }
   prune();
   const snapshot = snapshots.get(params.sessionId);
@@ -263,25 +286,63 @@ export async function runEmbeddedSessionFork(params: {
     }
   };
   assertCurrent();
+  const metadata: {
+    model: Model;
+    tools: Parameters<StreamFn>[1]["tools"];
+  } = JSON.parse(snapshot.metadata.toString("utf8"));
   if (
     snapshot.agentId !== params.agentId ||
-    snapshot.model.provider !== params.model.provider ||
-    snapshot.model.id !== params.model.id ||
-    snapshot.model.api !== params.model.api ||
-    snapshot.model.baseUrl !== params.model.baseUrl
+    metadata.model.provider !== params.model.provider ||
+    metadata.model.id !== params.model.id ||
+    metadata.model.api !== params.model.api ||
+    metadata.model.baseUrl !== params.model.baseUrl
   ) {
     throw new Error(
       "Cache-parity session fork requires the parent's prepared model. Send a normal message first.",
     );
   }
-  const context: Parameters<StreamFn>[1] = JSON.parse(snapshot.context.toString("utf8"));
-  const publishedMessageStart = context.messages.length;
-  context.messages = context.messages.concat(structuredClone(snapshot.publications));
+  const context: Parameters<StreamFn>[1] = {
+    tools: metadata.tools,
+    messages: snapshot.publications.map((data): Message =>
+      Buffer.isBuffer(data) ? deserialize(data) : structuredClone(data),
+    ),
+  };
+  const parentPayload: unknown = JSON.parse(await snapshot.payload.text());
+  if (!isRecord(parentPayload)) {
+    throw new Error("Cache-parity session fork requires an object provider request.");
+  }
+  const key = Array.isArray(parentPayload.input) ? "input" : "messages";
+  const prefix = parentPayload[key];
+  if (!Array.isArray(prefix)) {
+    throw new Error("Cache-parity session fork could not preserve the parent request prefix.");
+  }
+  const toolCallIds = new Set<string>();
+  for (const message of prefix) {
+    if (!isRecord(message)) {
+      continue;
+    }
+    if (message.type === "function_call" && typeof message.call_id === "string") {
+      toolCallIds.add(message.call_id);
+    }
+    const blocks = message.tool_calls ?? message.content;
+    if (Array.isArray(blocks)) {
+      for (const block of blocks) {
+        if (
+          isRecord(block) &&
+          (block.type === "tool_use" || block.type === "function") &&
+          typeof block.id === "string"
+        ) {
+          toolCallIds.add(block.id);
+        }
+      }
+    }
+  }
+  preparedRequestSuffix.mark(context, toolCallIds);
   // Only publications after the prepared request can still be in flight. Pair them
   // before provider replay repair can mistake a missing result for an aborted call.
   // These placeholders belong to this fork, never the parent's retained history.
   const completedCalls = new Set<string>();
-  for (let index = context.messages.length - 1; index >= publishedMessageStart; index--) {
+  for (let index = context.messages.length - 1; index >= 0; index--) {
     const message = context.messages[index]!;
     if (message.role === "toolResult") {
       completedCalls.add(message.toolCallId);
@@ -308,7 +369,7 @@ export async function runEmbeddedSessionFork(params: {
   }
   context.messages.push({ role: "user", content: params.question, timestamp: Date.now() });
   const model = getAiTransportHost().inheritManagedTransport(params.model, {
-    ...snapshot.model,
+    ...metadata.model,
     headers: params.model.headers,
   });
   const usage = createUsageAccumulator();
@@ -322,18 +383,11 @@ export async function runEmbeddedSessionFork(params: {
       asyncToolExecution: false,
       onPayload: (payload) => {
         assertCurrent();
-        const parentPayload: unknown = JSON.parse(snapshot.payload.toString("utf8"));
-        if (!isRecord(payload) || !isRecord(parentPayload)) {
+        if (!isRecord(payload)) {
           throw new Error("Cache-parity session fork requires an object provider request.");
         }
-        const key = Array.isArray(parentPayload.input) ? "input" : "messages";
-        const prefix = parentPayload[key];
         const messages = payload[key];
-        if (
-          !Array.isArray(prefix) ||
-          !Array.isArray(messages) ||
-          messages.length <= prefix.length
-        ) {
+        if (!Array.isArray(messages)) {
           throw new Error(
             "Cache-parity session fork could not preserve the parent request prefix.",
           );
@@ -341,23 +395,17 @@ export async function runEmbeddedSessionFork(params: {
         // Rebuilding the post-hook prefix would move Anthropic's final cache breakpoint.
         const replay = {
           ...parentPayload,
-          [key]: [...prefix, ...messages.slice(prefix.length).map(stripNewCacheMarkers)],
+          [key]: [...prefix, ...messages.map(stripNewCacheMarkers)],
         };
         delete replay.previous_response_id;
         if (Array.isArray(replay.tools) && replay.tools.length > 0) {
           // Keep schemas/cache breakpoints, but prevent provider-hosted execution.
           // Anthropic invalidates its messages cache when tool_choice changes.
-          if (model.api === "anthropic-messages") {
-            replay.tool_choice = { type: "none" };
-          } else if (
-            model.api === "openai-responses" ||
-            model.api === "openai-chatgpt-responses" ||
-            model.api === "openai-completions"
-          ) {
-            replay.tool_choice = "none";
-          } else {
+          const toolChoiceShape = FORK_TOOL_CHOICE_SHAPES.get(model.api);
+          if (!toolChoiceShape) {
             throw new Error("Session fork cannot disable hosted tools for this provider API.");
           }
+          replay.tool_choice = toolChoiceShape === "object" ? { type: "none" } : "none";
         }
         return replay;
       },

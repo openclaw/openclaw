@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -13,6 +16,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../../trajectory/runtime-store.sqlite.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -21,7 +25,8 @@ import {
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { registerAgentHarness } from "../../harness/registry.js";
-import type { AgentHarness } from "../../harness/types.js";
+import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
 import { createSandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -59,6 +64,21 @@ vi.mock("../../runtime-plan/build.js", () => ({
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
+function backend(id: string, workdir: string, runtimeId = id) {
+  return {
+    id,
+    runtimeId,
+    runtimeLabel: "Synthetic sandbox",
+    workdir,
+    buildExecSpec: async () => {
+      throw new Error("unexpected exec");
+    },
+    runShellCommand: async () => {
+      throw new Error("unexpected shell");
+    },
+  };
+}
+
 it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
   "settles attribution before a writable sandbox setup (%s)",
   async (outcome) => {
@@ -80,18 +100,7 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
       const setupFile = path.join(state.workspaceDir, "setup.txt");
       const factory = vi.fn(async () => {
         await fs.writeFile(setupFile, "sandbox setup");
-        return {
-          id: "baseline-fixture",
-          runtimeId: "baseline-fixture",
-          runtimeLabel: "Baseline fixture",
-          workdir: "/workspace",
-          buildExecSpec: async () => {
-            throw new Error("unexpected exec");
-          },
-          runShellCommand: async () => {
-            throw new Error("unexpected shell");
-          },
-        };
+        return backend("baseline-fixture", "/workspace");
       });
       const restoreBackend = registerSandboxBackend("baseline-fixture", factory);
       const admission = prepareSystemAgentRunAdmission(config, "baseline", "main", "test");
@@ -145,79 +154,92 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 type DispatchCase = {
-  agentId: string;
+  agentId?: string;
   sandboxSessionKey?: string;
-  remoteSkills: boolean;
-  skillCatalog: "host" | "sandbox" | "none";
+  remoteSkills?: boolean;
+  skillCatalog?: "host" | "sandbox" | "none";
   oneShotCliRun?: boolean;
   managedWorkspace?: boolean;
+  explicitCwd?: boolean;
   realManagedWorkspace?: boolean;
   hostMedia?: "allowed" | "outside";
   retirePlacement?: boolean;
   configuredContextEngine?: boolean;
   diffBaseline?: "settled" | "failed" | "revoked";
+  retryCount?: number;
+  legacyRetryCount?: number;
+  legacyRetryDelayMs?: number;
+  retryPreparation?: "omit" | "mutate" | "change-cwd";
+  cancelTrajectory?: boolean;
+  preparedAuth?: "explicit-header" | "no-auth";
 };
 
 const dispatchCases: DispatchCase[] = [
+  ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
+    agentId: "main",
+    preparedAuth,
+  })),
+  { agentId: "main", cancelTrajectory: true },
   ...(["settled", "failed", "revoked"] as const).map((diffBaseline) => ({
-    agentId: "work",
     sandboxSessionKey: "global",
-    remoteSkills: false,
-    skillCatalog: "none" as const,
     diffBaseline,
   })),
   {
     agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
     skillCatalog: "host" as const,
-    oneShotCliRun: undefined,
     configuredContextEngine: true,
+    retryCount: 0,
+    legacyRetryCount: 9,
+  },
+  ...([0, undefined] as const).map((retryCount) => ({
+    agentId: "main",
+    retryCount,
+    legacyRetryCount: 3,
+    retryPreparation: "mutate" as const,
+  })),
+  ...(["omit", "change-cwd"] as const).map((retryPreparation) => ({
+    agentId: "main",
+    retryCount: 0,
+    legacyRetryCount: 3,
+    retryPreparation,
+  })),
+  {
+    agentId: "main",
+    explicitCwd: true,
+    retryCount: 0,
+    legacyRetryCount: 9,
   },
   {
-    agentId: "work",
     sandboxSessionKey: "global",
-    remoteSkills: false,
     skillCatalog: "sandbox" as const,
     oneShotCliRun: true,
+    retryCount: 1,
   },
   {
-    agentId: "work",
     sandboxSessionKey: "agent:main:policy",
-    remoteSkills: false,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
+    legacyRetryCount: 3,
+    legacyRetryDelayMs: 12,
   },
   {
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
+    retryCount: 0,
+    legacyRetryCount: 9,
   },
   {
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills: false,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
     realManagedWorkspace: true,
   },
   {
     agentId: "main",
-    sandboxSessionKey: undefined,
     remoteSkills: true,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
     retirePlacement: true,
   },
   ...(["allowed", "outside"] as const).map((hostMedia) => ({
-    agentId: "work",
-    sandboxSessionKey: undefined,
     remoteSkills: true,
-    skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
     realManagedWorkspace: true,
@@ -226,19 +248,26 @@ const dispatchCases: DispatchCase[] = [
 ];
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth",
   async ({
-    agentId,
+    agentId = "work",
     sandboxSessionKey,
-    remoteSkills,
-    skillCatalog,
+    remoteSkills = false,
+    skillCatalog = "none",
     oneShotCliRun,
     managedWorkspace,
+    explicitCwd,
     realManagedWorkspace,
     hostMedia,
     retirePlacement,
     configuredContextEngine,
     diffBaseline,
+    retryCount,
+    legacyRetryCount,
+    legacyRetryDelayMs,
+    retryPreparation,
+    cancelTrajectory,
+    preparedAuth,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -249,7 +278,8 @@ it.each(dispatchCases)(
         agents: {
           ownership: "explicit" as const,
           entries: {
-            main: {},
+            main:
+              sandboxSessionKey === "agent:main:policy" ? { tools: { deny: ["web_search"] } } : {},
             work: { sandbox: { mode: realManagedWorkspace ? ("off" as const) : ("all" as const) } },
           },
           defaults: {
@@ -348,24 +378,23 @@ it.each(dispatchCases)(
         if (realManagedWorkspace) {
           throw new Error("LOCAL_DOCKER_UNAVAILABLE");
         }
-        return {
-          id: "owner-fixture",
-          runtimeId: scopeKey,
-          runtimeLabel: "Synthetic sandbox",
-          workdir: "/workspace",
-          buildExecSpec: async () => {
-            throw new Error("unexpected exec");
-          },
-          runShellCommand: async () => {
-            throw new Error("unexpected shell command");
-          },
-        };
+        return backend("owner-fixture", "/workspace", scopeKey);
       });
       const restoreSandbox = registerSandboxBackend(
         realManagedWorkspace ? "docker" : "owner-fixture",
         localBackend,
       );
       const runId = `dispatch-${agentId}`;
+      const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
+      const cancellation = new AbortController();
+      const cancellationError = new Error("session aborted");
+      const storePath = state.path("agents", agentId, "sessions", "sessions.json");
+      if (cancelTrajectory) {
+        await replaceSessionEntry(
+          { sessionKey: "global", storePath },
+          { sessionId: `${agentId}-global`, updatedAt: 1 },
+        );
+      }
       const admission = prepareAgentRunAdmission({
         cfg: config,
         facts: {
@@ -377,23 +406,63 @@ it.each(dispatchCases)(
       });
       const admittedRunContext = await admission.admit("plugin-harness", "owner-test");
       setActivePluginRegistry(createEmptyPluginRegistry());
-      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => ({
-        terminal: { kind: "ok" },
-        sessionIdUsed: params.sessionId,
-        messagesSnapshot: [],
-        assistantTexts: [`${params.agentId} answered`],
-        toolMetas: [],
-        lastAssistant: undefined,
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      }));
+      let retainedRetryPreparer:
+        | NonNullable<
+            AgentHarnessAttemptParamsV2["hostCapabilities"]
+          >["prepareContinuationRetryCount"]
+        | undefined;
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
+        retainedRetryPreparer = params.hostCapabilities?.prepareContinuationRetryCount;
+        expect(params).not.toHaveProperty("prepareContinuationRetryCount");
+        if (!remoteSkills && retryPreparation !== "omit") {
+          const cwd = params.cwd ?? params.workspaceDir;
+          retainedRetryPreparer?.({ cwd });
+          if (retryPreparation === "mutate") {
+            await fs.mkdir(path.join(cwd, ".openclaw"), { recursive: true });
+            await fs.writeFile(
+              path.join(cwd, ".openclaw", "settings.json"),
+              JSON.stringify({ retry: { provider: { maxRetries: 6 } } }),
+            );
+            retainedRetryPreparer?.({ cwd });
+          } else if (retryPreparation === "change-cwd") {
+            retainedRetryPreparer?.({ cwd: path.join(cwd, "different") });
+          }
+        }
+        return {
+          terminal: { kind: "ok" },
+          sessionIdUsed: params.sessionId,
+          messagesSnapshot: [],
+          assistantTexts: [`${params.agentId} answered`],
+          toolMetas: [],
+          lastAssistant: undefined,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          cloudCodeAssistFormatError: false,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+          providerRetryMaxRetries: legacyRetryCount,
+          providerRetryMaxDelayMs: legacyRetryDelayMs,
+        };
+      });
+      if (cancelTrajectory) {
+        runAttempt.mockImplementation(async (attempt) => {
+          const host = attempt.hostCapabilities;
+          if (!host?.trajectory) {
+            throw new Error("Expected the dispatch-owned trajectory recorder");
+          }
+          host.trajectory.recordEvent("plugin.accepted");
+          cancellation.abort(cancellationError);
+          admission.close();
+          expect(() => host.assertActive()).toThrow();
+          expect(() => host.trajectory?.recordEvent("plugin.late")).toThrow();
+          await expect(host.trajectory.flush()).rejects.toThrow();
+          throw cancellationError;
+        });
+      }
       registerAgentHarness({
-        id: "owner-fixture",
+        id: harnessId,
         label: "Owner fixture",
         supports: () => ({ supported: true }),
         conversationToolPolicySupport: "exact",
@@ -419,6 +488,7 @@ it.each(dispatchCases)(
             }
           : undefined,
         admittedRunContext,
+        ...(cancelTrajectory ? { abortSignal: cancellation.signal } : {}),
         agentId,
         config,
         runId,
@@ -426,6 +496,13 @@ it.each(dispatchCases)(
         sessionKey: "global",
         sandboxSessionKey,
         workspaceDir,
+        ...(explicitCwd
+          ? {
+              cwd: path.join(workspaceDir, "packages", "app"),
+              sessionRoot: workspaceDir,
+              permissionMode: "full" as const,
+            }
+          : {}),
         ...(managedWorkspace
           ? {
               cwd: workspaceDir,
@@ -459,7 +536,6 @@ it.each(dispatchCases)(
         getLifecycleGeneration: () => lifecycleGeneration,
         getParams: () => params,
         globalLane: "owner-dispatch-global",
-        sessionLane: "owner-dispatch-session",
         initialQueuedLifecycleGeneration: lifecycleGeneration,
         setLifecycleGeneration: (value) => {
           lifecycleGeneration = value;
@@ -467,6 +543,8 @@ it.each(dispatchCases)(
         setParams: () => {},
       });
       const authProfileStore = { version: 1, profiles: {} };
+      const sourceApiKey =
+        preparedAuth === "explicit-header" ? CUSTOM_LOCAL_AUTH_MARKER : "source-api-key";
       const contextEngine = createContextEngine({
         info: {
           id: configuredContextEngine ? "selected-context" : "legacy",
@@ -505,17 +583,29 @@ it.each(dispatchCases)(
           attemptAuthProfileStore: authProfileStore,
           resolveRunAttemptAuthProfileStore: () => authProfileStore,
           snapshot: () => ({
-            agentHarness: { id: "owner-fixture" },
+            agentHarness: { id: harnessId },
             pluginHarnessOwnsTransport: true,
             effectiveModel: {
               id: "fixture-model",
               provider: "fixture",
-              api: "openai-responses",
+              api: preparedAuth ? "openai-completions" : "openai-responses",
               input: imagePath ? ["text", "image"] : ["text"],
+              ...(preparedAuth
+                ? { headers: { Authorization: "Bearer runtime-token", "X-Test": "fixture" } }
+                : {}),
             },
             thinkLevel: "off",
-            apiKeyInfo: null,
-            runtimeAuthState: null,
+            apiKeyInfo: preparedAuth
+              ? { apiKey: sourceApiKey, source: "fixture", mode: "api-key" }
+              : null,
+            runtimeAuthState: preparedAuth
+              ? {
+                  generation: 1,
+                  sourceApiKey,
+                  apiKey: preparedAuth === "no-auth" ? CUSTOM_LOCAL_AUTH_MARKER : "runtime-api-key",
+                  authMode: "api-key",
+                }
+              : null,
             activePreparedAuthPlan: {
               providerForAuth: "fixture",
               authProfileProviderForAuth: "fixture",
@@ -526,7 +616,12 @@ it.each(dispatchCases)(
         sessionPromptState: {
           sessionId: `${agentId}-global`,
           sessionFile: "global",
-          sessionTarget: { agentId, sessionId: `${agentId}-global`, sessionKey: "global" },
+          sessionTarget: {
+            agentId,
+            sessionId: `${agentId}-global`,
+            sessionKey: "global",
+            ...(cancelTrajectory ? { storePath } : {}),
+          },
           activePrompt: { persisted: false, internal: false },
           onUserMessagePersisted: vi.fn(),
           settleOwnedTranscriptProjection: vi.fn(),
@@ -541,8 +636,6 @@ it.each(dispatchCases)(
         isTurnTainted: () => false,
         allocateToolOutcomeOrdinal: () => 1,
         getPostCompactionAbortError: () => undefined,
-        setPostCompactionAbortController() {},
-        clearPostCompactionAbortController() {},
       } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
       const remoteWorkspace = state.path("remote-execution-only");
       const remoteBridgeCommand = vi.fn(async () => {
@@ -562,13 +655,7 @@ it.each(dispatchCases)(
         : null;
       if (imagePath && remoteSandbox) {
         remoteSandbox.backend = {
-          id: "remote-fixture",
-          runtimeId: "remote-fixture",
-          runtimeLabel: "Remote fixture",
-          workdir: "/native/guest",
-          buildExecSpec: async () => {
-            throw new Error("unexpected remote process");
-          },
+          ...backend("remote-fixture", "/native/guest"),
           runShellCommand: remoteBridgeCommand,
         };
         remoteSandbox.fsBridge = createSandboxFsBridge({
@@ -624,9 +711,46 @@ it.each(dispatchCases)(
                 },
               }))
           : undefined;
+      if (retryCount !== undefined) {
+        const settingsDir = explicitCwd
+          ? path.join(workspaceDir, "packages", "app", ".openclaw")
+          : managedWorkspace && !realManagedWorkspace
+            ? path.join(projection, ".openclaw")
+            : state.agentDir(agentId);
+        await fs.mkdir(settingsDir, { recursive: true });
+        await fs.writeFile(
+          path.join(settingsDir, "settings.json"),
+          JSON.stringify({ retry: { provider: { maxRetries: retryCount, maxRetryDelayMs: 5 } } }),
+        );
+        if (explicitCwd || (managedWorkspace && !realManagedWorkspace)) {
+          await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+          await fs.writeFile(
+            path.join(workspaceDir, ".openclaw", "settings.json"),
+            JSON.stringify({ retry: { provider: { maxRetries: 7 } } }),
+          );
+        }
+      }
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
       void pending.catch(() => {});
       try {
+        if (retryPreparation === "change-cwd") {
+          await expect(pending).rejects.toThrow(
+            "Native execution cwd changed after continuation retry preparation",
+          );
+          expect(() => retainedRetryPreparer?.({ cwd: workspaceDir })).toThrow();
+          return;
+        }
+        if (cancelTrajectory) {
+          await expect(pending).rejects.toBe(cancellationError);
+          expect(runAttempt).toHaveBeenCalledOnce();
+          expect(
+            await loadSqliteTrajectoryRuntimeEvents({
+              sessionId: `${agentId}-global`,
+              storePath,
+            }),
+          ).toEqual([expect.objectContaining({ type: "plugin.accepted", source: "runtime" })]);
+          return;
+        }
         if (diffBaseline) {
           await awaitGateBeforeSettlement(
             baselineEntered.promise,
@@ -728,6 +852,19 @@ it.each(dispatchCases)(
         const { dispatchedAttempt: result } = await pending;
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
+        expect(result.rawAttempt.providerRetryMaxRetries).toBe(
+          retryPreparation === "omit" ? legacyRetryCount : (retryCount ?? legacyRetryCount),
+        );
+        expect(result.rawAttempt.providerRetryMaxDelayMs).toBe(legacyRetryDelayMs);
+        expect(() => retainedRetryPreparer?.({ cwd: workspaceDir })).toThrow();
+        if (explicitCwd) {
+          expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+            workspaceDir,
+            cwd: path.join(workspaceDir, "packages", "app"),
+            sessionRoot: workspaceDir,
+            permissionMode: "full",
+          });
+        }
         expect(runAttempt.mock.calls[0]?.[0].contextEngine).toBe(
           configuredContextEngine ? contextEngine : undefined,
         );
@@ -747,6 +884,18 @@ it.each(dispatchCases)(
           storePath: undefined,
         });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        if (sandboxSessionKey === "agent:main:policy") {
+          expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toMatchObject({
+            allowed: false,
+            persistentAllowed: false,
+          });
+        }
+        if (preparedAuth) {
+          expect(runAttempt.mock.calls[0]?.[0].model.headers).toEqual({
+            Authorization: preparedAuth === "explicit-header" ? "Bearer runtime-token" : null,
+            "X-Test": "fixture",
+          });
+        }
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
         if (managedWorkspace && !remoteSkills) {
           expect(preparation).toHaveBeenCalledWith(expect.objectContaining({ admittedRunContext }));

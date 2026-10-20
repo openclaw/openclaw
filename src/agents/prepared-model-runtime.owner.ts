@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
@@ -21,7 +22,6 @@ import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
-  groupBuildCandidates,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -511,14 +511,19 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner,
     };
   });
-  const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
+  const groups = groupRecords(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {
       return;
     }
     const result = results.get(candidate.owner);
-    if (!result || candidate.owner.snapshot === result.snapshot) {
+    if (!result) {
+      throw new Error(
+        `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
+      );
+    }
+    if (candidate.owner.snapshot === result.snapshot) {
       return;
     }
     if (captureRemoteModelCatalogStartupSnapshot() !== catalogGeneration) {
@@ -612,15 +617,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     for (const candidate of candidates) {
       if (!settleSingleOwner && candidate.owner.generation === candidate.generation) {
         candidate.owner.pendingPluginGeneration = undefined;
-      }
-      if (!candidate.isCurrent()) {
-        continue;
-      }
-      const result = results.get(candidate.owner);
-      if (!result) {
-        throw new Error(
-          `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
-        );
       }
       publishCandidate(candidate);
     }

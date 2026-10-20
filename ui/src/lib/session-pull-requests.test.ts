@@ -28,10 +28,15 @@ function expectSubscription(
   harness: ReturnType<typeof createGatewayHarness>,
   sessionKeys: string[],
   refreshSessionKeys?: string[],
+  passiveSessionKeys?: string[],
 ) {
   expect(harness.request).toHaveBeenLastCalledWith(
     SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-    { sessionKeys, ...(refreshSessionKeys ? { refreshSessionKeys } : {}) },
+    {
+      sessionKeys,
+      ...(refreshSessionKeys ? { refreshSessionKeys } : {}),
+      ...(passiveSessionKeys ? { passiveSessionKeys } : {}),
+    },
     { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
   );
 }
@@ -75,22 +80,93 @@ describe("session pull request snapshot store", () => {
     },
   );
 
-  it("waits for an active viewer before subscribing passive sidebar rows", async () => {
+  it("hydrates passive receipts and promotes only the active viewer to GitHub reads", async () => {
     const { harness, store, owner } = createStoreHarness();
     const passiveOwner = {};
     const key = "agent:main:demo";
     store.watch(passiveOwner, [key], { passive: true });
     await flushSync();
-    expect(harness.request).not.toHaveBeenCalled();
+    expectSubscription(harness, [], undefined, [key]);
     store.watch(owner, [key], { foreground: true });
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(1);
+    expect(harness.request).toHaveBeenCalledTimes(2);
     expectSubscription(harness, [key]);
     store.unwatch(owner);
     await flushSync();
-    expect(harness.request).toHaveBeenCalledTimes(2);
-    expectSubscription(harness, []);
+    expect(harness.request).toHaveBeenCalledTimes(3);
+    expectSubscription(harness, [], undefined, [key]);
     store.unwatch(passiveOwner);
+  });
+
+  it("retains branch and matching task metadata in receipt-only updates without reviving removed receipts", async () => {
+    vi.useFakeTimers();
+    const { harness, store, owner } = createStoreHarness();
+    const sidebar = {};
+    const key = "agent:main:demo";
+    const branch = { owner: "example", repo: "repository", branch: "feature/parent" };
+    const pullRequest = { ...branch, number: 40, state: "open" };
+    const task = (number: number) => ({
+      ...branch,
+      url: `https://github.com/example/repository/pull/${number}`,
+      number,
+      sourceSessionKey: `agent:main:child-${number}`,
+      sourceAgentId: "main",
+    });
+    const retained = { ...task(1), pullRequest: { ...pullRequest, number: 1 } };
+    store.watch(sidebar, [key], { passive: true });
+    store.watch(owner, [key], { foreground: true });
+    await flushSync();
+    harness.emit({
+      sessions: {
+        [key]: {
+          pullRequests: [pullRequest],
+          branch,
+          repository: branch,
+          taskPullRequests: [retained, task(2)],
+          taskPullRequestCount: 2,
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    store.unwatch(owner);
+    await flushSync();
+    harness.emit({
+      sessions: {
+        [key]: {
+          branchRead: false,
+          pullRequests: [],
+          taskPullRequests: [task(1)],
+          taskPullRequestCount: 1,
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    expect(store.get(key)).toMatchObject({
+      branchRead: false,
+      branch,
+      pullRequests: [pullRequest],
+      taskPullRequests: [retained],
+      taskPullRequestCount: 1,
+    });
+    const calls = harness.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).toHaveBeenCalledTimes(calls);
+    harness.emit({
+      sessions: {
+        [key]: {
+          pullRequests: [],
+          taskPullRequests: [],
+          taskPullRequestCount: 0,
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    expect(store.get(key)?.pullRequests).toEqual([]);
+    expect(store.get(key)?.taskPullRequests).toEqual([]);
+    store.unwatch(sidebar);
   });
 
   it("coalesces refresh bursts while a subscription request is unsettled and keeps one trailing refresh", async () => {
@@ -440,7 +516,9 @@ describe("session pull request snapshot store", () => {
     await flushSync();
     expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
     expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledWith("visibilitychange", visibilityListener);
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["visibilitychange", visibilityListener]),
+    );
   });
 
   it("does not retry a failed subscribe after the store becomes idle", async () => {
@@ -563,7 +641,7 @@ describe("session pull request snapshot store", () => {
     }
     await vi.advanceTimersByTimeAsync(5_000);
     expect(harness.request).toHaveBeenCalledOnce();
-    expectSubscription(harness, [viewed], [viewed]);
+    expectSubscription(harness, [viewed], [viewed], [passive]);
 
     harness.emit({ sessionKey: viewed, stream: "tool", data: { phase: "result" } }, "agent");
     store.unwatch(owner);
@@ -789,7 +867,7 @@ describe("session pull request snapshot store", () => {
       pullRequests: [{ number: 1, state: "merged" }],
     });
     await flushSync();
-    expectSubscription(harness, []);
+    expectSubscription(harness, [], undefined, [key]);
     expect(store.get(key)?.pullRequests).toEqual([{ number: 1, state: "merged" }]);
     store.unwatch(sidebar);
     await flushSync();

@@ -1,8 +1,8 @@
 // Declaration closure rendering keeps compiler-owned dependencies in API baselines.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import type { Printer, Program, Project } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import type { Printer, Program, Project } from "typescript/sync";
 import { formatNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import {
   normalizePluginSdkApiDeclarationText,

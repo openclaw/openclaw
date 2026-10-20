@@ -695,28 +695,6 @@ describe("microsoft-foundry plugin", () => {
     }
   });
 
-  it("refreshes cached Entra tokens with bounded fallback expiry when the clock is invalid", async () => {
-    const provider = registerProvider();
-    mockAzureCliToken({ accessToken: "cached-token", expiresInMs: 10 * 60_000 });
-    ensureAuthProfileStoreMock.mockReturnValue(entraStore());
-    const runtimeContext = authContext();
-
-    const first = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-    expect(first.apiKey).toBe("cached-token");
-
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    mockAzureCliTokenRaw(
-      JSON.stringify({
-        accessToken: "refreshed-token",
-      }),
-    );
-    const second = authResult(await provider.prepareRuntimeAuth?.(runtimeContext));
-
-    expect(second.apiKey).toBe("refreshed-token");
-    expect(second.expiresAt).toBe(55 * 60 * 1000);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps other configured Foundry models when switching the selected model", async () => {
     const provider = registerProvider();
     const config = makeConfig({

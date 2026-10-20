@@ -6,7 +6,10 @@ import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
-import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
+import {
+  resolveRequesterOriginForChild,
+  resolveSpawnRequesterConversationTarget,
+} from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -67,13 +70,11 @@ export async function resolveSubagentChildPlan(params: {
     targetAgentId: params.targetAgentId,
     explicitWorkspaceDir: inheritedWorkspaceDir,
   });
+  const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   const requesterOrigin = normalizeDeliveryContext({
     channel: params.ctx.agentChannel,
     accountId: params.ctx.agentAccountId,
-    to: params.ctx.agentTo,
-    ...(params.ctx.agentThreadId != null && params.ctx.agentThreadId !== ""
-      ? { threadId: params.ctx.agentThreadId }
-      : {}),
+    ...requesterConversation,
   });
   const childSessionOrigin = resolveRequesterOriginForChild({
     cfg: params.cfg,
@@ -81,8 +82,8 @@ export async function resolveSubagentChildPlan(params: {
     requesterAgentId: params.requesterAgentId,
     requesterChannel: params.ctx.agentChannel,
     requesterAccountId: params.ctx.agentAccountId,
-    requesterTo: params.ctx.agentTo,
-    requesterThreadId: params.ctx.agentThreadId,
+    requesterTo: requesterConversation.to,
+    requesterThreadId: requesterConversation.threadId,
     requesterGroupSpace: params.ctx.agentGroupSpace,
     requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
   });

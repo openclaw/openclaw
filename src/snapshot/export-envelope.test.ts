@@ -103,6 +103,21 @@ describe("engine-discriminated snapshot export envelope", () => {
     ).rejects.toThrow("does not match the source store identity");
   });
 
+  it.each([
+    "database.sqlite-wal",
+    "database.sqlite-shm",
+    "database.sqlite-journal",
+    "anchor.sqlite-wal",
+    "anchor.sqlite-shm",
+    "anchor.sqlite-journal",
+  ])("refuses unmanifested SQLite sidecar %s", async (name) => {
+    const { directory, manifest } = await fixture();
+    await fs.writeFile(path.join(directory, name), "unmanifested pages");
+    await expect(
+      verifyPostgresExportEnvelope(directory, manifest, inspectAnchor, "exact"),
+    ).rejects.toThrow("unexpected SQLite sidecar");
+  });
+
   it("never accepts sanitized user backups as exact recovery exports", async () => {
     const { directory, manifest } = await fixture();
     manifest.profile = "user-backup";

@@ -39,13 +39,15 @@ completion prompt and reply as quoted context when its account may replay saved
 history; see [CLI backends](/gateway/cli-backends#sessions).
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
-`message`, `sessions_send`, and the `conversations_*` tools regardless of
+`sessions_send`, and the `conversations_*` tools regardless of
 depth or role (system-level/interactive tools, parent-owned progress cards, direct delivery surfaces, or
 tools the main agent should coordinate). This hard-deny layer is derived from
 the persisted sub-agent session envelope on every turn, including resumed and
 visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override
-it. Hidden launches also disable `message` before tool construction as defense in
-depth. Sub-agents at the configured depth cap additionally
+it. Hidden helpers also lose `message`; visible spawned dashboard sessions may use
+it for user-approved replies, subject to configured, inherited, sandbox, and channel
+restrictions. Hidden launches disable `message` before tool construction as defense
+in depth. Sub-agents at the configured depth cap additionally
 lose `subagents`, `sessions_list`, `sessions_history`, and `sessions_spawn`, so
 their communication stays on the announce chain.
 

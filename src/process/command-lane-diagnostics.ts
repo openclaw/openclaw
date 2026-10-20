@@ -34,7 +34,7 @@ function getSubagentLaneSnapshot(): CommandLaneSnapshot {
     if (!state.lane.startsWith(SUBAGENT_LANE_PREFIX) || state.lane.startsWith(SWARM_LANE_PREFIX)) {
       continue;
     }
-    const activeCount = state.activeTaskIds.size;
+    const activeCount = state.activeTasks.size;
     snapshot.activeCount += activeCount;
     snapshot.queuedCount += state.queue.length;
     snapshot.draining ||= state.draining;

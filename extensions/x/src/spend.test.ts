@@ -1,27 +1,54 @@
 import { randomUUID } from "node:crypto";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveXCostLimits, type XCostLimits } from "./cost-limits.js";
 import { openXSpend, XBudgetExceededError } from "./spend.js";
 import { createKeyedState } from "./test-support/monitor.js";
 
+type WriteHook = (operation: "register" | "delete", key: string) => void | Promise<void>;
+
 function fixture(config: Partial<XCostLimits> = {}) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const openKeyedStore = createKeyedState();
   const stateDir = `synthetic-x-spend-${randomUUID()}`;
-  const runtime = {
-    state: { openKeyedStore, resolveStateDir: () => stateDir },
-    logging: { getChildLogger: () => logger },
-  };
+  const state = { openKeyedStore, resolveStateDir: () => stateDir };
+  const runtime = { state, logging: { getChildLogger: () => logger } };
   const limits = resolveXCostLimits(config);
-  return {
-    runtime,
-    limits,
-    logger,
-    spend: openXSpend(runtime, "default", () => limits),
-    store: openKeyedStore<number>({ namespace: "x.spend" }),
-  };
+  const spend = openXSpend(runtime, "default", () => limits);
+  const store = openKeyedStore<number>({ namespace: "x.spend" });
+  function replaceStore(beforeWrite: WriteHook) {
+    const replacement = {
+      ...state,
+      openKeyedStore<T>(options: Parameters<typeof openKeyedStore>[0]): PluginStateKeyedStore<T> {
+        const original = openKeyedStore<T>(options);
+        return {
+          ...original,
+          async register(key, value, params) {
+            await beforeWrite("register", key);
+            await original.register(key, value, params);
+          },
+          async delete(key, params) {
+            await beforeWrite("delete", key);
+            return await original.delete(key, params);
+          },
+        };
+      },
+    };
+    return openXSpend({ ...runtime, state: replacement }, "default", () => limits);
+  }
+  return { limits, logger, spend, store, replaceStore };
+}
+
+function blockWrites(test: ReturnType<typeof fixture>) {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const spend = test.replaceStore(async (operation) => {
+    if (operation === "register") {
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  return { entered: entered.promise, release: release.resolve, spend };
 }
 
 beforeEach(() => {
@@ -30,89 +57,63 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-describe("X spend reservations", () => {
+describe("X spend", () => {
   it.each([
-    { dailyUsd: 1, monthlyUsd: 10, reason: "daily" },
-    { dailyUsd: 10, monthlyUsd: 1, reason: "billing-cycle" },
-  ])("reserves and releases unused $reason capacity", async ({ reason, ...limits }) => {
-    const { spend } = fixture(limits);
-    const reservation = await spend.reserve(800_000);
-    await expect(spend.reserve(300_000)).rejects.toThrow(`${reason} budget`);
-    await reservation.settle(200_000);
-    await reservation.settle(200_000);
-    expect(await spend.status()).toMatchObject({ dayUsd: 0.2, cycleUsd: 0.2 });
-    const next = await spend.reserve(800_000);
-    await expect(spend.reserve(1)).rejects.toBeInstanceOf(XBudgetExceededError);
-    await next.settle(0);
-    expect(await spend.status()).not.toHaveProperty("exhaustedUntil");
-  });
+    [1, 10, "daily", false],
+    [10, 1, "billing-cycle", false],
+    [1, 1, "billing-cycle", true],
+  ] as const)(
+    "reserves and releases capacity (daily=%s monthly=%s reason=%s midnight=%s)",
+    async (dailyUsd, monthlyUsd, reason, midnight) => {
+      const limits = { dailyUsd, monthlyUsd, cycleStartDay: midnight ? 20 : 1 };
+      const { spend } = fixture(limits);
+      const reservation = await spend.reserve(800_000);
+      if (midnight) {
+        vi.setSystemTime("2026-10-20T00:00:00Z");
+      }
+      const denied = spend.reserve(300_000);
+      await expect(denied).rejects.toThrow(`${reason} budget`);
+      await expect(denied).rejects.toBeInstanceOf(XBudgetExceededError);
+      await reservation.settle(200_000);
+      await reservation.settle(200_000);
+      expect(await spend.status()).toMatchObject({ dayUsd: 0.2, cycleUsd: 0.2 });
+      const next = await spend.reserve(800_000);
+      expect(next).toHaveProperty("settle");
+      await expect(spend.reserve(1)).rejects.toBeInstanceOf(XBudgetExceededError);
+      await next.settle(0);
+      expect(await spend.status()).not.toHaveProperty("exhaustedUntil");
+    },
+  );
 
   it("serializes concurrent callers across replacement runtime handles before dispatch", async () => {
     const test = fixture({ dailyUsd: 1 });
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const original = test.runtime.state.openKeyedStore;
-    const replacement: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir"> = {
-      ...test.runtime.state,
-      openKeyedStore<T>(
-        options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-      ): PluginStateKeyedStore<T> {
-        const store = original<T>(options);
-        return {
-          ...store,
-          async register(key, value, params) {
-            entered.resolve();
-            await release.promise;
-            await store.register(key, value, params);
-          },
-        };
-      },
-    };
-    const second = openXSpend({ state: replacement }, "default", () => test.limits);
+    const { entered, release, spend: second } = blockWrites(test);
     const firstCall = test.spend.reserve(600_000);
-    await entered.promise;
+    await entered;
     const secondCall = second.reserve(600_000);
     const outcomes = Promise.allSettled([firstCall, secondCall]);
-    release.resolve();
+    release();
     const [first, other] = await outcomes;
     expect(first.status).toBe("fulfilled");
     expect(other).toMatchObject({ status: "rejected", reason: expect.any(XBudgetExceededError) });
     expect(await second.status()).toMatchObject({ dayUsd: 0.6, cycleUsd: 0.6 });
   });
 
-  it.each(["completion day", "cycle", "pending deletion"] as const)(
+  it.each([
+    ["completion day", "register", "default:day:2026-10-20", undefined],
+    ["cycle", "register", "default:cycle:2026-10-01", undefined],
+    ["pending deletion", "delete", null, 100_000],
+  ] as const)(
     "keeps failed %s settlement conservative and stops subsequent paid calls",
-    async (failedAt) => {
+    async (_failedAt, rejectedOperation, rejectedKey, overlap) => {
       const test = fixture({ dailyUsd: 1 });
       const reservation = await test.spend.reserve(800_000);
       vi.setSystemTime("2026-10-20T00:00:00Z");
-      const original = test.runtime.state.openKeyedStore;
-      const rejectedKey =
-        failedAt === "completion day" ? "default:day:2026-10-20" : "default:cycle:2026-10-01";
-      const replacement: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir"> = {
-        ...test.runtime.state,
-        openKeyedStore<T>(
-          options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-        ): PluginStateKeyedStore<T> {
-          const store = original<T>(options);
-          return {
-            ...store,
-            async register(key, value, params) {
-              if (failedAt !== "pending deletion" && key === rejectedKey) {
-                throw new Error("synthetic disk failure");
-              }
-              await store.register(key, value, params);
-            },
-            async delete(key, params) {
-              if (failedAt === "pending deletion") {
-                throw new Error("synthetic disk failure");
-              }
-              return await store.delete(key, params);
-            },
-          };
-        },
-      };
-      openXSpend({ state: replacement }, "default", () => test.limits);
+      test.replaceStore((operation, key) => {
+        if (operation === rejectedOperation && (rejectedKey === null || key === rejectedKey)) {
+          throw new Error("synthetic disk failure");
+        }
+      });
       await expect(reservation.settle(100_000)).rejects.toThrow("synthetic disk failure");
       await expect(test.spend.reserve(100_000)).rejects.toThrow("accounting unavailable");
       expect(
@@ -120,9 +121,7 @@ describe("X spend reservations", () => {
           (entry) => entry.key.includes(":pending:") && entry.value === 800_000,
         ),
       ).toBe(true);
-      expect(await test.store.lookup("default:overlap:2026-10-19:2026-10-20")).toBe(
-        failedAt === "pending deletion" ? 100_000 : undefined,
-      );
+      expect(await test.store.lookup("default:overlap:2026-10-19:2026-10-20")).toBe(overlap);
     },
   );
 
@@ -157,36 +156,14 @@ describe("X spend reservations", () => {
     await (await spend.reserve(0)).settle(0);
     expect(await spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
   });
-});
-
-describe("X spend period boundaries", () => {
   it("retains an event's receipt periods when its charge waits across midnight", async () => {
     const test = fixture({ cycleStartDay: 20 });
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const original = test.runtime.state.openKeyedStore;
-    const replacement: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir"> = {
-      ...test.runtime.state,
-      openKeyedStore<T>(
-        options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-      ): PluginStateKeyedStore<T> {
-        const store = original<T>(options);
-        return {
-          ...store,
-          async register(key, value, params) {
-            entered.resolve();
-            await release.promise;
-            await store.register(key, value, params);
-          },
-        };
-      },
-    };
-    openXSpend({ state: replacement }, "default", () => test.limits);
+    const { entered, release } = blockWrites(test);
     const blocked = test.spend.reserve(0);
-    await entered.promise;
+    await entered;
     const charged = test.spend.charge(5_000);
     vi.setSystemTime("2026-10-20T00:00:00Z");
-    release.resolve();
+    release();
     await (await blocked).settle(0);
     await charged;
     for (const period of [
@@ -265,17 +242,13 @@ describe("X spend period boundaries", () => {
     const reservation = await spend.reserve(200_000);
     vi.setSystemTime("2026-10-20T00:00:00Z");
     await reservation.settle(200_000);
-    limits.cycleStartDay = 20;
-    expect(await spend.status()).toMatchObject({
-      dayUsd: 0.2,
-      cycleUsd: 0.2,
-      cycleStart: "2026-10-20",
-    });
-    limits.cycleStartDay = 19;
-    expect(await spend.status()).toMatchObject({
-      dayUsd: 0.2,
-      cycleUsd: 0.2,
-      cycleStart: "2026-10-19",
-    });
+    for (const day of [20, 19]) {
+      limits.cycleStartDay = day;
+      expect(await spend.status()).toMatchObject({
+        dayUsd: 0.2,
+        cycleUsd: 0.2,
+        cycleStart: `2026-10-${day}`,
+      });
+    }
   });
 });

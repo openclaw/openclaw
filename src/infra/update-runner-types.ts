@@ -39,6 +39,7 @@ type GitUpdateTarget = {
   version?: string;
   schemaVersions?: OpenClawSchemaVersions;
   databaseEngines?: unknown;
+  postgresFamilies?: unknown;
   metadataUnreadable?: string;
 };
 

@@ -98,6 +98,60 @@ describe("worker live Gateway chat projection", () => {
 
   it.each([
     {
+      name: "exact silence",
+      chunks: ["NO_", "REPLY"],
+      published: [],
+      visible: "",
+    },
+    {
+      name: "whitespace-wrapped exact silence",
+      chunks: [" \nNO_", "REPLY \t"],
+      published: [],
+      visible: "",
+    },
+    {
+      name: "a leading control line split across chunks",
+      chunks: ["NO", "_REPLY", "\n", "Visible answer."],
+      published: ["Visible answer."],
+      visible: "Visible answer.",
+    },
+    {
+      name: "a visible suffix that literally spells NO_REPLY",
+      chunks: ["NO_REPLY", "\nNO_", "REPLY"],
+      published: ["NO_", "NO_REPLY"],
+      visible: "NO_REPLY",
+    },
+  ])("prepares $name before worker publication and Gateway projection", async (scenario) => {
+    const live = await liveProjection();
+    live.start();
+    let text = "";
+    {
+      using clock = vi.spyOn(Date, "now");
+      const startedAt = Date.now();
+      for (const [index, chunk] of scenario.chunks.entries()) {
+        // Exercise each protocol snapshot independently of worker preview pacing.
+        clock.mockReturnValue(startedAt + index * 100);
+        text += chunk;
+        live.preview(message(text), 0, chunk);
+      }
+    }
+    live.end(message(text));
+    await live.finish();
+    const published = harness.requestParams("worker.live-event").flatMap((params) => {
+      const { event } = params as WorkerLiveEventParams;
+      return event.kind === "assistant" ? [event.payload.text] : [];
+    });
+    expect(published).toEqual(scenario.published);
+    if (scenario.visible) {
+      await expectChatText(scenario.visible);
+    } else {
+      expect(harness.chat.events).toEqual([]);
+      expect(harness.chat.state.runs.get(RUN_ID)?.rawBuffer ?? "").toBe("");
+    }
+  });
+
+  it.each([
+    {
       prefix: "Before tool\n",
       final: "",
       expectedFinal: "Before tool\n",

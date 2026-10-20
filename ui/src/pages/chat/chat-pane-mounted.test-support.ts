@@ -26,10 +26,12 @@ export function createMountedPanes(
     Record<
       | "chat.history"
       | "chat.startup"
+      | "models.authStatus"
       | "models.list"
       | "sessions.describe"
       | "sessions.list"
-      | "sessions.patch",
+      | "sessions.patch"
+      | "environments.status",
       GatewayRequestHandler
     >
   >,
@@ -38,10 +40,12 @@ export function createMountedPanes(
     if (
       method === "chat.history" ||
       method === "chat.startup" ||
+      method === "models.authStatus" ||
       method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
-      method === "sessions.patch"
+      method === "sessions.patch" ||
+      method === "environments.status"
     ) {
       const response = responses?.[method];
       if (response) {
@@ -73,6 +77,9 @@ export function createMountedPanes(
         1,
       );
     }
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
     if (method === "sessions.describe") {
       await readBarrier;
       return { session: row ?? null };
@@ -101,9 +108,12 @@ export function createMountedPanes(
             "openclaw-chat-runtime-test",
             ChatPaneRuntime,
           ) as unknown as TestChatPane);
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+    // Configure the detached owner before the view starts its connection lifecycle.
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.context = context;
     pane.sessionKey = sessionKey;
+    // Composer and transcript state belongs to each mounted presentation.
+    pane.presentationId = crypto.randomUUID();
     Object.assign(pane, { agentId: paneAgentId });
     panes.push(pane);
     Reflect.set(pane, "state", undefined);

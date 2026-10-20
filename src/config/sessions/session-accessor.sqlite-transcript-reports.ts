@@ -12,6 +12,7 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { getCliHistoryWriter } from "./cli-history-boundary.js";
@@ -107,7 +108,11 @@ async function withReportWorker<T>(
     publish: (
       result: Pick<
         TranscriptReportCommit,
-        "projectionNeedsReconcile" | "cliHistoryChanged" | "sessionEntryChanged" | "entry"
+        | "projectionNeedsReconcile"
+        | "cliHistoryChanged"
+        | "sessionEntryChanged"
+        | "entry"
+        | "fullEntry"
       >,
     ) => void,
   ) => Promise<Result<T, TranscriptAppendRefusal>>,
@@ -211,16 +216,7 @@ async function withReportWorker<T>(
       assertTargetCurrent();
       const execution = captureOpenClawAgentDatabaseExecution(
         options,
-        identity.key.startsWith("file:")
-          ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: identity.key.slice("file:".length),
-                nativeLocation: identity.canonicalPath,
-                birthtime: identity.birthtime,
-              },
-            }
-          : { expectedCreationIdentity: identity },
+        toAgentExecutionConstraints(identity),
       );
       const cliWriter =
         kind === "append"
@@ -285,6 +281,7 @@ async function withReportWorker<T>(
                           databaseIdentity,
                           sessionKey: resolved.sessionKey,
                           entry: publication.entry,
+                          fullEntry: publication.fullEntry,
                         });
                       }
                       if (publication.projectionNeedsReconcile) {

@@ -64,10 +64,10 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -298,7 +298,8 @@ vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: vi.fn(
     (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
       snapshot: params?.existingSnapshot ?? {
@@ -309,7 +310,6 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
         version: 0,
       },
       shouldRefresh: !params?.existingSnapshot,
-      snapshotVersion: 0,
     }),
   ),
 }));

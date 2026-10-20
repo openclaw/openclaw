@@ -137,7 +137,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const existingRows = await this.database.readSourceState({
       source: "memory",
     });
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
+    const existingByPath = new Map(existingRows.map((row) => [row.path, row]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -152,7 +152,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     const indexItems: MemoryIndexWorkItem[] = [];
     for (const entry of fileEntries) {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const existing = existingByPath.get(entry.path);
+      if (
+        !params.needsFullReindex &&
+        existing?.hash === entry.hash &&
+        existing.mtime === entry.mtimeMs &&
+        existing.size === entry.size
+      ) {
         this.advanceSyncProgress(params.progress);
         continue;
       }
@@ -210,17 +216,16 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
     });
-    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
-    const sourceHashes =
-      existingHashes ??
-      new Map(
-        (
-          await this.database.readSourceState({
-            source: "sessions",
-            paths: files.map((file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file))),
-          })
-        ).map((row) => [row.path, row.hash]),
-      );
+    const { activePaths, existingRows, indexAll } = sessionPlan;
+    const sourceRows = new Map(
+      (
+        existingRows ??
+        (await this.database.readSourceState({
+          source: "sessions",
+          paths: files.map((file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file))),
+        }))
+      ).map((row) => [row.path, row]),
+    );
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -289,8 +294,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
       if (!isMemorySessionIndexable(entry)) {
         // Archived runs may reveal their internal origin only while parsing.
-        // Remove earlier index artifacts before excluding that transcript.
-        await this.deleteIndexedFile(entry.path, "sessions");
+        // Fresh rebuilds have no earlier artifacts; published indexes may have orphan chunks.
+        if (!this.database.isShadow) {
+          await this.deleteIndexedFile(entry.path, "sessions", sourceRows.get(entry.path)?.hash);
+        }
         this.advanceSyncProgress(params.progress);
         return null;
       }
@@ -300,7 +307,8 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           throw new Error("Memory source owner changed during hash lookup");
         }
       };
-      const existingHash = sourceHashes.get(entry.path);
+      const existing = sourceRows.get(entry.path);
+      const existingHash = existing?.hash;
       const hash =
         entry.revisionMs === undefined ? entry.hash : `sqlite:${entry.revisionMs}:${entry.hash}`;
       const existingContentHash = existingHash?.startsWith("sqlite:")
@@ -308,19 +316,21 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         : existingHash;
       if (
         !params.needsFullReindex &&
-        existingHash !== undefined &&
+        existing !== undefined &&
         existingContentHash === entry.hash
       ) {
         // Converge restored source fingerprints without replacing unchanged chunks.
         if (
-          (this.sessionsDirtyFiles.has(absPath) || existingHash !== hash) &&
+          (existing.hash !== hash ||
+            existing.mtime !== entry.mtimeMs ||
+            existing.size !== entry.size) &&
           !(await database.refreshSourceState(
             {
               path: entry.path,
               hash,
               mtime: entry.mtimeMs,
               size: entry.size,
-              expectedHash: existingHash,
+              expectedHash: existing.hash,
             },
             assertCurrent,
           ))

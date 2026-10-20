@@ -7,6 +7,7 @@ import {
   isOpenAICompatibleThinkingEnabled,
   normalizeOpenAICompatibleReasoningReplay,
   setQwenChatTemplateThinking,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   asOptionalObjectRecord,
@@ -259,16 +260,12 @@ function createQwenConstraintWrapper(
     const requestedThinkingLevel = resolveQwenThinkingLevel(thinkingLevel, options);
     const requestedEnableThinking =
       forceThinking || isOpenAICompatibleThinkingEnabled({ thinkingLevel, options });
-    const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload(payload, payloadModel) {
-        const payloadObj = asPayloadRecord(payload);
-        if (payloadObj) {
-          patchPayload({ payload: payloadObj, model, context, options });
-        }
-        const finalizePayload = (value: unknown) => {
-          const finalPayload = asPayloadRecord(value) ?? payloadObj;
+      onPayload: wrapProviderPayloadHook(
+        options?.onPayload,
+        (payload, value) => {
+          const finalPayload = asPayloadRecord(value) ?? asPayloadRecord(payload);
           if (finalPayload) {
             enforceQwenPayloadAfterCaller(
               finalPayload,
@@ -279,13 +276,14 @@ function createQwenConstraintWrapper(
             );
           }
           return value;
-        };
-        const result = originalOnPayload?.(payload, payloadModel);
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          return Promise.resolve(result).then(finalizePayload);
-        }
-        return finalizePayload(result);
-      },
+        },
+        (payload) => {
+          const payloadObj = asPayloadRecord(payload);
+          if (payloadObj) {
+            patchPayload({ payload: payloadObj, model, context, options });
+          }
+        },
+      ),
     });
   };
 }

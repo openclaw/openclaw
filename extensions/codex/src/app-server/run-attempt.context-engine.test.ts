@@ -477,16 +477,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const agentDir = path.join(tempDir, "agent");
       const resumed = scenario === "byte guard";
       const active = scenario !== "inactive engine";
-      await writeCodexAppServerBinding(
-        sessionFile,
-        makeThreadBootstrapBinding({
+      await writeCodexAppServerBinding(sessionFile, {
+        ...makeThreadBootstrapBinding({
           threadId: "thread-bootstrapped",
           cwd: workspaceDir,
           policyFingerprint:
             '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
           epoch: "epoch-1",
         }),
-      );
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+      });
       await fs.writeFile(
         path.join(path.dirname(sessionFile), "sessions.json"),
         JSON.stringify({ "agent:main:session-1": { sessionFile, totalTokens: 12_000 } }),
@@ -496,7 +497,20 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       await fs.writeFile(
         path.join(rolloutDir, "rollout-thread-bootstrapped.jsonl"),
         resumed
-          ? "x".repeat(2_000)
+          ? [
+              "x".repeat(2_000),
+              JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.4-codex" } }),
+              JSON.stringify({
+                payload: {
+                  type: "token_count",
+                  info: {
+                    last_token_usage: { total_tokens: 12_000 },
+                    model_context_window: 258_400,
+                  },
+                },
+              }),
+              "",
+            ].join("\n")
           : `${JSON.stringify({
               payload: {
                 type: "token_count",
@@ -508,15 +522,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const params = createParams(sessionFile, workspaceDir);
       params.agentDir = agentDir;
+      const assemble = vi.fn<ContextEngine["assemble"]>(async ({ prompt }) => ({
+        messages: [assistantMessage("reprojected context", 10), userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+      }));
       if (active) {
-        params.contextEngine = createContextEngine({
-          assemble: vi.fn(async ({ prompt }) => ({
-            messages: [assistantMessage("reprojected context", 10), userMessage(prompt ?? "", 11)],
-            estimatedTokens: 42,
-            systemPromptAddition: "context-engine system",
-            contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
-          })),
-        });
+        params.contextEngine = createContextEngine({ assemble });
       } else {
         const manager = openFileBackedSessionManagerForTest(sessionFile, {
           sessionId: "session-1",
@@ -555,6 +568,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const inputText = getRequestInputText(harness);
       if (resumed) {
         expect(inputText).toBe("hello");
+        expect(assemble).toHaveBeenCalledWith(expect.objectContaining({ tokenBudget: 258_400 }));
       } else if (active) {
         expect(inputText).toContain("OpenClaw assembled context for this turn:");
         expect(inputText).toContain("reprojected context");
@@ -948,5 +962,90 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(promptHookMessages).toEqual(preassemblyMessages);
     expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
     expectRequestInputTextContains(harness, params.prompt);
+  });
+});
+
+describe("Codex configured context budget", () => {
+  function createBudgetProbeEngine() {
+    const assemble = vi.fn<ContextEngine["assemble"]>(async ({ messages, prompt }) => ({
+      messages: [...messages, userMessage(prompt ?? "", 10)],
+      estimatedTokens: 42,
+      systemPromptAddition: "context-engine system",
+    }));
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    return { contextEngine: createContextEngine({ assemble, bootstrap }), assemble, bootstrap };
+  }
+
+  it.each([false, true])(
+    "reserves current input and native overhead before assembly (images: %s)",
+    async (withImages) => {
+      const { contextEngine, assemble, bootstrap } = createBudgetProbeEngine();
+      const harness = createStartedThreadHarness();
+      const sessionFile = path.join(tempDir, "context-budget.jsonl");
+      const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+        sessionId: "session-1",
+      });
+      sessionManager.appendMessage(userMessage("PRIOR_BUDGET_CONTEXT", 10));
+      const params = createParams(sessionFile, path.join(tempDir, "workspace"));
+      params.contextEngine = contextEngine;
+      params.authoredContextTokenCap = 600_000;
+      params.contextTokenBudget = 500_000;
+      params.prompt = `CURRENT_REQUEST ${"current ".repeat(1_000).trimEnd()}`;
+      params.currentInboundContext = { text: "CURRENT_INBOUND_REFERENCE" };
+      if (withImages) {
+        params.images = [
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+          },
+        ];
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      await harness.completeTurn();
+      await run;
+
+      const assembly = assemble.mock.calls[0]?.[0];
+      expect(assembly?.tokenBudget).toBeGreaterThan(0);
+      expect(assembly?.tokenBudget).toBeLessThan(480_000);
+      expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(assembly?.tokenBudget);
+      expect(assembly?.runtimeSettings?.limits.maxOutputTokens).toBe(20_000);
+      if (!contextEngine.bootstrap) {
+        throw new Error("expected bootstrap hook");
+      }
+      const bootstrapCall = bootstrap.mock.calls[0]?.[0];
+      expect(bootstrapCall?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
+      expect(getRequestInputText(harness)).toContain(params.prompt);
+      expect(getRequestInputText(harness)).toContain("CURRENT_INBOUND_REFERENCE");
+      const history = harness.requests.filter(({ method }) => method === "thread/inject_items");
+      expect(history).toHaveLength(1);
+      expect(JSON.stringify(history[0]?.params)).toContain("PRIOR_BUDGET_CONTEXT");
+      expect(getRequestInputText(harness)).not.toContain("PRIOR_BUDGET_CONTEXT");
+    },
+  );
+
+  it("keeps the caller allowance unchanged without an authored exact-model cap", async () => {
+    const { contextEngine, assemble } = createBudgetProbeEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "unconfigured-budget.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 500_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    await harness.completeTurn();
+    await run;
+
+    const assembly = assemble.mock.calls[0]?.[0];
+    expect(assembly?.tokenBudget).toBe(500_000);
+    expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
+    expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
   });
 });

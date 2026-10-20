@@ -1,6 +1,5 @@
 // Test-only queue fixtures and inspection over the production ingress queue.
 import type { ChannelIngressQueueRecord } from "openclaw/plugin-sdk/channel-outbound";
-import type { TelegramBotInfo } from "./bot-info.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   openTelegramIngressQueue,
@@ -21,10 +20,9 @@ type TelegramSpooledUpdate = {
   lastError?: string;
 };
 
-export function telegramSpooledUpdateLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
+export function telegramSpooledUpdateLaneKey(update: unknown): string {
   return getTelegramSequentialKey({
     update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
-    ...(botInfo ? { me: botInfo } : {}),
   });
 }
 

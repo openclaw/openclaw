@@ -22,8 +22,8 @@ replacement contracts.
 Always import from a specific subpath:
 
 ```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
@@ -34,7 +34,9 @@ the broader umbrella surface and shared helpers such as
 
 For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
-subpath is for shared schema primitives and the generic builder. OpenClaw's
+subpath is for shared schema primitives and the generic builder. For example,
+`buildChannelAccountSchemaParts` includes a shared `groupDmShape`; compose it
+locally when a channel needs a different group identifier validator. OpenClaw's
 bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
 bundled-channel schemas. That bundled schema subpath is not a pattern for new
 plugins.

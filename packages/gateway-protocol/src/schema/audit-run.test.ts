@@ -108,6 +108,20 @@ describe("audit run inspection protocol", () => {
       remediation: [],
     };
     expect(validate.Check(display)).toBe(true);
+    const representedSubject = {
+      state: "present",
+      principal: { kind: "person", domainRef: hmacRef, principalRef: hmacRef },
+    };
+    expect(validate.Check({ ...display, representedSubject })).toBe(true);
+    for (const principal of [
+      { ...representedSubject.principal, displayLabel: "Private name" },
+      { ...representedSubject.principal, rawPrincipalRef: "private-profile" },
+      { ...representedSubject.principal, principalRef: "r".repeat(257) },
+    ]) {
+      expect(
+        validate.Check({ ...display, representedSubject: { ...representedSubject, principal } }),
+      ).toBe(false);
+    }
     expect(validate.Check({ ...display, selectorId: undefined, receiptId: "hostile" })).toBe(false);
     expect(validate.Check({ ...display, source: { owner: "operator_approvals" } })).toBe(false);
     expect(

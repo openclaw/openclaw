@@ -633,6 +633,65 @@ describe("resolvePlaybackTranscode", () => {
     }
   });
 
+  it.each([false, true])(
+    "reports output close failures without replacing the probe outcome (probe fails=%s)",
+    async (probeFails) => {
+      const source = await createSource(`output-close-${probeFails}.mkv`);
+      const closeError = new Error("output close failed");
+      const probeError = new Error("output probe failed");
+      const closeOutput = vi.fn<() => Promise<void>>();
+      const openFile = fs.open;
+      let interceptedOutput = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (pathname, ...args) => {
+        const handle = await openFile(pathname, ...args);
+        if (!interceptedOutput && path.basename(String(pathname)) === "output.mp4") {
+          interceptedOutput = true;
+          const close = handle.close.bind(handle);
+          closeOutput.mockImplementation(async () => {
+            await close();
+            throw closeError;
+          });
+          vi.spyOn(handle, "close").mockImplementation(closeOutput);
+        }
+        return handle;
+      });
+      if (probeFails) {
+        probePlaybackMediaFileDescriptor
+          .mockResolvedValueOnce({ durationMs: 1000, videoCodec: "hevc", videoStreamIndex: 0 })
+          .mockRejectedValueOnce(probeError);
+      }
+      runFfmpeg.mockImplementationOnce(async (args: string[]) => {
+        await fs.writeFile(args.at(-1) ?? "", "normalized-video");
+        return "";
+      });
+      const params = { ...source, mimeType: "video/x-matroska", kind: "video" as const };
+      try {
+        await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+          kind: "preparing",
+        });
+        const completed = waitForPlaybackTranscodeJobsForTest("all");
+        if (probeFails) {
+          await expect(completed).rejects.toBe(probeError);
+        } else {
+          await completed;
+          const result = await playback.resolvePlaybackTranscode(params);
+          expect(result.kind).toBe("transcoded");
+          if (result.kind !== "transcoded") {
+            throw new Error("Expected cached playback output");
+          }
+          expect(await fs.readFile(result.path, "utf8")).toBe("normalized-video");
+        }
+        expect(closeOutput).toHaveBeenCalledOnce();
+        expect(playbackWarn).toHaveBeenCalledWith("Failed to close playback probe output", {
+          error: closeError,
+        });
+      } finally {
+        await settlePlaybackTranscodeJobsForTest();
+        openSpy.mockRestore();
+      }
+    },
+  );
+
   it("retries failed ffmpeg jobs after the bounded cooldown", async () => {
     const source = await createSource("failed.caf", "caff-source");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);

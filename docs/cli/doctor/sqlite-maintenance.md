@@ -187,6 +187,16 @@ without recreating `sessions.json` or replaying session metadata. Hash-matching
 sources continue through import; changed or unverifiable sources remain protected
 and are listed by path. Preserve those files for inspection.
 
+When a retained primary JSONL is missing, Doctor import and recovery compare its
+recorded byte length and SHA-256 with the owning session's canonical SQLite JSONL
+prefix. An exact match settles that source with a warning in the existing receipt,
+preserving newer SQLite events and allowing later plugin repairs to finish. A verified
+archived original remains usable through the normal archive path. Row counts and
+trajectory archives alone do not prove the missing primary's contents. If the bytes
+cannot be proven (including when import normalization changed their representation),
+the source remains unresolved: preserve the receipt and restore the named primary
+from a verified backup before rerunning recovery.
+
 A session directory does not need a legacy `sessions.json` to recover its history.
 Doctor derives session ownership from verified transcript headers and SQLite. For
 a configured agent with a pending plugin migration, it records a source index in
@@ -250,7 +260,11 @@ an import for that verified history.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,
-file identity, and logical owner before importing. Known historical generations
+file identity, and logical owner before importing. A renamed or copied file keeps
+its header's session identity; Doctor records a filename mismatch warning and
+preserves the original bytes. If multiple files claim that identity, Doctor keeps
+them separate in the protected archive and reports the conflict without merging
+their histories. Known historical generations
 remain attached to their existing session without changing its current generation
 or settings. History with no registry owner is recovered as an archived session
 only when its agent owner is unambiguous.
@@ -273,12 +287,25 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
+Duplicate settlement indexes retained artifact paths and manifest moves once per
+inventory instead of rescanning the full history for each duplicate. File-identity
+and source-byte checks still run before originals are retired.
+
 Normal Doctor output and `openclaw update status` show at most five
 `historical_transcript_deferred` examples per session store. Larger groups include
 the total and omitted counts; other warning types remain visible. For every
 finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json`.
 This summary does not retire recovery references or make missing archives eligible
 for cleanup. Preserve the remaining originals and migration manifests for recovery.
+
+`openclaw update status` rechecks recorded transcript findings against the current
+files and the read-only session store. It omits resolved findings, including JSONL
+originals that no longer exist and missing transcripts now present in SQLite or
+whose canonical session row was pruned. Unreadable stores, uncertain legacy keys,
+and unresolved originals keep their warnings. Replayed JSONL findings recommend
+inspection before choosing recovery; they do not ask you to stop the Gateway
+based only on a historical report. Migration manifests remain unchanged as proof
+for recovery and `openclaw update cleanup`.
 
 ### Changed archived registry
 

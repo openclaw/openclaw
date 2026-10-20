@@ -57,7 +57,9 @@ describe("FaceTime plugin manifest", () => {
     const pluginManifest = JSON.parse(
       readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
     );
-    // Release preparation bumps the package version and host contract together.
+    // Release preparation (scripts/sync-plugin-versions.ts) moves the package version, peer
+    // range, plugin API range, and build version to the host release together. It deliberately
+    // preserves minHostVersion: that floor only changes when this plugin raises it.
     const hostVersion = packageManifest.version;
     expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
 
@@ -81,7 +83,7 @@ describe("FaceTime plugin manifest", () => {
       clawhubSpec: "clawhub:@openclaw/facetime",
       npmSpec: "@openclaw/facetime",
       defaultChoice: "npm",
-      minHostVersion: `>=${hostVersion}`,
+      minHostVersion: ">=2026.10.3",
       allowInvalidConfigRecovery: true,
     });
     expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${hostVersion}`);

@@ -13,10 +13,11 @@ import {
 } from "discord-api-types/v10";
 import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type * as ws from "ws";
-import { Plugin, type Client } from "./client.js";
+import type { Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
-import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
+import { mapGatewayDispatchData } from "./gateway-dispatch.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
 import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
@@ -28,7 +29,6 @@ import type {
   GatewayPluginOptions,
   UpdatePresenceData,
 } from "./plugin-contract.js";
-import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -60,7 +60,7 @@ const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
 const MAX_RECONNECT_ATTEMPTS = 50;
 
-export class GatewayPlugin extends Plugin implements GatewayPluginContract {
+export class GatewayPlugin implements GatewayPluginContract {
   readonly id = "gateway";
   protected client?: Client;
   readonly options: GatewayPluginContract["options"];
@@ -71,6 +71,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   protected gatewayInfo?: APIGatewayBotInfo;
   public isConnected = false;
   private sessionId: string | null = null;
+  private selfUserId: string | null = null;
   private resumeGatewayUrl: string | null = null;
   private reconnectAttempts = 0;
   private consecutiveResumeFailures = 0;
@@ -90,7 +91,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   );
 
   constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {
-    super();
     this.options = {
       ...options,
       intents: options.intents ?? 0,
@@ -110,7 +110,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     return this.voiceStateCache.takeTransition(state);
   }
 
-  override async registerClient(client: Client): Promise<void> {
+  async registerClient(client: Client): Promise<void> {
     this.client = client;
     this.shouldReconnect = true;
     this.connect(false);
@@ -147,6 +147,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     this.reconnectAttempts = 0;
     this.consecutiveResumeFailures = 0;
     this.voiceStateCache.clear();
+    this.selfUserId = null;
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
@@ -353,6 +354,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     }
     if (payload.t === GatewayDispatchEvents.Ready) {
       const ready = payload.d;
+      this.selfUserId = ready.user.id;
       this.sessionId = ready.session_id ?? null;
       this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
     }
@@ -362,7 +364,20 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
       this.isConnected = true;
     }
     this.voiceStateCache.apply(payload);
-    dispatchVoiceGatewayEvent(this.client, payload);
+    if (
+      payload.t === GatewayDispatchEvents.VoiceServerUpdate ||
+      (payload.t === GatewayDispatchEvents.VoiceStateUpdate &&
+        payload.d.user_id === this.selfUserId)
+    ) {
+      const adapter = payload.d.guild_id
+        ? this.client.getPlugin("voice")?.adapters.get(payload.d.guild_id)
+        : undefined;
+      if (payload.t === GatewayDispatchEvents.VoiceServerUpdate) {
+        adapter?.onVoiceServerUpdate(payload.d);
+      } else {
+        adapter?.onVoiceStateUpdate(payload.d);
+      }
+    }
     // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
     // maps structures only after the queue claim; other events retain eager mapping.
     const data =
@@ -374,6 +389,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
 
   private resetSessionState(): void {
     this.sessionId = null;
+    this.selfUserId = null;
     this.resumeGatewayUrl = null;
     this.sequence = null;
     this.consecutiveResumeFailures = 0;
@@ -442,9 +458,5 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
 
   updateVoiceState(data: GatewayVoiceStateUpdateData): void {
     this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data }, true);
-  }
-
-  getRateLimitStatus() {
-    return this.outboundLimiter.getStatus();
   }
 }

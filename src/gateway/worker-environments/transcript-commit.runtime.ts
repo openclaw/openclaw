@@ -90,6 +90,7 @@ async function applyWorkerTranscriptCommit(params: {
     lifecycleRevision: target.expectedLifecycleRevision,
     requestedBaseLeafId: params.requestedBaseLeafId,
     recoverPersistedBatch: params.recoverPersistedBatch,
+    runId: params.runId,
     cwd: process.cwd(),
   };
   const prepareFresh = (recoveredCount: number) => {
@@ -174,6 +175,7 @@ async function applyWorkerTranscriptCommit(params: {
             databaseIdentity: databaseIdentity.physicalIdentity,
             sessionKey: target.sessionKey,
             entry: committed.entry,
+            fullEntry: committed.entry,
           });
         }
         if (committed.projectionNeedsReconcile) {

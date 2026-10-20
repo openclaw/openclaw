@@ -14,10 +14,8 @@
   box-sizing: border-box;
   width: 100%;
   max-width: none;
-  overflow: hidden;
   border: 1px solid var(--chat-composer-hairline);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
-  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 
@@ -337,7 +335,6 @@
       black calc(100% - 22px),
       var(--chat-goal-scroll-mask-bottom) 100%
     );
-    -webkit-mask-image: var(--chat-goal-scroll-mask);
     mask-image: var(--chat-goal-scroll-mask);
   }
 
@@ -463,7 +460,6 @@
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
-  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 
@@ -487,18 +483,11 @@
 
 .session-progress-card__summary {
   position: relative;
-  display: grid;
   grid-template-columns: var(--session-progress-marker-size) minmax(0, 1fr) auto auto;
-  align-items: center;
   gap: 12px;
   width: 100%;
-  min-width: 0;
   border: 0;
   background: transparent;
-  color: var(--text);
-  cursor: var(--cursor-action);
-  list-style: none;
-  user-select: none;
   touch-action: pan-x pinch-zoom;
   font-variant-numeric: tabular-nums;
 }
@@ -523,10 +512,6 @@
   .session-progress-card__summary:focus-visible::before {
     opacity: 1;
   }
-}
-
-.session-progress-card__summary::-webkit-details-marker {
-  display: none;
 }
 
 .session-progress-card__summary:focus-visible {
@@ -625,10 +610,6 @@
   border-color: color-mix(in srgb, var(--muted) 24%, transparent);
   border-top-color: var(--muted);
   animation-duration: 1.8s;
-}
-
-.session-progress-card__current {
-  font-weight: 500;
 }
 
 .session-progress-card__summary-count {

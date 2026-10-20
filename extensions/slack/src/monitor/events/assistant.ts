@@ -6,7 +6,6 @@ import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {
-  user_id?: string;
   context?: SlackAssistantThreadContextPayload;
   channel_id?: string;
   thread_ts?: string;
@@ -47,7 +46,6 @@ function normalizeAssistantThread(
   return {
     assistantChannelId: channelId,
     threadTs,
-    userId: thread.user_id?.trim() || previous?.userId,
     channelId: resolveContextString("channel_id", previous?.channelId),
     teamId: resolveContextString("team_id", previous?.teamId),
     enterpriseId:

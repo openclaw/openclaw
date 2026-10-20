@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+export const PLUGIN_SETTINGS_VISIBLE_KEYS = ["enabled", "allow", "deny", "load", "slots"] as const;
 
 export type PluginSettingsEditorModel = {
   pluginId: string;
@@ -79,7 +80,7 @@ export function pluginAdvancedSchema(rootSchema: JsonSchema | null): JsonSchema 
   if (!plugins?.properties) {
     return null;
   }
-  const properties = selectSchemaProperties(plugins, ["enabled", "allow", "deny", "load", "slots"]);
+  const properties = selectSchemaProperties(plugins, PLUGIN_SETTINGS_VISIBLE_KEYS);
   return { ...plugins, properties };
 }
 

@@ -28,56 +28,6 @@ export class BoardValidationError extends Error {
   }
 }
 
-function cloneTab(tab: BoardTab): BoardTab {
-  return {
-    tabId: tab.tabId,
-    title: tab.title,
-    position: tab.position,
-    chatDock: tab.chatDock,
-  };
-}
-
-function cloneWidget(widget: BoardWidget): BoardWidget {
-  return {
-    name: widget.name,
-    tabId: widget.tabId,
-    ...(widget.title !== undefined ? { title: widget.title } : {}),
-    contentKind: widget.contentKind,
-    ...(widget.contentOwner !== undefined ? { contentOwner: widget.contentOwner } : {}),
-    ...(widget.registeredContentKind !== undefined
-      ? { registeredContentKind: widget.registeredContentKind }
-      : {}),
-    ...(widget.presentation !== undefined ? { presentation: widget.presentation } : {}),
-    ...(widget.heightMode !== undefined ? { heightMode: widget.heightMode } : {}),
-    ...(widget.pluginKind !== undefined ? { pluginKind: widget.pluginKind } : {}),
-    ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
-    sizeW: widget.sizeW,
-    sizeH: widget.sizeH,
-    position: widget.position,
-    grantState: widget.grantState,
-    revision: widget.revision,
-    ...(widget.instanceId !== undefined ? { instanceId: widget.instanceId } : {}),
-    ...(widget.declaredSummary !== undefined
-      ? { declaredSummary: [...widget.declaredSummary] }
-      : {}),
-    ...(widget.declared !== undefined
-      ? {
-          declared: {
-            ...(widget.declared.netOrigins ? { netOrigins: [...widget.declared.netOrigins] } : {}),
-            ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-function cloneLayout(layout: BoardLayout): BoardLayout {
-  return {
-    tabs: layout.tabs.map(cloneTab),
-    widgets: layout.widgets.map(cloneWidget),
-  };
-}
-
 function clampInteger(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
@@ -87,20 +37,22 @@ function comparePosition(a: { position: number }, b: { position: number }): numb
 }
 
 export function normalizeBoardLayout(layout: BoardLayout): BoardLayout {
-  const tabs = layout.tabs.toSorted(comparePosition).map((tab, position) => {
-    const next = cloneTab(tab);
-    next.position = position;
-    return next;
+  return normalizeOwnedLayout(structuredClone(layout));
+}
+
+// Public operations take ownership once; successive operations only reorder that copy.
+function normalizeOwnedLayout(layout: BoardLayout): BoardLayout {
+  const tabs = layout.tabs.toSorted(comparePosition);
+  tabs.forEach((tab, position) => {
+    tab.position = position;
   });
   const tabPosition = new Map(tabs.map((tab) => [tab.tabId, tab.position]));
-  const widgets = layout.widgets
-    .toSorted((a, b) => {
-      const tabDelta =
-        (tabPosition.get(a.tabId) ?? Number.MAX_SAFE_INTEGER) -
-        (tabPosition.get(b.tabId) ?? Number.MAX_SAFE_INTEGER);
-      return tabDelta || a.position - b.position;
-    })
-    .map(cloneWidget);
+  const widgets = layout.widgets.toSorted((a, b) => {
+    const tabDelta =
+      (tabPosition.get(a.tabId) ?? Number.MAX_SAFE_INTEGER) -
+      (tabPosition.get(b.tabId) ?? Number.MAX_SAFE_INTEGER);
+    return tabDelta || a.position - b.position;
+  });
   const nextPosition = new Map<string, number>();
   for (const widget of widgets) {
     const position = nextPosition.get(widget.tabId) ?? 0;
@@ -274,14 +226,14 @@ function applyBoardOp(layout: BoardLayout, op: BoardOp): void {
 }
 
 export function applyBoardOps(layout: BoardLayout, ops: readonly BoardOp[]): BoardLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   for (const op of ops) {
     applyBoardOp(next, op);
-    const normalized = normalizeBoardLayout(next);
+    const normalized = normalizeOwnedLayout(next);
     next.tabs = normalized.tabs;
     next.widgets = normalized.widgets;
   }
-  return normalizeBoardLayout(next);
+  return normalizeOwnedLayout(next);
 }
 
 export function insertBoardWidget(
@@ -289,13 +241,13 @@ export function insertBoardWidget(
   widget: BoardWidget,
   placement: { tabId: string; after?: string; move?: boolean },
 ): BoardLayout {
-  const next = cloneLayout(layout);
+  const next = structuredClone(layout);
   const index = next.widgets.findIndex((candidate) => candidate.name === widget.name);
   const existing = next.widgets[index];
   // The producer fully materializes the replacement widget. Preserve position
   // only because layout movement is explicit below; omitted optional metadata
   // must not survive from the previous revision.
-  const inserted: BoardWidget = { ...widget, tabId: placement.tabId };
+  const inserted: BoardWidget = { ...structuredClone(widget), tabId: placement.tabId };
   if (existing) {
     inserted.position = existing.position;
     next.widgets[index] = inserted;
@@ -305,5 +257,5 @@ export function insertBoardWidget(
   if (!existing || placement.move) {
     moveWidget(next, inserted, placement.tabId, undefined, placement.after);
   }
-  return normalizeBoardLayout(next);
+  return normalizeOwnedLayout(next);
 }

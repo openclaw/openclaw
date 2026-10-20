@@ -1,9 +1,11 @@
 import type { Command } from "commander";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { danger, success, warn } from "../globals.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   ExitError,
@@ -54,16 +56,56 @@ const CONFIG_PATCH_DESCRIPTION = [
 type ConfigOperationParams = Parameters<
   typeof import("./config-cli-runner.js").runConfigOperations
 >[0];
+type ConfigMutationOwner = { method: string; target: string };
 
 async function runConfigMutation(
-  opts: { cliOptions: ConfigMutationOptions; runtime?: RuntimeEnv; throwOnError?: boolean },
+  opts: {
+    cliOptions: ConfigMutationOptions;
+    runtime?: RuntimeEnv;
+    throwOnError?: boolean;
+    localStateOwner?: ConfigMutationOwner;
+  },
   prepare: () => Promise<Omit<ConfigOperationParams, "runtime" | "options">>,
   jsonOutput = Boolean(opts.cliOptions.json),
 ) {
   const runtime = opts.runtime ?? defaultRuntime;
   const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
   try {
-    await runConfigOperations({ runtime, options: opts.cliOptions, ...(await prepare()) });
+    const prepared = await prepare();
+    const databaseOnly =
+      opts.localStateOwner !== undefined &&
+      prepared.operations.length > 0 &&
+      prepared.operations.every(({ setPath }) => setPath[0] === "database");
+    // Previews inspect installed plugin state without acquiring write custody.
+    if (
+      opts.localStateOwner &&
+      opts.cliOptions.dryRun &&
+      !databaseOnly &&
+      !getDatabaseEngineSelection()
+    ) {
+      const { readConfigSnapshotForEngineSelection } =
+        await import("../commands/config-preflight-snapshot.js");
+      await readConfigSnapshotForEngineSelection();
+    }
+    const runLocal = () =>
+      runConfigOperations({
+        runtime,
+        options: opts.cliOptions,
+        ...prepared,
+        ...(databaseOnly ? { databaseOnly: true } : {}),
+      });
+    if (!opts.localStateOwner || opts.cliOptions.dryRun) {
+      await runLocal();
+    } else {
+      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      await runWithLocalStateOwner({
+        ...opts.localStateOwner,
+        params: {},
+        onForeignOwner: "refuse",
+        ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
+        runLocal,
+      });
+    }
   } catch (err) {
     if (opts.throwOnError) {
       throw err;
@@ -80,6 +122,7 @@ export async function runConfigSet(opts: {
   beforePersistentApply?: () => void;
   /** Embedded recovery needs the writer's typed postcommit/rollback outcome. */
   throwOnError?: boolean;
+  localStateOwner?: ConfigMutationOwner;
 }) {
   return runConfigMutation(
     opts,
@@ -108,6 +151,7 @@ export async function runConfigSet(opts: {
 export async function runConfigPatch(opts: {
   cliOptions: ConfigPatchOptions;
   runtime?: RuntimeEnv;
+  localStateOwner?: ConfigMutationOwner;
 }) {
   return runConfigMutation(opts, async () => {
     const { configPatchModeError, readConfigPatchOperations } =
@@ -203,6 +247,7 @@ export async function runConfigUnset(opts: {
   cliOptions?: ConfigUnsetOptions;
   runtime?: RuntimeEnv;
   beforePersistentApply?: () => void;
+  localStateOwner?: ConfigMutationOwner;
 }) {
   const cliOptions = opts.cliOptions ?? {};
   return runConfigMutation({ ...opts, cliOptions }, async () => {
@@ -258,15 +303,23 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
+    const { readConfigSnapshotForEngineSelection } =
+      await import("../commands/config-preflight-snapshot.js");
     const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-    const { formatInvalidConfigRepairHint, finishConfigValidationForCli } =
-      await import("./config-cli-validation.js");
-    const read = await readConfigFileSnapshotWithPluginMetadata({
-      observe: false,
-      prepareValidation: "strict",
-      completePluginMetadata: false,
-    });
-    const snapshot = await finishConfigValidationForCli(read);
+    const { finishConfigValidationForCli } = await import("./config-cli-validation.js");
+    const { formatInvalidConfigRepairHint } = await import("./config-recovery-hints.js");
+    const selected = await readConfigSnapshotForEngineSelection();
+    const snapshot =
+      isConfigReadFailure(selected) ||
+      selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+        ? selected
+        : await finishConfigValidationForCli(
+            await readConfigFileSnapshotWithPluginMetadata({
+              observe: false,
+              prepareValidation: "strict",
+              completePluginMetadata: false,
+            }),
+          );
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {
@@ -289,6 +342,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       if (opts.json) {
         writeRuntimeJson(runtime, {
           ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
           valid: false,
           path: outputPath,
           issues,
@@ -352,7 +406,7 @@ export function registerConfigCli(program: Command) {
     )
     .action(async (opts) => {
       const { configureCommandFromSectionsArg } = await import("../commands/configure.commands.js");
-      await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+      await configureCommandFromSectionsArg(opts.section);
     });
   setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));
 
@@ -437,17 +491,11 @@ export function registerConfigCli(program: Command) {
     .option("--batch-json <json>", "Batch mode: JSON array of set operations")
     .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
     .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
-      const runLocal = () => runConfigSet({ path, value, cliOptions: opts });
-      if (opts.dryRun) {
-        return runLocal();
-      }
-      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
-      await runWithLocalStateOwner({
-        method: "config set",
-        params: {},
-        target: path ?? "config",
-        onForeignOwner: "refuse",
-        runLocal,
+      await runConfigSet({
+        path,
+        value,
+        cliOptions: opts,
+        localStateOwner: { method: "config set", target: path ?? "config" },
       });
     });
 
@@ -474,17 +522,9 @@ export function registerConfigCli(program: Command) {
       [] as string[],
     )
     .action(async (opts: ConfigPatchOptions) => {
-      const runLocal = () => runConfigPatch({ cliOptions: opts });
-      if (opts.dryRun) {
-        return runLocal();
-      }
-      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
-      await runWithLocalStateOwner({
-        method: "config patch",
-        params: {},
-        target: "config",
-        onForeignOwner: "refuse",
-        runLocal,
+      await runConfigPatch({
+        cliOptions: opts,
+        localStateOwner: { method: "config patch", target: "config" },
       });
     });
 
@@ -496,17 +536,10 @@ export function registerConfigCli(program: Command) {
     .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
     .option("--json", "print dry-run result as JSON")
     .action(async (path: string, options: ConfigUnsetOptions) => {
-      const runLocal = () => runConfigUnset({ path, cliOptions: options });
-      if (options.dryRun) {
-        return runLocal();
-      }
-      const { runWithLocalStateOwner } = await import("./local-state-owner.js");
-      await runWithLocalStateOwner({
-        method: "config unset",
-        params: {},
-        target: path,
-        onForeignOwner: "refuse",
-        runLocal,
+      await runConfigUnset({
+        path,
+        cliOptions: options,
+        localStateOwner: { method: "config unset", target: path },
       });
     });
 

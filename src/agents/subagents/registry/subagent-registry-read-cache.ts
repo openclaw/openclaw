@@ -26,7 +26,12 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../../state/openclaw-state-worker-error.js";
-import { freezeSubagentRunReadRecord, immutableSubagentRun } from "./subagent-registry-memory.js";
+import {
+  freezeSubagentRunReadRecord,
+  immutableSubagentRun,
+  isSubagentRunPayloadEvicted,
+  restoreSubagentRunPayload,
+} from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -298,9 +303,6 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
   if (!reply) {
     return new Map<string, SubagentRunReadRecord>();
   }
-  if (!reply.ok || reply.type !== "subagents.sessionList") {
-    throw new Error("Unexpected compact subagent registry read result");
-  }
   if ("unavailable" in reply) {
     const failure = new Error(reply.unavailable.message);
     retainOpenClawStateWorkerErrorPayload(failure, reply.unavailable.error);
@@ -470,9 +472,15 @@ export function mergeSelectedFullRuns(
 ): Map<string, SubagentRunRecord> {
   const current = context && !freshPersisted ? acceptedFullSnapshot(cache, context) : undefined;
   const merged = new Map<string, SubagentRunRecord>();
+  const withPayload = (entry: SubagentRunRecord) => {
+    const payload = persisted.get(entry.runId);
+    return isSubagentRunPayloadEvicted(entry) && payload && !isSubagentRunPayloadEvicted(payload)
+      ? restoreSubagentRunPayload(entry, payload)
+      : entry;
+  };
   for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
-      merged.set(runId, entry);
+      merged.set(runId, withPayload(entry));
     }
   }
   const state = selectSubagentCacheStateForRead(cache.state, context);
@@ -485,11 +493,11 @@ export function mergeSelectedFullRuns(
     })
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
-      setOrDeleteRun(merged, runId, entry && matches(entry) ? entry : undefined);
+      setOrDeleteRun(merged, runId, entry && matches(entry) ? withPayload(entry) : undefined);
     }
   }
   for (const [runId, entry] of selectedEntries(inMemoryRuns, runIds)) {
-    setOrDeleteRun(merged, runId, matches(entry) ? entry : undefined);
+    setOrDeleteRun(merged, runId, matches(entry) ? withPayload(entry) : undefined);
   }
   return merged;
 }

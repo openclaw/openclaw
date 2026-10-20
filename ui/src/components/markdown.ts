@@ -8,7 +8,11 @@ import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
 import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
-import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
+import {
+  markdownHighlightingPending,
+  markdownHighlightingReady,
+  renderMarkdownCodeBlock,
+} from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
 import { markdownGitHubAliasSignature } from "./markdown-github-repositories.ts";
 import {
@@ -25,8 +29,10 @@ import {
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
 import {
+  hasStreamingMarkdownHtml,
   repairStreamingMarkdownTail,
   splitStableStreamingMarkdown,
+  streamingMarkdownStableHtml,
   streamingMarkdownState,
 } from "./markdown-streaming.ts";
 import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
@@ -334,7 +340,8 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
   ["plugins", "diffs-language-pack"],
 ];
-const markdownCache = new Map<string, string>();
+const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
+const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
 function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
   const source = stripUnsupportedCitationControlMarkers(markdownLocal);
@@ -628,12 +635,21 @@ export function toSanitizedMarkdownHtml(
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
   const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
-  const sanitized =
-    markdownCache.get(cacheKey) ?? renderSanitizedMarkdown(renderInput, renderOptions);
+  let cached = markdownCache.get(cacheKey);
+  // Only highlightable code changes when the optional highlighter loads.
+  if (
+    !cached ||
+    (cached.highlighting !== undefined && cached.highlighting !== markdownHighlightingReady())
+  ) {
+    cached = { html: renderSanitizedMarkdown(renderInput, renderOptions) };
+    if (HIGHLIGHTABLE_CODE_RE.test(cached.html)) {
+      cached.highlighting = markdownHighlightingReady();
+    }
+  }
   markdownCache.delete(cacheKey);
-  markdownCache.set(cacheKey, sanitized);
+  markdownCache.set(cacheKey, cached);
   pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
-  return sanitized;
+  return cached.html;
 }
 
 function markdownRenderKey(options: MarkdownRenderEnv): string {
@@ -647,6 +663,16 @@ function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivE
   );
 }
 
+/** Keep late highlighting in the same mutable DOM owner, including stream finalization. */
+export function partitionMarkdownHtml(html: string, streamKey?: string): [string, string] {
+  if (!HIGHLIGHTABLE_CODE_RE.test(html) || !markdownHighlightingPending()) {
+    return [html, ""];
+  }
+  const previous = streamingMarkdownStableHtml(streamKey);
+  const stable = html.startsWith(previous) ? previous : "";
+  return [stable, html.slice(stable.length)];
+}
+
 export function toStreamingMarkdownParts(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
@@ -655,7 +681,7 @@ export function toStreamingMarkdownParts(
   const renderOptions = normalizeMarkdownRenderOptions(options);
   // Explicit selections are complete user input, not incremental assistant text.
   if (renderOptions.humanMentions.length) {
-    return [toSanitizedMarkdownHtml(markdownLocal, options), ""];
+    return partitionMarkdownHtml(toSanitizedMarkdownHtml(markdownLocal, options), streamKey);
   }
   const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
   if (isMarkdownBlockArtText(rawInput)) {
@@ -668,26 +694,32 @@ export function toStreamingMarkdownParts(
   const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+  const { boundary: candidateBoundary, tailRepairStart } = splitStableStreamingMarkdown(
     input,
     streamKey,
     truncated.text.length,
   );
+  let boundary = candidateBoundary;
   const stableMarkdown = input.slice(0, boundary);
-  const streamingTail = input.slice(boundary);
+  let streamingTail = input.slice(boundary);
   const state = streamingMarkdownState(streamKey);
   const previous = state?.rendered;
   const renderKey = markdownRenderKey(renderOptions);
+  const append = previous && stableMarkdown.startsWith(previous.markdown);
+  // Literal code cannot acquire HTML ownership after its block is complete.
+  const hasHtml = append
+    ? previous.hasHtml || hasStreamingMarkdownHtml(stableMarkdown.slice(previous.markdown.length))
+    : hasStreamingMarkdownHtml(stableMarkdown);
   // Containers and block-art classification can outlive a completed boundary.
   // The message parse guard also keeps applying to the complete prefix.
   const incremental =
     previous?.options === renderKey &&
-    stableMarkdown.startsWith(previous.markdown) &&
+    append &&
     (previous.markdown === stableMarkdown ||
       (previous.markdown.endsWith("\n") &&
         !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
         !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
-        !stableMarkdown.includes("<") &&
+        !hasHtml &&
         !isMarkdownBlockArtText(stableMarkdown) &&
         !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
@@ -704,8 +736,15 @@ export function toStreamingMarkdownParts(
         ? renderSanitizedMarkdown(stableMarkdown, { ...renderOptions })
         : stableHtml + appendedHtml;
   }
-  if (state) {
-    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml };
+  if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
+    // Keep provisional code in the mutable tail so highlighting can arrive
+    // before its DOM is promoted to stable content, preserving reader controls.
+    const retained = previous?.options === renderKey && append ? previous : undefined;
+    boundary = retained?.markdown.length ?? 0;
+    stableHtml = retained?.html ?? "";
+    streamingTail = input.slice(boundary);
+  } else if (state) {
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
   }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];

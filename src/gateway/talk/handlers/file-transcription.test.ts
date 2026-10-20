@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { MediaUnderstandingModelConfig } from "../../../config/types.tools.js";
 import { acquireStateDatabaseSchemaLease } from "../../../infra/gateway-state-owner.js";
 import type {
   AudioTranscriptionConfigContext,
@@ -307,11 +308,19 @@ describe("configured file transcription through Talk RPCs", () => {
         });
         const session = expectRespondOk(respond, { provider: "local-stt", mode: "transcription" });
         const sessionId = (session as { sessionId: string }).sessionId;
-        await call("talk.session.appendAudio", {
-          params: { sessionId, audioBase64: Buffer.alloc(1600, 0xff).toString("base64") },
-          respond: vi.fn(),
-          context,
-        });
+        const capturedAudio = Buffer.alloc(1600, 0xff);
+        capturedAudio.set([0x00, 0x80, 0x7f, 0xff, 0x10, 0x90]);
+        for (const chunk of [
+          capturedAudio.subarray(0, 1),
+          capturedAudio.subarray(1, 4),
+          capturedAudio.subarray(4),
+        ]) {
+          await call("talk.session.appendAudio", {
+            params: { sessionId, audioBase64: chunk.toString("base64") },
+            respond: vi.fn(),
+            context,
+          });
+        }
         expect(requests).toHaveLength(0);
         const closed = vi.fn();
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -336,9 +345,19 @@ describe("configured file transcription through Talk RPCs", () => {
         expect(requests[0]?.model).toBe("whisper");
         const audio = requests[0]?.buffer;
         expect(audio?.subarray(0, 4).toString()).toBe("RIFF");
+        expect(audio?.readUInt32LE(4)).toBe(3236);
+        expect(audio?.subarray(8, 16).toString()).toBe("WAVEfmt ");
+        expect(audio?.readUInt32LE(16)).toBe(16);
+        expect(audio?.readUInt16LE(20)).toBe(1);
+        expect(audio?.readUInt16LE(22)).toBe(1);
         expect(audio?.readUInt32LE(24)).toBe(8000);
+        expect(audio?.readUInt32LE(28)).toBe(16000);
+        expect(audio?.readUInt16LE(32)).toBe(2);
         expect(audio?.readUInt16LE(34)).toBe(16);
-        expect(audio?.subarray(44)).toEqual(Buffer.alloc(3200));
+        expect(audio?.subarray(36, 40).toString()).toBe("data");
+        expect(audio?.readUInt32LE(40)).toBe(3200);
+        expect(audio?.subarray(44, 56)).toEqual(Buffer.from("84827c7d0000000084c17c3e", "hex"));
+        expect(audio?.subarray(56)).toEqual(Buffer.alloc(3188));
         expect(events).toContainEqual(
           expect.objectContaining({ type: "transcript", text: "Turn the lights on" }),
         );
@@ -417,11 +436,29 @@ describe("configured file transcription through Talk RPCs", () => {
     },
   );
 
-  it("rejects oversized captures before dispatching them to the media provider", async () => {
+  it.each([
+    {
+      name: "largest audio fallback",
+      models: [
+        { provider: "local-stt", model: "small", capabilities: ["audio"], maxBytes: 4096 },
+        { provider: "local-stt", model: "large", capabilities: ["audio"], maxBytes: 16384 },
+        { provider: "local-stt", model: "vision", capabilities: ["image"], maxBytes: 65536 },
+      ],
+      maxBytes: 16384,
+    },
+  ] satisfies Array<{
+    name: string;
+    models: MediaUnderstandingModelConfig[] | undefined;
+    maxBytes: number;
+  }>)("enforces the $name capture limit before dispatch", async ({ models, maxBytes }) => {
     await withFileProvider(async (requests) => {
       const call = createTalkHandlerCaller(talkSessionHandlers);
+      const config: OpenClawConfig = {
+        ...cfg,
+        tools: { media: { ...cfg.tools?.media, models } },
+      };
       const context = {
-        getRuntimeConfig: () => cfg,
+        getRuntimeConfig: () => config,
         broadcastToConnIds: vi.fn(),
         logGateway: { warn: vi.fn() },
       };
@@ -432,13 +469,25 @@ describe("configured file transcription through Talk RPCs", () => {
         context,
       });
       const sessionId = (expectRespondOk(created) as { sessionId: string }).sessionId;
+      const accepted = vi.fn();
+      await call("talk.session.appendAudio", {
+        params: {
+          sessionId,
+          audioBase64: Buffer.alloc((maxBytes - 44) / 2, 0xff).toString("base64"),
+        },
+        respond: accepted,
+        context,
+      });
+      expectRespondOk(accepted);
       const rejected = vi.fn();
       await call("talk.session.appendAudio", {
-        params: { sessionId, audioBase64: Buffer.alloc(4096, 0xff).toString("base64") },
+        params: { sessionId, audioBase64: Buffer.alloc(1, 0xff).toString("base64") },
         respond: rejected,
         context,
       });
-      expectRespondError(rejected, { message: expect.stringContaining("8192 byte limit") });
+      expectRespondError(rejected, {
+        message: expect.stringContaining(`${maxBytes} byte limit`),
+      });
       expect(requests).toHaveLength(0);
       cleanupTalkConnection("conn-1", context.logGateway);
     });

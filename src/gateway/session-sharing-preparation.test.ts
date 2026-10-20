@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -12,6 +12,7 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import * as entryReads from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
@@ -25,7 +26,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { authorizePreparedSessionMutation } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
@@ -34,6 +38,59 @@ afterEach(() => vi.restoreAllMocks());
 
 const unavailableMessage =
   "Session access facts are unavailable; retry after session storage is ready.";
+
+const it = baseIt.extend<{ state: OpenClawTestState }>({
+  state: async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
+});
+
+function releasing<T extends { release(): void }>(facts: T) {
+  return Object.assign(facts, { [Symbol.dispose]: () => facts.release() });
+}
+
+function sharingHarness(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  storePath?: string,
+  agentId = "main",
+) {
+  const scope = { agentId, sessionKey, storePath };
+  const request = { cfg, sessionKey, agentId };
+  const transaction = (run: Parameters<typeof runOpenClawAgentWriteTransaction>[0]) =>
+    runOpenClawAgentWriteTransaction(run, { agentId, path: storePath });
+  return {
+    scope,
+    prepare: () => prepareSessionMutationFacts(request),
+    prepareMissing: () => prepareSessionMutationFacts({ ...request, allowMissing: true }),
+    write: (entry: SessionEntry) => replaceSessionEntrySync(scope, entry),
+    transaction,
+    commit: (...entries: SessionEntry[]) =>
+      transaction((database) => {
+        for (const entry of entries) {
+          writeSessionEntry(database, sessionKey, entry);
+        }
+      }),
+    authorize: (facts: Parameters<typeof authorizePreparedSessionMutation>[1]) =>
+      authorizePreparedSessionMutation(
+        { ...request, client: sharingPolicyClient({ user: "requester" }) },
+        facts,
+        {
+          policy: { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" },
+          aliases: new Set(["requester"]),
+        },
+      ),
+  };
+}
+
+function restrictedEntry(sessionId: string, lifecycleRevision: string): SessionEntry {
+  return {
+    sessionId,
+    lifecycleRevision,
+    updatedAt: 1,
+    visibility: "read-only",
+    sandbox: "required",
+    createdActor: { type: "human", source: "profile", id: "creator" },
+  };
+}
 
 function expectWithoutHostSql(action: () => void) {
   const sql = observeHostDataSql();
@@ -53,289 +110,248 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
-it("refuses a worker sharing result whose captured birthtime differs from its retained source", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("sharing-worker-birthtime.sqlite");
-    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-    const sessionKey = "agent:main:worker-birthtime";
-    replaceSessionEntrySync(
-      { agentId: "main", storePath, sessionKey },
-      { sessionId: "original", updatedAt: 1 },
-    );
-    const file = fs.statSync(storePath, { bigint: true });
-    const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
-    const observed: Array<Awaited<ReturnType<typeof readEntries>>["databaseIdentity"]> = [];
-    const reader = vi
-      .spyOn(entryReads, "readSessionEntriesFromStoreInWorker")
-      .mockImplementation(async (...args) => {
-        const [input] = args;
-        const loaded = await readEntries(...args);
-        if (input.projection !== "full" || !input.includeAuthorization) {
-          return loaded;
-        }
-        observed.push(loaded.databaseIdentity);
-        return loaded.databaseIdentity
-          ? {
-              ...loaded,
-              databaseIdentity: {
-                ...loaded.databaseIdentity,
-                birthtime: (BigInt(readDatabaseIdentityBirthtime(file)) + 1n).toString(),
-              },
-            }
-          : loaded;
-      });
-    let prepared: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
-    try {
-      await expect(
-        prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }).then((read) => {
-          prepared = read;
-          return read;
-        }),
-      ).rejects.toThrow(unavailableMessage);
-      expect(observed).toEqual([
-        expect.objectContaining({
-          identity: `${file.dev}:${file.ino}`,
-          filename: storePath,
-          birthtime: readDatabaseIdentityBirthtime(file),
-          incarnation: expect.any(String),
-        }),
-      ]);
-    } finally {
-      prepared?.release();
-      reader.mockRestore();
-    }
-  });
+it("refuses a worker sharing result whose captured birthtime differs from its retained source", async ({
+  state,
+}) => {
+  const storePath = state.statePath("sharing-worker-birthtime.sqlite");
+  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+  const sessionKey = "agent:main:worker-birthtime";
+  replaceSessionEntrySync(
+    { agentId: "main", storePath, sessionKey },
+    { sessionId: "original", updatedAt: 1 },
+  );
+  const file = fs.statSync(storePath, { bigint: true });
+  const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
+  const observed: Array<Awaited<ReturnType<typeof readEntries>>["databaseIdentity"]> = [];
+  vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+    async (...args) => {
+      const [input] = args;
+      const loaded = await readEntries(...args);
+      if (input.projection !== "full" || !input.includeAuthorization) {
+        return loaded;
+      }
+      observed.push(loaded.databaseIdentity);
+      return loaded.databaseIdentity
+        ? {
+            ...loaded,
+            databaseIdentity: {
+              ...loaded.databaseIdentity,
+              birthtime: (BigInt(readDatabaseIdentityBirthtime(file)) + 1n).toString(),
+            },
+          }
+        : loaded;
+    },
+  );
+  await expect(
+    prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }).then((read) => {
+      read.release();
+      return read;
+    }),
+  ).rejects.toThrow(unavailableMessage);
+  expect(observed).toEqual([
+    expect.objectContaining({
+      identity: `${file.dev}:${file.ino}`,
+      filename: storePath,
+      birthtime: readDatabaseIdentityBirthtime(file),
+      incarnation: expect.any(String),
+    }),
+  ]);
 });
 
-it.each(["unknown", "rollback"] as const)(
+it.for(["unknown", "rollback"] as const)(
   "applies %s topology publications to retained sharing facts",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = state.statePath("shared.sqlite");
-      const registration = { agentId: "main", path: storePath, env: state.env };
-      openOpenClawAgentDatabase(registration);
-      const cfg = { agents: { entries: { ops: {} } }, session: { store: storePath } };
-      const agentId = "ops";
-      const target = { agentId, sessionKey: `agent:${agentId}:registry-sharing` };
-      replaceSessionEntrySync(
-        { ...target, storePath },
-        {
-          sessionId: "registry-sharing",
-          lifecycleRevision: "first",
-          updatedAt: 1,
-        },
-      );
-      const prepared = await prepareSessionMutationFacts({ cfg, ...target });
-      try {
-        if (change === "unknown") {
-          sessionChanges.emit({ all: true, scope: "stores" });
-        } else {
-          expect(() =>
-            runOpenClawStateWriteTransaction(
-              () => {
-                unregisterOpenClawAgentDatabase(registration);
-                throw new Error("Synthetic registry rollback");
-              },
-              { env: state.env },
-            ),
-          ).toThrow("Synthetic registry rollback");
-        }
-        if (change === "rollback") {
-          expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("registry-sharing");
-        } else {
-          expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
-        }
-      } finally {
-        prepared.release();
-      }
-    });
-  },
-);
-
-it("does not discover registry-only retired stores outside captured roots", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("external-retired.sqlite");
-    const registration = { agentId: "retired", path: storePath, env: state.env };
+  async (change, { state }) => {
+    const storePath = state.statePath("shared.sqlite");
+    const registration = { agentId: "main", path: storePath, env: state.env };
     openOpenClawAgentDatabase(registration);
-    const target = { agentId: "retired", sessionKey: "agent:retired:external" };
+    const cfg = { agents: { entries: { ops: {} } }, session: { store: storePath } };
+    const agentId = "ops";
+    const target = { agentId, sessionKey: `agent:${agentId}:registry-sharing` };
     replaceSessionEntrySync(
       { ...target, storePath },
-      { sessionId: "external-retired", lifecycleRevision: "first", updatedAt: 1 },
+      {
+        sessionId: "registry-sharing",
+        lifecycleRevision: "first",
+        updatedAt: 1,
+      },
     );
-    const cfg = { agents: { entries: { main: {} } } };
-    const prepared = await prepareSessionMutationFacts({ cfg, ...target, allowMissing: true });
-    try {
-      expect(prepared.readCurrent(cfg).target).toBeNull();
-      unregisterOpenClawAgentDatabase(registration);
-      expect(prepared.readCurrent(cfg).target).toBeNull();
-    } finally {
-      prepared.release();
+    using prepared = releasing(await prepareSessionMutationFacts({ cfg, ...target }));
+    if (change === "unknown") {
+      sessionChanges.emit({ all: true, scope: "stores" });
+    } else {
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            unregisterOpenClawAgentDatabase(registration);
+            throw new Error("Synthetic registry rollback");
+          },
+          { env: state.env },
+        ),
+      ).toThrow("Synthetic registry rollback");
     }
-  });
-});
-
-it.each(["main", "research"])(
-  "retains %s mutation facts across agent roster publications",
-  async (agentId) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
-      const cfg = { agents: { entries: { [agentId]: {} } } };
-      const target = { agentId, sessionKey: `agent:${agentId}:roster-sharing` };
-      replaceSessionEntrySync(
-        { ...target, storePath },
-        { sessionId: "unaffected", lifecycleRevision: "first", updatedAt: 1 },
-      );
-      setRuntimeConfigSnapshot(cfg);
-      const prepared = await prepareSessionMutationFacts({ cfg, ...target });
-      try {
-        const added = { agents: { entries: { [agentId]: {}, other: {} } } };
-        for (const current of [added, cfg]) {
-          setRuntimeConfigSnapshot(current);
-          expect(prepared.readCurrent(current).target.entry.sessionId).toBe("unaffected");
-        }
-        const removed = { ...cfg, agents: { entries: { other: {} } } };
-        setRuntimeConfigSnapshot(removed);
-        expect(() => prepared.readCurrent(removed)).toThrow(unavailableMessage);
-      } finally {
-        prepared.release();
-      }
-    });
+    if (change === "rollback") {
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("registry-sharing");
+    } else {
+      expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+    }
   },
 );
 
-it("keeps durable sharing facts current before observers without SQL in retained assertions", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:main:sharing";
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const scope = { agentId: "main", sessionKey };
-    const entry: SessionEntry = {
-      sessionId: "sharing-session",
-      lifecycleRevision: "sharing-generation",
-      updatedAt: 1,
-      visibility: "read-only",
-      sandbox: "required",
-      createdActor: { type: "human", source: "profile", id: "creator" },
-    };
-    replaceSessionEntrySync(scope, entry);
-    await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
-    const client = sharingPolicyClient({
-      user: "requester",
-      scopes: ["operator.read", "operator.write"],
-    });
-    const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
-    const authorize = (read: Awaited<ReturnType<typeof prepareSessionMutationFacts>>) =>
-      authorizePreparedSessionMutation(
-        { cfg, client, sessionKey, agentId: "main" },
-        read.readCurrent(cfg),
-        { policy, aliases: new Set(["requester"]) },
-      );
-    let prepared: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
-    let replacementRead: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
-    const observed: Array<{ visibility: SessionEntry["visibility"]; member: boolean }> = [];
-    const observationErrors: unknown[] = [];
-    // This observer precedes the retained reader: installation must belong to commit, not notification order.
-    const stop = sessionChanges.subscribe((change) => {
-      if (
-        prepared &&
-        "sessionKey" in change &&
-        change.sessionKey === sessionKey &&
-        change.storePath === databasePath
-      ) {
-        try {
-          const current = prepared.readCurrent(cfg);
-          observed.push({
-            visibility: current.target.entry.visibility,
-            member: current.membership.has("requester"),
-          });
-        } catch (error) {
-          observationErrors.push(error);
-        }
-      }
-    });
-    try {
-      const preparationSql = observeHostDataSql();
-      try {
-        prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-        for (const call of preparationSql.calls) {
-          expect(call).not.toHaveBeenCalled();
-        }
-      } finally {
-        preparationSql.restore();
-      }
-      const read = prepared;
-      const assertWithoutSql = (allowed: boolean) =>
-        expectWithoutHostSql(() => expect(authorize(read) === null).toBe(allowed));
-      assertWithoutSql(true);
-      sessionChanges.emit({ all: true, scope: "subagent-runs" });
-      assertWithoutSql(true);
-      replaceSessionEntrySync(scope, {
-        ...entry,
-        archivedAt: 2,
-        label: "cosmetic change",
-        updatedAt: 2,
-      });
-      expect(read.readCurrent(cfg).target.entry.archivedAt).toBe(2);
-      assertWithoutSql(true);
-      expect(observed.at(-1)).toEqual({ visibility: "read-only", member: true });
-      await removeSessionMember(scope, "requester");
-      assertWithoutSql(false);
-      expect(observed.at(-1)).toEqual({ visibility: "read-only", member: false });
-      observed.length = 0;
-      const target = read.readCurrent(cfg).target;
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          writeSessionEntry(database, sessionKey, {
-            ...target.entry,
-            visibility: "shared",
-            updatedAt: 3,
-          });
-          expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
-          writeSessionEntry(database, sessionKey, {
-            ...target.entry,
-            visibility: "draft",
-            updatedAt: 4,
-          });
-        },
-        { agentId: target.agentId, path: databasePath },
-      );
-      expect(observed).toEqual([
-        { visibility: "draft", member: false },
-        { visibility: "draft", member: false },
-      ]);
-      expect(observationErrors).toEqual([]);
-      assertWithoutSql(false);
-      runOpenClawAgentWriteTransaction(
-        (database) =>
-          writeSessionEntry(database, sessionKey, {
-            ...target.entry,
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-generation",
-            updatedAt: 5,
-          }),
-        { agentId: target.agentId, path: databasePath },
-      );
-      expect(observationErrors).toHaveLength(1);
-      expect(observationErrors[0]).toBeInstanceOf(Error);
-      expect(observationErrors[0]).toHaveProperty("message", unavailableMessage);
-      expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
-      replacementRead = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-      expect(replacementRead.readCurrent(cfg).target.entry.sessionId).toBe("replacement-session");
-      await closeOpenClawAgentDatabaseByPathAsync(databasePath, target.agentId);
-      expect(() => replacementRead!.readCurrent(cfg)).toThrow(unavailableMessage);
-      read.release();
-      read.release();
-    } finally {
-      stop();
-      replacementRead?.release();
-      prepared?.release();
-    }
-  });
+it("does not discover registry-only retired stores outside captured roots", async ({ state }) => {
+  const storePath = state.statePath("external-retired.sqlite");
+  const registration = { agentId: "retired", path: storePath, env: state.env };
+  openOpenClawAgentDatabase(registration);
+  const target = { agentId: "retired", sessionKey: "agent:retired:external" };
+  replaceSessionEntrySync(
+    { ...target, storePath },
+    { sessionId: "external-retired", lifecycleRevision: "first", updatedAt: 1 },
+  );
+  const cfg = { agents: { entries: { main: {} } } };
+  using prepared = releasing(
+    await prepareSessionMutationFacts({ cfg, ...target, allowMissing: true }),
+  );
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  unregisterOpenClawAgentDatabase(registration);
+  expect(prepared.readCurrent(cfg).target).toBeNull();
 });
 
-it.each([
+it.for(["main", "research"])(
+  "retains %s mutation facts across agent roster publications",
+  async (agentId, { state }) => {
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
+    const cfg = { agents: { entries: { [agentId]: {} } } };
+    const target = { agentId, sessionKey: `agent:${agentId}:roster-sharing` };
+    replaceSessionEntrySync(
+      { ...target, storePath },
+      { sessionId: "unaffected", lifecycleRevision: "first", updatedAt: 1 },
+    );
+    setRuntimeConfigSnapshot(cfg);
+    using prepared = releasing(await prepareSessionMutationFacts({ cfg, ...target }));
+    const added = { agents: { entries: { [agentId]: {}, other: {} } } };
+    for (const current of [added, cfg]) {
+      setRuntimeConfigSnapshot(current);
+      expect(prepared.readCurrent(current).target.entry.sessionId).toBe("unaffected");
+    }
+    const removed = { ...cfg, agents: { entries: { other: {} } } };
+    setRuntimeConfigSnapshot(removed);
+    expect(() => prepared.readCurrent(removed)).toThrow(unavailableMessage);
+  },
+);
+
+it("keeps durable sharing facts current before observers without SQL in retained assertions", async ({
+  state,
+}) => {
+  const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:sharing";
+  const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  const harness = sharingHarness(cfg, sessionKey);
+  const { scope } = harness;
+  const entry = restrictedEntry("sharing-session", "sharing-generation");
+  harness.write(entry);
+  await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+  let prepared: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
+  let replacementRead: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
+  const observed: Array<{ visibility: SessionEntry["visibility"]; member: boolean }> = [];
+  const observationErrors: unknown[] = [];
+  // This observer precedes the retained reader: installation must belong to commit, not notification order.
+  const stop = sessionChanges.subscribe((change) => {
+    if (
+      prepared &&
+      "sessionKey" in change &&
+      change.sessionKey === sessionKey &&
+      change.storePath === databasePath
+    ) {
+      try {
+        const current = prepared.readCurrent(cfg);
+        observed.push({
+          visibility: current.target.entry.visibility,
+          member: current.membership.has("requester"),
+        });
+      } catch (error) {
+        observationErrors.push(error);
+      }
+    }
+  });
+  try {
+    const preparationSql = observeHostDataSql();
+    try {
+      prepared = await harness.prepare();
+      for (const call of preparationSql.calls) {
+        expect(call).not.toHaveBeenCalled();
+      }
+    } finally {
+      preparationSql.restore();
+    }
+    const read = prepared;
+    const assertWithoutSql = (allowed: boolean) =>
+      expectWithoutHostSql(() =>
+        expect(harness.authorize(read.readCurrent(cfg)) === null).toBe(allowed),
+      );
+    assertWithoutSql(true);
+    sessionChanges.emit({ all: true, scope: "subagent-runs" });
+    assertWithoutSql(true);
+    harness.write({
+      ...entry,
+      archivedAt: 2,
+      label: "cosmetic change",
+      updatedAt: 2,
+    });
+    expect(read.readCurrent(cfg).target.entry.archivedAt).toBe(2);
+    assertWithoutSql(true);
+    expect(observed.at(-1)).toEqual({ visibility: "read-only", member: true });
+    await removeSessionMember(scope, "requester");
+    assertWithoutSql(false);
+    expect(observed.at(-1)).toEqual({ visibility: "read-only", member: false });
+    observed.length = 0;
+    const target = read.readCurrent(cfg).target;
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeSessionEntry(database, sessionKey, {
+          ...target.entry,
+          visibility: "shared",
+          updatedAt: 3,
+        });
+        expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
+        writeSessionEntry(database, sessionKey, {
+          ...target.entry,
+          visibility: "draft",
+          updatedAt: 4,
+        });
+      },
+      { agentId: target.agentId, path: databasePath },
+    );
+    expect(observed).toEqual([
+      { visibility: "draft", member: false },
+      { visibility: "draft", member: false },
+    ]);
+    expect(observationErrors).toEqual([]);
+    assertWithoutSql(false);
+    harness.commit({
+      ...target.entry,
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-generation",
+      updatedAt: 5,
+    });
+    expect(observationErrors).toHaveLength(1);
+    expect(observationErrors[0]).toBeInstanceOf(Error);
+    expect(observationErrors[0]).toHaveProperty("message", unavailableMessage);
+    expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
+    replacementRead = await harness.prepare();
+    expect(replacementRead.readCurrent(cfg).target.entry.sessionId).toBe("replacement-session");
+    await closeOpenClawAgentDatabaseByPathAsync(databasePath, target.agentId);
+    expect(() => replacementRead!.readCurrent(cfg)).toThrow(unavailableMessage);
+    read.release();
+    read.release();
+  } finally {
+    stop();
+    replacementRead?.release();
+    prepared?.release();
+  }
+});
+
+it.for([
   "worker-metadata",
   "visibility",
   "membership",
@@ -344,23 +360,18 @@ it.each([
   "retirement",
   "unknown",
   "rollback",
-] as const)("reconciles a stale sharing worker return across %s publication", async (change) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+] as const)(
+  "reconciles a stale sharing worker return across %s publication",
+  async (change, { state }) => {
     const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     const sessionKey = "agent:main:acquiring-sharing";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const scope = { agentId: "main", sessionKey, storePath };
-    const entry: SessionEntry = {
-      sessionId: "acquiring-session",
-      lifecycleRevision: "original",
-      updatedAt: 1,
-      visibility: "read-only",
-      sandbox: "required",
-      createdActor: { type: "human", source: "profile", id: "creator" },
-    };
-    replaceSessionEntrySync(scope, entry);
+    const harness = sharingHarness(cfg, sessionKey, storePath);
+    const { scope } = harness;
+    const entry = restrictedEntry("acquiring-session", "original");
+    harness.write(entry);
     await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
     const originalRead = entryReads.readSessionEntriesFromStoreInWorker;
     let publications = 0;
@@ -370,26 +381,20 @@ it.each([
         if (!publications && snapshot.entries.some((row) => row.sessionKey === sessionKey)) {
           publications++;
           if (change === "unknown") {
-            runOpenClawAgentWriteTransaction(
-              (database) => {
-                publishSessionEntryCacheInvalidation(database, { sessionKey });
-              },
-              { agentId: "main", path: storePath },
-            );
+            harness.transaction((database) => {
+              publishSessionEntryCacheInvalidation(database, { sessionKey });
+            });
           } else if (change === "rollback") {
             const rollback = new Error("Synthetic sharing rollback");
             expect(() =>
-              runOpenClawAgentWriteTransaction(
-                (database) => {
-                  writeSessionEntry(database, sessionKey, {
-                    ...entry,
-                    visibility: "draft",
-                    updatedAt: 2,
-                  });
-                  throw rollback;
-                },
-                { agentId: "main", path: storePath },
-              ),
+              harness.transaction((database) => {
+                writeSessionEntry(database, sessionKey, {
+                  ...entry,
+                  visibility: "draft",
+                  updatedAt: 2,
+                });
+                throw rollback;
+              }),
             ).toThrow(rollback);
           } else if (change === "membership") {
             await removeSessionMember(scope, "requester");
@@ -397,23 +402,20 @@ it.each([
             await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
           } else if (change === "lifecycle" || change === "replacement") {
             // Exercise the entry publisher itself, without a separate lifecycle event.
-            runOpenClawAgentWriteTransaction(
-              (database) => {
-                writeSessionEntry(database, sessionKey, {
-                  ...entry,
-                  ...(change === "lifecycle"
-                    ? { lifecycleRevision: "replacement" }
-                    : { sessionId: "replacement-session" }),
-                  updatedAt: 2,
-                });
-                writeSessionEntry(database, sessionKey, entry);
+            harness.commit(
+              {
+                ...entry,
+                ...(change === "lifecycle"
+                  ? { lifecycleRevision: "replacement" }
+                  : { sessionId: "replacement-session" }),
+                updatedAt: 2,
               },
-              { agentId: "main", path: storePath },
+              entry,
             );
           } else if (change === "worker-metadata") {
             await replaceSessionEntry(scope, { ...entry, updatedAt: 2, label: "worker metadata" });
           } else {
-            replaceSessionEntrySync(scope, {
+            harness.write({
               ...entry,
               updatedAt: 2,
               visibility: "draft",
@@ -423,7 +425,7 @@ it.each([
         return snapshot;
       },
     );
-    const pending = prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+    const pending = harness.prepare();
     if (
       change === "lifecycle" ||
       change === "replacement" ||
@@ -432,154 +434,101 @@ it.each([
     ) {
       await expect(pending).rejects.toThrow(unavailableMessage);
     } else {
-      const read = await pending;
-      try {
-        expectWithoutHostSql(() => {
-          const facts = read.readCurrent(cfg);
-          expect(facts.target.entry.updatedAt).toBe(
-            change === "membership" || change === "rollback" ? 1 : 2,
-          );
-          expect(facts.membership.has("requester")).toBe(change !== "membership");
-          const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
-          expect(
-            authorizePreparedSessionMutation(
-              {
-                cfg,
-                client: sharingPolicyClient({ user: "requester" }),
-                sessionKey,
-                agentId: "main",
-              },
-              facts,
-              { policy, aliases: new Set(["requester"]) },
-            ) === null,
-          ).toBe(change === "worker-metadata" || change === "rollback");
-        });
-      } finally {
-        read.release();
-      }
+      using read = releasing(await pending);
+      expectWithoutHostSql(() => {
+        const facts = read.readCurrent(cfg);
+        expect(facts.target.entry.updatedAt).toBe(
+          change === "membership" || change === "rollback" ? 1 : 2,
+        );
+        expect(facts.membership.has("requester")).toBe(change !== "membership");
+        expect(harness.authorize(facts) === null).toBe(
+          change === "worker-metadata" || change === "rollback",
+        );
+      });
+      read.release();
       expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
     }
     expect(publications).toBe(1);
-  });
+  },
+);
+
+it("rejects unavailable durable metadata", async ({ state }) => {
+  const storePath = state.statePath("unavailable.sqlite");
+  fs.writeFileSync(storePath, "");
+  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  await expect(
+    prepareSessionMutationFacts({ cfg, sessionKey: "agent:main:sharing", agentId: "main" }),
+  ).rejects.toThrow(unavailableMessage);
 });
 
-it("rejects unavailable durable metadata", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("unavailable.sqlite");
-    fs.writeFileSync(storePath, "");
-    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    await expect(
-      prepareSessionMutationFacts({ cfg, sessionKey: "agent:main:sharing", agentId: "main" }),
-    ).rejects.toThrow(unavailableMessage);
-  });
-});
-
-it("requires an existing session before preparing sharing facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("negative-sharing.sqlite");
-    const cfg = {
-      ...rolePolicyConfig(),
-      agents: { entries: { main: {} } },
-      session: { store: storePath },
-    };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:main:absent";
-    await expect(prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" })).rejects.toThrow(
-      unavailableMessage,
+it("requires an existing session before preparing sharing facts", async ({ state }) => {
+  const storePath = state.statePath("negative-sharing.sqlite");
+  const cfg = {
+    ...rolePolicyConfig(),
+    agents: { entries: { main: {} } },
+    session: { store: storePath },
+  };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:absent";
+  const harness = sharingHarness(cfg, sessionKey, storePath);
+  await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
+  {
+    using missingDatabase = releasing(await harness.prepareMissing());
+    expect(missingDatabase.readCurrent(cfg).target).toBeNull();
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    expect(missingDatabase.readCurrent(cfg).target).toBeNull();
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:existing", storePath },
+      { sessionId: "existing", updatedAt: 1 },
     );
-    const missingDatabase = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey,
-      agentId: "main",
-      allowMissing: true,
+  }
+  await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
+  {
+    using missingEntry = releasing(await harness.prepareMissing());
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    expect(missingEntry.readCurrent(cfg).target).toBeNull();
+    harness.write({
+      sessionId: "new-restricted-session",
+      lifecycleRevision: "new-restricted-generation",
+      updatedAt: 1,
+      visibility: "draft",
+      sandbox: "required",
+      createdActor: { type: "human", source: "profile", id: "other" },
     });
-    try {
-      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:existing", storePath },
-        { sessionId: "existing", updatedAt: 1 },
-      );
-    } finally {
-      missingDatabase.release();
-    }
-    await expect(prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" })).rejects.toThrow(
-      unavailableMessage,
-    );
-    const missingEntry = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey,
-      agentId: "main",
-      allowMissing: true,
-    });
-    try {
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      expect(missingEntry.readCurrent(cfg).target).toBeNull();
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "new-restricted-session",
-          lifecycleRevision: "new-restricted-generation",
-          updatedAt: 1,
-          visibility: "draft",
-          sandbox: "required",
-          createdActor: { type: "human", source: "profile", id: "other" },
-        },
-      );
-      expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
-    } finally {
-      missingEntry.release();
-    }
-    const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-    try {
-      const client = sharingPolicyClient({ user: "requester" });
-      const policy = { ...cfg.gateway!.roles!.definitions.view!, sandbox: "required" as const };
-      const facts = prepared.readCurrent(cfg);
-      expect(facts.target.entry.sessionId).toBe("new-restricted-session");
-      expect(
-        authorizePreparedSessionMutation({ cfg, client, sessionKey, agentId: "main" }, facts, {
-          policy,
-          aliases: new Set(["requester"]),
-        })?.message,
-      ).toContain("session is draft");
-    } finally {
-      prepared.release();
-    }
-  });
+    expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
+  }
+  using prepared = releasing(await harness.prepare());
+  const facts = prepared.readCurrent(cfg);
+  expect(facts.target.entry.sessionId).toBe("new-restricted-session");
+  expect(harness.authorize(facts)?.message).toContain("session is draft");
 });
 
 // Alias retargets apply to the next preparation; captured requests retain their physical store.
-it("does not transfer prepared sharing facts through a same-path replacement", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const original = state.statePath("original", "session.sqlite");
-    const replacement = state.statePath("replacement", "session.sqlite");
-    const sessionKey = "agent:main:sharing";
-    for (const storePath of [original, replacement]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId: "identical", lifecycleRevision: "same", updatedAt: 1, visibility: "shared" },
-      );
-      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    }
-    const cfg = {
-      agents: { entries: { main: {} } },
-      session: { store: original },
-    };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const prepared = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-    try {
-      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
-      fs.renameSync(original, state.statePath("retired.sqlite"));
-      fs.renameSync(replacement, original);
-      registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
-      expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
-    } finally {
-      prepared.release();
-    }
-  });
+it("does not transfer prepared sharing facts through a same-path replacement", async ({
+  state,
+}) => {
+  const original = state.statePath("original", "session.sqlite");
+  const replacement = state.statePath("replacement", "session.sqlite");
+  const sessionKey = "agent:main:sharing";
+  for (const storePath of [original, replacement]) {
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "identical", lifecycleRevision: "same", updatedAt: 1, visibility: "shared" },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+  }
+  const cfg = { agents: { entries: { main: {} } }, session: { store: original } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  using prepared = releasing(
+    await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }),
+  );
+  expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
+  fs.renameSync(original, state.statePath("retired.sqlite"));
+  fs.renameSync(replacement, original);
+  registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
+  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
 });

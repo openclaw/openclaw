@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -43,52 +43,42 @@ const ACCENT_PRESETS = [
   {
     id: "default",
     hex: undefined,
-    labelKey: "configView.appearance.accents.default",
   },
   {
     id: "claw",
     hex: "#ff5c5c",
-    labelKey: "configView.appearance.accents.claw",
   },
   {
     id: "coral",
     hex: "#ff8066",
-    labelKey: "configView.appearance.accents.coral",
   },
   {
     id: "amber",
     hex: "#f5b942",
-    labelKey: "configView.appearance.accents.amber",
   },
   {
     id: "mint",
     hex: "#52c99a",
-    labelKey: "configView.appearance.accents.mint",
   },
   {
     id: "teal",
     hex: "#35b9b0",
-    labelKey: "configView.appearance.accents.teal",
   },
   {
     id: "blue",
     hex: "#5b9cf6",
-    labelKey: "configView.appearance.accents.blue",
   },
   {
     id: "violet",
     hex: "#a78bfa",
-    labelKey: "configView.appearance.accents.violet",
   },
   {
     id: "pink",
     hex: "#f472b6",
-    labelKey: "configView.appearance.accents.pink",
   },
   {
     id: "slate",
     hex: "#8795a8",
-    labelKey: "configView.appearance.accents.slate",
   },
 ] as const;
 
@@ -112,37 +102,32 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
     </span>
   );
 }
-function focusCustomThemeImportInput() {
-  requestAnimationFrame(() => {
-    const input = document.querySelector<HTMLInputElement>("[data-custom-theme-import-input]");
-    if (!input) {
+export function AppearanceSection(props: ConfigProps) {
+  let customThemeImportInput: HTMLInputElement | undefined;
+  let focusFrame = 0;
+  const showCustomThemeImport = () =>
+    props.hasCustomTheme || props.customThemeImportExpanded === true;
+  function focusImporter() {
+    const input = customThemeImportInput;
+    if (!input?.isConnected) {
       return;
     }
-    input.scrollIntoView({
-      block: "center",
-      behavior: resolveScrollBehavior(),
-    });
-    input.focus();
-    input.select();
-  });
-}
-export function AppearanceSection(props: ConfigProps) {
-  const showCustomThemeImport = createMemo(
-    () => props.hasCustomTheme || props.customThemeImportExpanded === true,
-  );
-  createEffect(
-    () => ({
-      shown: showCustomThemeImport(),
-      token: props.customThemeImportFocusToken,
-      viewState: props.viewState,
-    }),
-    ({ shown, token, viewState }) => {
-      if (shown && token != null && token !== viewState.lastCustomThemeImportFocusToken) {
-        viewState.lastCustomThemeImportFocusToken = token;
-        focusCustomThemeImportInput();
+    cancelAnimationFrame(focusFrame);
+    focusFrame = requestAnimationFrame(() => {
+      if (!input.isConnected) {
+        return;
       }
-    },
-  );
+      input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
+      input.focus();
+      input.select();
+    });
+  }
+  onSettled(() => {
+    if (showCustomThemeImport()) {
+      focusImporter();
+    }
+    return () => cancelAnimationFrame(focusFrame);
+  });
   const importedName = createMemo(() =>
     props.hasCustomTheme && props.customThemeLabel
       ? props.customThemeLabel
@@ -174,11 +159,9 @@ export function AppearanceSection(props: ConfigProps) {
   const selectedTheme = createMemo(() =>
     themeOptions().find((option) => option.id === props.theme),
   );
-  const themeUnavailable = createMemo(
-    () =>
-      props.themeCatalog?.unavailableId === props.theme ||
-      (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme()),
-  );
+  const themeUnavailable = () =>
+    props.themeCatalog?.unavailableId === props.theme ||
+    (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme());
   const presentedTheme = createMemo(
     () =>
       selectedTheme() ?? {
@@ -191,58 +174,53 @@ export function AppearanceSection(props: ConfigProps) {
       themeOptions().find((option) => option.id === props.themeResetValue)?.label ??
       t("configView.themes.claw.label"),
   );
-  const themeModeDefault = createMemo(() =>
+  const themeModeDefault = () =>
     props.themeModeResetValue === "light"
       ? t("common.light")
       : props.themeModeResetValue === "dark"
         ? t("common.dark")
-        : t("common.system"),
-  );
-  const themeProvenance = createMemo(() => serverUiPrefProvenanceHint(props.themeProvenance));
-  const themeModeProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.themeModeProvenance),
-  );
-  const accentProvenance = createMemo(() => serverUiPrefProvenanceHint(props.accentProvenance));
+        : t("common.system");
+  const themeProvenance = () => serverUiPrefProvenanceHint(props.themeProvenance);
+  const themeModeProvenance = () => serverUiPrefProvenanceHint(props.themeModeProvenance);
+  const accentProvenance = () => serverUiPrefProvenanceHint(props.accentProvenance);
   // The theme swatch is selected whenever resetting would land on the current
   // accent. A boolean `overridden` cannot express that: the resolver reports an
   // inherited server or profile accent as overridden too, which is what left the
   // swatch permanently unselectable and its reset click without a visible effect.
   // Accepted cost: an override equal to its reset target reads as inherited
   // until the two diverge, when the swatches correct themselves.
-  const themeAccentSelected = createMemo(() => props.accent === "theme");
+  const themeAccentSelected = () => props.accent === "theme";
   const accentColor = createMemo(() => (themeAccentSelected() ? undefined : props.accent));
-  const defaultAccentSelected = createMemo(
-    () =>
-      props.accent === props.accentResetValue ||
-      (themeAccentSelected() && props.accentResetValue === undefined),
-  );
+  const defaultAccentSelected = () =>
+    props.accent === props.accentResetValue ||
+    (themeAccentSelected() && props.accentResetValue === undefined);
   // Preview the accent a reset lands on, never var(--accent): the live override
   // would render this swatch as a duplicate of the selected preset.
-  const themeAccentColor = createMemo(() =>
+  const themeAccentColor = () =>
     props.accentResetValue && props.accentResetValue !== "theme"
       ? props.accentResetValue
-      : "var(--theme-chip-accent)",
-  );
-  const customAccentSelected = createMemo(() =>
-    Boolean(
-      !defaultAccentSelected() &&
-      !themeAccentSelected() &&
-      props.accent &&
-      !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
-    ),
-  );
+      : "var(--theme-chip-accent)";
   const selectedAccentPreset = createMemo(() =>
     ACCENT_PRESETS.find((preset) => preset.hex !== undefined && preset.hex === props.accent),
   );
-  const accentSelectionStatus = createMemo(() =>
-    themeAccentSelected()
+  const customAccentSelected = () =>
+    Boolean(
+      !defaultAccentSelected() && !themeAccentSelected() && props.accent && !selectedAccentPreset(),
+    );
+  const accentSelectionStatus = createMemo(() => {
+    const preset = selectedAccentPreset();
+    return themeAccentSelected()
       ? t("configView.appearance.usingThemeAccent")
       : defaultAccentSelected()
         ? null
         : t("configView.appearance.usingAccent", {
-            value: t(selectedAccentPreset()?.labelKey ?? "configView.appearance.customAccent"),
-          }),
-  );
+            value: t(
+              preset
+                ? `configView.appearance.accents.${preset.id}`
+                : "configView.appearance.customAccent",
+            ),
+          });
+  });
   return (
     <SettingsPage>
       <LanguageSection {...props} />
@@ -291,6 +269,7 @@ export function AppearanceSection(props: ConfigProps) {
                     onClick={() => {
                       if (opt().id === "custom" && !props.hasCustomTheme) {
                         props.onOpenCustomThemeImport?.();
+                        onSettled(focusImporter);
                         return;
                       }
                       if (
@@ -371,6 +350,7 @@ export function AppearanceSection(props: ConfigProps) {
                     {t("configView.appearance.themeLink")}
                   </span>
                   <input
+                    ref={(input) => (customThemeImportInput = input)}
                     class="settings-theme-import__input"
                     data-custom-theme-import-input
                     type="text"
@@ -451,17 +431,15 @@ export function AppearanceSection(props: ConfigProps) {
               <For each={ACCENT_PRESETS}>
                 {(preset) => {
                   const isDefault = preset.hex === undefined;
-                  const selected = createMemo(() =>
+                  const selected = () =>
                     isDefault
                       ? defaultAccentSelected()
-                      : !defaultAccentSelected() && preset.hex === props.accent,
-                  );
-                  const label = createMemo(() => t(preset.labelKey));
-                  const themeChipScope = createMemo(() =>
+                      : !defaultAccentSelected() && preset.hex === props.accent;
+                  const label = () => t(`configView.appearance.accents.${preset.id}`);
+                  const themeChipScope = () =>
                     isDefault
                       ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`
-                      : "",
-                  );
+                      : "";
                   return (
                     <button
                       type="button"

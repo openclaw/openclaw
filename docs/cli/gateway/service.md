@@ -49,6 +49,12 @@ process tree; a replacement instance is preserved. Transient SQLite sharing erro
 after confirmed process exit are retried; if inspection remains unavailable, the
 command warns and checks that the Gateway port is free before continuing with restart.
 
+Port confirmation shares the five-second settlement budget across the configured
+addresses, allowing slow Windows LAN connection refusals to confirm shutdown. If
+confirmation times out, the command reports an inconclusive result rather than a
+busy listener. Run `openclaw gateway status --deep` before retrying maintenance;
+a timeout does not prove that the port is free.
+
 If task settlement inspection remains unavailable
 within the stop budget, restart still attempts the captured task after confirming
 the Gateway exited, then reports that restart is unverified. An observed replacement
@@ -255,7 +261,7 @@ openclaw gateway restart
   <Accordion title="Service runtime">
     - Node is the primary and recommended managed Gateway runtime and the default for fresh installations; with no explicit runtime, pin, or wrapper, an install running under supported Bun uses that executable without creating a pin if no supported Node is found. Implicit reinstalls retain a supported recorded Node or Bun runtime as described above.
     - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
-    - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
+    - Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>
   <Accordion title="Lifecycle behavior">

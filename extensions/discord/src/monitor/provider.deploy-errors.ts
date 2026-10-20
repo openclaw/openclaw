@@ -175,7 +175,7 @@ function resolveDiscordDeployRateLimitDetails(
   };
 }
 
-export function formatDiscordDeployRateLimitDetails(err: unknown): string {
+function formatDiscordDeployRateLimitDetails(err: unknown): string {
   const rateLimit = resolveDiscordDeployRateLimitDetails(err);
   if (!rateLimit) {
     return "";

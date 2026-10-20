@@ -38,7 +38,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => ({
   )),
   createSubsystemLogger: () => loggerMock,
 }));
-vi.mock("./probe.js", () => probeMock);
+// mock-isolation: keep private API probe calls in the test-owned double.
+vi.mock("./probe.js", () => ({
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
+}));
 vi.mock("./private-api-status.js", async () => ({
   ...(await vi.importActual<typeof import("./private-api-status.js")>("./private-api-status.js")),
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
@@ -503,7 +506,7 @@ describe("imessage message actions", () => {
           partIndex: undefined,
           attachment: {
             kind: "buffer",
-            buffer: Uint8Array.from([0xfb, 0xff]),
+            buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
             filename: "attachment.bin",
           },
           options,
@@ -624,7 +627,7 @@ describe("imessage message actions", () => {
       [
         {
           chatGuid,
-          buffer: Uint8Array.from([0xfb, 0xff]),
+          buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
           filename: "photo.jpg",
           asVoice: true,
           options,
@@ -641,7 +644,9 @@ describe("imessage message actions", () => {
       { senderIsOwner: true },
     );
     expect(runtimeMock.setGroupIcon).toHaveBeenCalledWith(
-      expect.objectContaining({ buffer: Uint8Array.from([0xfb, 0xff]) }),
+      expect.objectContaining({
+        buffer: expect.objectContaining({ 0: 0xfb, 1: 0xff, byteLength: 2 }),
+      }),
     );
   });
 

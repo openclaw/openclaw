@@ -1,6 +1,6 @@
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -10,10 +10,6 @@ import {
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import {
-  cacheValidityTokensEqual,
-  readSessionEntryCacheValidityToken,
-} from "./session-accessor.sqlite-entry-revision.js";
 import {
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
@@ -28,7 +24,6 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
-  invalidateSessionEntryMaintenanceAgeFact,
   applySessionEntryMaintenanceAgeChange,
   readSessionEntryMaintenanceNextAgeAt,
   readSessionEntryMaintenanceAgeFact,
@@ -60,7 +55,7 @@ function prepareWorkerAgeFact(
   }
 }
 
-/** Retain the snapshot connection; its revision fences age facts, not unrelated row writes. */
+/** Retain the planning connection until selected rows are checked by the writer. */
 export function prepareSessionMaintenanceInWorker(
   plan: Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }> & {
     databaseOptions: ReclamationDatabaseOptions;
@@ -74,25 +69,14 @@ export function prepareSessionMaintenanceInWorker(
   try {
     claim.assertCurrent();
     prepareWorkerAgeFact(database, plan);
-    const revision = readSessionEntryCacheValidityToken(database.db);
-    const scopeKeys = [...(plan.input.activeSessionKeys ?? [])];
-    const scopedRevision = readSqliteDatabaseScopedWriteToken(database.db, scopeKeys);
-    const prepared = runSqliteDeferredTransactionSync(
+    const prepared = runSqliteReadSnapshotSync(
       database.db,
-      () => {
-        const planPreparation = prepareSessionEntryMaintenanceInDatabase(
+      () =>
+        prepareSessionEntryMaintenanceInDatabase(
           database,
           plan.input,
           () => plan.input.preservation,
-        );
-        return {
-          noOp: planPreparation.kind === "no-op",
-          apply:
-            planPreparation.kind === "no-op"
-              ? planPreparation.apply
-              : planPreparation.captureMutation(),
-        };
-      },
+        ),
       { databaseLabel: database.path, operationLabel: "session.maintenance.plan.read" },
     );
     return {
@@ -101,19 +85,7 @@ export function prepareSessionMaintenanceInWorker(
         onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
       ) {
         claim.assertCurrent();
-        const snapshotCurrent =
-          cacheValidityTokensEqual(revision, readSessionEntryCacheValidityToken(database.db)) ||
-          (prepared.noOp &&
-            plan.input.preparedAgeFactCurrent === true &&
-            scopedRevision !== undefined &&
-            scopedRevision === readSqliteDatabaseScopedWriteToken(database.db, scopeKeys));
-        const maintenance = prepared.apply(current, onArchived);
-        // Host publications cover entry changes; scoped receipts still fence unknown writes.
-        // Certified backfill and usage writes cannot change a protected-only no-op result.
-        if (!snapshotCurrent) {
-          invalidateSessionEntryMaintenanceAgeFact(current.db);
-        }
-        return maintenance;
+        return prepared(current, onArchived);
       },
       release: claim.release,
     };
@@ -188,7 +160,7 @@ export function runSessionMaintenanceMetadataInTransaction(
 ): SessionMaintenanceMetadataResult {
   if (plan.kind === "maintenance-statistics") {
     const database = openOpenClawAgentDatabase(plan.databaseOptions);
-    runWithSqliteBusyTimeout(database.db, 0, () =>
+    const run = () =>
       runOpenClawAgentWriteTransaction(
         (current) => {
           callbacks.beforeMutation?.(current);
@@ -198,8 +170,12 @@ export function runSessionMaintenanceMetadataInTransaction(
         },
         plan.databaseOptions,
         { busyTimeoutMs: 0, operationLabel: "session.maintenance.statistics" },
-      ),
-    );
+      );
+    if (isPostgresSqlConnection(database.db)) {
+      run();
+    } else {
+      runWithSqliteBusyTimeout(database.db, 0, run);
+    }
     return { kind: plan.kind, value: true };
   }
   try {

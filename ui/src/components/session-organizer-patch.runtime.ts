@@ -1,3 +1,4 @@
+import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarSessionMutationResult,
@@ -44,6 +45,7 @@ export async function patchSession(
     !requireSessionMutationAccess(host, scope, {
       method: "sessions.patch",
       params: requestParams,
+      allowDeferred: isSessionDisplayMetadataPatch(patch),
       sessionScope: refresh.sessionScope,
       session,
     })
@@ -75,6 +77,9 @@ export async function patchSession(
         host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
       }
       return "failed";
+    }
+    if ("queued" in patched) {
+      return "completed";
     }
     // Unpin from any surface (menu, pin button, drag) retires the session's
     // persisted zone slot; leaving it would resurrect stale synced entries.

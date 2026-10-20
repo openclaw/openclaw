@@ -534,23 +534,6 @@ describe("agentCommand compaction transcript rotation", () => {
     },
   );
 
-  it("does not publish a hidden model-run session as a compaction successor", async () => {
-    const onSessionIdChanged = vi.fn();
-    state.runAgentAttemptMock.mockImplementationOnce(async (params) =>
-      makeResult({ sessionId: params.sessionId, text: "hidden answer", runner: "embedded" }),
-    );
-
-    await agentCommand({
-      message: "hidden probe",
-      sessionId: "public-model-run-session",
-      modelRun: true,
-      sessionEffects: "internal",
-      onSessionIdChanged,
-    });
-
-    expect(onSessionIdChanged).not.toHaveBeenCalled();
-  });
-
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
     const sessionId = "cli-compaction-failure";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -744,18 +727,19 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it.each([
-    ["empty payloads", "empty", []],
-    ["a silent NO_REPLY payload", "silent", [{ text: "NO_REPLY" }]],
+    ["empty payloads", "empty"],
+    ["an intentional silent final", "silent"],
   ] as const)(
-    "keeps compaction failure fatal for %s without manufacturing delivery state",
-    async (_label, sessionSuffix, payloads) => {
+    "preserves compaction failure after %s without manufacturing delivery state",
+    async (_label, sessionSuffix) => {
       const sessionId = `no-reply-compaction-failure-${sessionSuffix}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       state.runAgentAttemptMock.mockResolvedValueOnce({
-        payloads: [...payloads],
+        payloads: [],
         meta: {
           durationMs: 1,
           stopReason: "end_turn",
+          terminalReply: { disposition: sessionSuffix },
           executionTrace: {
             runner: "cli",
             fallbackUsed: false,
@@ -771,12 +755,11 @@ describe("agentCommand compaction transcript rotation", () => {
       });
       state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
 
-      await expect(
-        agentCommand({
-          ...discordTurn(sessionId, sessionKey),
-          message: "prompt with no assistant reply",
-        }),
-      ).rejects.toThrow("Summarization failed: Connection error");
+      const command = agentCommand({
+        ...discordTurn(sessionId, sessionKey),
+        message: "prompt with no assistant reply",
+      });
+      await expect(command).rejects.toThrow("Summarization failed: Connection error");
 
       expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
       expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();

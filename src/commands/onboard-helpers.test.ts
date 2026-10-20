@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openUrl } from "../infra/browser-open.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -14,7 +15,6 @@ import {
   formatControlUiSshHint,
   handleReset,
   normalizeGatewayTokenInput,
-  openUrl,
   probeGatewayConfiguredModel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -416,6 +416,27 @@ describe("formatControlUiSshHint", () => {
 });
 
 describe("waitForGatewayReachable", () => {
+  it("cancels the pending retry timer when readiness is abandoned", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.probeGateway.mockResolvedValue({ ok: false, error: "not ready" });
+      const controller = new AbortController();
+      const waiting = waitForGatewayReachable({
+        url: "ws://127.0.0.1:18789",
+        deadlineMs: 60_000,
+        pollMs: 30_000,
+        signal: controller.signal,
+      });
+      const cancelled = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await cancelled;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps oversized poll intervals within the overall deadline", async () => {
     mocks.probeGateway.mockResolvedValue({
       ok: false,

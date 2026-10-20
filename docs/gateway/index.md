@@ -102,8 +102,10 @@ warm a candidate's worker caches before cutover by booting and cleanly stopping 
 state, a loopback port, the runtime user, and the same cache root. Warm it at its
 final release path: moving the release after warming can prevent Node from
 reusing its entries. Recent build caches coexist, including the serving release
-and a prepared candidate. Cleanup bounds the combined cache to 512 MiB and
-expires bytecode older than seven days.
+and a prepared candidate. Detached cleanup targets 512 MiB and 4,096 files across
+the combined cache, expires bytecode older than seven days, and continues after
+short commands exit. Large backlogs are pruned over bounded passes; see the
+[maintenance policy](/help/environment#temporary-compile-cache).
 
 ## OpenAI-compatible endpoints
 

@@ -1,4 +1,4 @@
-import { createReplyDispatcher, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { getQaBusState, injectQaBusInboundMessage } from "./bus-client.js";
@@ -28,7 +28,7 @@ async function visibleReplies(baseUrl: string) {
 }
 
 describe("QA inbound dispatch settlement", () => {
-  it("removes the preview when dispatcher normalization suppresses a silent final", async () => {
+  it("removes the preview when the producer supplies an empty final", async () => {
     await withQaBus(async (params) => {
       await runQaInbound(async (turn) => {
         const dispatcher = createReplyDispatcher({ ...turn.dispatcherOptions, ...turn.delivery });
@@ -37,7 +37,7 @@ describe("QA inbound dispatch settlement", () => {
           expect(await visibleReplies(params.account.baseUrl)).toMatchObject([
             { text: "unfinished" },
           ]);
-          expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+          expect(dispatcher.sendFinalReply({})).toBe(false);
           await turn.replyOptions?.onPartialReply?.({ text: "late partial" });
           expect(await visibleReplies(params.account.baseUrl)).toEqual([]);
         } finally {
@@ -63,27 +63,30 @@ describe("QA inbound dispatch settlement", () => {
     });
   });
 
-  it("keeps preview updates after an empty nonterminal block and preserves the final", async () => {
-    await withQaBus(async (params) => {
-      await runQaInbound(async (turn) => {
-        const dispatcher = createReplyDispatcher({ ...turn.dispatcherOptions, ...turn.delivery });
-        try {
-          await turn.replyOptions?.onPartialReply?.({ text: "draft" });
-          expect(dispatcher.sendBlockReply({ text: "" })).toBe(false);
-          await turn.replyOptions?.onPartialReply?.({ text: "expanded draft" });
-          expect(await visibleReplies(params.account.baseUrl)).toMatchObject([
-            { text: "expanded draft" },
-          ]);
-          expect(dispatcher.sendFinalReply({ text: "answer" })).toBe(true);
-        } finally {
-          dispatcher.markComplete();
-          await dispatcher.waitForIdle();
-        }
-      }, params);
-      expect(await visibleReplies(params.account.baseUrl)).toMatchObject([{ text: "answer" }]);
-      const state = await getQaBusState(params.account.baseUrl);
-      expect(state.events.filter((event) => event.kind === "outbound-message")).toHaveLength(1);
-      expect(state.events.filter((event) => event.kind === "message-deleted")).toHaveLength(0);
-    });
-  });
+  it.each(["answer", "NO_REPLY", '{"text":"NO_REPLY"}'])(
+    "keeps preview updates after an empty nonterminal block and preserves %s",
+    async (text) => {
+      await withQaBus(async (params) => {
+        await runQaInbound(async (turn) => {
+          const dispatcher = createReplyDispatcher({ ...turn.dispatcherOptions, ...turn.delivery });
+          try {
+            await turn.replyOptions?.onPartialReply?.({ text: "draft" });
+            expect(dispatcher.sendBlockReply({ text: "" })).toBe(false);
+            await turn.replyOptions?.onPartialReply?.({ text: "expanded draft" });
+            expect(await visibleReplies(params.account.baseUrl)).toMatchObject([
+              { text: "expanded draft" },
+            ]);
+            expect(dispatcher.sendFinalReply({ text })).toBe(true);
+          } finally {
+            dispatcher.markComplete();
+            await dispatcher.waitForIdle();
+          }
+        }, params);
+        expect(await visibleReplies(params.account.baseUrl)).toMatchObject([{ text }]);
+        const state = await getQaBusState(params.account.baseUrl);
+        expect(state.events.filter((event) => event.kind === "outbound-message")).toHaveLength(1);
+        expect(state.events.filter((event) => event.kind === "message-deleted")).toHaveLength(0);
+      });
+    },
+  );
 });

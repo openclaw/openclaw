@@ -85,25 +85,16 @@ function defineBuiltinCommand(
 ): ChatCommandDefinition {
   const { nativeName = key } = options;
   return {
+    ...options,
     key,
     nativeName: nativeName === false ? undefined : nativeName,
-    nativeAliases: options.nativeAliases,
-    nativeProviders: options.nativeProviders,
     description,
-    ...(options.descriptionLocalizations
-      ? { descriptionLocalizations: options.descriptionLocalizations }
-      : {}),
     acceptsArgs: options.acceptsArgs ?? Boolean(options.args?.length),
-    args: options.args,
     argsParsing: options.argsParsing ?? (options.args?.length ? "positional" : "none"),
-    formatArgs: options.formatArgs,
-    argsMenu: options.argsMenu,
     textAliases: options.textAliases ?? [`/${key}`],
     scope: nativeName === false ? "text" : "both",
     category,
     tier,
-    activeRunSafe: options.activeRunSafe,
-    modelIndependent: options.modelIndependent,
   };
 }
 
@@ -419,6 +410,13 @@ export function buildBuiltinChatCommands(
         textAliases: ["/steer", "/tell"],
         ...freeformArgs("message", "Steering message"),
       },
+    ),
+    defineBuiltinCommand(
+      "followup",
+      "Run this message as a new turn without changing queue mode.",
+      "management",
+      "standard",
+      { modelIndependent: "no-args", ...freeformArgs("message", "Followup message") },
     ),
     definePathCommand(
       "config",

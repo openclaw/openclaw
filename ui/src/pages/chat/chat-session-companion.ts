@@ -8,6 +8,7 @@ import type {
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { FastMode } from "../../api/types.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -36,7 +37,7 @@ export type ChatSessionCompanionTurn = {
   question: string;
   attachments?: ChatAttachment[];
 } & (
-  | { status: "pending" }
+  | { status: "pending"; startedAt: number }
   | ({ status: "answered" } & SessionCompanionExchange)
   | {
       status: "failed";
@@ -53,12 +54,22 @@ export type ChatSessionCompanionTurn = {
     }
 );
 
+/** Side chat's own model controls; empty fields use the Gateway's Side chat defaults. */
+export type ChatSessionCompanionModelSelection = {
+  model?: string;
+  thinkingLevel?: string;
+  fastMode?: FastMode;
+};
+
 export type ChatSessionCompanionThread = {
   turns: ChatSessionCompanionTurn[];
   loading: boolean;
   draft: string;
   attachments?: ChatAttachment[];
   attachmentReads?: ChatAttachmentReadLifecycle;
+  /** Model the Gateway answers with when no model is chosen; absent until hydrated. */
+  defaultModel?: string;
+  modelSelection?: ChatSessionCompanionModelSelection;
 };
 
 type MutableCompanionThread = ChatSessionCompanionThread & {
@@ -138,8 +149,12 @@ function reconcileTurns(thread: MutableCompanionThread, exchanges: SessionCompan
   );
 }
 
+function companionAgentKey(agentId?: string | null): string {
+  return agentId?.trim() ?? "";
+}
+
 function companionThreadKey(sessionKey: string, agentId?: string | null): string {
-  return `${agentId?.trim() ?? ""}\0${sessionKey.trim()}`;
+  return `${companionAgentKey(agentId)}\0${sessionKey.trim()}`;
 }
 
 /** Pane-owned ephemeral companion threads, keyed by the exact selected session. */
@@ -147,8 +162,22 @@ export class ChatSessionCompanionThreads {
   private readonly threads = new Map<string, MutableCompanionThread>();
   private readonly hydrationTokens = new Map<string, symbol>();
   private readonly submissionTokens = new Map<string, Deferred>();
+  // Model choices follow the agent across its sessions for this pane's lifetime,
+  // like the ephemeral threads themselves; a Gateway's catalog owns their validity.
+  private readonly modelSelections = new Map<string, ChatSessionCompanionModelSelection>();
 
-  constructor(private readonly notify: () => void = () => {}) {}
+  private publish?: () => void;
+
+  subscribe(listener: () => void): () => void {
+    this.publish = listener;
+    return () => {
+      this.publish = undefined;
+    };
+  }
+
+  private readonly notify = () => {
+    this.publish?.();
+  };
 
   view(sessionKey: string, agentId?: string | null): ChatSessionCompanionThread {
     return this.get(companionThreadKey(sessionKey, agentId));
@@ -161,6 +190,29 @@ export class ChatSessionCompanionThreads {
     }
     thread.draft = draft;
     thread.draftRevision += 1;
+    this.notify();
+  }
+
+  setModelSelection(
+    agentId: string | null | undefined,
+    patch: ChatSessionCompanionModelSelection,
+  ): void {
+    const agentKey = companionAgentKey(agentId);
+    const merged: ChatSessionCompanionModelSelection = {
+      ...this.modelSelections.get(agentKey),
+      ...patch,
+    };
+    const next: ChatSessionCompanionModelSelection = {
+      ...(merged.model ? { model: merged.model } : {}),
+      ...(merged.thinkingLevel ? { thinkingLevel: merged.thinkingLevel } : {}),
+      ...(merged.fastMode !== undefined ? { fastMode: merged.fastMode } : {}),
+    };
+    this.modelSelections.set(agentKey, next);
+    for (const [key, thread] of this.threads) {
+      if (key.startsWith(`${agentKey}\0`)) {
+        thread.modelSelection = next;
+      }
+    }
     this.notify();
   }
 
@@ -217,6 +269,7 @@ export class ChatSessionCompanionThreads {
         return;
       }
       reconcileTurns(thread, result.exchanges);
+      thread.defaultModel = result.defaultModel;
       thread.revision += 1;
       this.notify();
     } catch {
@@ -264,6 +317,7 @@ export class ChatSessionCompanionThreads {
     const turn: ChatSessionCompanionTurn = {
       question: normalized,
       status: "pending",
+      startedAt: Date.now(),
       ...(attachments?.length ? { attachments } : {}),
     };
     if (typeof question === "string") {
@@ -412,6 +466,7 @@ export class ChatSessionCompanionThreads {
         draft: "",
         attachments: [],
         attachmentReads: new ChatAttachmentReadLifecycle(this.notify),
+        modelSelection: this.modelSelections.get(key.slice(0, key.indexOf("\0"))) ?? {},
         revision: 0,
         draftRevision: 0,
         pendingResets: new Set(),
@@ -439,6 +494,7 @@ export function requestSessionCompanionAnswer(
   agentId?: string | null,
   attachments?: ChatAttachment[],
   uploadConfig?: ApplicationConfigCapability,
+  selection?: ChatSessionCompanionModelSelection,
 ): Promise<SessionsCompanionAskResult> {
   const selectionContext = companionSelectionContext(attachments ?? []);
   const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
@@ -453,6 +509,9 @@ export function requestSessionCompanionAnswer(
       question,
       ...(selectionContext ? { selectionContext } : {}),
       ...(media?.length ? { attachments: buildChatApiAttachments(media) } : {}),
+      ...(selection?.model ? { model: selection.model } : {}),
+      ...(selection?.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+      ...(selection?.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
     },
     { timeoutMs: COMPANION_ASK_TIMEOUT_MS },
   );

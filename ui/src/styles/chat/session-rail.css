@@ -71,41 +71,6 @@ openclaw-chat-session-rail {
 /* Openers stack against the composer they feed, so the eye travels chips ->
    input without crossing the thread. Left-aligned: they are actions, not
    content, and centring them would read as a second empty state. */
-.chat-session-rail__starters {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 0 14px 10px;
-}
-
-.chat-session-rail__starter {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  color: var(--text);
-}
-
-/* strokeIcon already inlines fill/stroke/stroke-width on the svg. */
-.chat-session-rail__starter svg {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 auto;
-  color: var(--muted);
-}
-
-.chat-session-rail__starter:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.chat-session-rail__starter:disabled:hover {
-  border-color: var(--border);
-  transform: none;
-}
-
 .chat-session-rail__exchange {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -145,28 +110,7 @@ openclaw-chat-session-rail {
   justify-self: start;
 }
 
-.chat-session-rail__exchange--pending .chat-session-rail__hint {
-  animation: chat-session-rail-pending-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes chat-session-rail-pending-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.45;
-  }
-}
-
 .chat-session-rail__prompt {
   min-width: 0;
   flex: 1 1 auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-session-rail__exchange--pending .chat-session-rail__hint {
-    animation: none;
-  }
 }

@@ -23,12 +23,7 @@ export default definePluginEntry({
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
     const resolveCurrentConfig = () => {
-      const liveConfig = api.runtime.config?.current
-        ? (api.runtime.config.current() as OpenClawConfig)
-        : undefined;
-      if (!liveConfig) {
-        return startupConfig;
-      }
+      const liveConfig = api.runtime.config.current() as OpenClawConfig;
       const livePluginConfig = resolveLivePluginConfigObject(
         () => liveConfig,
         "onepassword",

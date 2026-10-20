@@ -1,8 +1,8 @@
 /** @jsxImportSource @solidjs/web */
-import type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
-import type { JSX } from "@solidjs/web";
+import type { WorkboardBoardSummary, WorkboardSessionFacts } from "@openclaw/workboard-contract";
+import { dynamic, type JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For } from "solid-js";
 import { AgentAvatar, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
@@ -17,6 +17,34 @@ import { SessionStatusBadge, type SessionStatusPresentation } from "./view-sessi
 import "../../styles/sessions-board.css";
 
 const PULL_REQUEST_STATE_PRIORITY = { open: 0, draft: 1, merged: 2, closed: 3 };
+
+function PullRequestBadge(props: { request: WorkboardSessionFacts["pullRequests"][number] }) {
+  const Badge = dynamic(() => (props.request.url ? "a" : "span"));
+  return (
+    <Badge
+      class="workboard-session-pr"
+      data-state={props.request.state}
+      title={props.request.title}
+      href={props.request.url || undefined}
+      target={props.request.url ? "_blank" : undefined}
+      rel={props.request.url ? "noreferrer" : undefined}
+      onClick={(event: MouseEvent) => {
+        if (props.request.url) {
+          event.stopPropagation();
+        }
+      }}
+      onDragStart={(event: DragEvent) => {
+        if (props.request.url) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
+      {props.request.state === "merged" ? icons.gitMerge : icons.gitPullRequest}#
+      {props.request.number} · {t(`workboard.sessionsBoard.pullRequest.${props.request.state}`)}
+    </Badge>
+  );
+}
 
 export type SessionsBoardProps = {
   board: WorkboardBoardSummary;
@@ -81,12 +109,10 @@ export function SessionsBoard(props: SessionsBoardProps) {
           visible: true,
           tone: session.run === "active" ? "live" : session.run === "failed" ? "blocked" : "idle",
         } satisfies SessionStatusPresentation,
-        pullRequests: session.pullRequests
-          .map((pr) => ({ ...pr }))
-          .toSorted(
-            (left, right) =>
-              PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
-          ),
+        pullRequests: session.pullRequests.toSorted(
+          (left, right) =>
+            PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
+        ),
       }));
     return {
       canWrite: host.connection.canWrite,
@@ -98,6 +124,10 @@ export function SessionsBoard(props: SessionsBoardProps) {
       hasDock: controller.hasDock,
       hasSnapshot: Boolean(snapshot),
       loading: controller.loading,
+      nextCursor: snapshot?.nextCursor,
+      canLoad: host.connection.connected && !controller.busy,
+      loaded: snapshot?.sessions.length ?? 0,
+      total: snapshot?.total ?? snapshot?.sessions.length ?? 0,
       visibleError: [props.pageError, controller.error].filter(Boolean).join("\n"),
       warning: snapshot?.warning,
       peopleFilter: controller.peopleFilter,
@@ -191,6 +221,24 @@ export function SessionsBoard(props: SessionsBoardProps) {
         ) : null}
         {!state().hasSnapshot && state().loading ? (
           <div role="status">{t("workboard.sessionsBoard.loading")}</div>
+        ) : null}
+        {state().nextCursor ? (
+          <div class="workboard-pagination" role="status">
+            <span>
+              {t("workboard.sessionsBoard.partial", {
+                count: String(state().loaded),
+                total: String(state().total),
+              })}
+            </span>
+            <button
+              class="btn"
+              type="button"
+              disabled={state().loading || !state().canLoad}
+              onClick={() => void props.controller.loadMore()}
+            >
+              {t("workboard.sessionsBoard.loadMore")}
+            </button>
+          </div>
         ) : null}
         <div class="workboard-board-viewport">
           <div
@@ -286,44 +334,7 @@ export function SessionsBoard(props: SessionsBoardProps) {
                                 each={session().pullRequests.slice(0, 4)}
                                 keyed={(pr) => pr.number}
                               >
-                                {(pr) => (
-                                  <Show
-                                    when={pr().url}
-                                    fallback={
-                                      <span
-                                        class="workboard-session-pr"
-                                        data-state={pr().state}
-                                        title={pr().title}
-                                      >
-                                        {pr().state === "merged"
-                                          ? icons.gitMerge
-                                          : icons.gitPullRequest}
-                                        #{pr().number} ·{" "}
-                                        {t(`workboard.sessionsBoard.pullRequest.${pr().state}`)}
-                                      </span>
-                                    }
-                                  >
-                                    <a
-                                      class="workboard-session-pr"
-                                      data-state={pr().state}
-                                      href={pr().url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      title={pr().title}
-                                      onClick={(event: MouseEvent) => event.stopPropagation()}
-                                      onDragStart={(event: DragEvent) => {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                      }}
-                                    >
-                                      {pr().state === "merged"
-                                        ? icons.gitMerge
-                                        : icons.gitPullRequest}
-                                      #{pr().number} ·{" "}
-                                      {t(`workboard.sessionsBoard.pullRequest.${pr().state}`)}
-                                    </a>
-                                  </Show>
-                                )}
+                                {(pr) => <PullRequestBadge request={pr()} />}
                               </For>
                               {session().pullRequests.length > 4 ? (
                                 <span>+{session().pullRequests.length - 4}</span>

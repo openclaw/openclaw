@@ -1,12 +1,11 @@
 import type { Command } from "commander";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
-import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
+import { listStaleOpenClawMatrixDevices } from "./matrix/device-health.js";
 import type { MatrixProfileSyncResult } from "./matrix/profile.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
@@ -51,10 +50,6 @@ async function addMatrixAccount(params: {
   });
   const runtime = getMatrixRuntime();
   const cfg = runtime.config.current() as CoreConfig;
-  if (!matrixSetupAdapter.applyAccountConfig) {
-    throw new Error("Matrix account setup is unavailable.");
-  }
-
   const input: MatrixSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
@@ -68,13 +63,12 @@ async function addMatrixAccount(params: {
     initialSyncLimit,
     useEnv: params.useEnv === true,
   };
-  const accountId =
-    matrixSetupAdapter.resolveAccountId?.({
-      cfg,
-      accountId: params.account,
-      input,
-    }) ?? normalizeAccountId(params.account?.trim() || params.name?.trim());
-  const validationError = matrixSetupAdapter.validateInput?.({
+  const accountId = matrixSetupAdapter.resolveAccountId({
+    cfg,
+    accountId: params.account,
+    input,
+  });
+  const validationError = matrixSetupAdapter.validateInput({
     cfg,
     accountId,
     input,
@@ -154,9 +148,9 @@ async function addMatrixAccount(params: {
       const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
       deviceHealth = {
         currentDeviceId: addedDevices.find((device) => device.current)?.deviceId ?? null,
-        staleOpenClawDeviceIds: addedDevices
-          .filter((device) => !device.current && isOpenClawManagedMatrixDevice(device.displayName))
-          .map((device) => device.deviceId),
+        staleOpenClawDeviceIds: listStaleOpenClawMatrixDevices(addedDevices).map(
+          (device) => device.deviceId,
+        ),
       };
     } catch (err) {
       deviceHealth = {

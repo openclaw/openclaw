@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 defineDiscordVoiceTests(
   ({
@@ -534,6 +535,7 @@ defineDiscordVoiceTests(
     it("acknowledges leading wake names from partial realtime transcripts", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
       const { entry, bridgeParams } = await createWakeNameFixture();
+      voiceTestMocks.loggerInfoMock.mockClear();
 
       beginSpeakerTurn(entry);
       bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
@@ -553,21 +555,16 @@ defineDiscordVoiceTests(
       });
       expect(lastAgentCommandArgs().message).toContain("how is it going");
       expectUserMessageIncludes("wake answer");
+      const diagnostics = JSON.stringify(voiceTestMocks.loggerInfoMock.mock.calls).toLowerCase();
+      expect(diagnostics).not.toContain("molty");
+      expect(diagnostics).not.toContain("how is it going");
     });
 
-    it.each([
-      {
-        name: "unfinished fuzzy name",
-        chunks: ["Mostly", " because the task is still running."],
-      },
-      {
-        name: "name inside a long transcript",
-        chunks: ["ordinary discussion ".repeat(30), `OpenClaw, ${"x".repeat(230)}`],
-      },
-    ])("does not acknowledge $name that the final wake gate rejects", async ({ chunks }) => {
+    it("does not acknowledge an unfinished fuzzy name that the final wake gate rejects", async () => {
       const { entry, bridgeParams } = await createWakeNameFixture();
       beginSpeakerTurn(entry);
       bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+      const chunks = ["Mostly", " because the task is still running."];
       for (const chunk of chunks) {
         bridgeParams?.onTranscript?.("user", chunk, false);
       }

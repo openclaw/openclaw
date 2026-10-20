@@ -11,6 +11,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { loadRealChatDispatch } from "./chat-send-authority.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 
 const runtime = vi.hoisted(() => ({ run: vi.fn<typeof runEmbeddedAgentEntry>() }));
@@ -25,19 +26,15 @@ vi.mock("../call.js", () => ({
 
 installGatewayTestHooks();
 const createFixture = useBrowserFollowupFixture();
-afterEach(async () => {
-  await resetSubagentRegistryForTests({ persist: false });
-});
+afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
-it("gives a human chat.send continuation native child custody before backend execution", async ({
-  signal,
-}) => {
-  const fixture = await createFixture({ active: false, preserveContent: true });
+it("retains native child custody before a human continuation executes", async ({ signal }) => {
   const sessionKey = "agent:main:dashboard:retained-child";
+  await using fixture = await createFixture({ active: false, preserveContent: true, sessionKey });
   const runId = "human-child-continuation";
-  const task = "Verify the retained result instead of repeating the original task.";
+  const task = "Verify the retained result.";
   const entry = {
-    sessionId: "retained-child-session",
+    sessionId: fixture.scope.sessionId,
     lifecycleRevision: "retained-child-revision",
     updatedAt: Date.now(),
     status: "done" as const,
@@ -46,12 +43,7 @@ it("gives a human chat.send continuation native child custody before backend exe
     spawnDepth: 1,
     subagentRole: "leaf" as const,
   };
-  fixture.scope.sessionKey = sessionKey;
-  fixture.scope.sessionId = entry.sessionId;
-  fixture.params.sessionKey = sessionKey;
-  fixture.params.sessionId = entry.sessionId;
-  fixture.params.message = task;
-  fixture.params.idempotencyKey = runId;
+  Object.assign(fixture.params, { message: task, idempotencyKey: runId });
   await upsertSessionEntryCore(fixture.scope, entry);
   const completed = createSubagentRunRecord({
     runId: "completed-child",
@@ -61,11 +53,8 @@ it("gives a human chat.send continuation native child custody before backend exe
       sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
     },
-    requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
-    requesterDisplayKey: "main",
     task: "Original completed task",
-    cleanup: "keep",
     expectsCompletionMessage: false,
     startedAt: 1,
     endedAt: 2,
@@ -90,18 +79,7 @@ it("gives a human chat.send continuation native child custody before backend exe
       settleSessionOverride: async () => {},
     };
   });
-  const actualDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-    "../../auto-reply/dispatch.js",
-  );
-  const actualReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-    "../../auto-reply/reply/get-reply.js",
-  );
-  dispatchInboundMessageMock.mockImplementation((params) =>
-    actualDispatch.dispatchInboundMessage({
-      ...params,
-      replyResolver: actualReply.getReplyFromConfig,
-    }),
-  );
+  dispatchInboundMessageMock.mockImplementation(await loadRealChatDispatch());
   try {
     const ack = await fixture.send();
     expect(ack).toHaveBeenCalledWith(
@@ -111,21 +89,17 @@ it("gives a human chat.send continuation native child custody before backend exe
       expect.anything(),
     );
     await withinTest(entered.promise, signal);
-    expect(subagentRuns.get(runId)).toMatchObject({
-      runId,
-      childSessionKey: sessionKey,
-      task,
-      execution: { status: "running" },
-    });
-    expect(subagentRuns.get(completed.runId)).toMatchObject({
-      task: "Original completed task",
-      execution: { status: "terminal", outcome: { status: "ok" } },
-    });
+    expect([subagentRuns.get(runId), subagentRuns.get(completed.runId)]).toMatchObject([
+      { runId, childSessionKey: sessionKey, task, execution: { status: "running" } },
+      {
+        task: "Original completed task",
+        execution: { status: "terminal", outcome: { status: "ok" } },
+      },
+    ]);
     expect(isMainRestartRecoveryCandidate(loadSessionEntry(fixture.scope)!, sessionKey)).toBe(
       false,
     );
   } finally {
     release.resolve();
-    await fixture.cleanup();
   }
 });

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUsage } from "../../agents/usage.js";
+import { jsonExtractText } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -40,6 +41,7 @@ import {
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
   const rows = iterateSqliteQuerySync(
@@ -49,9 +51,7 @@ function readReportBranch(database: OpenClawAgentDatabase, sessionId: string) {
       .select((eb) => [
         "seq",
         "event_json",
-        eb
-          .fn<string | null>("json_extract", [eb.ref("navigation_json"), eb.val("$.report")])
-          .as("report_json"),
+        jsonExtractText(database.db, eb.ref("navigation_json"), "report").as("report_json"),
       ])
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
@@ -124,6 +124,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
   partial: AbortedSessionTranscriptPartial,
   preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>,
   projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
+  onEntryUpdated?: (entry: InternalSessionEntry) => void,
 ): AbortedSessionTranscriptPartialResult {
   assertSessionTranscriptHot(database.db, resolved.sessionId);
   const entry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
@@ -172,7 +173,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     if (!current || current.sessionId !== resolved.sessionId) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
-    writeSessionEntry(
+    const updatedEntry = writeSessionEntry(
       database,
       resolved.sessionKey,
       {
@@ -186,6 +187,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
       },
       { canonicalPreviousEntry: current },
     );
+    onEntryUpdated?.(updatedEntry);
   }
   return {
     skipped: false,

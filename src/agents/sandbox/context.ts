@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../
 import {
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { resolveAgentConfig } from "../agent-scope-config.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
@@ -38,7 +38,6 @@ import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
-import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
 import { readRegisteredSandboxRuntimeIds } from "./registry.js";
 import {
@@ -47,8 +46,10 @@ import {
   withSandboxRuntimeStatusInWorker,
 } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSandboxSession } from "./session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
+import { bindStreamSandboxContext } from "./stream-context.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
@@ -176,57 +177,6 @@ async function ensureSandboxWorkspaceLayout(
   };
 }
 
-function resolveSandboxSession(params: {
-  skillsSnapshot?: SkillSnapshot;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  preparedRuntimeStatus: ReturnType<typeof resolveSandboxRuntimeStatus>;
-}) {
-  const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) {
-    return null;
-  }
-
-  const runtime = { ...params.preparedRuntimeStatus };
-  if (!runtime.sandboxed) {
-    return null;
-  }
-
-  const configured = resolveSandboxConfigForAgent(params.config, runtime.agentId);
-  const sessionAttachmentRoot = resolveSubagentSessionAttachmentRootDir({
-    agentId: runtime.agentId,
-    childSessionKey: rawSessionKey,
-  });
-  // An attachment grant is session-owned. Give the child a dedicated runtime
-  // even when ordinary agent-scoped turns share one, so no sibling guest can
-  // inherit this session's protected projection.
-  try {
-    if (fsSync.statSync(sessionAttachmentRoot).isDirectory()) {
-      runtime.isolationSubject = { kind: "session", sessionKey: rawSessionKey };
-    }
-  } catch {
-    // No attachment grant for this session.
-  }
-  const librarySelections = params.skillsSnapshot?.librarySelections;
-  // Shared/agent sandboxes cannot expose one person's private bundles to another session,
-  // or replace bytes under an active revision. Selection changes get a separate runtime.
-  if (librarySelections?.length) {
-    runtime.isolationSubject = {
-      kind: "session",
-      sessionKey: `${rawSessionKey}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
-    };
-  }
-  // Docker and browser backends replace shared scope keys with a literal name;
-  // agent scope lets the prepared isolation subject own every sandbox resource.
-  const cfg = runtime.sandboxRequired
-    ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
-    : librarySelections?.length
-      ? { ...configured, scope: "agent" as const }
-      : configured;
-  return { rawSessionKey, runtime, cfg };
-}
-
 type ResolveSandboxContextParams = {
   config?: OpenClawConfig;
   agentId?: string;
@@ -241,7 +191,7 @@ type ResolveSandboxContextParams = {
   preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 
-type ResolvedSandboxSession = NonNullable<ReturnType<typeof resolveSandboxSession>>;
+type ResolvedSandboxSession = NonNullable<Awaited<ReturnType<typeof resolveSandboxSession>>>;
 
 function assertSandboxSessionSecretOwnerAvailable(
   config: OpenClawConfig | undefined,
@@ -262,8 +212,13 @@ function assertSandboxSessionSecretOwnerAvailable(
 async function prepareSandboxWorkspaceSelection(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
+  guard?: WorkspaceStateGuard,
+  operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext),
+  persistentExecution = false,
 ) {
   const { rawSessionKey, runtime } = resolved;
+  params.assertCurrent?.();
+  operatorAuthority?.assertCurrent();
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -273,8 +228,20 @@ async function prepareSandboxWorkspaceSelection(
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
-        signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
-        assertCurrent: params.assertCurrent,
+        signal: operatorAuthority?.signal,
+        // Cleanup retains the workspace owner after execution authorization closes.
+        assertCurrent: persistentExecution ? undefined : params.assertCurrent,
+        assertHost: () => {
+          guard?.assertHost?.();
+          if (persistentExecution) {
+            return;
+          }
+          if (params.admittedRunContext) {
+            operatorAuthority?.assertCurrent();
+          } else {
+            params.assertCurrent?.();
+          }
+        },
       })
     : undefined;
   try {
@@ -308,9 +275,17 @@ async function prepareSandboxWorkspaceSelection(
 async function resolveProvisionedSandboxContext(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
-  guard?: WorkspaceStateGuard,
+  guard: WorkspaceStateGuard,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  persistentExecution: boolean,
 ): Promise<SandboxContext> {
-  const selected = await prepareSandboxWorkspaceSelection(params, resolved);
+  const selected = await prepareSandboxWorkspaceSelection(
+    params,
+    resolved,
+    guard,
+    operatorAuthority,
+    persistentExecution,
+  );
   try {
     params.assertCurrent?.();
     const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
@@ -424,7 +399,10 @@ async function resolveProvisionedSandboxContext(
                 workspaceSource: "managed-worktree" as const,
               }
             : {}),
-          assertRuntimeCurrent: localWorkspace?.assertCurrent ?? params.assertCurrent,
+          assertRuntimeCurrent: () => {
+            params.assertCurrent?.();
+            localWorkspace?.assertCurrent();
+          },
           agentWorkspaceDir,
           skillsWorkspaceDir,
           readOnlyResourceMounts,
@@ -433,7 +411,7 @@ async function resolveProvisionedSandboxContext(
             ? { requireCurrentConfig: params.requireCurrentConfig }
             : {}),
         },
-        readAdmittedRunOperatorAuthority(params.admittedRunContext),
+        operatorAuthority,
         githubIdentity,
         guard,
       );
@@ -531,6 +509,15 @@ async function resolveProvisionedSandboxContext(
         localWorkspace,
       );
     }
+    bindStreamSandboxContext(sandboxContext, {
+      agentId: runtime.agentId,
+      scopeKey,
+      operatorAuthority,
+      assertCurrent: () => {
+        params.assertCurrent?.();
+        localWorkspace?.assertCurrent();
+      },
+    });
     return sandboxContext;
   } catch (error) {
     selected.localWorkspace?.[Symbol.dispose]();
@@ -541,6 +528,26 @@ async function resolveProvisionedSandboxContext(
 export async function resolveSandboxContext(
   params: ResolveSandboxContextParams,
 ): Promise<SandboxContext | null> {
+  return await resolveSandboxContextWithAuthority(
+    params,
+    readAdmittedRunOperatorAuthority(params.admittedRunContext),
+    false,
+  );
+}
+
+/** Restart retains the original authority without fabricating a new turn. */
+export async function resolveSandboxContextForPersistentExecution(
+  params: ResolveSandboxContextParams,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+): Promise<SandboxContext | null> {
+  return await resolveSandboxContextWithAuthority(params, operatorAuthority, true);
+}
+
+async function resolveSandboxContextWithAuthority(
+  params: ResolveSandboxContextParams,
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  persistentExecution: boolean,
+): Promise<SandboxContext | null> {
   const preparedRuntimeStatus =
     params.preparedRuntimeStatus ??
     (await resolveSandboxRuntimeStatusAsync({
@@ -548,7 +555,7 @@ export async function resolveSandboxContext(
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     }));
-  const resolved = resolveSandboxSession({ ...params, preparedRuntimeStatus });
+  const resolved = await resolveSandboxSession({ ...params, preparedRuntimeStatus });
   if (!resolved) {
     return null;
   }
@@ -557,6 +564,7 @@ export async function resolveSandboxContext(
   const assertCurrent = () => {
     assertStateOwner();
     assertCallerCurrent?.();
+    operatorAuthority?.assertCurrent();
     assertStateOwner();
   };
   const ownedParams = { ...params, assertCurrent };
@@ -566,10 +574,16 @@ export async function resolveSandboxContext(
   try {
     assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
     const context = await withWorktreePreparationTiming("sandbox", () =>
-      resolveProvisionedSandboxContext(ownedParams, resolved, {
-        assertHost: assertStateOwner,
-        beforeLegacyApply: assertCurrent,
-      }),
+      resolveProvisionedSandboxContext(
+        ownedParams,
+        resolved,
+        {
+          assertHost: assertStateOwner,
+          beforeLegacyApply: assertCurrent,
+        },
+        operatorAuthority,
+        persistentExecution,
+      ),
     );
     try {
       assertStateOwner();
@@ -586,7 +600,17 @@ export async function resolveSandboxContext(
   }
 }
 
+/** Information-only callers release preparation ownership before returning. */
 export async function ensureSandboxWorkspaceForSession(
+  params: Parameters<typeof prepareSandboxWorkspaceForSession>[0],
+  readSource?: CapturedSessionEntryReadSource,
+): Promise<SandboxWorkspaceInfo | null> {
+  using prepared = await prepareSandboxWorkspaceForSession(params, readSource);
+  return prepared?.workspace ?? null;
+}
+
+/** A writer owns this preparation until its final effect settles. */
+export async function prepareSandboxWorkspaceForSession(
   params: {
     skillsSnapshot?: SkillSnapshot;
     config?: OpenClawConfig;
@@ -595,23 +619,29 @@ export async function ensureSandboxWorkspaceForSession(
     workspaceDir?: string;
   },
   readSource?: CapturedSessionEntryReadSource,
-): Promise<SandboxWorkspaceInfo | null> {
+): Promise<{
+  workspace: SandboxWorkspaceInfo;
+  assertCurrent: () => void;
+  [Symbol.dispose]: () => void;
+} | null> {
   const readAuthority = captureChannelReadAuthority();
   const assertCurrent = () => readAuthority?.();
   const ownedParams = { ...params, assertCurrent };
-  return withSandboxRuntimeStatusInWorker(
+  using resources = new DisposableStack();
+  let assertWorkspaceCurrent = assertCurrent;
+  const workspaceInfo = await withSandboxRuntimeStatusInWorker(
     { cfg: params.config, agentId: params.agentId, sessionKey: params.sessionKey },
     { env: process.env, cwd: process.cwd(), assertCurrent, readSource },
     async (preparedRuntimeStatus) => {
-      const resolved = resolveSandboxSession({ ...params, preparedRuntimeStatus });
+      const resolved = await resolveSandboxSession({ ...params, preparedRuntimeStatus });
       if (!resolved) {
         return null;
       }
       assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
       const selected = await prepareSandboxWorkspaceSelection(ownedParams, resolved);
-      using localWorkspace = selected.localWorkspace;
-      void localWorkspace;
-      assertCurrent();
+      resources.use(selected.localWorkspace);
+      assertWorkspaceCurrent = selected.localWorkspace?.assertCurrent ?? assertCurrent;
+      assertWorkspaceCurrent();
       const { rawSessionKey, cfg } = selected;
 
       const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
@@ -633,4 +663,14 @@ export async function ensureSandboxWorkspaceForSession(
       };
     },
   );
+  if (!workspaceInfo) {
+    return null;
+  }
+  assertWorkspaceCurrent();
+  const lifetime = resources.move();
+  return {
+    workspace: workspaceInfo,
+    assertCurrent: assertWorkspaceCurrent,
+    [Symbol.dispose]: () => lifetime.dispose(),
+  };
 }

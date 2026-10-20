@@ -202,7 +202,7 @@ describe("chat.history cursor catch-up", () => {
     });
     const cleanup = vi
       .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+      .mockResolvedValue(undefined);
     onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);
@@ -217,7 +217,6 @@ describe("chat.history cursor catch-up", () => {
     const handler = createTranscriptUpdateBroadcastHandler({
       getSessionRowProjection: () => getSessionRowProjection(context),
       broadcastToConnIds: broadcast,
-      chatAbortControllers: context.chatAbortControllers,
       sessionEventSubscribers: { getAll: () => new Set<string>() },
       sessionMessageSubscribers: { get: () => new Set(["subscriber"]) },
     });
@@ -478,7 +477,7 @@ describe("chat.history cursor catch-up", () => {
         content: [
           {
             type: "text",
-            text: "ANNOUNCE_SKIP REPLY_SKIP",
+            text: "NO_REPLY",
             textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
           },
           ...sibling,

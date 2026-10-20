@@ -7,7 +7,7 @@ import {
   observeAgentRunActivity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
+  buildSessionEntries,
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
   sessionPathForSessionIdentity,
@@ -39,6 +39,7 @@ import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 const SESSION_QUIET_PERIOD_MS = 30_000;
 const SESSION_MAX_DEFERRAL_MS = 5 * 60_000;
 const SESSION_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+const SESSION_INSPECTION_BATCH_SIZE = 32;
 const log = createSubsystemLogger("memory");
 
 type MemorySessionTranscriptUpdate = Parameters<
@@ -155,7 +156,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.scheduleSessionIndexPass();
       });
     });
-    const unsubscribeTranscripts = this.subscribeSessionTranscriptUpdates((update) => {
+    const unsubscribeTranscripts = onInternalSessionTranscriptUpdate((update) => {
       this.runInBackgroundContext(() => {
         if (this.closing || this.closed) {
           return;
@@ -179,12 +180,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       unsubscribeActivity();
       unsubscribeTranscripts();
     };
-  }
-
-  protected subscribeSessionTranscriptUpdates(
-    listener: (update: MemorySessionTranscriptUpdate) => void,
-  ): () => void {
-    return onInternalSessionTranscriptUpdate(listener);
   }
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
@@ -220,7 +215,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const existingRows = await this.database.readSourceState({
       source: "sessions",
     });
-    const indexedPaths = new Set(existingRows.map((row) => row.path));
+    const indexedPaths = inspectSources ? new Set(existingRows.map((row) => row.path)) : undefined;
     const sqliteCorpusEntries = corpusEntries.filter(
       (entry) => entry.transcriptSource === "sqlite",
     );
@@ -238,6 +233,30 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const statsByEntry = new Map(
       sqliteCorpusEntries.map((entry, index) => [entry, transcriptStats[index]] as const),
     );
+    const excludedEntries = new Set<SessionTranscriptCorpusEntry>();
+    if (indexedPaths) {
+      const unindexed = corpusEntries.filter(
+        (entry) => !indexedPaths.has(this.sessionPathForCorpusEntry(entry)),
+      );
+      // Eligibility depends on rendered provenance; retain content for only one bounded group.
+      for (let start = 0; start < unindexed.length; start += SESSION_INSPECTION_BATCH_SIZE) {
+        if (stopped()) {
+          return [];
+        }
+        const batch = unindexed.slice(start, start + SESSION_INSPECTION_BATCH_SIZE);
+        const entries = await buildSessionEntries(
+          batch.map((entry) => ({
+            absPath: entry.sessionFile,
+            options: this.buildSessionEntryOptions(entry),
+          })),
+        );
+        entries.forEach((entry, index) => {
+          if (entry && !isMemorySessionIndexable(entry)) {
+            excludedEntries.add(batch[index]!);
+          }
+        });
+      }
+    }
     const fileStates = (
       await runWithConcurrency(
         corpusEntries.map(
@@ -245,17 +264,8 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             if (stopped()) {
               return null;
             }
-            // Missing rows can be intentional: parsing applies provenance admission
-            // that corpus metadata cannot express. Recheck on every catch-up so a
-            // later user turn can make a previously excluded session eligible.
-            if (!indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
-              const entry = await buildSessionEntry(
-                corpusEntry.sessionFile,
-                this.buildSessionEntryOptions(corpusEntry),
-              );
-              if (entry && !isMemorySessionIndexable(entry)) {
-                return null;
-              }
+            if (excludedEntries.has(corpusEntry)) {
+              return null;
             }
             if (corpusEntry.transcriptSource === "sqlite") {
               const stats = statsByEntry.get(corpusEntry);

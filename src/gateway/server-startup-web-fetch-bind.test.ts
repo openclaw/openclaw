@@ -52,10 +52,10 @@ vi.mock("../secrets/runtime-web-tools-fallback.runtime.js", async () => {
   };
 });
 
-vi.mock("../secrets/runtime-web-tools-public-artifacts.runtime.js", async () => {
+vi.mock("../plugins/web-provider-public-artifacts.js", async () => {
   const actual = await vi.importActual<
-    typeof import("../secrets/runtime-web-tools-public-artifacts.runtime.js")
-  >("../secrets/runtime-web-tools-public-artifacts.runtime.js");
+    typeof import("../plugins/web-provider-public-artifacts.js")
+  >("../plugins/web-provider-public-artifacts.js");
   return {
     ...actual,
     resolveBundledWebFetchProvidersFromPublicArtifacts:

@@ -15,7 +15,6 @@ import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
-  hasReplyPayloadContent,
   normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
@@ -126,17 +125,6 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
   return lines.join("\n");
 }
 
-function isSuppressedRelayStatusText(text: string): boolean {
-  const normalized = text.trim();
-  // Prevent relay housekeeping text from leaking into user-visible channels.
-  return (
-    /^(?:no channel reply|replied in-thread|replied in #[-\w]+)\.?$/i.test(normalized) ||
-    /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
-      normalized,
-    )
-  );
-}
-
 function normalizeRawOutboundPayload(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
@@ -158,13 +146,10 @@ function normalizeRawOutboundPayload(
   const strippedParsed =
     strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
   const parsedText = strippedParsed.text ?? "";
-  const suppressedText = strippedParsed.isSilent || isSuppressedRelayStatusText(parsedText);
   const normalizedPayload: ReplyPayload = applyReplyPayloadTargetPolicy(
     copyReplyPayloadMetadata(payload, {
       ...payload,
-      text:
-        formatBtwTextForExternalDelivery({ ...payload, text: suppressedText ? "" : parsedText }) ??
-        "",
+      text: formatBtwTextForExternalDelivery({ ...payload, text: parsedText }) ?? "",
       mediaUrls,
       mediaUrl: explicitMediaUrl,
       ...(payload.attachments
@@ -187,7 +172,7 @@ function normalizeRawOutboundPayload(
     ...(parsed.mediaFailures ?? []),
     ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
   ]);
-  return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
+  return normalizedPayload;
 }
 
 function createStructuredOutboundPayloadPlanEntry(

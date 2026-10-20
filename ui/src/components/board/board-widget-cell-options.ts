@@ -3,7 +3,7 @@ import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts"
 import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 export const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
@@ -20,6 +20,7 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
@@ -62,6 +63,7 @@ export type BoardWidgetCellProps = {
 };
 export type BoardWidgetCellHandle = {
   readonly presentationReady: boolean;
+  focusWidget(): void;
   selectMenuItem(value: string | undefined): void;
   teardown(): Promise<void>;
   restartAfterTeardown(): void;

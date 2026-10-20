@@ -1,17 +1,17 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { Value } from "typebox/value";
-import {
-  AgentActivityItemSchema,
-  type AgentActivityItem,
-} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import type { SidebarToolActivity } from "../../components/app-sidebar-session-types.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
+import {
+  cleanAgentActivityItem,
+  isAgentActivityItem,
+} from "../../lib/protocol-validators.generated/activity.js";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
@@ -28,8 +28,8 @@ export function readSubagentToolEvent(
 ): AgentActivityItem | undefined {
   const data = asOptionalRecord(value);
   if (stream === "item") {
-    const candidate = Value.Clean(AgentActivityItemSchema, { ...data });
-    if (!Value.Check(AgentActivityItemSchema, candidate) || candidate.kind !== "tool") {
+    const candidate = cleanAgentActivityItem({ ...data });
+    if (!isAgentActivityItem(candidate) || candidate.kind !== "tool") {
       return undefined;
     }
     return candidate.suppressChannelProgress && previous ? previous : candidate;

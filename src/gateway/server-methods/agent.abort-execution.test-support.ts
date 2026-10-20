@@ -1,6 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
+import {
+  getRpcSource,
+  getRpcSourceProjectSessionActive,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import {
   getAgentTestMocks,
   operatorWriteCliClient,
@@ -12,27 +17,40 @@ import {
   prime,
 } from "./agent.test-harness.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 
 const mocks = getAgentTestMocks();
 
 export function registerAgentAbortRunExecutionTest() {
-  it("chat.abort by runId aborts the agent run's signal and removes the entry", async () => {
+  it.for([
+    { action: "chat.abort", lateFailure: false },
+    { action: "chat.abort", lateFailure: true },
+    { action: "/stop", lateFailure: true },
+  ] as const)("settles $action (late failure: $lateFailure)", async (testCase, ctx) => {
+    const { action, lateFailure } = testCase;
     prime();
     const finishRun = createDeferred();
     const context = makeContext();
     const runId = "idem-abort-run";
-    let acceptedEntry: ChatAbortControllerEntry | undefined;
+    let acceptedEntry: RpcSourceRef | undefined;
     let capturedSignal: AbortSignal | undefined;
     mocks.agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
       capturedSignal = opts.abortSignal;
-      const entry = context.chatAbortControllers.get(runId);
-      if (entry?.controller.signal === opts.abortSignal) {
+      const entry = getRpcSource(runId);
+      if (entry?.input.abortSignal === opts.abortSignal) {
         acceptedEntry = entry;
       }
       await finishRun.promise;
-      return { payloads: [{ text: "late completion" }], meta: { durationMs: 1 } };
+      if (lateFailure) {
+        throw new Error("late provider failure");
+      }
+      return {
+        payloads: [{ text: "late completion" }],
+        meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "late completion" } },
+      };
     });
 
+    let abort: Promise<void> | undefined;
     try {
       await invokeAgent(
         {
@@ -45,55 +63,82 @@ export function registerAgentAbortRunExecutionTest() {
       );
 
       const active = requireValue(acceptedEntry, "active run missing");
-      const execution = requireValue(active.executionSettlement, "execution settlement missing");
-      expect(context.chatAbortControllers.get(runId)).toBe(active);
+      expect(getRpcSource(runId)).toBe(active);
       expect(capturedSignal?.aborted).toBe(false);
 
       const abortRespond = vi.fn();
-      await handleChatAbortRequest({
-        params: { sessionKey: "agent:main:main", runId },
-        respond: abortRespond as never,
+      const stopOptions = {
+        respond: abortRespond,
         context,
-        req: { type: "req", id: "abort-req", method: "chat.abort" },
         client: null,
         isWebchatConnect: () => false,
-      });
+      };
+      abort =
+        action === "chat.abort"
+          ? handleChatAbortRequest({
+              ...stopOptions,
+              params: { sessionKey: "agent:main:main", runId },
+              req: { type: "req", id: "abort-req", method: "chat.abort" },
+            })
+          : handleDirectExternalChatSend({
+              ...stopOptions,
+              params: {
+                sessionKey: "agent:main:main",
+                message: "/stop",
+                idempotencyKey: "idem-late-failure-stop",
+              },
+              req: { type: "req", id: "stop-req", method: "chat.send" },
+            });
 
+      // Acknowledge cancellation while the raw producer remains blocked.
+      await withinTest(abort, ctx.signal);
+      expect(capturedSignal?.aborted).toBe(true);
+      expect(isAgentRunDirectAbortReason(capturedSignal?.reason)).toBe(true);
+      expect(active.adapter.abortStopReason).toBe(action === "chat.abort" ? "rpc" : "stop");
+      expect(getRpcSourceProjectSessionActive(active)).toBe(false);
+      expect(getRpcSource(runId)).toBe(active);
       expect(mockCallArg(abortRespond)).toBe(true);
       expectRecordFields(mockCallArg(abortRespond, 0, 1), {
         aborted: true,
         runIds: [runId],
       });
-      expect(capturedSignal?.aborted).toBe(true);
-      expect(active.projectSessionActive).toBe(false);
-      expect(context.chatAbortControllers.get(runId)).toBe(active);
-      expect(execution.status).toBe("pending");
     } finally {
       finishRun.resolve();
-      await acceptedEntry?.executionSettlement?.completion;
+      await Promise.allSettled([abort]);
+      await acceptedEntry?.input.settlement.promise;
     }
-    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(getRpcSource(runId)).toBeUndefined();
+    if (lateFailure) {
+      const terminal = context.dedupe.get(`agent:${runId}`);
+      expect(terminal?.ok).toBe(true);
+      expect(terminal?.error).toBeUndefined();
+      expectRecordFields(terminal?.payload, { runId, status: "timeout", summary: "aborted" });
+    }
   });
 }
 
 export function registerAgentAbortStaleKeyExecutionTest() {
-  it("chat.abort by runId allows the owner connection to use a stale session key", async () => {
+  it("chat.abort by runId allows the owner connection to use a stale session key", async (ctx) => {
     prime();
     const finishRun = createDeferred();
     const context = makeContext();
     const runId = "idem-abort-stale-session-key";
-    let acceptedEntry: ChatAbortControllerEntry | undefined;
+    let acceptedEntry: RpcSourceRef | undefined;
     let capturedSignal: AbortSignal | undefined;
     mocks.agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
       capturedSignal = opts.abortSignal;
-      const entry = context.chatAbortControllers.get(runId);
-      if (entry?.controller.signal === opts.abortSignal) {
+      const entry = getRpcSource(runId);
+      if (entry?.input.abortSignal === opts.abortSignal) {
         acceptedEntry = entry;
       }
       await finishRun.promise;
-      return { payloads: [{ text: "late completion" }], meta: { durationMs: 1 } };
+      return {
+        payloads: [{ text: "late completion" }],
+        meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "late completion" } },
+      };
     });
 
+    let abort: Promise<void> | undefined;
     try {
       await invokeAgent(
         {
@@ -110,11 +155,10 @@ export function registerAgentAbortStaleKeyExecutionTest() {
       );
 
       const active = requireValue(acceptedEntry, "active run missing");
-      const execution = requireValue(active.executionSettlement, "execution settlement missing");
-      expect(context.chatAbortControllers.get(runId)).toBe(active);
-      expect(active.sessionKey).toBe("agent:main:main");
+      expect(getRpcSource(runId)).toBe(active);
+      expect(active.input.target?.sessionKey).toBe("agent:main:main");
       const abortRespond = vi.fn();
-      await handleChatAbortRequest({
+      abort = handleChatAbortRequest({
         params: { sessionKey: "agent:main:stale-key", runId },
         respond: abortRespond as never,
         context,
@@ -123,19 +167,21 @@ export function registerAgentAbortStaleKeyExecutionTest() {
         isWebchatConnect: () => false,
       });
 
+      // Acknowledge cancellation while the raw producer remains blocked.
+      await withinTest(abort, ctx.signal);
+      expect(capturedSignal?.aborted).toBe(true);
+      expect(getRpcSourceProjectSessionActive(active)).toBe(false);
+      expect(getRpcSource(runId)).toBe(active);
       expect(mockCallArg(abortRespond)).toBe(true);
       expectRecordFields(mockCallArg(abortRespond, 0, 1), {
         aborted: true,
         runIds: [runId],
       });
-      expect(capturedSignal?.aborted).toBe(true);
-      expect(active.projectSessionActive).toBe(false);
-      expect(context.chatAbortControllers.get(runId)).toBe(active);
-      expect(execution.status).toBe("pending");
     } finally {
       finishRun.resolve();
-      await acceptedEntry?.executionSettlement?.completion;
+      await Promise.allSettled([abort]);
+      await acceptedEntry?.input.settlement.promise;
     }
-    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expect(getRpcSource(runId)).toBeUndefined();
   });
 }

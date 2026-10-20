@@ -8,6 +8,7 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
+import { lookupPluginStateInWorker } from "../../plugin-state/plugin-state-worker-client.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -247,11 +248,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
         } finally {
           await backend.stop();
         }
-        expect(
-          await runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
-            worker.execute({ type: "pluginState.lookup", input: key }),
-          ),
-        ).toEqual({ ok: true, value: true });
+        expect(await lookupPluginStateInWorker(key)).toBe(true);
       } finally {
         getSessionRowProjection(context)?.dispose();
         clearSubagentRunsReadCacheForTest();

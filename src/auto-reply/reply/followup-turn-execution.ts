@@ -1,10 +1,17 @@
+import {
+  isFreshChannelCronAuthorityTurn,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -16,12 +23,11 @@ import { createReplyAgentRestartRecoveryController } from "./agent-runner-restar
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { captureReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
@@ -89,7 +95,8 @@ export async function executeFollowupTurn(params: {
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
     deliveryAllowed() &&
-    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
+    (sourceOpts?.progressRequiresReply !== true ||
+      isRequiredReplyExpectation(terminalReplyExpectation));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -131,11 +138,15 @@ export async function executeFollowupTurn(params: {
   const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
   const pendingWorkTasks = new Set<Promise<void>>();
   const trackPendingWork = (task: Promise<void>, kind: "progress" | "tool") => {
+    const releaseExecution = turn.operation.retainExecution();
     const observedTask = task.catch((error: unknown) => {
       pendingTaskFailures[kind] ??= error;
       throw error;
     });
-    const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
+    const watcher = observedTask.finally(() => {
+      pendingWorkTasks.delete(watcher);
+      releaseExecution();
+    });
     void watcher.catch(() => undefined);
     pendingWorkTasks.add(watcher);
   };
@@ -196,6 +207,8 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
+    // Presentation defaults can belong to another source or an already settled ingress.
+    cronCreatorAuthorityCapability: undefined,
     isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     internalEventExecution: turn.queued.run.internalEventExecution,
@@ -205,6 +218,8 @@ export async function executeFollowupTurn(params: {
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    forceRestartSafeTools: turn.queued.forceRestartSafeTools,
+    forceCodeModeTools: turn.queued.forceCodeModeTools,
     awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
     onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
     onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,
@@ -225,9 +240,11 @@ export async function executeFollowupTurn(params: {
     onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
       sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
       (item) =>
-        // Only the explicit draft owner may bypass hidden tool-progress filtering for preambles.
-        (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
-        shouldEmitStructuredProgress(),
+        // Model waits bypass verbosity; preambles still need their explicit draft owner.
+        item.kind === "model-wait"
+          ? progressAllowed()
+          : (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+            shouldEmitStructuredProgress(),
     ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
@@ -342,6 +359,9 @@ export async function executeFollowupTurn(params: {
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
   try {
+    // A session event rejected for stale policy is re-admitted by its owner under the
+    // same durable source id; reject it before admission records that source claim.
+    turn.queued.run.internalEventExecution?.assertCurrent?.();
     const admission = await recovery.admitUserTurn(recorder);
     accepted = true;
     await admitFollowupRunLifecycle(turn.queued);
@@ -418,7 +438,34 @@ export async function executeFollowupTurn(params: {
       // Queued execution outlives its ingress scope. Re-enter the exact source
       // custody after lazy collection binds it, so runtime appends consume all sources.
       turn.operation.abortSignal.throwIfAborted();
-      execution = await withCurrentUserTurnInput(recorder, execute);
+      // Only the original fresh ingress can recreate authority for this new run.
+      // Maintenance copies and synthetic turns must not reuse the source factory.
+      const run = turn.queued.run;
+      const capability =
+        run.senderIsOwner &&
+        isFreshChannelCronAuthorityTurn({
+          messageProvider: run.messageProvider,
+          senderId: run.senderId,
+          isHeartbeat,
+          isRoomEvent: roomEvent,
+          inputProvenance: run.inputProvenance,
+          spawnedBy: run.spawnedBy,
+          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+        })
+          ? turn.queued.createChannelCronAuthority?.(
+              turn.runId,
+              getCommandOwnerAuthority(run)?.isCurrent,
+            )
+          : undefined;
+      progressOpts.cronCreatorAuthorityCapability = capability;
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      execution = capability
+        ? await runWithCronCreatorAuthorityCapability(
+            capability,
+            runWithInput,
+            turn.operation.abortSignal,
+          )
+        : await runWithInput();
     }
   } catch (error) {
     await drainPendingWork();

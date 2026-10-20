@@ -948,16 +948,22 @@ describe("release child attempt composition", () => {
           jobs: [{ ...ghost, runner_name: "GitHub Actions 2" }, running],
         },
         { label: "with only queued copies", jobs: [ghost, ghost] },
-      ].map(({ label, jobs }) => ({
-        label,
-        attempts: [
-          { jobs: [job("test", "success")], runAttempt: 1 },
-          { jobs, runAttempt: 2 },
-        ],
-        effectiveRunAttempt: 2,
-        effectiveRunStatus: "in_progress",
-        plannedRunAttempt: 1,
-      })),
+        {
+          label: "beside a runnerless running job",
+          jobs: [ghost, { ...running, runner_id: null, runner_name: null }],
+        },
+      ].flatMap(({ label, jobs }) =>
+        ["queued", "in_progress"].map((effectiveRunStatus) => ({
+          label: `${label} in a ${effectiveRunStatus} run`,
+          attempts: [
+            { jobs: [job("test", "success")], runAttempt: 1 },
+            { jobs, runAttempt: 2 },
+          ],
+          effectiveRunAttempt: 2,
+          effectiveRunStatus,
+          plannedRunAttempt: 1,
+        })),
+      ),
       {
         label: "beside a running job in a completed run",
         attempts: [
@@ -1137,60 +1143,75 @@ describe("release decision policy", () => {
     ]);
   });
 
-  it("keeps a running rerun pending beside runnerless queued copies, then accepts its result", async () => {
-    const planned = child("normalCi");
-    const ghost = { name: "test", status: "queued", runner_id: null, runner_name: null };
-    let completed = false;
-    const options = {
-      readRun: async () =>
-        githubRun(planned, {
-          conclusion: completed ? "success" : null,
-          run_attempt: 2,
-          status: completed ? "completed" : "in_progress",
-          triggering_actor: { login: "release-operator" },
-        }),
-      readAttemptJobs: async (_runId: string, attempt: number) =>
-        attempt === 1
-          ? [
-              { name: "lint", status: "completed", conclusion: "success" },
-              { name: "test", status: "completed", conclusion: "failure" },
-            ]
-          : [
-              ghost,
-              {
-                name: "test",
-                status: completed ? "completed" : "in_progress",
-                conclusion: completed ? "success" : null,
-                runner_id: 42,
-                runner_name: "GitHub Actions 42",
-              },
-              ghost,
-            ],
-    };
-    const pending = await readChild(planned, undefined, undefined, options);
-    expect(classifyReleaseSnapshot({ children: [pending] })).toMatchObject({
-      activeRunIds: ["101"],
-      blockers: [],
-      errors: [],
-      state: "qualifying",
-    });
-    expect(pending.jobs).toEqual([
-      expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
-      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, status: "in_progress" }),
-    ]);
+  it.each(["queued", "in_progress"])(
+    "keeps a %s rerun pending beside runnerless queued copies, then accepts its result",
+    async (runStatus) => {
+      const planned = child("normalCi");
+      const name = "checks-node-core-fast-isolated";
+      const ghost = {
+        name,
+        status: "queued",
+        conclusion: null,
+        completed_at: null,
+        runner_id: null,
+        runner_name: null,
+      };
+      let completed = false;
+      const options = {
+        readRun: async () =>
+          githubRun(planned, {
+            conclusion: completed ? "success" : null,
+            run_attempt: 2,
+            status: completed ? "completed" : runStatus,
+            triggering_actor: { login: "release-operator" },
+          }),
+        readAttemptJobs: async (_runId: string, attempt: number) =>
+          attempt === 1
+            ? [
+                { name: "lint", status: "completed", conclusion: "success" },
+                { name, status: "completed", conclusion: "failure" },
+              ]
+            : [
+                ...Array.from({ length: 7 }, () => ghost),
+                {
+                  name,
+                  status: completed ? "completed" : "in_progress",
+                  conclusion: completed ? "success" : null,
+                  runner_id: 42,
+                  runner_name: "GitHub Actions 42",
+                  started_at: "2026-10-15T10:49:05Z",
+                },
+                ...Array.from({ length: 7 }, () => ghost),
+              ],
+      };
+      const pending = await readChild(planned, undefined, undefined, options);
+      expect(pending.errors).toEqual([]);
+      expect(pending.status).toBe(runStatus);
+      expect(terminalPolicyPass(pending)).toBe(false);
+      expect(classifyReleaseSnapshot({ children: [pending] })).toMatchObject({
+        activeRunIds: ["101"],
+        blockers: [],
+        errors: [],
+        state: "qualifying",
+      });
+      expect(pending.jobs).toEqual([
+        expect.objectContaining({ name, acceptedRunAttempt: 2, status: "in_progress" }),
+        expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
+      ]);
 
-    completed = true;
-    const settled = await readChild(planned, pending, undefined, options);
-    expect(classifyReleaseSnapshot({ children: [settled] })).toMatchObject({
-      activeRunIds: [],
-      blockers: [],
-      errors: [],
-      state: "passed",
-    });
-    expect(settled.jobs).toContainEqual(
-      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
-    );
-  });
+      completed = true;
+      const settled = await readChild(planned, pending, undefined, options);
+      expect(classifyReleaseSnapshot({ children: [settled] })).toMatchObject({
+        activeRunIds: [],
+        blockers: [],
+        errors: [],
+        state: "passed",
+      });
+      expect(settled.jobs).toContainEqual(
+        expect.objectContaining({ name, acceptedRunAttempt: 2, conclusion: "success" }),
+      );
+    },
+  );
 
   it.each([
     "HTTP 403: secondary rate limit",

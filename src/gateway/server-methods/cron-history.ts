@@ -14,11 +14,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
 import { assertCronReadCurrent } from "./cron-job-access.js";
-import {
-  createCronSessionVisibility,
-  cronJobIsVisible,
-  cronJobVisibilityTarget,
-} from "./cron-visibility.js";
+import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -50,7 +46,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       ),
     );
   const storeKey = cronStoreKey(context.cronStorePath);
-  const sessionVisibility = createCronSessionVisibility(client, () => context.getRuntimeConfig());
+  const sessionVisibility = createCronSessionVisibility(client, context);
   const assertAllowed = (sessionKey?: string, agentId?: string) => {
     assertCronReadCurrent(opts);
     const callerScope = readCronCallerScope(client);
@@ -76,18 +72,13 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
   };
   try {
     await context.cron.readJob(params.id);
-    assertCronReadCurrent(opts);
-    await sessionVisibility.prepare([
-      cronJobVisibilityTarget(context.cron.getJob(params.id), context.cron.getDefaultAgentId()),
-    ]);
-    assertAllowed();
+    await sessionVisibility.prepare();
     const select = () =>
       readCronRunHistoryBinding(storeKey, params.id, {
         runId: params.runId,
         runAtMs: params.runAtMs,
       });
     const selected = await select();
-    assertAllowed();
     if (!selected) {
       fail();
       return;
@@ -125,7 +116,6 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       }
       assertAllowed(transcriptSessionKey, agentId);
     };
-    assertCurrent();
     const physical = await readSessionHistoryPageInWorker(
       {
         kind: "transcript-binding",
@@ -133,7 +123,6 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       },
       opts.signal,
     );
-    assertCurrent();
     const { baseSessionKey } = parseCronRunScopeSuffix(sessionKey);
     if (
       !physical ||
@@ -142,10 +131,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       fail();
       return;
     }
-    await sessionVisibility.prepare([{ sessionKey: physical.sessionKey, agentId }]);
-    assertCurrent(physical.sessionKey);
     const { handleChatHistoryRequest } = await import("./chat-history-handler.js");
-    assertCurrent(physical.sessionKey);
     await handleChatHistoryRequest({
       ...opts,
       method: "chat.history",
@@ -153,9 +139,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
         sessionId,
         verifyRetainedState: async () => {
           await context.cron.readJob(params.id);
-          assertCurrent(physical.sessionKey);
           const current = await select();
-          assertCurrent(physical.sessionKey);
           return current?.binding === binding;
         },
       },
@@ -166,9 +150,10 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
         offset,
         maxBytes: MAX_CRON_HISTORY_BYTES - 16_384,
       },
-      respond: (ok, payload, error) => {
+      respond: (ok, payload) => {
         if (!ok) {
-          respond(false, undefined, error);
+          // Chat errors may name the internally selected session, which the caller cannot see.
+          fail();
           return;
         }
         const page = asOptionalRecord(payload);
@@ -196,7 +181,5 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     });
   } catch {
     fail();
-  } finally {
-    sessionVisibility.release();
   }
 };

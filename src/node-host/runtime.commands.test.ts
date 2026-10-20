@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -6,6 +6,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { NodeHostClient } from "./client.js";
 import { startNodeHostConnection } from "./connection.js";
 import { startNodeHostMcpManager } from "./mcp.js";
@@ -70,13 +71,14 @@ afterEach(() => {
 
 describe("restricted node command surface", () => {
   it("publishes only selected commands and rejects hidden invokes without starting ancillary services", async () => {
+    const platform = mockProcessPlatform("darwin");
+    onTestFinished(() => platform.mockRestore());
     const prepared = await prepareNodeHostRuntime({
       config: { nodeHost: { workerRuns: { enabled: true } }, desktop: { host: { enabled: true } } },
       env: { PATH: "/private/host/bin" },
       enableAgentRuns: true,
       forceWorkerRuns: true,
       installedAppsSharingEnabled: true,
-      platform: "darwin",
       commands: ["fixture.read", "fixture.list", "missing.command"],
     });
     expect(prepared.manifest).toEqual({

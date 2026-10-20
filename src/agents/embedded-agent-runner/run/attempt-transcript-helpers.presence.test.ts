@@ -6,6 +6,7 @@ import { hasSessionTranscriptMessageInDatabase } from "../../../config/sessions/
 import { replaceTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { createTranscriptEventInserter } from "../../../config/sessions/transcript-payload.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 
@@ -67,9 +68,10 @@ it("keeps one presence snapshot while another connection classifies a message", 
     writer
       .prepare("UPDATE transcript_event_identities SET event_type = NULL WHERE session_id = ?")
       .run(sessionTarget.sessionId);
-    const prepare = database.db.prepare.bind(database.db);
+    const native = requireNativeSqliteDatabase(database.db);
+    const prepare = native.prepare.bind(native);
     let classified = false;
-    const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+    const spy = vi.spyOn(native, "prepare").mockImplementation((query) => {
       const statement = prepare(query);
       if (
         !query.includes('"transcript_event_identities"') ||

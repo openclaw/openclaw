@@ -11,8 +11,10 @@ const { detectBinaryMock, execFileSyncMock, readFileMock, runCommandWithTimeoutM
   () => ({
     detectBinaryMock: vi.fn<DetectBinary>(async () => false),
     execFileSyncMock: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
-    readFileMock: vi.fn(async () => "6.8.0-generic"),
-    runCommandWithTimeoutMock: vi.fn<() => Promise<SpawnResult>>(async () => ({
+    readFileMock: vi.fn<() => Promise<string>>(),
+    runCommandWithTimeoutMock: vi.fn<
+      (argv: string[], optionsOrTimeout?: number | { timeoutMs?: number }) => Promise<SpawnResult>
+    >(async () => ({
       stdout: "",
       stderr: "",
       code: 0,
@@ -47,10 +49,11 @@ vi.mock("node:fs/promises", async () => {
 
 let detectBrowserOpenSupport: typeof import("./browser-open.js").detectBrowserOpenSupport;
 let openUrl: typeof import("./browser-open.js").openUrl;
+let openLocalFile: typeof import("./browser-open.js").openLocalFile;
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ detectBrowserOpenSupport, openUrl } = await import("./browser-open.js"));
+  ({ detectBrowserOpenSupport, openUrl, openLocalFile } = await import("./browser-open.js"));
   vi.stubEnv("VITEST", "");
   vi.stubEnv("NODE_ENV", "development");
   vi.stubEnv("DISPLAY", "");
@@ -87,6 +90,57 @@ describe("openUrl", () => {
   });
 });
 
+describe("openLocalFile", () => {
+  it("passes only the private file:// path to the opener, never a credential URL", async () => {
+    mockProcessPlatform("linux");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("DISPLAY", ":0");
+    detectBinaryMock.mockResolvedValue(true);
+    runCommandWithTimeoutMock.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(openLocalFile("/tmp/openclaw-browser-handoff-X/handoff.html")).resolves.toBe(true);
+    const argv = runCommandWithTimeoutMock.mock.calls[0]![0];
+    expect(argv[0]).toBe("xdg-open");
+    expect(argv).toHaveLength(2);
+    expect(argv[1]).toMatch(/^file:\/\//);
+    expect(argv[1]).not.toContain("bootstrapToken");
+  });
+
+  it("opens native Windows handoff paths instead of reading the drive letter as a URL scheme", async () => {
+    mockProcessPlatform("win32");
+
+    await expect(
+      openLocalFile(
+        "C:\\Users\\Alice\\AppData\\Local\\Temp\\openclaw-browser-handoff-ABC123\\handoff.html",
+      ),
+    ).resolves.toBe(true);
+    const argv = runCommandWithTimeoutMock.mock.calls[0]![0];
+    expect(argv.at(-2)).toBe("url.dll,FileProtocolHandler");
+    expect(argv.at(-1)).toBe(
+      "file:///C:/Users/Alice/AppData/Local/Temp/openclaw-browser-handoff-ABC123/handoff.html",
+    );
+  });
+
+  it("refuses http(s) URLs and non-file inputs", async () => {
+    mockProcessPlatform("linux");
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+
+    await expect(openLocalFile("http://127.0.0.1:18789/#bootstrapToken=x")).resolves.toBe(false);
+    await expect(openLocalFile("file:///tmp/handoff.html")).resolves.toBe(false);
+    await expect(openLocalFile("relative/handoff.html")).resolves.toBe(false);
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("browser support and launch", () => {
   it("retains process-level WSL detection caching through support detection", async () => {
     mockProcessPlatform("linux");
@@ -105,16 +159,11 @@ describe("browser support and launch", () => {
 
   it("reports display-less WSL support only when wslview is installed", async () => {
     detectBinaryMock.mockImplementation(async (binary) => binary === "wslview");
-
-    await expect(
-      detectBrowserOpenSupport({
-        platform: "linux",
-        env: { WSL_DISTRO_NAME: "Ubuntu" },
-      }),
-    ).resolves.toEqual({ ok: true });
-
     mockProcessPlatform("linux");
     vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+
+    await expect(detectBrowserOpenSupport()).resolves.toEqual({ ok: true });
+
     await expect(openUrl("https://example.com/")).resolves.toBe(true);
     expect(runCommandWithTimeoutMock).toHaveBeenCalledExactlyOnceWith(
       ["wslview", "https://example.com/"],
@@ -122,12 +171,10 @@ describe("browser support and launch", () => {
     );
 
     detectBinaryMock.mockResolvedValue(false);
-    await expect(
-      detectBrowserOpenSupport({
-        platform: "linux",
-        env: { WSL_DISTRO_NAME: "Ubuntu" },
-      }),
-    ).resolves.toEqual({ ok: false, reason: "wsl-no-wslview" });
+    await expect(detectBrowserOpenSupport()).resolves.toEqual({
+      ok: false,
+      reason: "wsl-no-wslview",
+    });
   });
 
   it("prefers the registry-backed Windows system root over process env", async () => {

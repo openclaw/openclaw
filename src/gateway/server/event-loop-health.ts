@@ -4,7 +4,10 @@ import { isMainThread, Worker } from "node:worker_threads";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { GatewayEventLoopHealthSchema } from "../../../packages/gateway-protocol/src/schema/runtime-vitals.js";
-import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  onInternalDiagnosticEventInterest,
+} from "../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
@@ -44,13 +47,8 @@ type GatewayEventLoopHealthMonitor = {
   stop: () => void;
 };
 
-type EventLoopUtilizationReader = typeof performance.eventLoopUtilization;
-
 type GatewayEventLoopHealthMonitorDeps = {
   scheduler: GatewayScheduler;
-  now?: () => number;
-  cpuUsage?: typeof process.cpuUsage;
-  eventLoopUtilization?: EventLoopUtilizationReader;
   isIdle?: () => boolean;
 };
 
@@ -98,14 +96,7 @@ function cpuUsageDelta(
 function readHostCpuTimes(): CpuInfo["times"][] | undefined {
   try {
     const times = cpus().map((cpu) => cpu.times);
-    return times.length &&
-      times.every((cpu) =>
-        [cpu.user, cpu.nice, cpu.sys, cpu.idle, cpu.irq].every(
-          (value) => Number.isFinite(value) && value >= 0,
-        ),
-      )
-      ? times
-      : undefined;
+    return times.length ? times : undefined;
   } catch {
     return undefined;
   }
@@ -173,10 +164,9 @@ export function createGatewayEventLoopHealthMonitor(
   deps: GatewayEventLoopHealthMonitorDeps,
 ): GatewayEventLoopHealthMonitor {
   const { scheduler } = deps;
-  const nowMs = deps.now ?? performance.now.bind(performance);
-  const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
-  const readEventLoopUtilization =
-    deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
+  const nowMs = performance.now.bind(performance);
+  const readCpuUsage = process.cpuUsage.bind(process);
+  const readEventLoopUtilization = performance.eventLoopUtilization.bind(performance);
   const flightRecorder = createStallFlightRecorder((message) => log.warn(message), nowMs);
   const stalls = createMainThreadStallMonitor(nowMs);
   let unattributedDelayMs = 0;
@@ -256,13 +246,7 @@ export function createGatewayEventLoopHealthMonitor(
     cancelWorkerCpuSample = () => {
       active = false;
     };
-    const readings = workers.map(async (worker) => {
-      try {
-        return await worker.cpuUsage();
-      } catch {
-        return undefined;
-      }
-    });
+    const readings = workers.map((worker) => worker.cpuUsage());
     void Promise.all(readings).then((usage) => {
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;
@@ -291,6 +275,22 @@ export function createGatewayEventLoopHealthMonitor(
 
     const now = nowMs();
     const attributed = stalls.drain();
+    if (
+      attributed.stalls.length > 0 &&
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.main_thread.stall")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({
+          type: "gateway.main_thread.stall",
+          stalls: attributed.stalls.map((stall) => ({
+            task: stall.task,
+            durationMs: stall.elapsedMs,
+          })),
+          dropped: attributed.dropped,
+        }),
+      );
+    }
     // Idle windows retain callback attribution and overdue-deadline detection without
     // the native histogram's 20 ms wakeup. Full resolution returns with active work.
     const delayMaxMs = Math.max(
@@ -416,7 +416,7 @@ export function createGatewayEventLoopHealthMonitor(
       id: "event-loop-health",
       delayMs,
       phase: delayMs === IDLE_SAMPLE_INTERVAL_MS ? "maintenance" : undefined,
-      // Let the blocking callback's after hook publish its stall before resetting the window.
+      // Let the blocking task scope publish its stall before resetting the window.
       run: () => queueMicrotask(sample),
     });
     sampleDueAt = nowMs() + (job.atMs - scheduler.now());
@@ -426,6 +426,13 @@ export function createGatewayEventLoopHealthMonitor(
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
+  const unsubscribeInterest = onInternalDiagnosticEventInterest("gateway.event_loop.sample", () => {
+    const now = nowMs();
+    const nextSampleAt = Math.max(now, lastWallAt + SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS);
+    if (histogram && nextSampleAt < sampleDueAt) {
+      samplingJob = scheduleSample(nextSampleAt - now);
+    }
+  });
 
   const reset = () => {
     stalls.reset();
@@ -458,6 +465,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      unsubscribeInterest();
       flightRecorder.stop();
       stalls.stop();
       samplingJob?.cancel();

@@ -17,6 +17,12 @@ type PluginConfigTargetScope = {
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
+/** Static credential fields shared by auth-profile scanning and target discovery. */
+export const AUTH_PROFILE_SECRET_FIELDS = {
+  api_key: { authProfileType: "api_key", valueField: "key", refField: "keyRef" },
+  token: { authProfileType: "token", valueField: "token", refField: "tokenRef" },
+} as const;
+
 const WEB_PROVIDER_SECRET_CONFIGS = [
   { contract: "webSearchProviders", configPath: "webSearch.apiKey" },
   { contract: "webFetchProviders", configPath: "webFetch.apiKey" },
@@ -118,25 +124,24 @@ function listChannelSecretTargetRegistryEntries(
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  ...(
-    [
-      ["api_key", "key"],
-      ["token", "token"],
-    ] as const
-  ).map(([authProfileType, field]): SecretTargetRegistryEntry => ({
-    id: `auth-profiles.${authProfileType}.${field}`,
-    targetType: `auth-profiles.${authProfileType}.${field}`,
-    configFile: "auth-profile-store",
-    pathPattern: `profiles.*.${field}`,
-    refPathPattern: `profiles.*.${field}Ref`,
-    secretShape: SIBLING_REF_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    authProfileType,
-  })),
+  ...Object.values(AUTH_PROFILE_SECRET_FIELDS).map(
+    ({ authProfileType, valueField, refField }): SecretTargetRegistryEntry => ({
+      id: `auth-profiles.${authProfileType}.${valueField}`,
+      targetType: `auth-profiles.${authProfileType}.${valueField}`,
+      configFile: "auth-profile-store",
+      pathPattern: `profiles.*.${valueField}`,
+      refPathPattern: `profiles.*.${refField}`,
+      secretShape: SIBLING_REF_SHAPE,
+      expectedResolvedValue: "string",
+      includeInPlan: true,
+      includeInConfigure: true,
+      includeInAudit: true,
+      authProfileType,
+    }),
+  ),
   ...[
+    "tools.github.app.privateKey",
+    "agents.entries.*.tools.github.app.privateKey",
     "memory.search.remote.apiKey",
     "agents.entries.*.memory.search.remote.apiKey",
     "cron.webhookToken",

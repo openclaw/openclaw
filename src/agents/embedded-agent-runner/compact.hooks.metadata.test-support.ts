@@ -3,6 +3,7 @@ import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
 } from "../../plugins/plugin-instance-invocation.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type {
   PreparedModelRuntimeInput,
@@ -14,49 +15,8 @@ export type CompactHooksQueuedCompaction = (
   host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
 ) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
 
-const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
-  version: 1,
-  hostContractVersion: "test",
-  compatRegistryVersion: "test",
-  migrationVersion: 1,
-  policyHash: "",
-  generatedAtMs: 1,
-  installRecords: {},
-  plugins: [],
-  diagnostics: [],
-};
-export const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
-  policyHash: "",
-  index: emptyPluginIndex,
-  registryIndex: emptyPluginIndex,
-  registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
-  diagnostics: [],
-  byPluginId: new Map(),
-  normalizePluginId: (pluginId: string) => pluginId,
-  declaredProviderOwners: new Map(),
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    providerAuthContributions: [],
-    modelIdNormalizationPolicies: new Map(),
-  },
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
-};
+export const emptyPluginMetadataSnapshot: PluginMetadataSnapshot =
+  createEmptyPluginMetadataSnapshot();
 
 export const getCurrentPluginMetadataSnapshotMock: Mock<
   typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
@@ -132,7 +92,7 @@ export function createCompactHooksPreparedModelRuntime(input: {
   };
 }
 
-export function createCompactHooksAuthStorage() {
+function createCompactHooksAuthStorage() {
   const runtimeKeys = new Map<string, string>();
   return {
     setRuntimeApiKey: vi.fn((provider: string, apiKey: string) => {

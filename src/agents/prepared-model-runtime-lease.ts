@@ -102,6 +102,51 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
   };
   assertAdmission();
+  const generation = options.pluginGeneration;
+  const borrowed = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
+  if (provenance === "run" && options.catalogMode !== "live" && generation && borrowed) {
+    const deriveSelections = options.deriveRuntimePluginSelections;
+    const input = normalizePreparedModelRuntimeInput({
+      ...rawInput,
+      ...(deriveSelections
+        ? {
+            runtimePluginSelections: withPluginMetadataSnapshotScope(
+              generation.pluginMetadataSnapshot,
+              () => [
+                ...(rawInput.runtimePluginSelections ?? []),
+                ...deriveSelections({
+                  config: rawInput.config,
+                  metadataSnapshot: generation.pluginMetadataSnapshot,
+                }),
+              ],
+              { trustConfigIdentity: true },
+            ),
+          }
+        : {}),
+    });
+    if (
+      borrowed.metadataSnapshot === generation.pluginMetadataSnapshot &&
+      preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
+      borrowed.agentId === input.agentId &&
+      borrowed.agentDir === input.agentDir &&
+      borrowed.inheritedAuthDir === input.inheritedAuthDir &&
+      borrowed.workspaceDir === input.workspaceDir &&
+      (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
+      !input.readOnly &&
+      !input.loadRuntimePlugins &&
+      !input.skipCredentials &&
+      !input.env &&
+      preparedPluginGenerationSupportsSelections(generation, input)
+    ) {
+      // Admitted work must finish before replacement can drain its retained generation.
+      assertAdmission();
+      return {
+        snapshot: borrowed,
+        pluginGeneration: generation,
+        [Symbol.asyncDispose]: retainPreparedPluginGeneration(generation),
+      };
+    }
+  }
   if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
     await prepareSharedAuthStoreOwnership(rawInput.env);
   }
@@ -188,31 +233,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       (configuredOwner.needsRefresh ||
         configuredOwner.pluginGeneration !== options.pluginGeneration)
     ) {
-      const borrowed = getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration);
-      if (
-        !configuredOwner.needsRefresh &&
-        borrowed &&
-        borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
-        preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
-        borrowed.agentId === input.agentId &&
-        borrowed.agentDir === input.agentDir &&
-        borrowed.inheritedAuthDir === input.inheritedAuthDir &&
-        borrowed.workspaceDir === input.workspaceDir &&
-        (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
-        !input.readOnly &&
-        !input.loadRuntimePlugins &&
-        !input.skipCredentials &&
-        !input.env &&
-        preparedPluginGenerationSupportsSelections(options.pluginGeneration, input)
-      ) {
-        // Nested work borrows its still-open parent; it cannot publish or widen that authority.
-        assertAdmission();
-        return {
-          snapshot: borrowed,
-          pluginGeneration: options.pluginGeneration,
-          [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
-        };
-      }
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
       );

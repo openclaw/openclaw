@@ -14,6 +14,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
+import { writeJsonWithoutCharset } from "../infra/http-json.js";
 import {
   createHttpRequestAbortSignal,
   sendHttpRequestRejection,
@@ -29,7 +30,7 @@ import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
-import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   registerMcpLoopbackClientGrantRevocationListener,
@@ -172,14 +173,15 @@ async function startMcpLoopbackServer(
   const closeActiveSseResponses = (): void => {
     for (const res of activeSseResponses) {
       if (!res.destroyed && !res.writableEnded) {
-        const socket = res.socket;
         res.end();
-        socket?.end();
       }
     }
   };
 
   const httpServer = createHttpServer((req, res) => {
+    // Close after the complete response so pooled clients cannot race an idle timeout.
+    // Active JSON/SSE streams remain open until res.end().
+    res.setHeader("Connection", "close");
     const auth = validateMcpLoopbackRequest({
       req,
       res,
@@ -209,8 +211,7 @@ async function startMcpLoopbackServer(
         parsed = parseMcpJsonBody(body);
         if (Array.isArray(parsed) && parsed.length === 0) {
           markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(jsonRpcError(null, -32600, "Invalid Request")));
+          writeJsonWithoutCharset(res, 200, jsonRpcError(null, -32600, "Invalid Request"));
           return;
         }
         const messages = Array.isArray(parsed) ? parsed : [parsed];
@@ -239,8 +240,7 @@ async function startMcpLoopbackServer(
         markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
         const { boundGrantToken, boundClientGrant } = auth;
         if (boundClientGrant && !boundClientGrant.isCurrent()) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "unauthorized" }));
+          writeJsonWithoutCharset(res, 401, { error: "unauthorized" });
           return;
         }
         const cfg = getRuntimeConfig();
@@ -300,7 +300,9 @@ async function startMcpLoopbackServer(
                   admittedRunContext: boundClientGrant?.admittedRunContext,
                   sessionEventSourcePolicy: boundClientGrant?.sessionEventSourcePolicy,
                   messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
-                  cfg,
+                  // Only a run-bound CLI grant carries a verified turn sender's audience.
+                  memoryAudience: boundClientGrant?.memoryAudience,
+                  cfg: boundClientGrant?.toolPolicyConfig ?? cfg,
                   signal: requestAbort.signal,
                   authProfileStore: boundClientGrant?.toolAuth?.store,
                   authProfileStoreAgentDir: boundClientGrant?.toolAuth?.agentDir || undefined,
@@ -319,8 +321,7 @@ async function startMcpLoopbackServer(
           } catch (error) {
             requestAbort.signal.throwIfAborted();
             if (boundClientGrant && !boundClientGrant.isCurrent()) {
-              res.writeHead(401, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "unauthorized" }));
+              writeJsonWithoutCharset(res, 401, { error: "unauthorized" });
               return;
             }
             throw error;
@@ -329,8 +330,7 @@ async function startMcpLoopbackServer(
           // Discovery may outlive the requesting connection or grant.
           requestAbort.signal.throwIfAborted();
           if (boundClientGrant && !boundClientGrant.isCurrent()) {
-            res.writeHead(401, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "unauthorized" }));
+            writeJsonWithoutCharset(res, 401, { error: "unauthorized" });
             return;
           }
 
@@ -428,6 +428,7 @@ async function startMcpLoopbackServer(
                     mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                     agentId: scopedTools.agentId,
                     sessionKey: requestContext.sessionKey,
+                    requesterOrigin: requestContext.requesterOrigin,
                     turnSourceChannel: requestContext.messageProvider,
                     turnSourceLocal:
                       !requestContext.messageProvider &&
@@ -514,16 +515,14 @@ async function startMcpLoopbackServer(
               "application/json",
             );
           } else if (isRecord(error) && error.code === "mcp_json_parse_error") {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+            writeJsonWithoutCharset(res, 400, jsonRpcError(null, -32700, "Parse error"));
           } else {
             const internalError = jsonRpcInternalError(parsed);
             if (internalError === null) {
               res.writeHead(202);
               res.end();
             } else {
-              res.writeHead(500, { "Content-Type": "application/json" });
-              res.end(JSON.stringify(internalError));
+              writeJsonWithoutCharset(res, 500, internalError);
             }
           }
         }

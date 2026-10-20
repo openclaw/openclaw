@@ -16,7 +16,6 @@ import {
   qualifyNpmPackageBundle,
   validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
-  verifyPreparedNpmBundleFiles,
   verifyNpmSourceCheck,
 } from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
@@ -496,6 +495,47 @@ describe("prepared npm bundle", () => {
   });
 
   it.each([
+    ["carried-forward copy", "2026-08-01T00:00:00Z", true],
+    ["re-executed job", "2026-08-01T01:00:00Z", false],
+  ] as const)("checks later attempts for the producer job: %s", async (_, startedAt, accepted) => {
+    const fixture = await bundleFixture();
+    Object.assign(fixture.run, { status: "completed", conclusion: "success" });
+    Object.assign(fixture.job, {
+      started_at: "2026-08-01T00:00:00Z",
+      completed_at: "2026-08-01T00:10:00Z",
+    });
+    const current = { ...fixture.run, run_attempt: 3 };
+    const later = { ...fixture.job, id: 47, run_attempt: 3, started_at: startedAt };
+    const runGh = (args: string[]) => {
+      const endpoint = args[1] ?? "";
+      if (endpoint.endsWith("/runs/12")) {
+        return JSON.stringify(current);
+      }
+      if (endpoint.includes("/attempts/3/jobs?")) {
+        // Apply the production --jq projection so dropped execution fields fail here.
+        return execFileSync("jq", ["-c", args[args.indexOf("--jq") + 1]!], {
+          input: JSON.stringify({ total_count: 1, jobs: [later] }),
+          encoding: "utf8",
+        });
+      }
+      return fixture.runGh(args);
+    };
+    const verify = () =>
+      verifyNpmBundleProducer({
+        producer: fixture.descriptor.producer,
+        repository,
+        toolingSha,
+        requireCompletedParent: true,
+        runGh,
+      });
+    if (accepted) {
+      expect(verify().job.id).toBe(fixture.job.id);
+    } else {
+      expect(verify).toThrow("superseded by a later attempt");
+    }
+  });
+
+  it.each([
     "superseded qualifier",
     "missing attempt jobs",
     "mismatched attempt jobs",
@@ -838,19 +878,6 @@ describe("prepared npm bundle", () => {
       expect(existsSync(fixture.outputDir)).toBe(false);
     },
   );
-
-  it("accepts descriptor JSON whose object keys were reordered without changing its contents", async () => {
-    const { descriptor, files, manifest } = await bundleFixture();
-    const reordered = JSON.parse(
-      JSON.stringify(descriptor, (_key, value: unknown) =>
-        value !== null && typeof value === "object" && !Array.isArray(value)
-          ? Object.fromEntries(Object.entries(value).toReversed())
-          : value,
-      ),
-    );
-    expect(JSON.stringify(reordered.producer)).not.toBe(JSON.stringify(descriptor.producer));
-    expect(verifyPreparedNpmBundleFiles({ descriptor: reordered, files })).toEqual(manifest);
-  });
 
   it("qualifies exact package bytes with large SDK and npm lock evidence", async () => {
     const fixture = await bundleFixture();

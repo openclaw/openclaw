@@ -2,9 +2,12 @@ import type { PluginHookReplyDispatchEvent } from "openclaw/plugin-sdk/core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { PLUGIN_COMMAND_DISPATCH } from "../plugins/plugin-command-dispatch-contract.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import type * as ReplyChunking from "./reply-chunking.js";
+import type * as ReplyRuntime from "./reply-runtime.js";
 import {
   createReplyDispatcher,
   dispatchInboundMessage,
+  isSilentReplyText,
   type GetReplyOptions,
   type PreparedAgentRunStart,
   type ReplyDispatcher,
@@ -26,8 +29,26 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionStart"
   | "onCompactionEnd"];
 
+describe("reply SDK silence surface", () => {
+  it("exposes only the exact helper from reply-runtime", () => {
+    type ChunkingExports = keyof typeof ReplyChunking;
+    type RuntimeExports = keyof typeof ReplyRuntime;
+    expectTypeOf<"SILENT_REPLY_TOKEN">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"SILENT_REPLY_TOKEN">().toExtend<RuntimeExports>();
+    expectTypeOf<"isSilentReplyText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<RuntimeExports>();
+    expectTypeOf(isSilentReplyText).parameters.toEqualTypeOf<[text?: string]>();
+  });
+});
+
 describe("reply runtime public progress contracts", () => {
-  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+  it("retains released lifecycle callback arguments and synchronous completion acknowledgment", () => {
+    type Deferral = NonNullable<
+      NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>["onDeferred"]
+    >;
+    expectTypeOf<Parameters<Deferral>>().toEqualTypeOf<[]>();
+    expectTypeOf<ReturnType<Deferral>>().toEqualTypeOf<boolean | void>();
     type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
     type LegacyAgentRunStart = (
       runId: string,
@@ -115,11 +136,14 @@ describe("reply runtime public dispatcher compatibility", () => {
     >;
     type Resolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof Options>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof Options>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof Options>();
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof RuntimeOptions>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof RuntimeOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof RuntimeOptions>();
     type ResolverOptions = NonNullable<Parameters<Resolver>[1]>;
     expectTypeOf<"internalEventExecution">().not.toExtend<keyof ResolverOptions>();
+    expectTypeOf<"onReplyOperationAdmitted">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onReplyOperationOwned">().not.toExtend<keyof ResolverOptions>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof Options>();
     expectTypeOf<"onSessionPrepared">().toExtend<keyof ResolverOptions>();
@@ -131,6 +155,7 @@ describe("reply runtime public dispatcher compatibility", () => {
       isHeartbeat: true,
       onReplyStart: callback,
       internalEventExecution: { assertCurrent: callback, onStarted: callback },
+      onReplyOperationAdmitted: callback,
       onReplyOperationOwned: callback,
       [PLUGIN_COMMAND_DISPATCH]: { kind: "non-plugin" as const },
     };
@@ -149,6 +174,7 @@ describe("reply runtime public dispatcher compatibility", () => {
       dispatchReplyFromConfig: async ({ replyOptions }) => {
         dispatched = true;
         expect(replyOptions).not.toHaveProperty("internalEventExecution");
+        expect(replyOptions).not.toHaveProperty("onReplyOperationAdmitted");
         expect(replyOptions).not.toHaveProperty("onReplyOperationOwned");
         expect(replyOptions).toMatchObject({
           isHeartbeat: true,
@@ -162,6 +188,7 @@ describe("reply runtime public dispatcher compatibility", () => {
     expect(dispatched).toBe(true);
     expect(delivered).toEqual(["public reply"]);
     expect(options.internalEventExecution.onStarted).toBe(callback);
+    expect(options.onReplyOperationAdmitted).toBe(callback);
     expect(options.onReplyOperationOwned).toBe(callback);
   });
 

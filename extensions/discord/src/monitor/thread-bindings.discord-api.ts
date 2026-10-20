@@ -10,7 +10,7 @@ import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
-import { resolveDiscordChannelIdSafe, resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
   BINDINGS_BY_THREAD_ID,
@@ -241,7 +241,7 @@ export async function resolveChannelIdForBinding(params: {
     }).rest;
     const channel = await getChannel(rest, lookupThreadId);
     const channelInfo = resolveDiscordChannelInfoSafe(channel);
-    const channelId = normalizeOptionalString(resolveDiscordChannelIdSafe(channel)) ?? "";
+    const channelId = normalizeOptionalString(channelInfo.id) ?? "";
     const type = channelInfo.type;
     const parentId = normalizeOptionalString(channelInfo.parentId) ?? "";
     // Only thread channels should resolve to their parent channel.

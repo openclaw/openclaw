@@ -68,7 +68,6 @@ export class DiscordAudioTransport extends EventEmitter<{
 }> {
   readonly speakingUsers = new Set<string>();
   playerStatus = "idle";
-  connectionStatus = "signalling";
   private readonly worker: DiscordAudioWorkerThread;
   private readonly adapter: DiscordGatewayAdapterImplementerMethods;
   private readonly captures = new Map<number, DiscordAudioCapture>();
@@ -263,7 +262,6 @@ export class DiscordAudioTransport extends EventEmitter<{
         this.finish(new Error("Discord voice session stopped."), true);
         break;
       case "connection":
-        this.connectionStatus = event.status;
         if (event.status === "destroyed") {
           this.emit("stopped");
         }
@@ -284,11 +282,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       case "capture-frame": {
         const capture = this.captures.get(event.id);
         if (capture && !capture.destroyed) {
-          capture.push({
-            ...event.frame,
-            pcm: Buffer.from(event.frame.pcm),
-            packet: Buffer.from(event.frame.packet),
-          });
+          capture.push(event.frame);
         }
         break;
       }
@@ -328,7 +322,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       }
       case "error":
         this.readiness.reject(restoreDiscordAudioError(event.error));
-        logger.warn("discord voice: " + event.error.message);
+        logger.warn("discord voice: audio worker failed", { code: event.error.code });
         break;
       case "log":
         if (event.level === "warn") {
@@ -366,7 +360,6 @@ export class DiscordAudioTransport extends EventEmitter<{
       return;
     }
     this.terminal = true;
-    this.connectionStatus = "destroyed";
     this.playerStatus = "idle";
     this.readiness.reject(error);
     this.destroyAdapter();

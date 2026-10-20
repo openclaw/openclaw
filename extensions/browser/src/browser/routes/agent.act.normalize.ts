@@ -1,4 +1,5 @@
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_ACT_KIND_FACTS, isActKind } from "../act-kinds.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -10,7 +11,6 @@ import {
 import type { BrowserActRequest } from "../client-actions.types.js";
 import { normalizeBrowserFormFields } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
-import { isActKind } from "./agent.act.shared.js";
 import {
   readRouteFiniteNumber,
   readRouteInteger,
@@ -141,15 +141,8 @@ export function normalizeActRequest(body: Record<string, unknown>, depth = 0): B
   const targetId = toStringOrEmpty(body.targetId) || undefined;
   const finish = <T extends BrowserActRequest>(action: T): T => {
     action.targetId = targetId;
-    switch (action.kind) {
-      case "press":
-      case "insertText":
-      case "resize":
-      case "close":
-      case "batch":
-        break;
-      default:
-        action.timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+    if (BROWSER_ACT_KIND_FACTS[action.kind].timeout) {
+      Object.assign(action, { timeoutMs: readRouteTimerTimeoutMs(body.timeoutMs) });
     }
     for (const key in action) {
       if (action[key] === undefined) {
@@ -324,7 +317,6 @@ export function normalizeActRequest(body: Record<string, unknown>, depth = 0): B
     case "batch": {
       // Bound nesting before recursing: oversized bodies parse fine, but
       // unbounded recursion overflows the stack before the count check runs.
-      // Matches the executor's ACT_MAX_BATCH_DEPTH enforcement.
       if (depth > ACT_MAX_BATCH_DEPTH) {
         throw new Error(`batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`);
       }

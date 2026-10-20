@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -32,6 +32,7 @@ type CronRunsSectionProps = Pick<
   | "onRefresh"
   | "onRunsFiltersChange"
   | "onViewRunTranscript"
+  | "onRunMount"
 > & {
   conditionActivity?: {
     checkCount: number;
@@ -119,18 +120,16 @@ function FilterDropdown<T extends string>(props: {
   onToggle: (value: T, checked: boolean) => void;
   onClear: () => void;
 }) {
-  const selectedLabels = createMemo(() =>
+  const selectedLabels = () =>
     props.options
       .filter((option) => props.selected.includes(option.value))
-      .map((option) => option.label),
-  );
-  const summary = createMemo(() =>
+      .map((option) => option.label);
+  const summary = () =>
     selectedLabels().length === 0
       ? props.allLabel
       : selectedLabels().length <= 2
         ? selectedLabels().join(", ")
-        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`,
-  );
+        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`;
   const accessibleSummary = createMemo(() =>
     selectedLabels().length > 2
       ? `${summary()} (${new Intl.ListFormat(i18n.getLocale(), {
@@ -145,7 +144,10 @@ function FilterDropdown<T extends string>(props: {
         id={`cron-runs-filter-${props.id}`}
         label={`${props.title} ${accessibleSummary()}`}
         class="cron-filter-dropdown__details"
-        triggerClass={`btn btn--sm cron-filter-dropdown__trigger${props.selected.length > 0 ? " active" : ""}`}
+        triggerClass={[
+          "btn btn--sm cron-filter-dropdown__trigger",
+          { active: props.selected.length > 0 },
+        ]}
         triggerAttributes={{ title: props.title }}
         trigger={
           <>
@@ -213,7 +215,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           <span>{t("cron.linkedRun.label")}</span>
           <button
             class="btn btn--sm"
-            onClick={() => void props.onRunsFiltersChange({ cronRunsRunId: null })}
+            onClick={() => props.onRunsFiltersChange({ cronRunsRunId: null })}
           >
             {t("cron.linkedRun.showAll")}
           </button>
@@ -231,7 +233,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             aria-label={t("cron.runs.searchRuns")}
             placeholder={t("cron.runs.searchPlaceholder")}
             onInput={(e) =>
-              void props.onRunsFiltersChange({
+              props.onRunsFiltersChange({
                 cronRunsQuery: e.currentTarget.value,
               })
             }
@@ -248,10 +250,10 @@ export function RunsSection(props: CronRunsSectionProps) {
           selected={props.runsStatuses}
           onToggle={(value, checked) => {
             const next = toggleSelection(props.runsStatuses, value, checked);
-            void props.onRunsFiltersChange({ cronRunsStatuses: next });
+            props.onRunsFiltersChange({ cronRunsStatuses: next });
           }}
           onClear={() => {
-            void props.onRunsFiltersChange({ cronRunsStatuses: [] });
+            props.onRunsFiltersChange({ cronRunsStatuses: [] });
           }}
         />
         <FilterDropdown
@@ -265,10 +267,10 @@ export function RunsSection(props: CronRunsSectionProps) {
           selected={props.runsDeliveryStatuses}
           onToggle={(value, checked) => {
             const next = toggleSelection(props.runsDeliveryStatuses, value, checked);
-            void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
+            props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
           }}
           onClear={() => {
-            void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
+            props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           }}
         />
         <div class="cron-filter-dropdown">
@@ -308,7 +310,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             ]}
             onSelect={(item) => {
               if (item.id === "asc" || item.id === "desc") {
-                void props.onRunsFiltersChange({ cronRunsSortDir: item.id });
+                props.onRunsFiltersChange({ cronRunsSortDir: item.id });
               }
             }}
           />
@@ -353,6 +355,7 @@ export function RunsSection(props: CronRunsSectionProps) {
                 entry={entry()}
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
+                onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
                 onViewRunTranscript={(targetEntry, trigger) =>
                   props.onViewRunTranscript?.(targetEntry, trigger)
                 }
@@ -400,6 +403,9 @@ function Run(props: {
   formatTimestamp: ReturnType<typeof createMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
+  onRunMount?: (
+    ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
+  ) => (() => void) | undefined;
 }) {
   const status = () =>
     runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
@@ -410,9 +416,9 @@ function Run(props: {
     );
   const usageSummary = createMemo(() => {
     const usage = props.entry.usage;
-    return usage && typeof usage.total_tokens === "number"
+    return usage?.total_tokens !== undefined
       ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
-      : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
+      : usage?.input_tokens !== undefined && usage.output_tokens !== undefined
         ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
         : null;
   });
@@ -431,10 +437,20 @@ function Run(props: {
       usageSummary(),
     ].filter(Boolean),
   );
-  const highlighted = () =>
-    Boolean(props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry));
+  const highlighted = createMemo(() =>
+    props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, props.entry)
+      ? props.highlightedRunId
+      : null,
+  );
+  let row!: HTMLDivElement;
+  onSettled(() => props.onRunMount?.(row, () => props.entry));
   return (
-    <div class={["cron-run-entry", { "cron-run-entry--highlighted": highlighted() }]}>
+    <div
+      ref={(element) => {
+        row = element;
+      }}
+      class={["cron-run-entry", { "cron-run-entry--highlighted": Boolean(highlighted()) }]}
+    >
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">
@@ -445,18 +461,18 @@ function Run(props: {
         </div>
         <div class="cron-run-entry__meta">
           <div>{props.formatTimestamp(props.entry.ts)}</div>
-          {typeof props.entry.runAtMs === "number" ? (
+          {props.entry.runAtMs !== undefined ? (
             <div class="muted">
               {t("cron.runEntry.runAt")} {props.formatTimestamp(props.entry.runAtMs)}
             </div>
           ) : undefined}
           <div class="muted">
-            {typeof props.entry.durationMs === "number" && Number.isFinite(props.entry.durationMs)
+            {props.entry.durationMs !== undefined
               ? (formatDurationCompact(props.entry.durationMs) ??
                 formatDurationHuman(props.entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
-          {typeof props.entry.nextRunAtMs === "number" ? (
+          {props.entry.nextRunAtMs !== undefined ? (
             <div class="muted">{formatRunNextLabel(props.entry.nextRunAtMs)}</div>
           ) : undefined}
           {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (

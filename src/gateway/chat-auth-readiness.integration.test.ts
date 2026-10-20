@@ -19,7 +19,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionModelSelectionInternal as applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
@@ -51,30 +51,24 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       { ...entry, sessionId: "other-session" },
     );
     const request = makeRequestMock({
-      "chat.metadata": async () => ({ commands: [] }),
+      "chat.metadata": { commands: [] },
       "models.list": async (params: unknown) => {
-        const selected = (
-          await loadGatewaySessionEntryReadOnlyAsync(
-            (params as { sessionKey: string }).sessionKey,
-            { agentId: "main" },
-          )
-        ).entry;
+        const { entry: selected } = await loadGatewaySessionEntryReadOnlyAsync(
+          (params as { sessionKey: string }).sessionKey,
+          { agentId: "main" },
+        );
         const available = selected?.authProfileOverride === "anthropic:restored";
         return {
-          commands: [],
           models: [
             { ...model, available, ...(available ? {} : { unavailableReason: "missing-auth" }) },
           ],
         };
       },
-      "sessions.list": async () => ({ sessions: [], defaults: {}, count: 0, path: "", ts: 0 }),
+      "sessions.list": { sessions: [], defaults: {}, count: 0, path: "", ts: 0 },
     });
     const client = createTestGatewayClient(request);
-    const retained = makeChatHost({
-      sessionKey,
-      chatMessage: "Keep this draft",
-      client,
-    }) as ChatPageHost;
+    const draft = "Keep this draft";
+    const retained = makeChatHost({ sessionKey, chatMessage: draft, client }) as ChatPageHost;
     const sibling = makeChatHost({ sessionKey: otherKey, client }) as ChatPageHost;
     const shell = new ShellGatewayOwner({
       context: {
@@ -90,7 +84,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       observeDeletedSessions() {},
       recoverDeletedActiveSession() {},
       selectChatSession() {},
-      requestUpdate() {},
+      invalidate() {},
     });
     await refreshChatMetadata(retained);
     await refreshChatMetadata(sibling);
@@ -101,7 +95,6 @@ it("refreshes a retained pane from a persisted profile-only selection through th
     const publishLifecycle = createLifecycleEventBroadcastHandler({
       getSessionRowProjection: () => rowProjection,
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-      chatAbortControllers: new Map(),
       broadcastToConnIds: (event, payload) => {
         shell.handleGatewayEvent({ type: "event", event, payload });
         handlePageGatewayEvent(retained, { type: "event", event, payload });
@@ -140,7 +133,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
       expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
-      expect(retained.chatMessage).toBe("Keep this draft");
+      expect(retained.chatMessage).toBe(draft);
       expect(retained.chatMessages).toBe(transcript);
     } finally {
       unsubscribe();

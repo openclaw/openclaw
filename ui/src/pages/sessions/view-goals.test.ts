@@ -14,7 +14,7 @@ describe("session goals", () => {
   it.each([
     { status: "active" as const, label: "Pursuing goal", kind: "ok" },
     { status: "paused" as const, label: "Goal paused", kind: "warn" },
-  ])("renders $status session goals in the status cell", async ({ status, label, kind }) => {
+  ])("renders $status session goals in expanded details", async ({ status, label, kind }) => {
     const container = document.createElement("div");
     const initial = {
       ...buildProps(
@@ -39,11 +39,12 @@ describe("session goals", () => {
         }),
       ),
       searchQuery: "web goal",
+      expandedSessionKey: "agent:main:goal",
     };
     renderSessionsView(initial, container);
     await Promise.resolve();
 
-    const statuses = container.querySelectorAll(".session-status-stack .settings-status");
+    const statuses = container.querySelectorAll(".session-details-panel__badges .settings-status");
     const goal = statuses[1];
     expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${label} (12k/50k)`);
     expect(goal?.classList.contains(`settings-status--${kind}`)).toBe(true);
@@ -55,7 +56,7 @@ describe("session goals", () => {
     );
     const tooltip = wrapper?.parentElement as (HTMLElement & { content: string }) | null;
     expect(tooltip?.content).toBe(`${label} (12k/50k): Ship the web goal indicator`);
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
 
     document.body.append(container);
     try {
@@ -71,7 +72,9 @@ describe("session goals", () => {
         },
         container,
       );
-      const updatedGoal = container.querySelectorAll(".session-status-stack .settings-status")[1];
+      const updatedGoal = container.querySelectorAll(
+        ".session-details-panel__badges .settings-status",
+      )[1];
       expect(updatedGoal?.closest('[tabindex="0"]')).toBe(wrapper);
       expect(document.activeElement).toBe(wrapper);
       expect(wrapper?.getAttribute("aria-label")).toBe(

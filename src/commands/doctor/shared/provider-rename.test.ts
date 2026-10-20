@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prepareOperatorModelPolicy } from "../../../agents/operator-model-policy.js";
+import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import {
@@ -29,6 +30,51 @@ function configFor(baseUrl: string): OpenClawConfig {
   return {
     models: { providers: { ollama: { baseUrl, api: "ollama", models: [model("qwen:cloud")] } } },
     agents: { defaults: { model: "ollama/qwen:cloud" } },
+  };
+}
+
+function migrate(config: OpenClawConfig) {
+  return applyProviderRenames(config, planProviderRenames(config, renames));
+}
+
+function expectStable(input: OpenClawConfig, before: OpenClawConfig, migrated: OpenClawConfig) {
+  expect(input).toEqual(before);
+  expect(migrate(migrated)).toEqual({ config: migrated, changes: [] });
+}
+
+function embeddingSearch(baseUrl: string) {
+  return { provider: "ollama" as const, model: "nomic-embed-text", remote: { baseUrl } };
+}
+
+function references(provider: string, pin = "") {
+  const ref = `${provider}/qwen:cloud${pin}`;
+  const scalarKeys = [
+    "model",
+    "primary",
+    "summaryModel",
+    "imageModel",
+    "utilityModel",
+    "voiceModel",
+    "imageGenerationModel",
+    "musicGenerationModel",
+    "pdfModel",
+    "videoGenerationModel",
+    "preferredModel",
+  ];
+  const arrayKeys = [
+    "fallback",
+    "fallbacks",
+    "allowedModels",
+    "modelFallbacks",
+    "imageModelFallbacks",
+  ];
+  return {
+    ...Object.fromEntries(scalarKeys.map((key) => [key, ref])),
+    ...Object.fromEntries(arrayKeys.map((key) => [key, [ref, "custom/keep"]])),
+    mediaModels: { image: `${provider}/image` },
+    modelByChannel: { telegram: `${provider}/channel` },
+    media: { provider, model: "vision" },
+    unrelated: "ollama/qwen:cloud",
   };
 }
 
@@ -71,10 +117,8 @@ describe("provider rename config migration", () => {
     ["   ", "ollama-cloud"],
   ])("respects the memory embedding endpoint %s", (baseUrl, provider) => {
     const config = configFor("https://ollama.com/v1");
-    config.memory = {
-      search: { provider: "ollama", model: "nomic-embed-text", remote: { baseUrl } },
-    };
-    const result = applyProviderRenames(config, planProviderRenames(config, renames));
+    config.memory = { search: embeddingSearch(baseUrl) };
+    const result = migrate(config);
     expect(result.config.memory?.search).toEqual({
       provider,
       model: "nomic-embed-text",
@@ -89,49 +133,24 @@ describe("provider rename config migration", () => {
   });
 
   it.each([
-    {
-      defaultsBaseUrl: "https://ollama.com/v1",
-      search: { remote: { baseUrl: "http://127.0.0.1:11434" } },
-      expected: "ollama",
-    },
-    {
-      defaultsBaseUrl: "http://127.0.0.1:11434",
-      search: { provider: "ollama", model: "nomic-embed-text" },
-      expected: "ollama",
-    },
-    {
-      defaultsBaseUrl: "http://127.0.0.1:11434",
-      search: { remote: { baseUrl: "https://ollama.com/v1" } },
-      expected: "ollama-cloud",
-    },
-    {
-      defaultsBaseUrl: "https://ollama.com/v1",
-      search: { model: "nomic-embed-text" },
-      expected: "ollama-cloud",
-    },
-  ])(
-    "preserves the effective per-agent embedding route: %j",
-    ({ defaultsBaseUrl, search, expected }) => {
+    ["https://ollama.com/v1", { remote: { baseUrl: "http://127.0.0.1:11434" } }, "ollama"],
+    ["http://127.0.0.1:11434", { provider: "ollama", model: "nomic-embed-text" }, "ollama"],
+    ["http://127.0.0.1:11434", { remote: { baseUrl: "https://ollama.com/v1" } }, "ollama-cloud"],
+    ["https://ollama.com/v1", { model: "nomic-embed-text" }, "ollama-cloud"],
+  ] as const)(
+    "preserves the effective per-agent embedding route: %s %j",
+    (defaultsBaseUrl, search, expected) => {
       const config = configFor("https://ollama.com/v1");
-      config.memory = {
-        search: {
-          provider: "ollama",
-          model: "nomic-embed-text",
-          remote: { baseUrl: defaultsBaseUrl },
-        },
-      };
+      config.memory = { search: embeddingSearch(defaultsBaseUrl) };
       config.agents!.entries = { work: { memory: { search } } };
       const before = structuredClone(config);
-      const result = applyProviderRenames(config, planProviderRenames(config, renames));
+      const result = migrate(config);
       const migrated = result.config.agents?.entries?.work?.memory?.search;
       expect(migrated?.provider ?? result.config.memory?.search?.provider).toBe(expected);
       expect(migrated?.model ?? result.config.memory?.search?.model).toBe("nomic-embed-text");
       expect(migrated?.remote).toEqual(before.agents?.entries?.work?.memory?.search?.remote);
       expect(result.config.agents?.defaults?.model).toBe("ollama-cloud/qwen:cloud");
-      expect(config).toEqual(before);
-      expect(
-        applyProviderRenames(result.config, planProviderRenames(result.config, renames)),
-      ).toEqual({ config: result.config, changes: [] });
+      expectStable(config, before, result.config);
     },
   );
 
@@ -156,7 +175,7 @@ describe("provider rename config migration", () => {
       order: { ollama: ["ollama:default"] },
     };
     const before = structuredClone(config);
-    const result = applyProviderRenames(config, planProviderRenames(config, renames));
+    const result = migrate(config);
     expect(result.config.models?.providers?.["ollama-cloud"]).toEqual({
       baseUrl: "https://ollama.com",
       api: "ollama",
@@ -166,80 +185,35 @@ describe("provider rename config migration", () => {
     });
     expect(result.config.models?.providers?.ollama).toBeUndefined();
     expect(result.config.auth).toEqual(before.auth);
-    expect(config).toEqual(before);
-    expect(
-      applyProviderRenames(result.config, planProviderRenames(result.config, renames)),
-    ).toEqual({
-      config: result.config,
-      changes: [],
-    });
+    expectStable(config, before, result.config);
   });
 
   it("rewrites every reference location, drops profile pins once, and preserves policy denials", () => {
     const config = configFor("https://ollama.com");
-    const scalarKeys = [
-      "model",
-      "primary",
-      "summaryModel",
-      "imageModel",
-      "utilityModel",
-      "voiceModel",
-      "imageGenerationModel",
-      "musicGenerationModel",
-      "pdfModel",
-      "videoGenerationModel",
-      "preferredModel",
-    ];
-    const arrayKeys = [
-      "fallback",
-      "fallbacks",
-      "allowedModels",
-      "modelFallbacks",
-      "imageModelFallbacks",
-    ];
-    const fixture = {
-      ...Object.fromEntries(scalarKeys.map((key) => [key, "ollama/qwen:cloud@ollama:default"])),
-      ...Object.fromEntries(
-        arrayKeys.map((key) => [key, ["ollama/qwen:cloud@ollama:default", "custom/keep"]]),
-      ),
-      models: {
-        "ollama/qwen:cloud": { alias: "old" },
-        "ollama-cloud/qwen:cloud": { alias: "canonical" },
-      },
-      mediaModels: { image: "ollama/image" },
-      modelByChannel: { telegram: "ollama/channel" },
-      media: { provider: "ollama", model: "vision" },
-      unrelated: "ollama/qwen:cloud",
-    };
-    Object.assign(config, { fixture });
-    config.agents!.entries = { work: { model: "ollama/work@ollama:work" } };
-    config.gateway = {
-      roles: {
-        default: "restricted",
-        definitions: {
-          restricted: {
-            agents: "*",
-            scopes: ["operator.write"],
-            sessions: { others: "none" },
-            modelPolicy: { allow: ["ollama/*"], deny: ["ollama/blocked", "ollama/private*"] },
-          },
+    Object.assign(config, {
+      fixture: {
+        ...references("ollama", "@ollama:default"),
+        models: {
+          "ollama/qwen:cloud": { alias: "old" },
+          "ollama-cloud/qwen:cloud": { alias: "canonical" },
         },
       },
+    });
+    config.agents!.entries = { work: { model: "ollama/model@20261001@q4_k_m@ollama:work" } };
+    const role: GatewayOperatorRoleDefinition = {
+      agents: "*",
+      scopes: ["operator.write"],
+      sessions: { others: "none" },
+      modelPolicy: { allow: ["ollama/*"], deny: ["ollama/blocked", "ollama/private*"] },
     };
+    config.gateway = { roles: { definitions: { restricted: role } } };
     const result = applyProviderRenames(config, renames);
     expect(result.config).toMatchObject({
       fixture: {
-        ...Object.fromEntries(scalarKeys.map((key) => [key, "ollama-cloud/qwen:cloud"])),
-        ...Object.fromEntries(
-          arrayKeys.map((key) => [key, ["ollama-cloud/qwen:cloud", "custom/keep"]]),
-        ),
+        ...references("ollama-cloud"),
         models: { "ollama-cloud/qwen:cloud": { alias: "canonical" } },
-        mediaModels: { image: "ollama-cloud/image" },
-        modelByChannel: { telegram: "ollama-cloud/channel" },
-        media: { provider: "ollama-cloud", model: "vision" },
-        unrelated: "ollama/qwen:cloud",
       },
-      agents: { entries: { work: { model: "ollama-cloud/work" } } },
+      agents: { entries: { work: { model: "ollama-cloud/model@20261001@q4_k_m" } } },
     });
     expect(result.changes.filter((change) => /re-pin/i.test(change))).toHaveLength(1);
     const policy = prepareOperatorModelPolicy({
@@ -252,9 +226,6 @@ describe("provider rename config migration", () => {
     }
     expect(policy?.allows({ provider: "ollama-cloud", model: "allowed" })).toBe(true);
     expect(policy?.allows({ provider: "custom", model: "allowed" })).toBe(false);
-    expect(rewriteProviderModelRef("ollama/model@20261001@q4_k_m@ollama:default", renames)).toBe(
-      "ollama-cloud/model@20261001@q4_k_m",
-    );
     for (const ref of [
       "ollamax/model",
       "custom/model:cloud",

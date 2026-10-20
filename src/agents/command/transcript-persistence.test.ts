@@ -10,9 +10,14 @@ import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-coordination-fallback-");
 
-it.each(["CLI", "ACP"] as const)(
-  "keeps the %s coordination fallback hidden after runtime persistence is unavailable",
-  async (runtime) => {
+it.each([
+  { runtime: "CLI", sourceTool: "sessions_send" },
+  { runtime: "ACP", sourceTool: "sessions_send" },
+  { runtime: "CLI", sourceTool: "subagent_settle", privateCompletion: true as const },
+  { runtime: "ACP", sourceTool: "subagent_settle", privateCompletion: true as const },
+])(
+  "keeps the $runtime $sourceTool fallback hidden after runtime persistence is unavailable",
+  async ({ runtime, sourceTool, privateCompletion }) => {
     const cwd = sessionDirs.make();
     const target = {
       agentId: "main",
@@ -25,9 +30,10 @@ it.each(["CLI", "ACP"] as const)(
     const common = {
       ...target,
       body: "Review the worker result",
+      privateCompletion,
       inputProvenance: {
         kind: "inter_session" as const,
-        sourceTool: "sessions_send",
+        sourceTool,
         sourceRole: "subagent" as const,
       },
       sessionEntry,
@@ -59,6 +65,54 @@ it.each(["CLI", "ACP"] as const)(
     expect(messages.every((message) => Reflect.get(message, "display") === false)).toBe(true);
   },
 );
+
+it("persists the terminal CLI turn usage while keeping last-call context", async () => {
+  const cwd = sessionDirs.make();
+  const target = {
+    agentId: "main",
+    sessionId: "cli-turn-usage",
+    sessionKey: "agent:main:cli-turn-usage",
+    storePath: path.join(cwd, "openclaw-agent.sqlite"),
+  };
+  const sessionEntry = { sessionId: target.sessionId, updatedAt: Date.now() };
+  await upsertSessionEntryCore(target, sessionEntry);
+  const lastCallUsage = { input: 2, output: 1, cacheRead: 27_376, total: 27_379 };
+
+  await persistCliTurnTranscript({
+    ...target,
+    body: "run tools",
+    sessionEntry,
+    sessionStore: { [target.sessionKey]: sessionEntry },
+    sessionAgentId: "main",
+    sessionCwd: cwd,
+    config: {},
+    result: {
+      payloads: [{ text: "turn reply" }],
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: target.sessionId,
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          usage: lastCallUsage,
+          lastCallUsage,
+          diagnosticUsage: { input: 6, output: 77, cacheRead: 54_631, total: 54_714 },
+        },
+      },
+    },
+  });
+
+  expect(SessionManager.open(target).buildSessionContext().messages.at(-1)).toMatchObject({
+    role: "assistant",
+    usage: {
+      input: 6,
+      output: 77,
+      cacheRead: 54_631,
+      totalTokens: 54_714,
+      contextUsage: { state: "available", promptTokens: 27_378, totalTokens: 27_379 },
+    },
+  });
+});
 
 it.each(["CLI", "ACP"] as const)(
   "recovers the complete %s answer for its run after a later turn",

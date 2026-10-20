@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawNativeState
 import OpenClawProtocol
 import OSLog
 import Synchronization
@@ -48,6 +49,7 @@ public actor GatewayChannelActor {
     private nonisolated let socketAdmission = Mutex(true)
     private var lastSeq: Int?
     private var liveTextProjection = GatewayLiveTextProjection()
+    private var presenceProjection = GatewayPresenceProjection()
     private var lastTick: Date?
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
@@ -190,6 +192,7 @@ public actor GatewayChannelActor {
         self.shouldReconnect = false
         self.connected = false
         self.liveTextProjection.reset()
+        self.presenceProjection.reset()
         self.acceptedHTTPBearer = nil
         self.connectAttemptTask?.cancel()
         self.connectAttemptTask = nil
@@ -479,6 +482,7 @@ public actor GatewayChannelActor {
         self.connectFailureBackoff.reset()
         self.lastSeq = nil
         self.liveTextProjection.reset()
+        self.presenceProjection.reset()
         self.listen(connectionGeneration: connectionGeneration)
         self.startTickWatchdog(connectionGeneration: connectionGeneration)
         self.startKeepalive(connectionGeneration: connectionGeneration)
@@ -565,7 +569,8 @@ public actor GatewayChannelActor {
             "minProtocol": ProtoAnyCodable(protocols.lowerBound),
             "maxProtocol": ProtoAnyCodable(protocols.upperBound),
             "client": ProtoAnyCodable(client),
-            "caps": ProtoAnyCodable(options.caps),
+            // The channel reconstructs rosters before delivery to macOS/iOS subscribers.
+            "caps": ProtoAnyCodable(options.caps + (role == "operator" ? ["presence-deltas", "health-summary"] : [])),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
             "role": ProtoAnyCodable(role),
@@ -650,7 +655,8 @@ public actor GatewayChannelActor {
                     deviceId: identity.deviceId,
                     role: role,
                     gatewayID: options.deviceAuthGatewayID,
-                    profile: options.deviceIdentityProfile)
+                    profile: options.deviceIdentityProfile,
+                    observedToken: selectedAuth.authDeviceToken)
             }
             throw error
         }
@@ -753,7 +759,7 @@ extension GatewayChannelActor {
         } else {
             .none
         }
-        return SelectedConnectAuth(
+        var selected = SelectedConnectAuth(
             authToken: authToken,
             authBootstrapToken: authBootstrapToken,
             authDeviceToken: authDeviceToken,
@@ -763,6 +769,14 @@ extension GatewayChannelActor {
             storedScopes: storedEntry?.scopes,
             authSource: authSource,
             suppressedDeviceTokenRetry: suppressedDeviceTokenRetry)
+        if explicitBootstrapToken != nil, let deviceId {
+            selected.observedTokens = DeviceAuthStore.observeTokens(
+                deviceId: deviceId,
+                gatewayID: options.deviceAuthGatewayID)
+        } else if let storedToken {
+            selected.observedTokens[options.role] = storedToken
+        }
+        return selected
     }
 
     nonisolated static func requestedScopesExceedStoredToken(
@@ -867,28 +881,27 @@ extension GatewayChannelActor {
     private func persistIssuedDeviceToken(
         authSource: GatewayAuthSource,
         deviceId: String,
-        role: String,
-        token: String,
-        scopes: [String],
+        issuance: (role: String, token: String, scopes: [String]),
         deviceAuthGatewayID: String?,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile) -> Bool
+        expectedToken: String?) -> Bool
     {
         let persistedScopes: [String]
         if authSource == .bootstrapToken {
             guard self.shouldPersistBootstrapHandoffTokens(),
-                  let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes)
+                  let filteredScopes = self.filteredBootstrapHandoffScopes(role: issuance.role, scopes: issuance.scopes)
             else { return false }
             persistedScopes = filteredScopes
         } else {
-            persistedScopes = scopes
+            persistedScopes = issuance.scopes
         }
         return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
-            role: role,
-            token: token,
+            role: issuance.role,
+            token: issuance.token,
             scopes: persistedScopes,
             gatewayID: deviceAuthGatewayID,
-            profile: deviceIdentityProfile).persisted
+            expectedToken: expectedToken,
+            onlyIfUnchanged: true).persisted
     }
 
     private func handleConnectResponse(
@@ -901,7 +914,6 @@ extension GatewayChannelActor {
     {
         let role = options.role
         let deviceAuthGatewayID = options.deviceAuthGatewayID
-        let deviceIdentityProfile = options.deviceIdentityProfile
         if res.ok == false {
             let details = gatewayErrorDetails(res.error)
             throw GatewayConnectAuthError(
@@ -945,11 +957,9 @@ extension GatewayChannelActor {
             if let identity, options.allowsDeviceAuthPersistence, self.persistIssuedDeviceToken(
                 authSource: self.lastAuthSource,
                 deviceId: identity.deviceId,
-                role: authRole,
-                token: deviceToken,
-                scopes: scopes,
+                issuance: (role: authRole, token: deviceToken, scopes: scopes),
                 deviceAuthGatewayID: deviceAuthGatewayID,
-                deviceIdentityProfile: deviceIdentityProfile)
+                expectedToken: selectedAuth.observedTokens[authRole])
             {
                 persistedRoles.insert(authRole)
             }
@@ -968,11 +978,9 @@ extension GatewayChannelActor {
                    self.persistIssuedDeviceToken(
                        authSource: .bootstrapToken,
                        deviceId: identity.deviceId,
-                       role: authRole,
-                       token: deviceToken,
-                       scopes: scopes,
+                       issuance: (role: authRole, token: deviceToken, scopes: scopes),
                        deviceAuthGatewayID: deviceAuthGatewayID,
-                       deviceIdentityProfile: deviceIdentityProfile)
+                       expectedToken: selectedAuth.observedTokens[authRole])
                 {
                     persistedRoles.insert(authRole)
                 }
@@ -1061,6 +1069,7 @@ extension GatewayChannelActor {
         self.disconnectedConnectionGeneration = connectionGeneration
         self.connected = false
         self.liveTextProjection.reset()
+        self.presenceProjection.reset()
         self.acceptedHTTPBearer = nil
         let disconnectedTask = self.task
         self.task = nil
@@ -1129,8 +1138,10 @@ extension GatewayChannelActor {
                 self.lastSeq = seq
             }
             if evt.event == "tick" { self.lastTick = Date() }
-            guard let projected = self.liveTextProjection.project(evt) else {
-                let error = Self.failure(8, "gateway live text baseline missing")
+            guard let text = self.liveTextProjection.project(evt),
+                  let projected = self.presenceProjection.project(text)
+            else {
+                let error = Self.failure(8, "gateway event baseline missing")
                 await self.transitionToDisconnected(
                     reason: error.localizedDescription,
                     error: error,
@@ -1160,7 +1171,7 @@ extension GatewayChannelActor {
                     guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
                     if case let .event(evt) = frame, evt.event == "connect.challenge" {
                         guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
+                              let challenge = GatewayConnectChallenge(payload: payload)
                         else {
                             throw ConnectChallengeError.invalid
                         }
@@ -1516,6 +1527,7 @@ extension GatewayChannelActor {
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
+            error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
@@ -1523,19 +1535,18 @@ extension GatewayChannelActor {
         {
             return error
         }
-        if let urlError = error as? URLError {
-            if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
-                return GatewayTLSValidationError(failure: failure, context: context)
-            }
-            let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
-            return NSError(
-                domain: URLError.errorDomain,
-                code: urlError.errorCode,
-                userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
+        if error is URLError,
+           let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure()
+        {
+            return GatewayTLSValidationError(failure: failure, context: context)
         }
         let ns = error as NSError
-        let desc = ns.localizedDescription.isEmpty ? "unknown" : ns.localizedDescription
-        return NSError(domain: ns.domain, code: ns.code, userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
+        let fallback = error is URLError ? "cancelled" : "unknown"
+        let desc = ns.localizedDescription.isEmpty ? fallback : ns.localizedDescription
+        var userInfo = ns.userInfo
+        // Keep the producer's causal chain and metadata; only presentation gains context.
+        userInfo[NSLocalizedDescriptionKey] = "\(context): \(desc)"
+        return NSError(domain: ns.domain, code: ns.code, userInfo: userInfo)
     }
 
     private func encodeRequest(

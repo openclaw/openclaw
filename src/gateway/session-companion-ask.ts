@@ -11,7 +11,6 @@ import { buildBtwCliPrompt } from "../agents/btw-prompts.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
-import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -27,6 +26,9 @@ import { SessionCompanionAskError } from "./session-companion-errors.js";
 import {
   buildSessionCompanionSystemPrompt,
   resolveSessionCompanionModel,
+  resolveSessionCompanionRoute,
+  type SessionCompanionAskSelection,
+  type SessionCompanionRunControls,
   resolveSessionCompanionCliRuntime,
   assertSessionCompanionImageInput,
   SESSION_COMPANION_TOOLS,
@@ -59,6 +61,7 @@ type SessionCompanionRunParams = {
   cfg: OpenClawConfig;
   agentId: string;
   modelRef: string;
+  controls?: SessionCompanionRunControls;
   sessionKey: string;
   workspaceDir: string;
   systemPrompt: string;
@@ -78,10 +81,7 @@ export type SessionCompanionAskDeps = {
       agentId?: string,
     ) => Promise<SessionObserverCompanionSnapshot>;
   };
-  resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
-  run?: (params: SessionCompanionRunParams) => Promise<string>;
-  now?: () => number;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
@@ -126,12 +126,7 @@ function toRunnerHistoryMessage(
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   params.assertSourceCurrent?.();
   params.assertInputCurrent?.();
-  const selectedModel = resolveSessionCompanionModel({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelRef: params.modelRef,
-    operatorAuthority: params.operatorAuthority,
-  });
+  const selectedModel = resolveSessionCompanionModel(params);
   const current = params.messages.at(-1);
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");
@@ -219,6 +214,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
           executionMode: "side-question",
           provider: cliRuntime,
           model: selectedModel.modelId,
+          ...(params.controls?.thinkLevel ? { thinkLevel: params.controls.thinkLevel } : {}),
           requesterModel: { provider: selectedModel.provider, model: selectedModel.modelId },
           disableTools: true,
           timeoutMs: ASK_TIMEOUT_MS,
@@ -231,7 +227,11 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
         params.assertSourceCurrent?.();
         answer = (await executePreparedCliRun(prepared)).text;
       } finally {
-        await prepared?.preparedBackend.cleanup?.();
+        try {
+          await prepared?.preparedBackend.cleanup?.();
+        } catch (error) {
+          companionLog.warn("Side chat backend cleanup failed", { error });
+        }
       }
       modelExecution?.assertCurrent();
       return answer;
@@ -289,6 +289,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       assertModelInput: params.images?.length ? assertSessionCompanionImageInput : undefined,
       provider: selectedModel.runtimeProvider ?? selectedModel.provider,
       model: selectedModel.modelId,
+      ...params.controls,
       modelFallbacksOverride: [],
       requestedRouteResolution: "resolved",
       agentHarnessRuntimeOverride: "openclaw",
@@ -324,7 +325,10 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       await removeInternalSessionEffectsSession(
         target,
         executionStarted ? undefined : expectedSeedOwner,
-      );
+      ).catch((error: unknown) => {
+        // Cleanup must not replace a completed answer or replay it through fallback.
+        companionLog.warn("Side chat internal session cleanup failed", { error });
+      });
     } finally {
       modelExecution?.release();
     }
@@ -332,9 +336,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
 }
 
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
-  const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
-  const run = params.run ?? defaultRun;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
@@ -399,6 +401,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     question: string;
     selectionContext?: string;
     attachments?: ChatAttachment[];
+    selection?: SessionCompanionAskSelection;
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
@@ -518,8 +521,8 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
       const cfg = params.getConfig();
-      const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
-      if (!utilityModelRef) {
+      const { modelRef, fallbacks } = resolveSessionCompanionRoute(cfg, agentId, request.selection);
+      if (!modelRef) {
         throw new SessionCompanionAskError(
           "utility-model-unavailable",
           "No utility model is configured for this session.",
@@ -560,10 +563,11 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           "The selected session changed before Side chat could answer.",
         );
       }
-      const rawAnswer = await run({
+      const runParams: SessionCompanionRunParams = {
         cfg,
         agentId,
-        modelRef: utilityModelRef,
+        modelRef,
+        ...(request.selection?.controls ? { controls: request.selection.controls } : {}),
         sessionKey,
         workspaceDir,
         systemPrompt: buildSessionCompanionSystemPrompt(sessionKey),
@@ -573,7 +577,59 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         assertSourceCurrent,
         ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
-      });
+      };
+      let rawAnswer: string;
+      if (fallbacks.length) {
+        // The fallback owner filters the whole chain before choosing a permitted route.
+        const selection = resolveSessionCompanionModel({
+          ...runParams,
+          operatorAuthority: undefined,
+        });
+        const [{ runWithModelFallback }, { resolveModelCandidateChain }] = await Promise.all([
+          import("../agents/model-fallback-runner.js"),
+          import("../agents/model-fallback-candidates.js"),
+        ]);
+        const candidateParams = {
+          cfg,
+          agentId,
+          provider: selection.provider,
+          model: selection.modelId,
+          requestedRouteResolution: "resolved" as const,
+          fallbacksOverride: fallbacks,
+        };
+        const modelPolicy = request.operatorAuthority?.modelPolicy;
+        if (modelPolicy && !resolveModelCandidateChain(candidateParams).some(modelPolicy.allows)) {
+          // Preserve Side chat's permitted-model recovery when the entire utility chain is denied.
+          rawAnswer = await defaultRun(runParams);
+        } else {
+          const result = await runWithModelFallback({
+            ...candidateParams,
+            abortSignal: controller.signal,
+            operatorAuthority: request.operatorAuthority,
+            skipAuthProfileRuntime: true,
+            resolveAgentHarnessRuntimeOverride: () => "openclaw",
+            run: (provider, model, options) => {
+              controller.signal.throwIfAborted();
+              assertSourceCurrent?.();
+              request.assertInputCurrent?.();
+              return defaultRun({
+                ...runParams,
+                modelRef:
+                  options?.modelRoutingProvenance.stage === "fallback"
+                    ? `${provider}/${model}${
+                        provider === selection.provider && selection.profileId
+                          ? `@${selection.profileId}`
+                          : ""
+                      }`
+                    : modelRef,
+              });
+            },
+          });
+          rawAnswer = result.result;
+        }
+      } else {
+        rawAnswer = await defaultRun(runParams);
+      }
       const replySessionId = await currentSessionId(sessionKey, agentId);
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");
