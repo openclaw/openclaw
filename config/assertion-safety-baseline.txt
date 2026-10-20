@@ -28,7 +28,7 @@ extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
 extensions/beam/src/mirror.ts	1
 extensions/browser/src/browser-node-fallback.ts	1
-extensions/browser/src/browser-node-proxy.ts	2
+extensions/browser/src/browser-node-proxy.ts	1
 extensions/browser/src/browser-proxy-upload.ts	1
 extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	1
@@ -89,7 +89,7 @@ extensions/clickclack/src/channel.ts	3
 extensions/clickclack/src/discussions/service-open.ts	1
 extensions/clickclack/src/discussions/service.ts	1
 extensions/clickclack/src/doctor-contract.ts	2
-extensions/clickclack/src/gateway.ts	2
+extensions/clickclack/src/gateway.ts	1
 extensions/clickclack/src/http-client.ts	1
 extensions/clickclack/src/inbound.ts	4
 extensions/clickclack/src/outbound.ts	1
@@ -221,7 +221,6 @@ extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
 extensions/discord/src/markdown.ts	1
 extensions/discord/src/monitor/agent-components.plugin-interactive.ts	1
-extensions/discord/src/monitor/channel-access.ts	1
 extensions/discord/src/monitor/exec-approvals.ts	1
 extensions/discord/src/monitor/gateway-metadata.ts	6
 extensions/discord/src/monitor/gateway-plugin.ts	2
@@ -847,7 +846,6 @@ extensions/voice-call/index.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
-extensions/voice-call/src/response-generator.ts	2
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/webhook.ts	5
 extensions/voyage/embedding-batch.ts	1

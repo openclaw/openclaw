@@ -38,17 +38,6 @@ function array(value: unknown, min: number, max: number, field: string): unknown
 function unique(values: unknown[], field: string) {
   check(new Set(values).size === values.length, field);
 }
-function assertSageProbabilities(
-  value: unknown,
-  expected: readonly (string | number)[],
-  key: "option" | "level",
-): void {
-  array(value, expected.length, expected.length, `${key} probabilities`).forEach((entry, i) => {
-    const estimate = object(entry, `${key} probability`);
-    check(estimate[key] === expected[i], `${key} correlation`);
-    number(estimate.probability, 0, 1, `${key} probability`);
-  });
-}
 // Native optional fields accept null and preserve empty strings and whitespace.
 function assertSageNullableString(value: unknown, field: string) {
   check(value == null || readStringValue(value) !== undefined, field);
@@ -154,14 +143,34 @@ export function parseSageResponse(value: unknown, q: SageQuestion, c: SageConten
       } else if (r.probability !== null) {
         number(r.probability, 0, 1, "chosen probability");
       }
-      assertSageProbabilities(r.probabilities, options, "option");
+      const probabilities = array(
+        r.probabilities,
+        options.length,
+        options.length,
+        "option probabilities",
+      );
+      probabilities.forEach((p, i) => {
+        const o = object(p, "option probability");
+        check(o.option === options[i], "option correlation");
+        number(o.probability, 0, 1, "option probability");
+      });
       break;
     }
     case "scale": {
       const levels = q.levels.map((level) => level.level);
       number(r.expectation, Math.min(...levels), Math.max(...levels), "expectation");
       number(r.confidence, -Infinity, Infinity, "confidence");
-      assertSageProbabilities(r.probabilities, levels, "level");
+      const probabilities = array(
+        r.probabilities,
+        levels.length,
+        levels.length,
+        "level probabilities",
+      );
+      probabilities.forEach((p, i) => {
+        const estimate = object(p, "level probability");
+        check(estimate.level === levels[i], "level correlation");
+        number(estimate.probability, 0, 1, "level probability");
+      });
       break;
     }
     case "sort": {
