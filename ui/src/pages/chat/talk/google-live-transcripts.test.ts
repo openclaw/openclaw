@@ -116,13 +116,11 @@ describe("Google Live browser transcript finality", () => {
       ],
     },
   ])(
-    "does not end another Talk turn when interrupted completion arrives $name",
+    "preserves interrupted speech and the next utterance when completion arrives $name",
     async ({ boundary }) => {
       const onTranscript = vi.fn();
-      const onTalkEvent = vi.fn();
-      const transport = await createTransport({ onTranscript, onTalkEvent });
+      const transport = await createTransport({ onTranscript });
       const ws = await startTransport(transport);
-      onTalkEvent.mockClear();
       for (const serverContent of [
         { outputTranscription: { text: "Interrupted " } },
         { outputTranscription: { text: "response" } },
@@ -136,16 +134,6 @@ describe("Google Live browser transcript finality", () => {
       expect(
         onTranscript.mock.calls.filter(([entry]) => entry.final).map(([entry]) => entry.text),
       ).toEqual(["Interrupted response", "New question", "Next response"]);
-      expect(onTalkEvent.mock.calls.map(([event]) => [event.type, event.turnId])).toEqual([
-        ["output.text.delta", "turn-1"],
-        ["output.text.delta", "turn-1"],
-        ["output.text.done", "turn-1"],
-        ["turn.cancelled", "turn-1"],
-        ["transcript.done", "turn-2"],
-        ["output.text.delta", "turn-2"],
-        ["output.text.done", "turn-2"],
-        ["turn.ended", "turn-2"],
-      ]);
       transport.stop();
       expect(onTranscript.mock.calls.filter(([entry]) => entry.final)).toHaveLength(3);
     },

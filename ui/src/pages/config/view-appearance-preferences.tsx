@@ -86,7 +86,7 @@ export function LanguageSection(props: ConfigProps) {
       overridden={props.localeOverridden}
     />
   );
-  const provenance = createMemo(() => serverUiPrefProvenanceHint(props.localeProvenance));
+  const provenance = () => serverUiPrefProvenanceHint(props.localeProvenance);
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
       <SettingsSectionHeader title={t("quickSettings.language")} />
@@ -124,9 +124,8 @@ export function LanguageSection(props: ConfigProps) {
 function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "camera" }) {
   const state = createMemo(() => props.config[props.kind]);
   const title = createMemo(() => t(`chat.composer.${props.kind}Input`));
-  const onSelect = createMemo(() =>
-    props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect,
-  );
+  const onSelect = () =>
+    props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect;
   const selectedDeviceId = createMemo(() => state()?.selectedDeviceId.trim() ?? "");
   const selectOptions = createMemo(() => {
     const devices = state()?.devices ?? [];
@@ -224,13 +223,12 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
 export function ChatPreferencesSection(props: ConfigProps) {
   const followUpSelection = createMemo(() => props.chatFollowUpMode ?? "server");
   const serverQueueMode = createMemo(() => props.serverQueueMode ?? t("chat.followUpModeLoading"));
-  const followUpDescription = createMemo(() =>
+  const followUpDescription = () =>
     props.chatFollowUpMode
       ? t("chat.followUpModeOverriding", {
           mode: serverQueueMode(),
         })
-      : undefined,
-  );
+      : undefined;
   // The value binding rewrites the DOM whenever it reruns. Track only the stored
   // width so unrelated settings refreshes keep an uncommitted draft.
   const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
@@ -250,12 +248,8 @@ export function ChatPreferencesSection(props: ConfigProps) {
       overridden={props.chatSendShortcutOverridden}
     />
   );
-  const sendShortcutProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.chatSendShortcutProvenance),
-  );
-  const followUpProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance),
-  );
+  const sendShortcutProvenance = () => serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
+  const followUpProvenance = () => serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
   const catalogTargetDefaultDescription = (
     <SettingsDefaultDescription
       value={t("chat.catalogOpenTargetViewer")}

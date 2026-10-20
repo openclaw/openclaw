@@ -82,14 +82,14 @@ function EmptyState(props: { model: PortalsModel }) {
 function PortalPreview(props: { model: PortalsModel; portal: PortalSummary }) {
   const state = () => props.model.state();
   const portalUrl = () => props.portal.url ?? "";
-  const displayUrl = createMemo(() => {
+  const displayUrl = () => {
     if (!portalUrl()) {
       return "";
     }
     const value = new URL(portalUrl());
     value.search = "";
     return value.href;
-  });
+  };
   const frameKey = () => `${props.portal.id}\u0000${portalUrl()}`;
   const probeStatus = () =>
     state().portalProbeState?.key === frameKey() ? state().portalProbeState!.status : "probing";

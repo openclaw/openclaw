@@ -18,7 +18,7 @@ import {
   renderSettledPastedTextAttachment,
 } from "./chat-attachment-picker.test-support.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   createChatProps,
   createPasteEvent,

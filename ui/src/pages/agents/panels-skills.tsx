@@ -35,7 +35,7 @@ export function AgentSkills(
     Boolean(params.configForm) && !params.configLoading && !params.configSaving;
   const editable = () => params.canUpdateConfig && configReady();
   const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
-  const hasExplicitAllowlist = createMemo(() => Array.isArray(config().entry?.skills));
+  const hasExplicitAllowlist = () => Array.isArray(config().entry?.skills);
   const allowlist = createMemo(() => resolveAgentSkillsFilter(params.configForm, params.agentId));
   const allowSet = createMemo(() => new Set(allowlist() ?? []));
   const usingAllowlist = () => allowlist() !== undefined;

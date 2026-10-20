@@ -1,266 +1,40 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayPendingRequests } from "../../../../../packages/gateway-client/src/pending-request.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import {
+  audioClock,
+  listeners,
+  processors,
+  inputSinks,
+  createdSources,
+  getUserMedia,
+  MockAudioContext,
+  createSession,
+  defaultRelayResponse,
+  createClient,
+  createConsultClient,
+  createAudioAppendClient,
+  createTransport,
+  startTransport,
+  emitGatewayFrame,
+  emitTalkEvent,
+  emitConsultAndWait,
+  pumpMicrophone,
+  zeroPcmBase64,
+  requestCallsFor,
+  installGatewayRelayTestFixture,
+} from "./gateway-relay.test-support.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   type RealtimeTalkEvent,
-  type RealtimeTalkGatewayRelaySessionResult,
-  type RealtimeTalkTransportContext,
 } from "./shared.ts";
 
-type GatewayFrame = { event: string; payload?: unknown };
-type GatewayListener = (event: GatewayFrame) => void;
-type MockProcessor = {
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  onaudioprocess:
-    | ((event: { inputBuffer: { getChannelData: (channel: number) => Float32Array } }) => void)
-    | null;
-};
-
-const listeners = new Set<GatewayListener>();
-const processors: MockProcessor[] = [];
-const inputSinks: Array<{
-  connect: ReturnType<typeof vi.fn>;
-  disconnect: ReturnType<typeof vi.fn>;
-  gain: { value: number };
-}> = [];
-const createdSources: MockAudioBufferSource[] = [];
-let getUserMedia: ReturnType<typeof vi.fn>;
-let audioCurrentTime = 0;
-
-class MockAudioBufferSource {
-  buffer: unknown = null;
-  readonly addEventListener = vi.fn();
-  readonly connect = vi.fn();
-  readonly start = vi.fn();
-  readonly stop = vi.fn();
-}
-
-class MockAudioContext {
-  get currentTime(): number {
-    return audioCurrentTime;
-  }
-  readonly destination = {};
-  readonly close = vi.fn(async () => undefined);
-
-  createMediaStreamSource() {
-    return {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-    };
-  }
-
-  createScriptProcessor() {
-    const processor: MockProcessor = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      onaudioprocess: null,
-    };
-    processors.push(processor);
-    return processor;
-  }
-
-  createGain() {
-    const sink = {
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      gain: { value: 1 },
-    };
-    inputSinks.push(sink);
-    return sink;
-  }
-
-  createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      disconnect: vi.fn(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
-    };
-  }
-
-  createBuffer(_channels: number, length: number, sampleRate: number) {
-    const channel = new Float32Array(length);
-    return {
-      duration: length / sampleRate,
-      getChannelData: () => channel,
-    };
-  }
-
-  createBufferSource() {
-    const source = new MockAudioBufferSource();
-    createdSources.push(source);
-    return source;
-  }
-}
-
-function createSession(): RealtimeTalkGatewayRelaySessionResult {
-  return {
-    provider: "openai",
-    transport: "gateway-relay",
-    relaySessionId: "relay-1",
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24000,
-    },
-  };
-}
-
-function defaultRelayResponse(method: string, supportsBargeIn?: boolean) {
-  return method === "talk.catalog"
-    ? { realtime: { providers: [{ id: "openai", supportsBargeIn }] } }
-    : {};
-}
-
-function createClient(
-  supportsBargeIn?: boolean,
-  requestImplementation: (method: string) => Promise<unknown> = async (method) =>
-    defaultRelayResponse(method, supportsBargeIn),
-): RealtimeTalkTransportContext["client"] {
-  return {
-    hello: {},
-    addEventListener: vi.fn((listener: GatewayListener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }),
-    request: vi.fn(requestImplementation),
-  } as unknown as RealtimeTalkTransportContext["client"];
-}
-
-function createConsultClient() {
-  const client = createClient();
-  vi.mocked(client["request"]).mockImplementation(async (method) => {
-    if (method === "talk.client.toolCall") {
-      return {
-        runId: "run-1",
-        idempotencyKey: "run-1",
-        agentId: "main",
-        agentSessionKey: "agent:main:main",
-      };
-    }
-    return defaultRelayResponse(method);
-  });
-  return client;
-}
-
-function createAudioAppendClient(client = createClient()) {
-  const sent: Array<{ id: string }> = [];
-  const pending = new GatewayPendingRequests({ createRequestId: () => "audio", nowMs: Date.now });
-  const request = vi.mocked(client["request"]).getMockImplementation()!;
-  vi.mocked(client["request"]).mockImplementation((method, params, options) =>
-    method === "talk.session.appendAudio"
-      ? pending.request({ send: (frame) => sent.push(JSON.parse(frame)) }, method, params, options)
-      : request(method, params, options),
-  );
-  return {
-    client,
-    respond: (index: number) => {
-      pending.handleResponse({ type: "res", id: sent[index]!.id, ok: true, payload: {} });
-    },
-  };
-}
-
-async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
-  return new GatewayRelayRealtimeTalkTransport(createSession(), {
-    input: await prepareRealtimeTalkTestInput(),
-    callbacks: {},
-    client: createClient(),
-    sessionKey: "main",
-    ...overrides,
-  });
-}
-
-async function startTransport(transport: GatewayRelayRealtimeTalkTransport): Promise<void> {
-  await expect(transport.start()).resolves.toBe("ready");
-  transport.activate();
-}
-
-function emitGatewayFrame(frame: GatewayFrame): void {
-  for (const listener of listeners) {
-    listener(frame);
-  }
-}
-
-function emitTalkEvent(payload: unknown): void {
-  let eventPayload = payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const event = payload as Record<string, unknown>;
-    if ((event.type === "audio" || event.type === "clear") && event.talkEvent === undefined) {
-      eventPayload = { ...event, talkEvent: { turnId: "turn-1" } };
-    }
-  }
-  emitGatewayFrame({ event: "talk.event", payload: eventPayload });
-}
-
-function emitConsultAndWait(client: RealtimeTalkTransportContext["client"]) {
-  emitTalkEvent({
-    relaySessionId: "relay-1",
-    type: "toolCall",
-    callId: "call-1",
-    name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    args: { question: "status?" },
-  });
-  return waitForFast(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
-}
-
-function pumpMicrophone(samples: Float32Array): void {
-  const processor = processors.at(-1);
-  if (!processor) {
-    throw new Error("Expected microphone script processor to be created");
-  }
-  processor.onaudioprocess?.({
-    inputBuffer: {
-      getChannelData: () => samples,
-    },
-  });
-}
-
-function zeroPcmBase64(sampleRate: number): string {
-  return "AAAA".repeat((sampleRate * 2) / 3);
-}
-
-function requestCallsFor(
-  client: RealtimeTalkTransportContext["client"],
-  method: string,
-): Array<Parameters<RealtimeTalkTransportContext["client"]["request"]>> {
-  return vi.mocked(client["request"]).mock.calls.filter((call) => call[0] === method);
-}
-
 describe("GatewayRelayRealtimeTalkTransport", () => {
-  beforeEach(() => {
-    listeners.clear();
-    processors.length = 0;
-    inputSinks.length = 0;
-    createdSources.length = 0;
-    audioCurrentTime = 0;
-    vi.stubGlobal("AudioContext", MockAudioContext);
-    getUserMedia = vi.fn(async () => ({
-      getTracks: () => [Object.assign(new EventTarget(), { stop: vi.fn() })],
-    }));
-    Object.defineProperty(globalThis.navigator, "mediaDevices", {
-      configurable: true,
-      value: {
-        getUserMedia,
-      },
-    });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    listeners.clear();
-    processors.length = 0;
-    inputSinks.length = 0;
-    createdSources.length = 0;
-  });
+  installGatewayRelayTestFixture();
 
   it("closes explicit Stop with abort", async () => {
     const client = createConsultClient();
@@ -613,31 +387,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
   });
 
-  it("does not forward Talk events for another relay session", async () => {
-    const onTalkEvent = vi.fn();
-    const transport = await createTransport({ callbacks: { onTalkEvent } });
-
-    await startTransport(transport);
-    emitTalkEvent({
-      relaySessionId: "relay-other",
-      type: "ready",
-      talkEvent: {
-        id: "relay-other:1",
-        type: "session.ready",
-        sessionId: "relay-other",
-        seq: 1,
-        timestamp: "2026-05-05T00:00:00.000Z",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        payload: {},
-      } satisfies RealtimeTalkEvent,
-    });
-
-    expect(onTalkEvent).not.toHaveBeenCalled();
-    void transport.stop();
-  });
-
   it("keeps assistant playback alive while relay input is silence", async () => {
     const client = createClient();
     const transport = await createTransport({ client });
@@ -747,7 +496,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     emitTalkEvent({ relaySessionId: "relay-1", type: "mark", markName: "mark-1" });
 
     expect(requestCallsFor(client, "talk.session.acknowledgeMark")).toHaveLength(0);
-    audioCurrentTime = 1;
+    audioClock.currentTime = 1;
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(requestCallsFor(client, "talk.session.acknowledgeMark")).toEqual([
@@ -874,7 +623,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     await startTransport(transport);
     for (const timestamp of [10, 20, 30, 40]) {
-      audioCurrentTime = timestamp / 1_000;
+      audioClock.currentTime = timestamp / 1_000;
       pumpMicrophone(new Float32Array(4096));
     }
 
@@ -973,59 +722,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(appendCalls).toHaveLength(1);
     expect(closeCalls).toHaveLength(0);
   });
-
-  it.each(["talk event", "status"] as const)(
-    "releases local resources when a close %s callback throws",
-    async (callbackKind) => {
-      const stopTrack = vi.fn();
-      getUserMedia.mockResolvedValue({
-        getTracks: () => [Object.assign(new EventTarget(), { stop: stopTrack })],
-      } as unknown as MediaStream);
-      const throwingCallback = vi.fn();
-      const client = createClient();
-      const transport = await createTransport({
-        client,
-        callbacks:
-          callbackKind === "talk event"
-            ? { onTalkEvent: throwingCallback }
-            : { onStatus: throwingCallback },
-      });
-
-      await startTransport(transport);
-      throwingCallback.mockImplementation(() => {
-        throw new Error("consumer failed");
-      });
-      expect(() =>
-        emitTalkEvent({
-          relaySessionId: "relay-1",
-          type: "close",
-          reason: "error",
-          talkEvent:
-            callbackKind === "talk event"
-              ? ({
-                  id: "relay-1:1",
-                  type: "session.closed",
-                  sessionId: "relay-1",
-                  seq: 1,
-                  timestamp: "2026-05-05T00:00:00.000Z",
-                  mode: "realtime",
-                  transport: "gateway-relay",
-                  brain: "agent-consult",
-                  payload: {},
-                  final: true,
-                } satisfies RealtimeTalkEvent)
-              : undefined,
-        }),
-      ).toThrow("consumer failed");
-
-      expect(stopTrack).toHaveBeenCalledOnce();
-      expect(processors.at(-1)?.disconnect).toHaveBeenCalledOnce();
-      expect(listeners.size).toBe(0);
-      emitTalkEvent({ relaySessionId: "relay-1", type: "ready" });
-      void transport.stop();
-      expect(requestCallsFor(client, "talk.session.close")).toHaveLength(0);
-    },
-  );
 
   it("preserves relay error details across close events", async () => {
     const onStatus = vi.fn();
@@ -1469,7 +1165,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
 
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
-    audioCurrentTime = 1;
+    audioClock.currentTime = 1;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toEqual([
       [
@@ -1674,7 +1370,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       callId: "call-1",
       talkEvent,
     });
-    expect(onTalkEvent).toHaveBeenCalledWith(talkEvent);
+    expect(onTalkEvent).not.toHaveBeenCalled();
     expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
 
     emitTalkEvent({

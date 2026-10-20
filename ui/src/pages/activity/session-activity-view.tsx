@@ -103,7 +103,7 @@ function SessionLinkView(props: {
     agentsList: context.agents.state.agentsList,
     hello: context.gateway.snapshot.hello,
   }));
-  const face = createMemo(() => resolveSessionPreferredFace(props.row));
+  const face = () => resolveSessionPreferredFace(props.row);
   const addressable = createMemo(() =>
     isSessionKeyAddressable(props.row.key, isUiGlobalScopeConfigured(sessionHost())),
   );
@@ -131,10 +131,10 @@ function SessionLinkView(props: {
   const owner = createMemo(() =>
     sessionActivityOwner(props.row, agents.read().agentsList, agentIdentity.read()),
   );
-  const ownerName = createMemo(() => {
+  const ownerName = () => {
     getLocale();
     return presenceViewerLabel(owner());
-  });
+  };
   const activityAt = () => sessionActivityTimestamp(props.row);
   const relativeTime = createMemo(() => {
     void props.presentationRevision;
@@ -147,30 +147,25 @@ function SessionLinkView(props: {
       ? runId
       : undefined;
   });
-  const headline = createMemo(() =>
-    activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "",
-  );
-  const scope = createMemo(() =>
-    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null,
-  );
+  const headline = () => (activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "");
+  const scope = () =>
+    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null;
   const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
   const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
   const summary = () => props.row.activitySummary;
-  const state = createActivityMemo(() =>
+  const state = () =>
     summary()?.state === "current" && !summary()?.text
       ? "missing"
-      : (summary()?.state ?? "missing"),
-  );
+      : (summary()?.state ?? "missing");
   const updating = () => state() === "updating";
-  const feedback = createActivityMemo(() =>
+  const feedback = () =>
     state() === "stale"
       ? t(summary()?.text ? "activityFeed.recapStale" : "activityFeed.recapMissing")
       : state() === "unavailable"
         ? t(summary()?.text ? "activityFeed.recapRefreshFailed" : "activityFeed.recapUnavailable")
         : state() === "missing"
           ? t("activityFeed.recapMissing")
-          : "",
-  );
+          : "";
   const title = createActivityMemo(() => {
     const updatedAt = summary()?.updatedAt;
     return updatedAt

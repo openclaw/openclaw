@@ -16,7 +16,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";

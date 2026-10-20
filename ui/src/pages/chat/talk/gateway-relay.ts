@@ -340,8 +340,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     const closesRelay = event.type === "close";
     try {
-      if (event.talkEvent) {
-        this.ctx.callbacks.onTalkEvent?.(event.talkEvent);
+      const lifecycleType = event.talkEvent?.type;
+      if (lifecycleType === "session.ready" || lifecycleType === "session.closed") {
+        this.ctx.callbacks.onTalkEvent?.({ type: lifecycleType });
       }
       switch (event.type) {
         case "ready":

@@ -14,7 +14,7 @@ import {
   createAttachmentSidebarHarness,
   renderAttachmentHarness,
 } from "./chat-attachment-picker.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createPasteEvent, renderChatView } from "./chat-view.test-helpers.ts";
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { ComposerPastedText } from "./components/chat-composer-pasted-text.tsx";

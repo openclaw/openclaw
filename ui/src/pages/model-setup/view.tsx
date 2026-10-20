@@ -35,7 +35,7 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 
 function EmptyState(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
-  const installs = createMemo(() => props.result.recommendedInstalls ?? []);
+  const installs = () => props.result.recommendedInstalls ?? [];
   const visible = () => {
     props.revision?.();
     return (
@@ -309,11 +309,10 @@ function renderSetupAccessWarning(canAdmin: boolean) {
 }
 
 function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
-  const verify = createMemo(() =>
+  const verify = () =>
     props.verify.phase === "ok" && props.verify.modelTarget === "utility"
       ? { phase: "idle" as const }
-      : props.verify,
-  );
+      : props.verify;
   return (
     <>
       <Show when={!props.embedded && props.result.configuredModel}>
@@ -337,10 +336,8 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
 }
 
 function ModelSetupBody(props: ModelSetupViewProps) {
-  const ready = createMemo(() => (props.page.phase === "ready" ? props.page.result : undefined));
-  const error = createMemo(() =>
-    props.page.phase === "detect-error" ? props.page.message : undefined,
-  );
+  const ready = () => (props.page.phase === "ready" ? props.page.result : undefined);
+  const error = () => (props.page.phase === "detect-error" ? props.page.message : undefined);
   return (
     <Switch>
       <Match when={ready()}>

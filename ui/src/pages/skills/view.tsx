@@ -270,11 +270,10 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const missing = createMemo(() => computeSkillMissing(props.skill));
   const reasons = createMemo(() => computeSkillReasons(props.skill));
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
-  const detailTab = createMemo<SkillDetailTab>(() =>
+  const detailTab = (): SkillDetailTab =>
     props.view.state.skillsDetailTab === "card" && props.skill.skillCard?.present
       ? "card"
-      : "overview",
-  );
+      : "overview";
   const hasTabs = () => Boolean(props.skill.clawhub || props.skill.skillCard?.present);
   return (
     <SkillReaderDialog
@@ -475,17 +474,17 @@ function InstalledClawHubOverview(props: {
   view: SkillsProps;
   verdict: ClawHubSkillSecurityVerdict | null;
 }) {
-  const link = createMemo(() => props.skill.clawhub);
-  const invalidReason = createMemo(() => {
+  const link = () => props.skill.clawhub;
+  const invalidReason = () => {
     const value = link();
     return value?.status === "invalid" ? value.reason : null;
-  });
-  const installedRef = createMemo(() => {
+  };
+  const installedRef = () => {
     const value = link();
     return value?.status === "linked"
       ? `${value.ownerHandle ? `@${value.ownerHandle}/` : ""}${value.slug}@${value.installedVersion}`
       : "";
-  });
+  };
   const auditHref = createMemo(() =>
     resolveSafeExternalUrl(props.verdict?.securityAuditUrl ?? "", window.location.href),
   );
@@ -496,9 +495,7 @@ function InstalledClawHubOverview(props: {
         ? formatUiExternalText(props.verdict.reasons.join(", "))
         : null),
   );
-  const status = createMemo(() =>
-    verdictStatus(props.verdict, props.view.state.clawhubVerdictsLoading),
-  );
+  const status = () => verdictStatus(props.verdict, props.view.state.clawhubVerdictsLoading);
   return (
     <Show when={link()}>
       {(current) => (
