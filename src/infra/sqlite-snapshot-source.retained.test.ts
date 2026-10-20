@@ -70,12 +70,10 @@ it.each([true, false])(
       syncBuiltinESMExports();
       const controller = new AbortController();
       const barrier = new Int32Array(new SharedArrayBuffer(4));
-      let services = 0;
       function serviceToCompletion(operation) {
         const deadline = performance.now() + 10_000;
         for (;;) {
           operation.service();
-          services++;
           const outcome = operation.read();
           if (outcome.status === 'rejected') throw outcome.error;
           if (outcome.status === 'fulfilled') return outcome.value;
@@ -91,7 +89,6 @@ it.each([true, false])(
       let joined;
       let prepared;
       let joinedSource;
-      let proof;
       const failures = [];
       let cleanupJoined = false;
       try {
@@ -129,8 +126,6 @@ it.each([true, false])(
         assert.equal(microtaskRan, false);
         assert.equal(timerRan, false);
         assert.equal(nativeConstructions, 0);
-        proof = { row, microtaskRan, timerRan, nativeConstructions, services,
-          location: prepared.location, directory: prepared.cleanupRoot, removed: true };
       } catch (error) {
         failures.push(error);
       } finally {
@@ -156,7 +151,7 @@ it.each([true, false])(
         sqlite.DatabaseSync = originalConstructor;
         syncBuiltinESMExports();
       }
-      process.stdout.write(JSON.stringify({ proof, cleanupJoined,
+      process.stdout.write(JSON.stringify({ cleanupJoined,
         errors: failures.map(error => error instanceof Error ? error.stack : String(error)) }));
       if (failures.length || !cleanupJoined) process.exitCode = 1;
     `;
@@ -178,18 +173,8 @@ it.each([true, false])(
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBeNull();
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(receipt).toMatchObject({
-      cleanupJoined: true,
-      errors: [],
-      proof: {
-        row: { value: "preserved" },
-        microtaskRan: false,
-        timerRan: false,
-        nativeConstructions: 0,
-        removed: true,
-      },
-    });
-    expect(fs.existsSync(receipt.proof.directory)).toBe(false);
+    // The child asserts the row, cleanup, idle event loop and zero native constructions.
+    expect(receipt).toEqual({ cleanupJoined: true, errors: [] });
     expect(fs.readFileSync(source)).toEqual(original);
     expect(fs.readdirSync(root).filter((name) => name.startsWith("source.sqlite"))).toEqual(
       sourceFiles,

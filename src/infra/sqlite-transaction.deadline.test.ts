@@ -1,29 +1,25 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runSqliteImmediateTransaction } from "./sqlite-transaction.js";
 
 const databases: DatabaseSync[] = [];
-const directories: string[] = [];
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const db of databases.splice(0)) {
-    if (db.isOpen) {
-      db.close();
+const directories = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const db of databases.splice(0)) {
+      if (db.isOpen) {
+        db.close();
+      }
     }
-  }
-  for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
+    cleanup();
+  });
 });
 
-async function fixture() {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "sqlite-inherited-deadline-"));
-  directories.push(directory);
+function fixture() {
+  const directory = directories.make("sqlite-inherited-deadline-");
   const db = new DatabaseSync(path.join(directory, "index.sqlite"));
   const blocker = new DatabaseSync(path.join(directory, "index.sqlite"));
   databases.push(db, blocker);
@@ -33,7 +29,7 @@ async function fixture() {
 
 describe("inherited SQLite BEGIN deadline", () => {
   it("keeps the first nonblocking attempt after queue/startup consumed the budget", async () => {
-    const { db } = await fixture();
+    const { db } = fixture();
     const beginDeadlineNs = process.hrtime.bigint() - 1n;
     const prepare = vi.spyOn(db, "prepare");
     await runSqliteImmediateTransaction(
@@ -50,7 +46,7 @@ describe("inherited SQLite BEGIN deadline", () => {
   });
 
   it("returns the original first lock error without a fresh Worker retry budget", async () => {
-    const { db, blocker } = await fixture();
+    const { db, blocker } = fixture();
     blocker.exec("BEGIN IMMEDIATE");
     const exec = db.exec.bind(db);
     let firstFailure: unknown;
@@ -82,7 +78,7 @@ describe("inherited SQLite BEGIN deadline", () => {
   it.each(["prepare", "admit"] as const)(
     "retains an eligible second attempt delayed in %s",
     async (phase) => {
-      const { db, blocker } = await fixture();
+      const { db, blocker } = fixture();
       blocker.exec("BEGIN IMMEDIATE");
       const beginDeadlineNs = 1_000_000_000n;
       let now = 0n;

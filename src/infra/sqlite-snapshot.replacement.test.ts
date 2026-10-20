@@ -32,12 +32,8 @@ async function fixture() {
     [sourcePath, "new"],
     [targetPath, "old"],
   ]) {
-    const database = new DatabaseSync(file!);
-    try {
-      database.exec(`CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('${value}');`);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(file!);
+    database.exec(`CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('${value}');`);
   }
   const original = await fs.readFile(targetPath);
   const source = await fs.readFile(sourcePath);
@@ -72,12 +68,8 @@ it.skipIf(process.platform === "win32").each(["prepared", "direct"] as const)(
     expect(receipt).toMatchObject({ targetPath: options.targetPath, ...content(source) });
     expect(await fs.readFile(options.targetPath)).toEqual(source);
     expect(await fs.readFile(options.sourcePath)).toEqual(source);
-    const database = new DatabaseSync(options.targetPath, { readOnly: true });
-    try {
-      expect(database.prepare("SELECT value FROM records").all()).toEqual([{ value: "new" }]);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(options.targetPath, { readOnly: true });
+    expect(database.prepare("SELECT value FROM records").all()).toEqual([{ value: "new" }]);
   },
 );
 

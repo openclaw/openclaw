@@ -2,25 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { createSqliteSnapshotStagingRuntime } from "./sqlite-snapshot-staging-runtime.js";
 import type { SqliteSnapshotStagingReply } from "./sqlite-snapshot-staging.types.js";
+
+type Runtime = ReturnType<typeof createSqliteSnapshotStagingRuntime>;
+type RunTask = (input: unknown) => Promise<SqliteSnapshotStagingReply>;
+type Resource = { closeResource: (directory?: string) => Promise<void> };
 
 const fixture = vi.hoisted(() => {
   const ports: { value?: import("node:worker_threads").MessageChannel } = {};
   return {
     ports,
-    register:
-      vi.fn<
-        (
-          run: (input: unknown) => Promise<SqliteSnapshotStagingReply>,
-          options: { closeResource: (directory?: string) => Promise<void> },
-        ) => void
-      >(),
-    allocate:
-      vi.fn<
-        ReturnType<
-          typeof import("./sqlite-snapshot-staging-runtime.js").createSqliteSnapshotStagingRuntime
-        >["allocate"]
-      >(),
+    register: vi.fn<(run: RunTask, options: Resource) => void>(),
+    allocate: vi.fn<Runtime["allocate"]>(),
     closeRuntime: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     removed: vi.fn<(directory: string) => Promise<void>>().mockResolvedValue(undefined),
     createSession: vi.fn(() => {
@@ -53,10 +47,7 @@ vi.mock("./sqlite-readonly-native-resource.client.js", () => ({
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     try {
-      const registration = fixture.register.mock.calls[0];
-      if (registration) {
-        await registration[1].closeResource();
-      }
+      await fixture.register.mock.calls[0]?.[1].closeResource();
       cleanup();
     } finally {
       fixture.ports.value?.port1.close();

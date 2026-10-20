@@ -27,19 +27,14 @@ function createFixture() {
   const cache = path.join(root, "cache");
   const source = path.join(root, "source.sqlite");
   fs.mkdirSync(cache);
-  const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
+  using database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(source);
   database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  database.close();
   return { root, cache, source };
 }
 
 function assertReadable(location: string) {
-  const database = nodeSqlite.openNodeSqliteDatabase(location, { readOnly: true });
-  try {
-    expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
-  } finally {
-    database.close();
-  }
+  using database = nodeSqlite.openNodeSqliteDatabase(location, { readOnly: true });
+  expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
 }
 
 it("preserves a live nested snapshot when its parent starts cleanup first", async () => {

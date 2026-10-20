@@ -18,16 +18,19 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 async function fixture() {
   const directory = directories.make("sqlite-cow-");
   const sourcePath = path.join(directory, "source.sqlite");
-  const database = new DatabaseSync(sourcePath);
-  try {
+  {
+    using database = new DatabaseSync(sourcePath);
     database.exec("CREATE TABLE payload(value BLOB); PRAGMA user_version=7;");
     database
       .prepare("INSERT INTO payload(rowid, value) VALUES (?, ?)")
       .run(71, Buffer.alloc(131071, 42));
-  } finally {
-    database.close();
   }
-  return { directory, sourcePath, bytes: await fs.readFile(sourcePath) };
+  const bytes = await fs.readFile(sourcePath);
+  const content = {
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sizeBytes: bytes.length,
+  };
+  return { directory, sourcePath, bytes, content };
 }
 
 it.each(["auto", "off"] as const)(
@@ -51,14 +54,12 @@ it.each(["auto", "off"] as const)(
           expect(metadata[1]?.cloneId).not.toBe(0n);
           expect(metadata[1]?.cloneId === metadata[0].cloneId).toBe(mode === "auto");
         }
-        const snapshot = new DatabaseSync(prepared.location);
-        try {
+        {
+          using snapshot = new DatabaseSync(prepared.location);
           snapshot.exec("DELETE FROM payload");
           expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
             integrity_check: "ok",
           });
-        } finally {
-          snapshot.close();
         }
         expect(await fs.readFile(sourcePath)).toEqual(bytes);
       } finally {
@@ -74,7 +75,7 @@ it.each(["auto", "off"] as const)(
 it.each(["auto", "off"] as const)(
   "preserves independent recovery generations with native copying %s",
   async (mode) => {
-    const { directory, sourcePath, bytes } = await fixture();
+    const { directory, sourcePath, bytes, content } = await fixture();
     const paths = [
       sourcePath,
       path.join(directory, "original.sqlite"),
@@ -94,19 +95,14 @@ it.each(["auto", "off"] as const)(
             preserveSourceArtifacts: true,
           },
         });
-        expect(snapshot.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
-        expect(snapshot.sizeBytes).toBe(bytes.length);
-        expect(snapshot.userVersion).toBe(7);
+        expect(snapshot).toMatchObject({ ...content, userVersion: 7 });
       }
       const restored = path.join(directory, "restored.sqlite");
       await publishVerifiedSqliteFile({
         sourcePath: paths[1]!,
         sourceIdentity: await fs.stat(paths[1]!, { bigint: true }),
         targetPath: restored,
-        expectedContent: {
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-          sizeBytes: bytes.length,
-        },
+        expectedContent: content,
         requireAtomicPublication: true,
       });
       paths.push(restored);
@@ -123,34 +119,28 @@ it.each(["auto", "off"] as const)(
       expect(cloneIds.every((id) => id !== undefined && id !== 0n)).toBe(true);
       expect(new Set(cloneIds).size).toBe(mode === "auto" ? 1 : paths.length);
     }
-    const restored = new DatabaseSync(paths[3]!);
-    try {
+    {
+      using restored = new DatabaseSync(paths[3]!);
       expect(restored.prepare("SELECT rowid, length(value) AS bytes FROM payload").all()).toEqual([
         { rowid: 71, bytes: 131071 },
       ]);
       restored.exec("UPDATE payload SET value='restored-write' WHERE rowid=71;");
-    } finally {
-      restored.close();
     }
-    const source = new DatabaseSync(sourcePath);
-    try {
+    {
+      using source = new DatabaseSync(sourcePath);
       source.exec("DELETE FROM payload;");
-    } finally {
-      source.close();
     }
     for (const retained of paths.slice(1, 3)) {
       expect(await fs.readFile(retained)).toEqual(bytes);
     }
     await fs.unlink(paths[2]!);
     expect(await fs.readFile(paths[1]!)).toEqual(bytes);
-    const reopened = new DatabaseSync(paths[3]!, { readOnly: true });
-    try {
+    {
+      using reopened = new DatabaseSync(paths[3]!, { readOnly: true });
       expect(reopened.prepare("SELECT value FROM payload").get()).toEqual({
         value: "restored-write",
       });
       expect(reopened.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    } finally {
-      reopened.close();
     }
     expect((await fs.readdir(directory)).toSorted()).toEqual([
       "original.sqlite",
@@ -178,11 +168,9 @@ it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", 
   const { directory, sourcePath } = await fixture();
   const alias = path.join(directory, "source-alias.sqlite");
   if (layout === "empty WAL") {
-    const writer = new DatabaseSync(sourcePath);
-    try {
+    {
+      using writer = new DatabaseSync(sourcePath);
       writer.exec("PRAGMA journal_mode=WAL");
-    } finally {
-      writer.close();
     }
     await fs.writeFile(`${sourcePath}-wal`, "");
   } else {
@@ -202,12 +190,10 @@ it.each(["empty WAL", "source alias"])("keeps an independent raw copy with %s", 
         expect(metadata[1]?.cloneId).toBe(metadata[0].cloneId);
       }
     } else {
-      const writer = new DatabaseSync(prepared.location);
-      try {
+      {
+        using writer = new DatabaseSync(prepared.location);
         writer.exec("DELETE FROM payload");
         expect(writer.prepare("SELECT count(*) AS count FROM payload").get()).toEqual({ count: 0 });
-      } finally {
-        writer.close();
       }
       expect(await fs.readFile(alias)).toEqual(bytes);
     }

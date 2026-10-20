@@ -31,6 +31,11 @@ function rehearsalEnv(root: string): NodeJS.ProcessEnv {
   };
 }
 
+function exec(file: string, sql: string) {
+  using database = openNodeSqliteDatabase(file);
+  database.exec(sql);
+}
+
 it.each(["prepared", "outside", "symlink", "sidecar-symlink", "incomplete"])(
   "reuses only prepared rehearsal bytes across checks (%s)",
   async (kind) => {
@@ -40,9 +45,7 @@ it.each(["prepared", "outside", "symlink", "sidecar-symlink", "incomplete"])(
       kind === "outside" || kind === "symlink" ? outside : root,
       "agent.sqlite",
     );
-    const writer = openNodeSqliteDatabase(file);
-    writer.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (1)");
-    writer.close();
+    exec(file, "CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (1)");
     const source = kind === "symlink" ? path.join(root, "linked.sqlite") : file;
     if (kind === "symlink") {
       fs.symlinkSync(file, source);
@@ -70,9 +73,7 @@ it.each(["prepared", "outside", "symlink", "sidecar-symlink", "incomplete"])(
           { agentDatabases: true },
         );
         expect(reader?.isOpen).toBe(false);
-        const candidate = openNodeSqliteDatabase(file);
-        candidate.exec("UPDATE probe SET value = 2");
-        candidate.close();
+        exec(file, "UPDATE probe SET value = 2");
       }
     });
   },
@@ -99,9 +100,7 @@ it("reuses prepared shared state without granting inspection write authority", a
         },
         { agentDatabases: true },
       );
-      const candidate = openNodeSqliteDatabase(options.path);
-      candidate.exec("UPDATE probe SET value = 2");
-      candidate.close();
+      exec(options.path, "UPDATE probe SET value = 2");
     }
   });
 });
