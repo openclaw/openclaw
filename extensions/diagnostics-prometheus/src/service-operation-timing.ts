@@ -28,6 +28,18 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const DIFF_CACHE_MISS_REASONS = new Set([
+  "cold",
+  "evicted",
+  "pending",
+  "no-revision",
+  "oversized",
+  "revision-changed-head",
+  "revision-changed-index",
+  "revision-changed-untracked-set",
+  "revision-changed-worktree-mtime",
+  "revision-changed-metadata",
+]);
 const CHAT_SEND_PHASE =
   /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
 
@@ -137,6 +149,18 @@ export function recordOperationTimingEvent(
         const outcome = evt.details?.outcome;
         if (outcome !== "cache-hit" && outcome !== "cache-miss") {
           return;
+        }
+        const reason = evt.details?.missReason;
+        if (
+          outcome === "cache-miss" &&
+          typeof reason === "string" &&
+          DIFF_CACHE_MISS_REASONS.has(reason)
+        ) {
+          store.counter(
+            "openclaw_diff_cache_misses_total",
+            "Local diff cache misses by bounded reason; pending reads join an existing load.",
+            { method: evt.name, reason },
+          );
         }
         for (const stage of [
           "admission",

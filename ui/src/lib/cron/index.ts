@@ -1,10 +1,8 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asNullableObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  readNonEmptyStringPreservingWhitespace,
-} from "@openclaw/normalization-core/string-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { CronAddResult } from "../../../../packages/gateway-protocol/src/schema/cron.types.js";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult } from "../../api/types.ts";
@@ -284,14 +282,7 @@ function buildFailureAlert(
   };
 }
 
-type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
-
-// cron.add responds with either { created, job } or the bare job read view.
-function extractSavedCronJobId(response: unknown): string | null {
-  const record = asNullableObjectRecord(response);
-  const container = record && "job" in record ? asNullableObjectRecord(record.job) : record;
-  return readNonEmptyStringPreservingWhitespace(container?.id) ?? null;
-}
+type CronSaveResult = { saved: false } | { saved: true; jobId: string };
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   let result: CronSaveResult = { saved: false };
@@ -412,9 +403,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       }
       result = { saved: true, jobId: editingJob.id };
     } else {
-      let response: unknown;
+      let response: CronAddResult;
       try {
-        response = await client.request("cron.add", job);
+        response = await client.request<CronAddResult>("cron.add", job);
       } catch (error) {
         if (!isCurrent()) {
           return;
@@ -431,7 +422,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         resetCronFormToDefaults(state, agentId);
         state.cronCreateOpen = false;
       }
-      result = { saved: true, jobId: extractSavedCronJobId(response) };
+      result = { saved: true, jobId: ("job" in response ? response.job : response).id };
     }
     await reloadCronJobsSnapshot(state);
     if (!isCurrent()) {

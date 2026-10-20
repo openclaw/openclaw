@@ -666,7 +666,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       if (editing) {
         return;
       }
-      if (runNow && result.jobId) {
+      if (runNow) {
         // Explicit create-and-run intent survives navigation while saving.
         await runCronJob(cronState, result.jobId, "force");
       }
