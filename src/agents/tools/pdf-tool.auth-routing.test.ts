@@ -108,25 +108,25 @@ it.each(["API key", "OAuth"])("routes %s PDF auth with Codex chat", async (mode)
 });
 
 describe("Anthropic PDF model authentication routing", () => {
-  it.each(["setup token", "API key"] as const)(
+  it.each(["setup token", "provider-default setup token", "API key"] as const)(
     "routes an Anthropic %s profile through the PDF tool to Messages",
     async (mode) => {
       resetPdfToolAuthEnv();
       await withTempPdfAgentDir(async (agentDir) => {
         const modelId = "claude-opus-4-6";
         const profileId = "anthropic:pdf-fixture";
-        const credential =
-          mode === "setup token"
-            ? {
-                type: "token" as const,
-                provider: "anthropic" as const,
-                token: "sk-ant-oat01-fixture-setup-token",
-              }
-            : {
-                type: "api_key" as const,
-                provider: "anthropic" as const,
-                key: "fixture-anthropic-api-key",
-              };
+        const usesSetupToken = mode !== "API key";
+        const credential = usesSetupToken
+          ? {
+              type: "token" as const,
+              provider: "anthropic" as const,
+              token: "sk-ant-oat01-fixture-setup-token",
+            }
+          : {
+              type: "api_key" as const,
+              provider: "anthropic" as const,
+              key: "fixture-anthropic-api-key",
+            };
         await persistAuthProfileBatch({
           agentDir,
           profiles: [{ profileId, credential }],
@@ -203,7 +203,7 @@ describe("Anthropic PDF model authentication routing", () => {
               profiles: {
                 [profileId]: {
                   provider: "anthropic",
-                  mode: mode === "setup token" ? "oauth" : "api_key",
+                  mode: usesSetupToken ? "oauth" : "api_key",
                 },
               },
               order: { anthropic: [profileId] },
@@ -213,6 +213,9 @@ describe("Anthropic PDF model authentication routing", () => {
               providers: {
                 anthropic: {
                   baseUrl: `http://127.0.0.1:${address.port}`,
+                  ...(mode === "provider-default setup token"
+                    ? { request: { auth: { mode: "provider-default" as const } } }
+                    : {}),
                   models: [
                     {
                       id: modelId,
@@ -254,7 +257,7 @@ describe("Anthropic PDF model authentication routing", () => {
             config,
             observationConfig: config,
             isCurrent: () => true,
-            authModes: { anthropic: mode === "setup token" ? "oauth" : "api_key" },
+            authModes: { anthropic: usesSetupToken ? "oauth" : "api_key" },
             metadataSnapshot,
             pluginRegistry,
             allowGatewaySubagentBinding: false,
@@ -285,10 +288,10 @@ describe("Anthropic PDF model authentication routing", () => {
             throw new Error("expected a captured Anthropic PDF request");
           }
           expect(request.documentCount).toBe(1);
-          expect(request.userAgentIsClaudeCode).toBe(mode === "setup token");
+          expect(request.userAgentIsClaudeCode).toBe(usesSetupToken);
           const betaHeaders = request.anthropicBeta.split(",").map((value) => value.trim());
           expect(betaHeaders).toContain("pdfs-2024-09-25");
-          if (mode === "setup token") {
+          if (usesSetupToken) {
             expect(request.authorizationIsSetupToken).toBe(true);
             expect(request.xApiKeyIsControl).toBe(false);
             expect(betaHeaders).toEqual(

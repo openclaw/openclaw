@@ -167,7 +167,7 @@ export async function anthropicAnalyzePdf(
     headers.set(name, value);
   }
   const hasExplicitAuthOverride =
-    Boolean(request?.auth) ||
+    (request?.auth?.mode !== undefined && request.auth.mode !== "provider-default") ||
     ["authorization", "x-api-key", "api-key"].some((name) => headers.has(name));
   const usesOAuthApiKey = !hasExplicitAuthOverride && isAnthropicOAuthApiKey(apiKey);
   const usesBearerAuth = usesAnthropicBearerAuth(request, headers) || usesOAuthApiKey;
