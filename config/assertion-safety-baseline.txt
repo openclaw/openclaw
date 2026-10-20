@@ -65,7 +65,6 @@ extensions/browser/src/browser/server-context.tab-ops.ts	2
 extensions/browser/src/browser/system-chrome-cookies.ts	1
 extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
-extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
 extensions/browser/src/cli/browser-cli-manage.ts	1
 extensions/browser/src/cli/browser-cli-shared.ts	1
 extensions/browser/src/gateway/browser-request.ts	3
