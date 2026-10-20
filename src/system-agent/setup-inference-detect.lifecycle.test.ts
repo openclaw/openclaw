@@ -26,12 +26,6 @@ it.each([false, true])(
       const releaseEvent = `${nativeEvent}-release`;
       const nativeBefore = process.listenerCount(nativeEvent);
       const modelRef = `${id}/local-model`;
-      await state.writeJson(`extensions/${id}/package.json`, {
-        name: id,
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.ts"] },
-      });
       await state.writeJson(`extensions/${id}/openclaw.plugin.json`, {
         id,
         providers: [id],

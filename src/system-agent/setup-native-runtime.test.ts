@@ -5,19 +5,17 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
-import type * as SetupShared from "../wizard/setup.shared.js";
-import type * as SetupInferenceTurn from "./setup-inference-turn.js";
 import { setupNativeRuntime } from "./setup-native-runtime.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 
 const io = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), load: vi.fn() }));
-vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof SetupShared>()),
+vi.mock(import("../wizard/setup.shared.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   readSetupConfigFileSnapshot: io.read,
   writeWizardConfigFile: io.write,
 }));
-vi.mock("./setup-inference-turn.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof SetupInferenceTurn>()),
+vi.mock(import("./setup-inference-turn.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   loadSetupInferencePluginGeneration: io.load,
 }));
 

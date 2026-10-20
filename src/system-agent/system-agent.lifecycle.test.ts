@@ -28,12 +28,6 @@ it.each([false, true])(
         const before = process.listenerCount(nativeEvent);
         const events: string[] = [];
         const observe = (event: string) => events.push(event);
-        await state.writeJson(`${id}/package.json`, {
-          name: id,
-          version: "1.0.0",
-          type: "commonjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        });
         await state.writeJson(`${id}/openclaw.plugin.json`, {
           id,
           activation: { onAgentHarnesses: [id] },

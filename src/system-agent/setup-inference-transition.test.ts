@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { createConfigWriteSafetyRejectionError } from "../config/io.write-errors.js";
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
-import type { RuntimeConfigWriteApplicationStatus } from "../config/runtime-write-application.js";
+import type { RuntimeConfigWriteApplicationStatus as ApplicationStatus } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { commitSetupInferenceActivation } from "./setup-inference-transition.js";
 
@@ -19,10 +19,7 @@ it.each([
     const candidate: OpenClawConfig = { agents: { defaults: { model: "openai/fixture" } } };
     let current = before;
     const completion: { run?: () => Promise<boolean> } = {};
-    const settle = async (
-      options: ConfigWriteOptions,
-      result: RuntimeConfigWriteApplicationStatus,
-    ) => {
+    const settle = async (options: ConfigWriteOptions, result: ApplicationStatus) => {
       const claim = getRuntimeConfigWriteApplication(options)?.claim();
       assert(claim, "Missing config application receipt");
       await claim.prepare?.(() => {});
@@ -62,12 +59,10 @@ it.each([
 );
 
 it("keeps config safety diagnostics out of the recovery error shown to users", async () => {
-  const config = { gateway: { mode: "local" } } satisfies OpenClawConfig;
-  const diagnosticPath = "/private/fixture/openclaw.json";
-  const rejectedPath = `${diagnosticPath}.rejected.fixture`;
+  const config: OpenClawConfig = {};
   const recoveryError = createConfigWriteSafetyRejectionError({
     reasons: ["size-drop:3855->984"],
-    rejectedPath,
+    rejectedPath: "/private/fixture/openclaw.json.rejected.fixture",
   });
 
   const activation = commitSetupInferenceActivation({
