@@ -23,6 +23,7 @@ type ModelAuthPolicyParams = {
   modelBaseUrl?: string;
   mode?: string;
   authFlow?: string;
+  planType?: string;
   capability?: string;
 };
 
@@ -31,6 +32,7 @@ function policyForModel(params: ModelAuthPolicyParams): ProviderModelAuthPolicy 
     provider: params.provider,
     mode: params.mode,
     authFlow: params.authFlow,
+    planType: params.planType,
     capability: params.capability,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,

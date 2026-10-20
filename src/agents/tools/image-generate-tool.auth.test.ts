@@ -127,4 +127,37 @@ describe("image generation credential availability", () => {
       });
     },
   );
+
+  it.each([
+    { chatgptPlanType: "free", extraCredential: undefined, available: false },
+    { chatgptPlanType: "free", extraCredential: "api_key", available: true },
+    { chatgptPlanType: "free", extraCredential: "env", available: true },
+    { chatgptPlanType: "plus", extraCredential: undefined, available: true },
+    { chatgptPlanType: undefined, extraCredential: undefined, available: true },
+  ] as const)(
+    "exposes image generation for the $chatgptPlanType ChatGPT plan only with supported auth ($extraCredential)",
+    ({ chatgptPlanType, extraCredential, available }) => {
+      withEnv(
+        {
+          OPENAI_API_KEY: extraCredential === "env" ? "synthetic-env-key" : undefined,
+          OPENAI_API_KEYS: undefined,
+        },
+        () => {
+          const tool = createImageGenerateTool({
+            config: { plugins: { allow: ["openai"] } },
+            authProfileStore: createAuthProfileStoreFixture({
+              "openai:chatgpt": createOAuthRefreshCredential({
+                expires: Date.now() + 3_600_000,
+                ...(chatgptPlanType ? { chatgptPlanType } : {}),
+              }),
+              ...(extraCredential === "api_key"
+                ? { "openai:platform": createApiKeyCredential("openai", "synthetic-key") }
+                : {}),
+            }),
+          });
+          expect(tool?.name ?? null).toBe(available ? "image_generate" : null);
+        },
+      );
+    },
+  );
 });

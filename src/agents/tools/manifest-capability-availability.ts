@@ -130,6 +130,7 @@ function hasConfiguredCapabilityProviderSignal(params: {
               capability,
               mode: profileTypeToAuthMode(credential.type),
               authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
+              planType: credential.type === "oauth" ? credential.chatgptPlanType : undefined,
             }))
         );
       })

@@ -48,4 +48,17 @@ describe("OpenAI provider model authentication policy", () => {
       });
     },
   );
+
+  it.each([
+    ["free", "image-generation", false],
+    ["FREE", "image-generation", false],
+    ["plus", "image-generation", true],
+    [undefined, "image-generation", true],
+    ["free", undefined, true],
+    ["free", "embedding", true],
+  ] as const)("authorizes the %s ChatGPT plan for %s: %s", (planType, capability, compatible) => {
+    expect(
+      resolveModelAuthPolicy({ provider: "openai", mode: "oauth", planType, capability }),
+    ).toMatchObject({ compatible });
+  });
 });

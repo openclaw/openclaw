@@ -6,6 +6,13 @@ export function openAIImageConfig(provider: Omit<ModelProviderConfig, "models">)
   return { models: { providers: { openai: { ...provider, models: [] } } } };
 }
 
+export function createChatGPTAccessToken(planType: string) {
+  const payload = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_plan_type: planType } }),
+  ).toString("base64url");
+  return `header.${payload}.signature`;
+}
+
 export function createCodexOAuthAuthStore() {
   return {
     version: 1 as const,
