@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { TemplateContext } from "../templating.js";
@@ -19,6 +19,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getExecuteAgentTurnForTest();
+const completedMessage = { name: "message", phase: "end", status: "completed" };
 
 function messageTurn(opts: InternalGetReplyOptions = {}) {
   const followupRun = createFollowupRun();
@@ -69,178 +70,157 @@ const failedCommand: AgentEvent = {
   },
 };
 
-describe("executeAgentTurn: message tool progress", () => {
-  it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
-    const itemEventGate = createDeferred();
-    const itemEventStarted = createDeferred();
-    const onItemEvent = vi.fn(async () => {
-      itemEventStarted.resolve();
-      await itemEventGate.promise;
+it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
+  const itemEventGate = createDeferred();
+  const itemEventStarted = createDeferred();
+  const onItemEvent = vi.fn(async () => {
+    itemEventStarted.resolve();
+    await itemEventGate.promise;
+  });
+  const onCommandOutput = vi.fn();
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    await params.onAgentEvent?.(messageStart());
+    const itemEventPromise = params.onAgentEvent?.(messageEnd());
+    await itemEventStarted.promise;
+    await params.onAgentEvent?.(failedCommand);
+    await params.onAgentEvent?.({
+      stream: "item",
+      data: {
+        kind: "preamble",
+        phase: "update",
+        itemId: "commentary-1",
+        progressText: "This must stay suppressed.",
+      },
     });
-    const onCommandOutput = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    itemEventGate.resolve();
+    await itemEventPromise;
+    return {
+      payloads: [],
+      didDeliverSourceReplyViaMessageTool: true,
+      meta: { terminalReply: { disposition: "silent" } },
+    };
+  });
+
+  await executeAgentTurn(
+    messageTurn({ onItemEvent, onCommandOutput, progressPreambleEnabled: true }),
+  );
+
+  expect(onItemEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(completedMessage));
+  expect(onCommandOutput).not.toHaveBeenCalled();
+  expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+    expect.objectContaining({ outcome: "tool_delivered", runStatus: "completed" }),
+  );
+});
+
+it("settles failed recording without replaying the turn", async () => {
+  state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+  state.recordMessageToolRunOutcomeMock.mockRejectedValueOnce(
+    new SqliteWorkerError("Outcome could not be confirmed", "outcome-unknown"),
+  );
+  const followupRun = createFollowupRun();
+  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  await expect(
+    executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun })),
+  ).resolves.toMatchObject({
+    kind: "success",
+    runResult: { payloads: [] },
+  });
+  expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledTimes(1);
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+});
+
+it("clears run ownership when model preflight fails", async () => {
+  const onAgentRunTerminalOutcome = vi.fn();
+  const followupRun = createFollowupRun();
+  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+  const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+  const failure = new Error("model preflight failed");
+  const modelRead = vi
+    .spyOn(
+      await import("../../agents/session-model-auto-revert.js"),
+      "createAgentPatchedSessionModelRunGuard",
+    )
+    .mockRejectedValueOnce(failure);
+
+  try {
+    await expect(
+      executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+        }),
+      ),
+    ).rejects.toBe(failure);
+  } finally {
+    modelRead?.mockRestore();
+  }
+
+  expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+  expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+  expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      runId: "preflight-failure",
+      outcome: "mute",
+      runStatus: "errored",
+    }),
+  );
+  expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+});
+
+it("preserves message-tool-only suppression across fallback candidates", async () => {
+  const onItemEvent = vi.fn();
+  const onCommandOutput = vi.fn();
+  state.runEmbeddedAgentMock
+    .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.(messageStart());
-      const itemEventPromise = params.onAgentEvent?.(messageEnd());
-      await itemEventStarted.promise;
-      await params.onAgentEvent?.(failedCommand);
+      await params.onAgentEvent?.(messageEnd(false, false));
+      return { payloads: [], meta: {} };
+    })
+    .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
-        stream: "item",
+        stream: "command_output",
         data: {
-          kind: "preamble",
-          phase: "update",
-          itemId: "commentary-1",
-          progressText: "This must stay suppressed.",
+          itemId: "command:exec-1",
+          phase: "end",
+          name: "exec",
+          output: "must stay suppressed",
+          status: "completed",
+          exitCode: 0,
         },
       });
-      itemEventGate.resolve();
-      await itemEventPromise;
-      return {
-        payloads: [],
-        didDeliverSourceReplyViaMessageTool: true,
-        meta: { terminalReply: { disposition: "silent" } },
-      };
-    });
-
-    await executeAgentTurn(
-      messageTurn({ onItemEvent, onCommandOutput, progressPreambleEnabled: true }),
-    );
-
-    expect(onItemEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "message",
-        phase: "end",
-        status: "completed",
-      }),
-    );
-    expect(onItemEvent).toHaveBeenCalledTimes(1);
-    expect(onCommandOutput).not.toHaveBeenCalled();
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: "tool_delivered",
-        runStatus: "completed",
-      }),
-    );
-  });
-
-  it("settles failed recording without replaying the turn", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    state.recordMessageToolRunOutcomeMock.mockRejectedValueOnce(
-      new SqliteWorkerError("Outcome could not be confirmed", "outcome-unknown"),
-    );
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await expect(
-      executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun })),
-    ).resolves.toMatchObject({
-      kind: "success",
-      runResult: { payloads: [] },
-    });
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["model"] as const)("clears run ownership when %s preflight fails", async (stage) => {
-    const onAgentRunTerminalOutcome = vi.fn();
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    const failure = new Error(`${stage} preflight failed`);
-    const modelRead = vi
-      .spyOn(
-        await import("../../agents/session-model-auto-revert.js"),
-        "createAgentPatchedSessionModelRunGuard",
-      )
-      .mockRejectedValueOnce(failure);
-
-    try {
-      await expect(
-        executeAgentTurn(
-          createMinimalRunAgentTurnParams({
-            followupRun,
-            opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
-          }),
-        ),
-      ).rejects.toBe(failure);
-    } finally {
-      modelRead?.mockRestore();
-    }
-
-    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
-    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        runId: "preflight-failure",
-        outcome: "mute",
-        runStatus: "errored",
-      }),
-    );
-    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves message-tool-only suppression across fallback candidates", async () => {
-    const onItemEvent = vi.fn();
-    const onCommandOutput = vi.fn();
-    state.runEmbeddedAgentMock
-      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        await params.onAgentEvent?.(messageStart());
-        await params.onAgentEvent?.(messageEnd(false, false));
-        return { payloads: [], meta: {} };
-      })
-      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        await params.onAgentEvent?.({
-          stream: "command_output",
-          data: {
-            itemId: "command:exec-1",
-            phase: "end",
-            name: "exec",
-            output: "must stay suppressed",
-            status: "completed",
-            exitCode: 0,
-          },
-        });
-        return { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
-      });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
-      return {
-        result: await params.run("openai", "fallback", fallbackAttemptOptions(params, "unknown")),
-        provider: "openai",
-        model: "fallback",
-        attempts: [],
-      };
-    });
-
-    await executeAgentTurn(messageTurn({ onItemEvent, onCommandOutput }));
-
-    expect(onItemEvent).toHaveBeenCalledTimes(1);
-    expect(onCommandOutput).not.toHaveBeenCalled();
-  });
-
-  it("keeps progress callbacks active after message-tool-only reads", async () => {
-    const onItemEvent = vi.fn();
-    const onCommandOutput = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.(messageStart(true));
-      await params.onAgentEvent?.(messageEnd(true));
-      await params.onAgentEvent?.(failedCommand);
       return { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
     });
-
-    await executeAgentTurn(messageTurn({ onItemEvent, onCommandOutput }));
-
-    expect(onItemEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "message",
-        phase: "end",
-        status: "completed",
-      }),
-    );
-    expect(onCommandOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        output: "failed command output",
-        status: "failed",
-      }),
-    );
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
+    return {
+      result: await params.run("openai", "fallback", fallbackAttemptOptions(params, "unknown")),
+      provider: "openai",
+      model: "fallback",
+      attempts: [],
+    };
   });
+
+  await executeAgentTurn(messageTurn({ onItemEvent, onCommandOutput }));
+
+  expect(onItemEvent).toHaveBeenCalledTimes(1);
+  expect(onCommandOutput).not.toHaveBeenCalled();
+});
+
+it("keeps progress callbacks active after message-tool-only reads", async () => {
+  const onItemEvent = vi.fn();
+  const onCommandOutput = vi.fn();
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    await params.onAgentEvent?.(messageStart(true));
+    await params.onAgentEvent?.(messageEnd(true));
+    await params.onAgentEvent?.(failedCommand);
+    return { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
+  });
+
+  await executeAgentTurn(messageTurn({ onItemEvent, onCommandOutput }));
+
+  expect(onItemEvent).toHaveBeenCalledWith(expect.objectContaining(completedMessage));
+  expect(onCommandOutput).toHaveBeenCalledWith(
+    expect.objectContaining({ output: "failed command output", status: "failed" }),
+  );
 });
