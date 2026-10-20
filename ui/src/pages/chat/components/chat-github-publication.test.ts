@@ -13,6 +13,16 @@ import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 
 describe("GitHub publication account controls", () => {
   let container: HTMLDivElement;
+  const query = (selector: string) => container.querySelector(selector);
+  const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
+  const personalAccount = (login = "alice-tools") => ({
+    state: "connected" as const,
+    generation: "personal-generation",
+    account: { accountId: 2, login },
+    accessExpiresAtMs: null,
+    refreshState: "available" as const,
+    pending: null,
+  });
 
   function paint(props: Partial<ChatPullRequestsProps>) {
     paintChatPullRequests(
@@ -20,6 +30,7 @@ describe("GitHub publication account controls", () => {
         pullRequests: [],
         status: "ready",
         onDismiss: () => {},
+        branch: sessionBranch(),
         ...props,
       },
       container,
@@ -42,22 +53,21 @@ describe("GitHub publication account controls", () => {
       const shared = source ? { source, accountId: 1, login: "system-bot" } : null;
       const onSelect = vi.fn();
       paint({
-        branch: sessionBranch(),
         publication: publication({
           options: { shared, personal: null, pendingPersonal: null, latestShared: null },
           selection: shared ? { source: "shared", expected: shared } : null,
           onSelect,
         }),
       });
-      expect(container.querySelector('select, [role="menu"], [role="dialog"][popover]')).toBeNull();
-      expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
-      expect(container.querySelector(".chat-pr__create")?.textContent?.trim()).toBe("Publish PR");
-      expect(container.querySelector("[data-publication-account]")).toBeNull();
+      expect(query('select, [role="menu"], [role="dialog"][popover]')).toBeNull();
+      expect(query('[aria-label="Publication account"]')).toBeNull();
+      expect(publish()?.textContent?.trim()).toBe("Publish PR");
+      expect(query("[data-publication-account]")).toBeNull();
       expect(onSelect).not.toHaveBeenCalled();
       if (shared) {
-        expect(container.querySelector(".chat-pr__publication-outcome")).toBeNull();
+        expect(query(".chat-pr__publication-outcome")).toBeNull();
       } else {
-        expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
+        expect(publish()?.disabled).toBe(true);
         expect(container.textContent).toContain(
           "Sign in with a personal profile to use My GitHub.",
         );
@@ -65,7 +75,6 @@ describe("GitHub publication account controls", () => {
           "applies only to this explicit Publish PR action",
         );
         paint({
-          branch: sessionBranch(),
           publication: publication({
             options: {
               shared: { source: "system-configured", accountId: 1, login: "system-bot" },
@@ -85,19 +94,11 @@ describe("GitHub publication account controls", () => {
     "offers radio account choices, disambiguating matching logins only: %s",
     async (sameLogin) => {
       const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
-      const personal = {
-        state: "connected" as const,
-        generation: "personal-generation",
-        account: { accountId: 2, login: sameLogin ? shared.login : "alice-tools" },
-        accessExpiresAtMs: null,
-        refreshState: "available" as const,
-        pending: null,
-      };
+      const personal = personalAccount(sameLogin ? shared.login : "alice-tools");
       const onSelect = vi.fn();
       const options = { shared, personal, pendingPersonal: null, latestShared: null };
       const paintSelection = (source: "shared" | "personal") =>
         paint({
-          branch: sessionBranch(),
           publication: publication({
             options,
             selection:
@@ -108,16 +109,18 @@ describe("GitHub publication account controls", () => {
           }),
         });
       paintSelection("shared");
-      const menu = container.querySelector('[role="menu"]');
+      const menu = query('[role="menu"]');
       expect(menu?.getAttribute("aria-label")).toBe("Publication account");
-      expect(container.querySelector('select, [role="dialog"][popover]')).toBeNull();
+      expect(query('select, [role="dialog"][popover]')).toBeNull();
       const choices = [...menu!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
-      expect(choices.map((item) => item.getAttribute("value"))).toEqual(["shared", "personal"]);
-      expect(choices.map((item) => item.getAttribute("role"))).toEqual([
-        "menuitemradio",
-        "menuitemradio",
+      expect(
+        choices.map((item) =>
+          ["value", "role", "aria-checked"].map((name) => item.getAttribute(name)),
+        ),
+      ).toEqual([
+        ["shared", "menuitemradio", "true"],
+        ["personal", "menuitemradio", "false"],
       ]);
-      expect(choices.map((item) => item.getAttribute("aria-checked"))).toEqual(["true", "false"]);
       expect(choices[0]?.textContent).toContain("@agent-bot");
       expect(choices[1]?.textContent).toContain(sameLogin ? "@agent-bot" : "@alice-tools");
       expect(menu?.textContent?.includes("Agent override")).toBe(sameLogin);
@@ -136,56 +139,37 @@ describe("GitHub publication account controls", () => {
       await waitForSolid(() =>
         expect(choices.map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true"]),
       );
-      expect(choices.map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true"]);
       expect(choices[0]?.querySelector(".oc-menu-item__details svg")).toBeNull();
       expect(choices[1]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
-      expect(container.querySelector(".chat-pr__create")?.textContent?.trim()).toBe("Publish PR");
+      expect(publish()?.textContent?.trim()).toBe("Publish PR");
     },
   );
 
   it("warns about the workspace only for a selected or sole personal account", () => {
-    const personal = {
-      state: "connected" as const,
-      generation: "personal-generation",
-      account: { accountId: 2, login: "alice-tools" },
-      accessExpiresAtMs: null,
-      refreshState: "available" as const,
-      pending: null,
-    };
+    const personal = personalAccount();
     const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
     const options = { shared, personal, pendingPersonal: null, latestShared: null };
     const onSelect = vi.fn();
     const paintPublication = (overrides: Partial<GitHubPublicationView>) =>
       paint({
-        branch: sessionBranch(),
         publication: publication({ options, onSelect, personalReady: false, ...overrides }),
       });
     paintPublication({});
-    expect(container.querySelector<HTMLButtonElement>("button.chat-pr__create")?.disabled).toBe(
-      false,
-    );
+    expect(publish()?.disabled).toBe(false);
     expect(container.textContent).not.toContain("reclaim the workspace");
     paintPublication({
       selection: { source: "personal", generation: personal.generation, account: personal.account },
     });
-    expect(container.querySelector<HTMLButtonElement>("button.chat-pr__create")?.disabled).toBe(
-      true,
-    );
+    expect(publish()?.disabled).toBe(true);
     expect(container.textContent).toContain("reclaim the workspace");
-    expect(container.querySelector('[role="menu"]')?.textContent).not.toContain(
-      "reclaim the workspace",
+    expect(query('[role="menu"]')?.textContent).not.toContain("reclaim the workspace");
+    expect(query(".chat-pr__publication-outcome")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
     );
-    expect(
-      container
-        .querySelector(".chat-pr__publication-outcome")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim(),
-    ).toBe("Wait for work to finish and reclaim the workspace to publish with My GitHub.");
     paintPublication({ options: { ...options, shared: null }, selection: null });
-    const publish = container.querySelector<HTMLButtonElement>("button.chat-pr__create");
-    expect(publish?.disabled).toBe(true);
-    expect(publish?.textContent?.trim()).toBe("Publish as @alice-tools");
-    expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
+    expect(publish()?.disabled).toBe(true);
+    expect(publish()?.textContent?.trim()).toBe("Publish as @alice-tools");
+    expect(query('[aria-label="Publication account"]')).toBeNull();
     expect(container.textContent).toContain("reclaim the workspace");
     expect(onSelect).not.toHaveBeenCalled();
   });
